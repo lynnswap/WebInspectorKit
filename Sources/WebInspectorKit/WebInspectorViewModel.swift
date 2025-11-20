@@ -16,7 +16,7 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 @Observable
 final class WebInspectorViewModel {
     @ObservationIgnored private weak var currentPageWebView: WKWebView?
-    @ObservationIgnored private var lastWebViewIdentifier: ObjectIdentifier?
+    @ObservationIgnored private weak var lastWebView: WKWebView?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -39,13 +39,12 @@ final class WebInspectorViewModel {
             return
         }
 
-        let newIdentifier = ObjectIdentifier(webView)
-        let previousIdentifier = lastWebViewIdentifier
+        let previousWebView = lastWebView
         currentPageWebView = webView
         webBridge.contentModel.pageWebView = webView
-        lastWebViewIdentifier = newIdentifier
+        lastWebView = webView
 
-        let needsReload = previousIdentifier == nil || previousIdentifier != newIdentifier
+        let needsReload = previousWebView == nil || previousWebView != webView
         if needsReload {
             Task { await reload() }
         } else {
@@ -61,7 +60,7 @@ final class WebInspectorViewModel {
         restorePageScrollingState()
 #endif
         if let currentPageWebView {
-            lastWebViewIdentifier = ObjectIdentifier(currentPageWebView)
+            lastWebView = currentPageWebView
         }
         webBridge.contentModel.pageWebView = nil
         currentPageWebView = nil
