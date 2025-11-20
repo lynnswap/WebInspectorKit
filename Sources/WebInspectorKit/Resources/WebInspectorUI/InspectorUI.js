@@ -1090,13 +1090,6 @@
         }
         row.appendChild(label);
 
-        if (node.textContent && node.nodeType === NODE_TYPES.TEXT_NODE) {
-            const text = document.createElement("span");
-            text.className = "tree-node__text";
-            text.textContent = ` ${trimText(node.textContent)}`;
-            row.appendChild(text);
-        }
-
         return row;
     }
 
