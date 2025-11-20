@@ -171,7 +171,6 @@ extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
 // MARK: - Asset helpers
 
 enum WebInspectorAssets {
-    static let directory = "WebInspectorUI"
     private static let searchBundles = [Bundle.module, .main]
 
     static var mainFileURL: URL? {
@@ -184,9 +183,6 @@ enum WebInspectorAssets {
 
     static func locateResource(named name: String, withExtension fileExtension: String) -> URL? {
         for bundle in searchBundles {
-            if let url = bundle.url(forResource: name, withExtension: fileExtension, subdirectory: directory) {
-                return url
-            }
             if let url = bundle.url(forResource: name, withExtension: fileExtension) {
                 return url
             }
