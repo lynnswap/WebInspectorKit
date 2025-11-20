@@ -18,6 +18,9 @@ final class WebInspectorViewModel {
     @ObservationIgnored private weak var currentPageWebView: WKWebView?
     @ObservationIgnored private var lastWebViewIdentifier: ObjectIdentifier?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
+#if canImport(UIKit)
+    @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
+#endif
 
     var requestedDepth = WebInspectorConstants.defaultDepth
     var isSelectingElement = false
@@ -54,6 +57,9 @@ final class WebInspectorViewModel {
         webBridge.contentModel.clearWebInspectorHighlight()
         cancelSelectionMode()
         setAutoUpdateState(false)
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
         if let currentPageWebView {
             lastWebViewIdentifier = ObjectIdentifier(currentPageWebView)
         }
@@ -89,6 +95,9 @@ final class WebInspectorViewModel {
         guard isSelectingElement || selectionTask != nil else { return }
         selectionTask?.cancel()
         selectionTask = nil
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
         Task { @MainActor [webBridge] in
             await webBridge.contentModel.cancelSelectionMode()
         }
@@ -97,6 +106,9 @@ final class WebInspectorViewModel {
 
     private func startSelectionMode() {
         guard hasPageWebView else { return }
+#if canImport(UIKit)
+        disablePageScrollingForSelection()
+#endif
         isSelectingElement = true
         webBridge.contentModel.clearWebInspectorHighlight()
         selectionTask?.cancel()
@@ -105,6 +117,9 @@ final class WebInspectorViewModel {
             defer {
                 self.isSelectingElement = false
                 self.selectionTask = nil
+#if canImport(UIKit)
+                self.restorePageScrollingState()
+#endif
             }
             do {
                 let result = try await self.webBridge.contentModel.beginSelectionMode()
@@ -129,4 +144,27 @@ final class WebInspectorViewModel {
             await webBridge.contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)
         }
     }
+
+#if canImport(UIKit)
+    private func disablePageScrollingForSelection() {
+        guard let scrollView = currentPageWebView?.scrollView else { return }
+        if scrollBackup == nil {
+            scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
+        }
+        scrollView.isScrollEnabled = false
+        scrollView.panGestureRecognizer.isEnabled = false
+    }
+
+    private func restorePageScrollingState() {
+        guard let scrollView = currentPageWebView?.scrollView else {
+            scrollBackup = nil
+            return
+        }
+        if let backup = scrollBackup {
+            scrollView.isScrollEnabled = backup.isScrollEnabled
+            scrollView.panGestureRecognizer.isEnabled = backup.isPanEnabled
+        }
+        scrollBackup = nil
+    }
+#endif
 }
