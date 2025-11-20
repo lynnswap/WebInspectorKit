@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Inspector</title>
+    <link rel="stylesheet" href="InspectorUI.css">
+</head>
+<body>
+    <div class="inspector">
+        <section class="inspector__content">
+            <div class="dom-tree-panel">
+                <div class="dom-panel__toolbar">
+                    <span id="dom-tree-summary" class="dom-panel__summary"></span>
+                    <div class="dom-panel__actions">
+                        <button id="collapse-all" class="control-button" title="すべて折りたたむ">
+                            <span class="icon icon-collapse"></span>
+                        </button>
+                        <button id="expand-all" class="control-button" title="すべて展開する">
+                            <span class="icon icon-expand"></span>
+                        </button>
+                    </div>
+                </div>
+                <div id="dom-tree" class="dom-tree" role="tree" aria-label="DOM tree"></div>
+                <div id="dom-empty" class="dom-empty" hidden>
+                    <p>DOM情報を取得できませんでした。リロードしてください。</p>
+                </div>
+            </div>
+            <aside class="dom-details" aria-live="polite">
+                <div class="details-card">
+                    <header>選択中のノード</header>
+                    <pre id="node-preview" class="details-code"></pre>
+                    <p id="node-description" class="details-description"></p>
+                </div>
+                <div class="details-card">
+                    <header>属性</header>
+                    <dl id="node-attributes" class="details-attributes"></dl>
+                </div>
+            </aside>
+        </section>
+    </div>
+    <script src="InspectorUI.js"></script>
+</body>
+</html>
