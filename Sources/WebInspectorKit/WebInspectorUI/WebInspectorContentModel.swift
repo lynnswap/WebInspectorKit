@@ -150,7 +150,7 @@ extension WebInspectorContentModel {
         guard let pageWebView else { return }
         try? await injectScriptIfNeeded(on: pageWebView)
         _ = try? await pageWebView.callAsyncJavaScript(
-            "return (() => { window.webInspectorKit.highlightDOMNode(identifier); return null; })();",
+            "(() => { window.webInspectorKit.highlightDOMNode(identifier); return null; })();",
             arguments: ["identifier": id],
             in: nil,
             contentWorld: .page
@@ -167,7 +167,7 @@ extension WebInspectorContentModel {
             try await injectScriptIfNeeded(on: pageWebView)
             let debounce = max(50, Int(WebInspectorConstants.autoUpdateDebounce * 1000))
             _ = try await pageWebView.callAsyncJavaScript(
-                "return (() => { window.webInspectorKit.setAutoSnapshotEnabled(enabled, options); return null; })();",
+                "(() => { window.webInspectorKit.setAutoSnapshotEnabled(enabled, options); return null; })();",
                 arguments: [
                     "enabled": enabled,
                     "options": [
