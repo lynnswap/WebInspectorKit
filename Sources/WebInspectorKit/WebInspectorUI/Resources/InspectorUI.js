@@ -97,12 +97,10 @@
 
     function sendProtocolMessage(message) {
         const payload = typeof message === "string" ? message : JSON.stringify(message);
-        window.webkit.messageHandlers.webInspector.postMessage({ type: "protocol", payload });
+        window.webkit.messageHandlers.webInspectorProtocol.postMessage(payload);
     }
 
     function sendCommand(method, params = {}) {
-        if (!window.webkit.messageHandlers.webInspector)
-            return Promise.reject(new Error("host unavailable"));
         const id = ++protocolState.lastId;
         const message = { id, method, params };
         return new Promise((resolve, reject) => {
@@ -166,7 +164,7 @@
             : (error && error.message ? error.message : String(error));
         console.error(`[tweetpd-inspector] ${context}:`, error);
         try {
-            window.webkit.messageHandlers.webInspector.postMessage({ type: "log", payload: { message: `${context}: ${details}` } });
+            window.webkit.messageHandlers.webInspectorLog.postMessage(`${context}: ${details}`);
         } catch {
             // ignore logging failures
         }
@@ -1665,7 +1663,7 @@
         if (dom.expandAll)
             dom.expandAll.addEventListener("click", expandAll);
         try {
-            window.webkit.messageHandlers.webInspector.postMessage({ type: "ready" });
+            window.webkit.messageHandlers.webInspectorReady.postMessage(true);
         } catch {
             // ignore
         }

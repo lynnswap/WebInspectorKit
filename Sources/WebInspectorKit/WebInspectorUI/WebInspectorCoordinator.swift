@@ -13,7 +13,11 @@ private let coordinatorLogger = Logger(subsystem: "WebInspectorKit", category: "
 
 @MainActor
 final class WebInspectorCoordinator: NSObject {
-    static let handlerName = "webInspector"
+    private enum HandlerName: String, CaseIterable {
+        case protocolMessage = "webInspectorProtocol"
+        case ready = "webInspectorReady"
+        case log = "webInspectorLog"
+    }
 
     private struct InspectorProtocolRequest {
         let id: Int
@@ -34,16 +38,17 @@ final class WebInspectorCoordinator: NSObject {
     }
 
     func attach(webView: WKWebView) {
+        if self.webView !== webView {
+            isReady = false
+        }
         self.webView = webView
         
         let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
-        controller.add(self, name: WebInspectorCoordinator.handlerName)
-        webView.navigationDelegate = self
-        
-        if !isReady{
-            isReady = false
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue)
+            controller.add(self, name: $0.rawValue)
         }
+        webView.navigationDelegate = self
     }
 
     func applyMutationBundle(_ payload: WebInspectorBridge.PendingBundle) {
@@ -85,14 +90,22 @@ final class WebInspectorCoordinator: NSObject {
 
     func detach(webView: WKWebView) {
         guard self.webView === webView else { return }
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
+        let controller = webView.configuration.userContentController
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue)
+        }
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
         webView.navigationDelegate = nil
         self.webView = nil
         coordinatorLogger.debug("inspector detached")
     }
 
     @MainActor deinit {
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
+        if let controller = webView?.configuration.userContentController{
+            HandlerName.allCases.forEach {
+                controller.removeScriptMessageHandler(forName: $0.rawValue)
+            }
+        }
         webView?.navigationDelegate = nil
     }
 
@@ -262,28 +275,32 @@ final class WebInspectorCoordinator: NSObject {
             coordinatorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private func removeMessageHandlers(from controller: WKUserContentController) {
+        HandlerName.allCases.forEach { controller.removeScriptMessageHandler(forName: $0.rawValue) }
+    }
 }
 
 extension WebInspectorCoordinator: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == Self.handlerName else { return }
-        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+        guard let handlerName = HandlerName(rawValue: message.name) else { return }
 
-        switch type {
-        case "protocol":
-            handleProtocolPayload(body["payload"])
-        case "ready":
+        switch handlerName {
+        case .protocolMessage:
+            handleProtocolPayload(message.body)
+        case .ready:
             isReady = true
             Task{
                 await flushPendingWork()
                 bridge?.isLoading = false
             }
-        case "log":
-            if let payload = body["payload"] as? [String: Any], let message = payload["message"] as? String {
-                coordinatorLogger.debug("inspector log: \(message, privacy: .public)")
+        case .log:
+            if let dictionary = message.body as? [String: Any],
+               let logMessage = dictionary["message"] as? String {
+                coordinatorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+            } else if let logMessage = message.body as? String {
+                coordinatorLogger.debug("inspector log: \(logMessage, privacy: .public)")
             }
-        default:
-            break
         }
     }
 }
