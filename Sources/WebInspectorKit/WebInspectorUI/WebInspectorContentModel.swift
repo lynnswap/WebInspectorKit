@@ -138,10 +138,8 @@ extension WebInspectorContentModel {
     func cancelSelectionMode() async {
         guard let pageWebView else { return }
         try? await injectScriptIfNeeded(on: pageWebView)
-        _ = try? await pageWebView.callAsyncJavaScript(
-            "return window.webInspectorKit.cancelElementSelection()",
-            arguments: [:],
-            in: nil,
+        try? await pageWebView.callAsyncVoidJavaScript(
+            "window.webInspectorKit.cancelElementSelection()",
             contentWorld: .page
         )
     }
@@ -149,10 +147,9 @@ extension WebInspectorContentModel {
     func highlightDOMNode(id: Int) async {
         guard let pageWebView else { return }
         try? await injectScriptIfNeeded(on: pageWebView)
-        _ = try? await pageWebView.callAsyncJavaScript(
-            "(() => { window.webInspectorKit.highlightDOMNode(identifier); return null; })();",
+        try? await pageWebView.callAsyncVoidJavaScript(
+            "window.webInspectorKit.highlightDOMNode(identifier)",
             arguments: ["identifier": id],
-            in: nil,
             contentWorld: .page
         )
     }
@@ -166,8 +163,8 @@ extension WebInspectorContentModel {
         do {
             try await injectScriptIfNeeded(on: pageWebView)
             let debounce = max(50, Int(WebInspectorConstants.autoUpdateDebounce * 1000))
-            _ = try await pageWebView.callAsyncJavaScript(
-                "(() => { window.webInspectorKit.setAutoSnapshotEnabled(enabled, options); return null; })();",
+            try await pageWebView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
                 arguments: [
                     "enabled": enabled,
                     "options": [
@@ -175,7 +172,6 @@ extension WebInspectorContentModel {
                         "debounce": debounce
                     ]
                 ],
-                in: nil,
                 contentWorld: .page
             )
         } catch {

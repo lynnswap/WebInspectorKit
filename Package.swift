@@ -20,9 +20,9 @@ let package = Package(
         // Targets can depend on other targets in this package and products from dependencies.
     .target(
         name: "WebInspectorKit",
-        path: "Sources/WebInspectorKit/WebInspectorUI",
+        path: "Sources/WebInspectorKit",
         resources: [
-            .process("Resources")
+            .process("WebInspectorUI/Resources")
         ]
     ),
 

@@ -173,10 +173,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let webView else { return }
         Task { @MainActor in
             do {
-                _ = try await webView.callAsyncJavaScript(
-                    "(() => { window.webInspectorKit?.dispatchMessageFromBackend?.(message); return null; })();",
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.dispatchMessageFromBackend?.(message)",
                     arguments: ["message": message],
-                    in: nil,
                     contentWorld: .page
                 )
             } catch {
@@ -222,10 +221,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let webView else { return }
         Task { @MainActor in
             do {
-                _ = try await webView.callAsyncJavaScript(
-                    "(() => { window.webInspectorKit?.applyMutationBundle?.(bundle); return null; })();",
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.applyMutationBundle?.(bundle)",
                     arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
-                    in: nil,
                     contentWorld: .page
                 )
             } catch {
@@ -238,10 +236,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let webView else { return }
         Task { @MainActor in
             do {
-                _ = try await webView.callAsyncJavaScript(
-                    "(() => { window.webInspectorKit?.setSearchTerm?.(term); return null; })();",
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.setSearchTerm?.(term)",
                     arguments: ["term": term],
-                    in: nil,
                     contentWorld: .page
                 )
             } catch {
@@ -254,10 +251,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let webView else { return }
         Task { @MainActor in
             do {
-                _ = try await webView.callAsyncJavaScript(
-                    "(() => { window.webInspectorKit?.setPreferredDepth?.(depth); return null; })();",
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.setPreferredDepth?.(depth)",
                     arguments: ["depth": depth],
-                    in: nil,
                     contentWorld: .page
                 )
             } catch {
@@ -270,10 +266,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         guard let webView else { return }
         Task { @MainActor in
             do {
-                _ = try await webView.callAsyncJavaScript(
-                    "(() => { window.webInspectorKit?.requestDocument?.(options); return null; })();",
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.requestDocument?.(options)",
                     arguments: ["options": ["depth": depth, "preserveState": preserveState]],
-                    in: nil,
                     contentWorld: .page
                 )
             } catch {
