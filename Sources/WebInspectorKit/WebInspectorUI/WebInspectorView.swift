@@ -67,21 +67,7 @@ public struct WebInspectorView: View {
     }
 
     public var body: some View {
-        ZStack {
-            WebInspectorWebContainer(bridge: model.webBridge)
-
-            if let errorMessage = model.webBridge.errorMessage {
-                ContentUnavailableView {
-                    Image(systemName:"exclamationmark.triangle")
-                        .foregroundStyle(.yellow)
-                } description: {
-                    Text(errorMessage)
-                }
-                .padding()
-                .frame(maxWidth: 320)
-                .transition(.opacity)
-            }
-        }
+        WebInspectorWebContainer(bridge: model.webBridge)
         .onAppear {
             model.handleAppear(webView: webView)
         }
@@ -128,6 +114,19 @@ private struct WebInspectorWebContainer: View {
     var body: some View {
         WebInspectorWebViewContainerRepresentable(bridge: bridge)
             .ignoresSafeArea()
+            .overlay{
+                if let errorMessage = bridge.errorMessage {
+                    ContentUnavailableView {
+                        Image(systemName:"exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                    } description: {
+                        Text(errorMessage)
+                    }
+                    .padding()
+                    .frame(maxWidth: 320)
+                    .transition(.opacity)
+                }
+            }
     }
 }
 
