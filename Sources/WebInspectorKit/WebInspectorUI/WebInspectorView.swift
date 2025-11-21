@@ -67,55 +67,9 @@ public struct WebInspectorView: View {
     }
 
     public var body: some View {
-        WebInspectorWebContainer(bridge: model.webBridge)
-        .onAppear {
-            model.handleAppear(webView: webView)
-        }
-        .onChange(of: webView) {
-            model.handleAppear(webView: webView)
-        }
-        .onDisappear {
-            model.handleDisappear()
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.toggleSelectionMode()
-                } label: {
-                    Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
-                }
-                .disabled(!model.hasPageWebView)
-            }
-            ToolbarItem(placement: .secondaryAction) {
-                Button {
-                    Task { await model.reload() }
-                } label: {
-                    if model.webBridge.isLoading {
-                        ProgressView()
-                    } else {
-                        Label{
-                            Text("reload")
-                        }icon:{
-                            Image(systemName: "arrow.clockwise")
-                        }
-                    }
-                }
-                .disabled(model.webBridge.isLoading)
-            }
-        }
-    }
-}
-
-// MARK: - WebContainer Representable
-
-private struct WebInspectorWebContainer: View {
-    var bridge: WebInspectorBridge
-
-    var body: some View {
-        WebInspectorWebViewContainerRepresentable(bridge: bridge)
-            .ignoresSafeArea()
+        tabContent
             .overlay{
-                if let errorMessage = bridge.errorMessage {
+                if let errorMessage = model.webBridge.errorMessage {
                     ContentUnavailableView {
                         Image(systemName:"exclamationmark.triangle")
                             .foregroundStyle(.yellow)
@@ -127,6 +81,201 @@ private struct WebInspectorWebContainer: View {
                     .transition(.opacity)
                 }
             }
+            .onAppear {
+                model.handleAppear(webView: webView)
+            }
+            .onChange(of: webView) {
+                model.handleAppear(webView: webView)
+            }
+            .onDisappear {
+                model.handleDisappear()
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.toggleSelectionMode()
+                    } label: {
+                        Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
+                    }
+                    .disabled(!model.hasPageWebView)
+                }
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        Task { await model.reload() }
+                    } label: {
+                        if model.webBridge.isLoading {
+                            ProgressView()
+                        } else {
+                            Label{
+                                Text("reload")
+                            }icon:{
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                    }
+                    .disabled(model.webBridge.isLoading)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+#if canImport(UIKit)
+        WebInspectorTabBarContainer(model: model)
+            .ignoresSafeArea()
+#else
+        TabView {
+            WebInspectorWebContainer(bridge: model.webBridge)
+                .tabItem {
+                    Label {
+                        Text(InspectorTab.tree.title)
+                    } icon: {
+                        Image(systemName: InspectorTab.tree.systemImage)
+                    }
+                }
+            DOMDetailView(model)
+                .tabItem {
+                    Label {
+                        Text(InspectorTab.detail.title)
+                    } icon: {
+                        Image(systemName: InspectorTab.detail.systemImage)
+                    }
+                }
+        }
+#endif
+    }
+}
+
+// MARK: - Tab Metadata
+
+private enum InspectorTab: Int, CaseIterable {
+    case tree
+    case detail
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .tree:
+            LocalizedStringResource("inspector.tab.tree", bundle: .module)
+        case .detail:
+            LocalizedStringResource("inspector.tab.detail", bundle: .module)
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .tree:
+            "chevron.left.forwardslash.chevron.right"
+        case .detail:
+            "info.circle"
+        }
+    }
+
+    var tag: Int { rawValue }
+}
+
+#if canImport(UIKit)
+// MARK: - Tab Bar Container
+
+private struct WebInspectorTabBarContainer: UIViewControllerRepresentable {
+    var model: WebInspectorViewModel
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            model: model
+        )
+    }
+
+    func makeUIViewController(context: Context) -> UITabBarController {
+        let tabBarController = UITabBarController()
+        tabBarController.viewControllers = context.coordinator.controllers
+        tabBarController.view.backgroundColor = .clear
+        tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
+        return tabBarController
+    }
+
+    func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
+        
+    }
+    @MainActor
+    final class Coordinator {
+        var controllers: [UIViewController] { [pageController, domHost] }
+
+        private let pageController: WebInspectorPageViewController
+        private let domHost: UIHostingController<DOMDetailView>
+
+        init(model: WebInspectorViewModel) {
+            pageController = WebInspectorPageViewController(bridge: model.webBridge)
+            domHost = UIHostingController(rootView: DOMDetailView(model))
+
+            configureTabItems()
+        }
+
+        private func configureTabItems() {
+            setTabBarItem(for: .tree, controller: pageController)
+            setTabBarItem(for: .detail, controller: domHost)
+        }
+
+        private func setTabBarItem(for tab: InspectorTab, controller: UIViewController) {
+            controller.tabBarItem = UITabBarItem(
+                title: String(localized: tab.title),
+                image: UIImage(systemName: tab.systemImage),
+                tag: tab.tag
+            )
+        }
+    }
+}
+
+private final class WebInspectorPageViewController: UIViewController {
+    private var bridge: WebInspectorBridge
+    private var webView: WKWebView?
+
+    init(bridge: WebInspectorBridge) {
+        self.bridge = bridge
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let webView = bridge.makeInspectorWebView()
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.webView = webView
+        view = webView
+    }
+
+    @MainActor deinit {
+        if let webView {
+            bridge.teardownInspectorWebView(webView)
+        }
+    }
+
+    func updateBridgeIfNeeded(_ newBridge: WebInspectorBridge) {
+        guard bridge !== newBridge else { return }
+        if let webView {
+            bridge.teardownInspectorWebView(webView)
+        }
+        bridge = newBridge
+        guard isViewLoaded else { return }
+        let newWebView = newBridge.makeInspectorWebView()
+        newWebView.frame = view.bounds
+        newWebView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView = newWebView
+        view = newWebView
+    }
+}
+#endif
+
+// MARK: - WebContainer Representable
+
+private struct WebInspectorWebContainer: View {
+    var bridge: WebInspectorBridge
+
+    var body: some View {
+        WebInspectorWebViewContainerRepresentable(bridge: bridge)
+            .ignoresSafeArea()
     }
 }
 
