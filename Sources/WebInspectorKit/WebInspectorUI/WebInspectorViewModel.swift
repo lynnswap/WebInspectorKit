@@ -14,7 +14,7 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 
 @MainActor
 @Observable
-final class WebInspectorViewModel {
+public final class WebInspectorViewModel {
     @ObservationIgnored private weak var currentPageWebView: WKWebView?
     @ObservationIgnored private weak var lastWebView: WKWebView?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
@@ -29,6 +29,8 @@ final class WebInspectorViewModel {
     var hasPageWebView: Bool {
         webBridge.contentModel.pageWebView != nil
     }
+
+    public init() {}
 
     func handleAppear(webView: WKWebView?) {
         webBridge.errorMessage = nil

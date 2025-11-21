@@ -23,13 +23,17 @@ struct WebInspectorSelectionResult: Decodable {
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    var webView: WKWebView?
+    private var model: WebInspectorViewModel
+    private var webView: WKWebView?
+  
     @Environment(\.dismiss) private var dismiss
 
-    @State private var model = WebInspectorViewModel()
-
-    public init(webView: WKWebView?) {
+    public init(
+        _ viewModel: WebInspectorViewModel,
+        webView: WKWebView?
+    ) {
         self.webView = webView
+        self.model = viewModel
     }
 
     public var body: some View {
@@ -227,11 +231,12 @@ enum WebInspectorError: LocalizedError {
 private struct WebInspectorPreviewHost: View {
     @State private var model :WebInspectorPreviewModel?
     @State private var isPresented:Bool = true
+    @State private var inspectorModel = WebInspectorViewModel()
     var body: some View {
         if let model {
             PreviewWebViewRepresentable(webView: model.webView)
                 .sheet(isPresented: $isPresented) {
-                    WebInspectorView(webView: model.webView)
+                    WebInspectorView(inspectorModel, webView: model.webView)
                         .presentationBackgroundInteraction(.enabled)
                         .presentationDetents([.medium, .large])
                         .presentationContentInteraction(.scrolls)
