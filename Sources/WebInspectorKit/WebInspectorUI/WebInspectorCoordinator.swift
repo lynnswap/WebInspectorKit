@@ -12,7 +12,7 @@ import OSLog
 private let coordinatorLogger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorCoordinator")
 
 @MainActor
-final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+final class WebInspectorCoordinator: NSObject {
     static let handlerName = "webInspector"
 
     private struct InspectorProtocolRequest {
@@ -43,28 +43,6 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         
         if !isReady{
             isReady = false
-        }
-    }
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == Self.handlerName else { return }
-        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
-
-        switch type {
-        case "protocol":
-            handleProtocolPayload(body["payload"])
-        case "ready":
-            isReady = true
-            Task{
-                await flushPendingWork()
-                bridge?.isLoading = false
-            }
-        case "log":
-            if let payload = body["payload"] as? [String: Any], let message = payload["message"] as? String {
-                coordinatorLogger.debug("inspector log: \(message, privacy: .public)")
-            }
-        default:
-            break
         }
     }
 
@@ -103,14 +81,6 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                 await requestDocumentNow(depth: depth, preserveState: preserveState)
             }
         }
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        coordinatorLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        coordinatorLogger.error("inspector load failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func detach(webView: WKWebView) {
@@ -291,5 +261,39 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         } catch {
             coordinatorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+}
+
+extension WebInspectorCoordinator: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.handlerName else { return }
+        guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
+
+        switch type {
+        case "protocol":
+            handleProtocolPayload(body["payload"])
+        case "ready":
+            isReady = true
+            Task{
+                await flushPendingWork()
+                bridge?.isLoading = false
+            }
+        case "log":
+            if let payload = body["payload"] as? [String: Any], let message = payload["message"] as? String {
+                coordinatorLogger.debug("inspector log: \(message, privacy: .public)")
+            }
+        default:
+            break
+        }
+    }
+}
+
+extension WebInspectorCoordinator: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        coordinatorLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        coordinatorLogger.error("inspector load failed: \(error.localizedDescription, privacy: .public)")
     }
 }
