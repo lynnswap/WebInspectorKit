@@ -33,9 +33,11 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         super.init()
     }
 
-    func attach(webView: WKWebView) {
+    func attach(webView: WKWebView, resetReadiness: Bool = true) {
         self.webView = webView
-        isReady = false
+        if resetReadiness {
+            isReady = false
+        }
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

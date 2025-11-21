@@ -30,7 +30,7 @@ final class WebInspectorBridge {
     var errorMessage: String?
     let contentModel = WebInspectorContentModel()
 
-    @ObservationIgnored private(set) weak var inspectorWebView: WKWebView?
+    @ObservationIgnored private(set) var inspectorWebView: WKWebView?
     @ObservationIgnored private lazy var coordinator = WebInspectorCoordinator(bridge: self)
 
     init() {
@@ -38,9 +38,13 @@ final class WebInspectorBridge {
     }
 
     func makeInspectorWebView() -> WKWebView {
+        if let inspectorWebView {
+            configureInspectorWebView(inspectorWebView, resetReadiness: false)
+            return inspectorWebView
+        }
+
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.userContentController.add(coordinator, name: WebInspectorCoordinator.handlerName)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
 
@@ -56,18 +60,14 @@ final class WebInspectorBridge {
         webView.scrollView.alwaysBounceVertical = true
 #endif
 
-        webView.navigationDelegate = coordinator
-        coordinator.attach(webView: webView)
         inspectorWebView = webView
+        configureInspectorWebView(webView, resetReadiness: true)
         loadInspector(in: webView)
         return webView
     }
 
     func teardownInspectorWebView(_ webView: WKWebView) {
         coordinator.detach(webView: webView)
-        if inspectorWebView === webView {
-            inspectorWebView = nil
-        }
     }
 
     private func loadInspector(in webView: WKWebView) {
@@ -84,6 +84,14 @@ final class WebInspectorBridge {
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
         coordinator.applyMutationBundle(payload)
+    }
+
+    private func configureInspectorWebView(_ webView: WKWebView, resetReadiness: Bool) {
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
+        controller.add(coordinator, name: WebInspectorCoordinator.handlerName)
+        webView.navigationDelegate = coordinator
+        coordinator.attach(webView: webView, resetReadiness: resetReadiness)
     }
 
     func updateSearchTerm(_ term: String) {

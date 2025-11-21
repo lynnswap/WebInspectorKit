@@ -4,8 +4,6 @@
     if (window.webInspectorKit && window.webInspectorKit.__installed)
         return;
 
-    const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.webInspector;
-
     const dom = {
         tree: document.getElementById("dom-tree"),
         empty: document.getElementById("dom-empty"),
@@ -98,14 +96,12 @@
     }
 
     function sendProtocolMessage(message) {
-        if (!handler)
-            return;
         const payload = typeof message === "string" ? message : JSON.stringify(message);
-        handler.postMessage({ type: "protocol", payload });
+        window.webkit.messageHandlers.webInspector.postMessage({ type: "protocol", payload });
     }
 
     function sendCommand(method, params = {}) {
-        if (!handler)
+        if (!window.webkit.messageHandlers.webInspector)
             return Promise.reject(new Error("host unavailable"));
         const id = ++protocolState.lastId;
         const message = { id, method, params };
@@ -169,12 +165,10 @@
             ? error.stack
             : (error && error.message ? error.message : String(error));
         console.error(`[tweetpd-inspector] ${context}:`, error);
-        if (handler) {
-            try {
-                handler.postMessage({ type: "log", payload: { message: `${context}: ${details}` } });
-            } catch {
-                // ignore logging failures
-            }
+        try {
+            window.webkit.messageHandlers.webInspector.postMessage({ type: "log", payload: { message: `${context}: ${details}` } });
+        } catch {
+            // ignore logging failures
         }
     }
 
@@ -1657,12 +1651,10 @@
             dom.collapseAll.addEventListener("click", collapseAll);
         if (dom.expandAll)
             dom.expandAll.addEventListener("click", expandAll);
-        if (handler) {
-            try {
-                handler.postMessage({ type: "ready" });
-            } catch {
-                // ignore
-            }
+        try {
+            window.webkit.messageHandlers.webInspector.postMessage({ type: "ready" });
+        } catch {
+            // ignore
         }
         requestDocument({ preserveState: false }).catch(() => {});
     }
