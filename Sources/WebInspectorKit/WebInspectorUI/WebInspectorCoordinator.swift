@@ -55,8 +55,10 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             handleProtocolPayload(body["payload"])
         case "ready":
             isReady = true
-            flushPendingWork()
-            bridge?.isLoading = false
+            Task{
+                await flushPendingWork()
+                bridge?.isLoading = false
+            }
         case "log":
             if let payload = body["payload"] as? [String: Any], let message = payload["message"] as? String {
                 coordinatorLogger.debug("inspector log: \(message, privacy: .public)")
@@ -68,7 +70,9 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     func applyMutationBundle(_ payload: WebInspectorBridge.PendingBundle) {
         if isReady {
-            applyBundleNow(payload)
+            Task{
+                await applyBundleNow(payload)
+            }
         } else {
             pendingBundles.append(payload)
         }
@@ -77,21 +81,27 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     func updateSearchTerm(_ term: String) {
         pendingSearchTerm = term
         if isReady {
-            applySearchTermNow(term)
+            Task{
+                await applySearchTermNow(term)
+            }
         }
     }
 
     func setPreferredDepth(_ depth: Int) {
         pendingPreferredDepth = depth
         if isReady {
-            applyPreferredDepthNow(depth)
+            Task{
+                await applyPreferredDepthNow(depth)
+            }
         }
     }
 
     func requestDocument(depth: Int, preserveState: Bool) {
         pendingDocumentRequest = (depth, preserveState)
         if isReady {
-            requestDocumentNow(depth: depth, preserveState: preserveState)
+            Task{
+                await requestDocumentNow(depth: depth, preserveState: preserveState)
+            }
         }
     }
 
@@ -136,8 +146,7 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     }
 
     private func processProtocolRequest(_ request: InspectorProtocolRequest) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+        Task {
             do {
                 switch request.method {
                 case "DOM.getDocument":
@@ -146,7 +155,7 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                         throw WebInspectorError.scriptUnavailable
                     }
                     let payload = try await content.captureSnapshot(maxDepth: depth)
-                    self.sendResponse(id: request.id, result: payload.rawJSON)
+                    await self.sendResponse(id: request.id, result: payload.rawJSON)
                 case "DOM.requestChildNodes":
                     let depth = (request.params["depth"] as? Int) ?? WebInspectorConstants.subtreeDepth
                     let identifier = request.params["nodeId"] as? Int ?? 0
@@ -154,145 +163,133 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                         throw WebInspectorError.scriptUnavailable
                     }
                     let subtree = try await content.captureSubtree(identifier: identifier, maxDepth: depth)
-                    self.sendResponse(id: request.id, result: subtree.rawJSON)
+                    await self.sendResponse(id: request.id, result: subtree.rawJSON)
                 case "DOM.highlightNode":
                     if let identifier = request.params["nodeId"] as? Int {
                         await self.bridge?.contentModel.highlightDOMNode(id: identifier)
                     }
-                    self.sendResponse(id: request.id, result: [:])
+                    await self.sendResponse(id: request.id, result: [:])
                 case "Overlay.hideHighlight", "DOM.hideHighlight":
                     self.bridge?.contentModel.clearWebInspectorHighlight()
-                    self.sendResponse(id: request.id, result: [:])
+                    await self.sendResponse(id: request.id, result: [:])
                 default:
-                    self.sendError(id: request.id, message: "Unsupported method: \(request.method)")
+                    await self.sendError(id: request.id, message: "Unsupported method: \(request.method)")
                 }
             } catch {
-                self.sendError(id: request.id, message: error.localizedDescription)
+                await self.sendError(id: request.id, message: error.localizedDescription)
             }
         }
     }
 
-    private func dispatchToFrontend(_ message: Any) {
+    private func dispatchToFrontend(_ message: Any) async {
         guard let webView else { return }
-        Task { @MainActor in
-            do {
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.dispatchMessageFromBackend?.(message)",
-                    arguments: ["message": message],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("dispatch to frontend failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.dispatchMessageFromBackend?.(message)",
+                arguments: ["message": message],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("dispatch to frontend failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func sendResponse(id: Int, result: Any) {
+    private func sendResponse(id: Int, result: Any) async {
         var message: [String: Any] = ["id": id]
         message["result"] = result
-        dispatchToFrontend(message)
+        await dispatchToFrontend(message)
     }
 
-    private func sendError(id: Int, message: String) {
+    private func sendError(id: Int, message: String) async {
         let payload: [String: Any] = [
             "id": id,
             "error": ["message": message]
         ]
-        dispatchToFrontend(payload)
+        await dispatchToFrontend(payload)
     }
 
-    private func flushPendingWork() {
+    private func flushPendingWork() async {
         if let preferredDepth = pendingPreferredDepth {
-            applyPreferredDepthNow(preferredDepth)
+            await applyPreferredDepthNow(preferredDepth)
             pendingPreferredDepth = nil
         }
         if let request = pendingDocumentRequest {
-            requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
+            await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
             pendingDocumentRequest = nil
         }
         if !pendingBundles.isEmpty {
-            applyBundlesNow(pendingBundles)
+            await applyBundlesNow(pendingBundles)
             pendingBundles.removeAll()
         }
         if let term = pendingSearchTerm {
-            applySearchTermNow(term)
+            await applySearchTermNow(term)
             pendingSearchTerm = nil
         }
     }
 
-    private func applyBundlesNow(_ bundles: [WebInspectorBridge.PendingBundle]) {
+    private func applyBundlesNow(_ bundles: [WebInspectorBridge.PendingBundle]) async {
         guard let webView, !bundles.isEmpty else { return }
-        Task { @MainActor in
-            do {
-                let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.applyMutationBundles?.(bundles)",
-                    arguments: ["bundles": payloads],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.applyMutationBundles?.(bundles)",
+                arguments: ["bundles": payloads],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func applyBundleNow(_ payload: WebInspectorBridge.PendingBundle) {
+    private func applyBundleNow(_ payload: WebInspectorBridge.PendingBundle) async {
         guard let webView else { return }
-        Task { @MainActor in
-            do {
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.applyMutationBundle?.(bundle)",
-                    arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.applyMutationBundle?.(bundle)",
+                arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func applySearchTermNow(_ term: String) {
+    private func applySearchTermNow(_ term: String) async {
         guard let webView else { return }
-        Task { @MainActor in
-            do {
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.setSearchTerm?.(term)",
-                    arguments: ["term": term],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("send search term failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.setSearchTerm?.(term)",
+                arguments: ["term": term],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("send search term failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func applyPreferredDepthNow(_ depth: Int) {
+    private func applyPreferredDepthNow(_ depth: Int) async {
         guard let webView else { return }
-        Task { @MainActor in
-            do {
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.setPreferredDepth?.(depth)",
-                    arguments: ["depth": depth],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("send preferred depth failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.setPreferredDepth?.(depth)",
+                arguments: ["depth": depth],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("send preferred depth failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func requestDocumentNow(depth: Int, preserveState: Bool) {
+    private func requestDocumentNow(depth: Int, preserveState: Bool) async {
         guard let webView else { return }
-        Task { @MainActor in
-            do {
-                try await webView.callAsyncVoidJavaScript(
-                    "window.webInspectorKit?.requestDocument?.(options)",
-                    arguments: ["options": ["depth": depth, "preserveState": preserveState]],
-                    contentWorld: .page
-                )
-            } catch {
-                coordinatorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.requestDocument?.(options)",
+                arguments: ["options": ["depth": depth, "preserveState": preserveState]],
+                contentWorld: .page
+            )
+        } catch {
+            coordinatorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
