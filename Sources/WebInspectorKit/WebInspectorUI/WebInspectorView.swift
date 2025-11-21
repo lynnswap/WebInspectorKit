@@ -25,8 +25,6 @@ struct WebInspectorSelectionResult: Decodable {
 public struct WebInspectorView: View {
     private var model: WebInspectorViewModel
     private var webView: WKWebView?
-  
-    @Environment(\.dismiss) private var dismiss
 
     public init(
         _ viewModel: WebInspectorViewModel,
@@ -62,13 +60,6 @@ public struct WebInspectorView: View {
             model.handleDisappear()
         }
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                }
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     model.toggleSelectionMode()
@@ -232,10 +223,20 @@ private struct WebInspectorPreviewHost: View {
                 .sheet(isPresented: $isPresented) {
                     NavigationStack {
                         WebInspectorView(inspectorModel, webView: model.webView)
-                            .presentationBackgroundInteraction(.enabled)
-                            .presentationDetents([.medium, .large])
-                            .presentationContentInteraction(.scrolls)
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button {
+                                        isPresented = false
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                    }
+                                }
+                            }
+                           
                     }
+                    .presentationBackgroundInteraction(.enabled)
+                    .presentationDetents([.medium, .large])
+                    .presentationContentInteraction(.scrolls)
                 }
         }else{
             Color.clear
