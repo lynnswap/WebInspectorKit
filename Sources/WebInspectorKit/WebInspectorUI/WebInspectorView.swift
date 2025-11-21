@@ -37,51 +37,19 @@ public struct WebInspectorView: View {
     }
 
     public var body: some View {
+        ZStack {
+            WebInspectorWebContainer(bridge: model.webBridge)
 
-        NavigationStack {
-            ZStack {
-                WebInspectorWebContainer(bridge: model.webBridge)
-
-                if let errorMessage = model.webBridge.errorMessage {
-                    ContentUnavailableView {
-                        Image(systemName:"exclamationmark.triangle")
-                            .foregroundStyle(.yellow)
-                    } description: {
-                        Text(errorMessage)
-                    }
-                    .padding()
-                    .frame(maxWidth: 320)
-                    .transition(.opacity)
+            if let errorMessage = model.webBridge.errorMessage {
+                ContentUnavailableView {
+                    Image(systemName:"exclamationmark.triangle")
+                        .foregroundStyle(.yellow)
+                } description: {
+                    Text(errorMessage)
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        model.toggleSelectionMode()
-                    } label: {
-                        Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
-                    }
-                    .disabled(!model.hasPageWebView)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task { await model.reload() }
-                    } label: {
-                        if model.webBridge.isLoading {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                    }
-                    .disabled(model.webBridge.isLoading)
-                }
+                .padding()
+                .frame(maxWidth: 320)
+                .transition(.opacity)
             }
         }
         .onAppear {
@@ -92,6 +60,35 @@ public struct WebInspectorView: View {
         }
         .onDisappear {
             model.handleDisappear()
+        }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.toggleSelectionMode()
+                } label: {
+                    Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
+                }
+                .disabled(!model.hasPageWebView)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button {
+                    Task { await model.reload() }
+                } label: {
+                    if model.webBridge.isLoading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .disabled(model.webBridge.isLoading)
+            }
         }
     }
 }
@@ -233,10 +230,12 @@ private struct WebInspectorPreviewHost: View {
         if let model {
             PreviewWebViewRepresentable(webView: model.webView)
                 .sheet(isPresented: $isPresented) {
-                    WebInspectorView(inspectorModel, webView: model.webView)
-                        .presentationBackgroundInteraction(.enabled)
-                        .presentationDetents([.medium, .large])
-                        .presentationContentInteraction(.scrolls)
+                    NavigationStack {
+                        WebInspectorView(inspectorModel, webView: model.webView)
+                            .presentationBackgroundInteraction(.enabled)
+                            .presentationDetents([.medium, .large])
+                            .presentationContentInteraction(.scrolls)
+                    }
                 }
         }else{
             Color.clear
