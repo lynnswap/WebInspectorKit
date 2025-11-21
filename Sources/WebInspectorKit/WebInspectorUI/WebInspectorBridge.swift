@@ -6,11 +6,8 @@
 //
 
 import SwiftUI
-import OSLog
 import WebKit
 import Observation
-
-private let bridgeLogger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorBridge")
 
 enum WebInspectorConstants {
     static let defaultDepth = 4
@@ -21,81 +18,38 @@ enum WebInspectorConstants {
 @MainActor
 @Observable
 final class WebInspectorBridge {
-    struct PendingBundle {
-        let rawJSON: String
-        let preserveState: Bool
-    }
-
     var isLoading = false
     var errorMessage: String?
     let contentModel = WebInspectorContentModel()
-
-    @ObservationIgnored private(set) var inspectorWebView: WKWebView?
-    @ObservationIgnored private lazy var coordinator = WebInspectorCoordinator(bridge: self)
+    let inspectorModel = WebInspectorInspectorModel()
 
     init() {
         contentModel.bridge = self
+        inspectorModel.bridge = self
     }
 
     func makeInspectorWebView() -> WKWebView {
-        if let inspectorWebView {
-            coordinator.attach(webView: inspectorWebView)
-            return inspectorWebView
-        }
-
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-
-#if DEBUG
-        webView.isInspectable = true
-#endif
-
-#if canImport(UIKit)
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = true
-        webView.scrollView.alwaysBounceVertical = true
-#endif
-
-        inspectorWebView = webView
-        coordinator.attach(webView: webView)
-        loadInspector(in: webView)
-        return webView
+        inspectorModel.makeInspectorWebView()
     }
 
     func teardownInspectorWebView(_ webView: WKWebView) {
-        coordinator.detach(webView: webView)
-    }
-
-    private func loadInspector(in webView: WKWebView) {
-        guard
-            let mainURL = WebInspectorAssets.mainFileURL,
-            let baseURL = WebInspectorAssets.resourcesDirectory
-        else {
-            bridgeLogger.error("missing inspector resources")
-            return
-        }
-        webView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
+        inspectorModel.teardownInspectorWebView(webView)
     }
 
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
-        let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
-        coordinator.applyMutationBundle(payload)
+        inspectorModel.enqueueMutationBundle(rawJSON, preserveState: preserveState)
     }
 
     func updateSearchTerm(_ term: String) {
-        coordinator.updateSearchTerm(term)
+        inspectorModel.updateSearchTerm(term)
     }
 
     func updatePreferredDepth(_ depth: Int) {
-        coordinator.setPreferredDepth(depth)
+        inspectorModel.setPreferredDepth(depth)
     }
 
     func requestDocument(depth: Int, preserveState: Bool) {
-        coordinator.requestDocument(depth: depth, preserveState: preserveState)
+        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
     }
 
     func handleSnapshotFromPage(_ package: WebInspectorSnapshotPackage) {
