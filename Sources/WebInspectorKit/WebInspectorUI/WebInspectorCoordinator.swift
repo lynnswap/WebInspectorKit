@@ -208,12 +208,28 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             pendingDocumentRequest = nil
         }
         if !pendingBundles.isEmpty {
-            pendingBundles.forEach { applyBundleNow($0) }
+            applyBundlesNow(pendingBundles)
             pendingBundles.removeAll()
         }
         if let term = pendingSearchTerm {
             applySearchTermNow(term)
             pendingSearchTerm = nil
+        }
+    }
+
+    private func applyBundlesNow(_ bundles: [WebInspectorBridge.PendingBundle]) {
+        guard let webView, !bundles.isEmpty else { return }
+        Task { @MainActor in
+            do {
+                let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
+                try await webView.callAsyncVoidJavaScript(
+                    "window.webInspectorKit?.applyMutationBundles?.(bundles)",
+                    arguments: ["bundles": payloads],
+                    contentWorld: .page
+                )
+            } catch {
+                coordinatorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

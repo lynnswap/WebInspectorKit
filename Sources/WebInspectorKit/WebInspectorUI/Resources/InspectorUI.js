@@ -207,6 +207,19 @@
         messages.forEach(message => dispatchMessageFromBackend(message));
     }
 
+    function applyMutationBundles(bundles) {
+        if (!bundles) {
+            return;
+        }
+        if (!Array.isArray(bundles)) {
+            applyMutationBundle(bundles);
+            return;
+        }
+        for (const entry of bundles) {
+            applyMutationBundle(entry);
+        }
+    }
+
     class FrameDebouncer {
         constructor(callback) {
             this._callback = callback;
@@ -1667,6 +1680,7 @@
     const webInspectorKit = {
         dispatchMessageFromBackend,
         applyMutationBundle,
+        applyMutationBundles,
         requestDocument,
         setSearchTerm,
         setPreferredDepth,
