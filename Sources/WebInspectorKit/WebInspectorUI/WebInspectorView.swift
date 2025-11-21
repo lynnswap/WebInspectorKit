@@ -213,6 +213,7 @@ private struct WebInspectorPreviewHost: View {
     @State private var model :WebInspectorPreviewModel?
     @State private var isPresented:Bool = true
     @State private var inspectorModel = WebInspectorViewModel()
+    @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         if let model {
             PreviewWebViewRepresentable(webView: model.webView)
@@ -228,8 +229,10 @@ private struct WebInspectorPreviewHost: View {
                                     }
                                 }
                             }
+                            .background(backgroundColor.opacity(0.5))
                            
                     }
+                   
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDetents([.medium, .large])
                     .presentationContentInteraction(.scrolls)
@@ -239,6 +242,13 @@ private struct WebInspectorPreviewHost: View {
                 .onAppear(){
                     self.model = WebInspectorPreviewModel(url:URL(string: "https://www.google.com")!)
                 }
+        }
+    }
+    private var backgroundColor:Color{
+        if colorScheme == .dark{
+            Color(red: 43/255, green: 43/255, blue: 43/255)
+        }else{
+            Color.white
         }
     }
 }

@@ -75,10 +75,8 @@ html {
 }
 
 .dom-tree-panel {
-    background: var(--inspector-panel);
     border-radius: 16px;
     padding: 12px 0;
-    border: 1px solid var(--inspector-border);
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -118,7 +116,6 @@ html {
 }
 
 .dom-tree::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
     border-radius: 4px;
 }
 
