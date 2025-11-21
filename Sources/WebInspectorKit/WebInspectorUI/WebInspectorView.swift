@@ -26,7 +26,7 @@ public struct WebInspectorView: View {
     var webView: WKWebView?
     @Environment(\.dismiss) private var dismiss
 
-    @State private var viewModel = WebInspectorViewModel()
+    @State private var model = WebInspectorViewModel()
 
     public init(webView: WKWebView?) {
         self.webView = webView
@@ -36,9 +36,9 @@ public struct WebInspectorView: View {
 
         NavigationStack {
             ZStack {
-                WebInspectorWebContainer(bridge: viewModel.webBridge)
+                WebInspectorWebContainer(bridge: model.webBridge)
 
-                if let errorMessage = viewModel.webBridge.errorMessage {
+                if let errorMessage = model.webBridge.errorMessage {
                     VStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.title)
@@ -63,34 +63,34 @@ public struct WebInspectorView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        viewModel.toggleSelectionMode()
+                        model.toggleSelectionMode()
                     } label: {
-                        Image(systemName: viewModel.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
+                        Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
                     }
-                    .disabled(!viewModel.hasPageWebView)
+                    .disabled(!model.hasPageWebView)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        Task { await viewModel.reload() }
+                        Task { await model.reload() }
                     } label: {
-                        if viewModel.webBridge.isLoading {
+                        if model.webBridge.isLoading {
                             ProgressView()
                         } else {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
-                    .disabled(viewModel.webBridge.isLoading)
+                    .disabled(model.webBridge.isLoading)
                 }
             }
         }
         .onAppear {
-            viewModel.handleAppear(webView: webView)
+            model.handleAppear(webView: webView)
         }
         .onChange(of: webView) {
-            viewModel.handleAppear(webView: webView)
+            model.handleAppear(webView: webView)
         }
         .onDisappear {
-            viewModel.handleDisappear()
+            model.handleDisappear()
         }
     }
 }
