@@ -1527,11 +1527,53 @@
         return fragment;
     }
 
+    function buildSelectionPath(node) {
+        if (!node)
+            return [];
+        const labels = [];
+        let current = node;
+        let guard = 0;
+        while (current && guard < 200) {
+            labels.unshift(renderPreview(current));
+            if (!current.parentId)
+                break;
+            current = state.nodes.get(current.parentId);
+            guard++;
+        }
+        return labels;
+    }
+
+    function notifyNativeSelection(node) {
+        const handler = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorDomSelection : null;
+        if (!handler || typeof handler.postMessage !== "function")
+            return;
+        const payload = node ? {
+            id: typeof node.id === "number" ? node.id : null,
+            preview: renderPreview(node),
+            description: node.textContent ? trimText(node.textContent, 240) : "",
+            attributes: Array.isArray(node.attributes) ? node.attributes.map(attr => ({
+                name: attr.name || "",
+                value: attr.value || ""
+            })) : [],
+            path: buildSelectionPath(node)
+        } : null;
+        try {
+            handler.postMessage(payload);
+        } catch (error) {
+            try {
+                window.webkit.messageHandlers.webInspectorLog.postMessage(`domSelection: ${error && error.message ? error.message : error}`);
+            } catch {
+                // ignore logging failures
+            }
+        }
+    }
+
     function updateDetails(node) {
         if (!node) {
             dom.preview.textContent = "";
             dom.description.textContent = "";
             dom.attributes.innerHTML = "";
+            notifyNativeSelection(null);
             return;
         }
         dom.preview.textContent = renderPreview(node);
@@ -1555,6 +1597,7 @@
             dom.attributes.appendChild(dt);
             dom.attributes.appendChild(dd);
         }
+        notifyNativeSelection(node);
     }
 
     function renderPreview(node) {

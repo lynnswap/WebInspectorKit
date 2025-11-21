@@ -14,6 +14,38 @@ struct WebInspectorDOMUpdatePayload: Equatable {
     let rawJSON: String
 }
 
+public struct WebInspectorDOMAttribute: Equatable {
+    public let name: String
+    public let value: String
+
+    public init(name: String, value: String) {
+        self.name = name
+        self.value = value
+    }
+}
+
+public struct WebInspectorDOMSelection: Equatable {
+    public let nodeId: Int?
+    public let preview: String
+    public let description: String
+    public let attributes: [WebInspectorDOMAttribute]
+    public let path: [String]
+
+    public init(
+        nodeId: Int?,
+        preview: String,
+        description: String,
+        attributes: [WebInspectorDOMAttribute],
+        path: [String]
+    ) {
+        self.nodeId = nodeId
+        self.preview = preview
+        self.description = description
+        self.attributes = attributes
+        self.path = path
+    }
+}
+
 struct WebInspectorSelectionResult: Decodable {
     let cancelled: Bool
     let requiredDepth: Int

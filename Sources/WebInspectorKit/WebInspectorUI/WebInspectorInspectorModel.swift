@@ -19,6 +19,7 @@ final class WebInspectorInspectorModel: NSObject {
         case protocolMessage = "webInspectorProtocol"
         case ready = "webInspectorReady"
         case log = "webInspectorLog"
+        case domSelection = "webInspectorDomSelection"
     }
 
     private struct InspectorProtocolRequest {
@@ -318,7 +319,36 @@ extension WebInspectorInspectorModel: WKScriptMessageHandler {
             } else if let logMessage = message.body as? String {
                 inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
             }
+        case .domSelection:
+            if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
+                bridge?.updateDomSelection(WebInspectorDOMSelection(dictionary: dictionary))
+            } else {
+                bridge?.updateDomSelection(nil)
+            }
         }
+    }
+}
+
+private extension WebInspectorDOMSelection {
+    init(dictionary: [String: Any]) {
+        let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
+        let preview = dictionary["preview"] as? String ?? ""
+        let description = dictionary["description"] as? String ?? ""
+        let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
+        let attributes = attributesPayload.compactMap { entry -> WebInspectorDOMAttribute? in
+            guard let name = entry["name"] as? String else { return nil }
+            let value = entry["value"] as? String ?? ""
+            return WebInspectorDOMAttribute(name: name, value: value)
+        }
+        let path = dictionary["path"] as? [String] ?? []
+
+        self.init(
+            nodeId: nodeId,
+            preview: preview,
+            description: description,
+            attributes: attributes,
+            path: path
+        )
     }
 }
 

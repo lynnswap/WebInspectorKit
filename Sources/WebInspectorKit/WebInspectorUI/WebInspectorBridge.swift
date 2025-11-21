@@ -20,6 +20,7 @@ enum WebInspectorConstants {
 public final class WebInspectorBridge {
     var isLoading = false
     var errorMessage: String?
+    var domSelection: WebInspectorDOMSelection?
     let contentModel = WebInspectorContentModel()
     let inspectorModel = WebInspectorInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
@@ -51,6 +52,7 @@ public final class WebInspectorBridge {
 
     func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
+        domSelection = nil
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -72,6 +74,7 @@ public final class WebInspectorBridge {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
         lastPageWebView = nil
+        domSelection = nil
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -120,5 +123,9 @@ public final class WebInspectorBridge {
     func handleDomUpdateFromPage(_ payload: WebInspectorDOMUpdatePayload) {
         isLoading = false
         enqueueMutationBundle(payload.rawJSON, preserveState: true)
+    }
+
+    func updateDomSelection(_ selection: WebInspectorDOMSelection?) {
+        domSelection = selection
     }
 }
