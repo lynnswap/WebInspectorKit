@@ -43,16 +43,13 @@ public struct WebInspectorView: View {
                 WebInspectorWebContainer(bridge: model.webBridge)
 
                 if let errorMessage = model.webBridge.errorMessage {
-                    VStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.title)
-                            .foregroundStyle(.orange)
+                    ContentUnavailableView {
+                        Image(systemName:"exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                    } description: {
                         Text(errorMessage)
-                            .multilineTextAlignment(.center)
-                            .font(.callout)
                     }
                     .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .frame(maxWidth: 320)
                     .transition(.opacity)
                 }
