@@ -41,10 +41,6 @@ public final class WebInspectorBridge {
         inspectorModel.enqueueMutationBundle(rawJSON, preserveState: preserveState)
     }
 
-    func updateSearchTerm(_ term: String) {
-        inspectorModel.updateSearchTerm(term)
-    }
-
     func updatePreferredDepth(_ depth: Int) {
         inspectorModel.setPreferredDepth(depth)
     }

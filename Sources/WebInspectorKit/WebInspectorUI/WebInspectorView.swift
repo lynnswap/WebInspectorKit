@@ -88,25 +88,10 @@ public struct WebInspectorView: View {
 
 private struct WebInspectorWebContainer: View {
     var bridge: WebInspectorBridge
-    @State private var searchText = ""
-    @State private var lastSubmittedSearchTerm: String?
 
     var body: some View {
         WebInspectorWebViewContainerRepresentable(bridge: bridge)
             .ignoresSafeArea()
-            .searchable(text: $searchText)
-            .onAppear {
-                submitSearchTerm(searchText, force: true)
-            }
-            .onChange(of: searchText) {
-                submitSearchTerm(searchText)
-            }
-    }
-
-    private func submitSearchTerm(_ term: String, force: Bool = false) {
-        guard force || lastSubmittedSearchTerm != term else { return }
-        lastSubmittedSearchTerm = term
-        bridge.updateSearchTerm(term)
     }
 }
 

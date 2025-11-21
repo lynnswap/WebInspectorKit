@@ -36,7 +36,6 @@ final class WebInspectorInspectorModel: NSObject {
     private(set) var webView: WKWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
-    private var pendingSearchTerm: String?
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
 
@@ -76,15 +75,6 @@ final class WebInspectorInspectorModel: NSObject {
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
         applyMutationBundle(payload)
-    }
-
-    func updateSearchTerm(_ term: String) {
-        pendingSearchTerm = term
-        if isReady {
-            Task {
-                await applySearchTermNow(term)
-            }
-        }
     }
 
     func setPreferredDepth(_ depth: Int) {
@@ -252,10 +242,6 @@ final class WebInspectorInspectorModel: NSObject {
             await applyBundlesNow(pendingBundles)
             pendingBundles.removeAll()
         }
-        if let term = pendingSearchTerm {
-            await applySearchTermNow(term)
-            pendingSearchTerm = nil
-        }
     }
 
     private func applyBundlesNow(_ bundles: [PendingBundle]) async {
@@ -282,19 +268,6 @@ final class WebInspectorInspectorModel: NSObject {
             )
         } catch {
             inspectorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applySearchTermNow(_ term: String) async {
-        guard let webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.setSearchTerm?.(term)",
-                arguments: ["term": term],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send search term failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
