@@ -7,9 +7,6 @@
     const dom = {
         tree: document.getElementById("dom-tree"),
         empty: document.getElementById("dom-empty"),
-        summary: document.getElementById("dom-tree-summary"),
-        collapseAll: document.getElementById("collapse-all"),
-        expandAll: document.getElementById("expand-all"),
         preview: document.getElementById("node-preview"),
         description: document.getElementById("node-description"),
         attributes: document.getElementById("node-attributes")
@@ -20,12 +17,6 @@
             dom.tree = document.getElementById("dom-tree");
         if (!dom.empty)
             dom.empty = document.getElementById("dom-empty");
-        if (!dom.summary)
-            dom.summary = document.getElementById("dom-tree-summary");
-        if (!dom.collapseAll)
-            dom.collapseAll = document.getElementById("collapse-all");
-        if (!dom.expandAll)
-            dom.expandAll = document.getElementById("expand-all");
         if (!dom.preview)
             dom.preview = document.getElementById("node-preview");
         if (!dom.description)
@@ -526,7 +517,6 @@
 
             if (!snapshot || !snapshot.root) {
                 dom.empty.hidden = false;
-                dom.summary.textContent = "DOM情報が見つかりません";
                 dom.preview.textContent = "";
                 dom.description.textContent = "";
                 dom.attributes.innerHTML = "";
@@ -536,14 +526,11 @@
             dom.empty.hidden = true;
 
             const normalizedRoot = normalizeNodeDescriptor(snapshot.root);
-            if (!normalizedRoot) {
-                dom.summary.textContent = "DOM情報が見つかりません";
+            if (!normalizedRoot)
                 return;
-            }
             snapshot.root = normalizedRoot;
             indexNode(normalizedRoot, 0, null);
             dom.tree.appendChild(buildNode(normalizedRoot));
-            dom.summary.textContent = `DOM Nodes: ${state.nodes.size.toLocaleString()}`;
 
             if (preserveState && preservedOpenState.size) {
                 preservedOpenState.forEach((value, key) => {
@@ -1603,7 +1590,6 @@
     function applyFilter() {
         if (!state.snapshot || !state.snapshot.root)
             return;
-        let matches = 0;
         const term = state.filter;
 
         function filterNode(node) {
@@ -1629,39 +1615,13 @@
             if (element)
                 element.classList.toggle("is-filtered-out", !shouldShow);
 
-            if (nodeMatches)
-                matches += 1;
-
             return nodeMatches || childMatches;
         }
 
         filterNode(state.snapshot.root);
-
-        if (term) {
-            dom.summary.textContent = `Filter: "${term}" (${matches} 件)`;
-        } else {
-            dom.summary.textContent = `DOM Nodes: ${state.nodes.size.toLocaleString()}`;
-        }
-    }
-
-    function collapseAll() {
-        state.nodes.forEach((_value, nodeId) => {
-            const defaultExpanded = nodeId === state.snapshot?.root?.id;
-            setNodeExpanded(nodeId, !!defaultExpanded);
-        });
-    }
-
-    function expandAll() {
-        state.nodes.forEach((_value, nodeId) => {
-            setNodeExpanded(nodeId, true);
-        });
     }
 
     function attachEventListeners() {
-        if (dom.collapseAll)
-            dom.collapseAll.addEventListener("click", collapseAll);
-        if (dom.expandAll)
-            dom.expandAll.addEventListener("click", expandAll);
         try {
             window.webkit.messageHandlers.webInspectorReady.postMessage(true);
         } catch {
