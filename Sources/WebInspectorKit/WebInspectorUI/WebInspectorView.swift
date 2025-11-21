@@ -130,8 +130,6 @@ extension WebInspectorWebViewContainerRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
-        nsView.navigationDelegate = nil
-        nsView.configuration.userContentController.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
         coordinator.teardownInspectorWebView(nsView)
     }
 }
@@ -150,8 +148,6 @@ extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        uiView.navigationDelegate = nil
-        uiView.configuration.userContentController.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
         coordinator.teardownInspectorWebView(uiView)
     }
 }

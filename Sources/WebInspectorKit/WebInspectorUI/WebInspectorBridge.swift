@@ -39,7 +39,7 @@ final class WebInspectorBridge {
 
     func makeInspectorWebView() -> WKWebView {
         if let inspectorWebView {
-            configureInspectorWebView(inspectorWebView, resetReadiness: false)
+            coordinator.attach(webView: inspectorWebView)
             return inspectorWebView
         }
 
@@ -61,7 +61,7 @@ final class WebInspectorBridge {
 #endif
 
         inspectorWebView = webView
-        configureInspectorWebView(webView, resetReadiness: true)
+        coordinator.attach(webView: webView)
         loadInspector(in: webView)
         return webView
     }
@@ -84,14 +84,6 @@ final class WebInspectorBridge {
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
         coordinator.applyMutationBundle(payload)
-    }
-
-    private func configureInspectorWebView(_ webView: WKWebView, resetReadiness: Bool) {
-        let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
-        controller.add(coordinator, name: WebInspectorCoordinator.handlerName)
-        webView.navigationDelegate = coordinator
-        coordinator.attach(webView: webView, resetReadiness: resetReadiness)
     }
 
     func updateSearchTerm(_ term: String) {

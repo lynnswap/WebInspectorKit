@@ -33,9 +33,15 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         super.init()
     }
 
-    func attach(webView: WKWebView, resetReadiness: Bool = true) {
+    func attach(webView: WKWebView) {
         self.webView = webView
-        if resetReadiness {
+        
+        let controller = webView.configuration.userContentController
+        controller.removeScriptMessageHandler(forName: WebInspectorCoordinator.handlerName)
+        controller.add(self, name: WebInspectorCoordinator.handlerName)
+        webView.navigationDelegate = self
+        
+        if !isReady{
             isReady = false
         }
     }
@@ -99,7 +105,8 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
 
     func detach(webView: WKWebView) {
         guard self.webView === webView else { return }
-        userContentControllerCleanup()
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
+        webView.navigationDelegate = nil
         self.webView = nil
         coordinatorLogger.debug("inspector detached")
     }
@@ -107,10 +114,6 @@ final class WebInspectorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
     @MainActor deinit {
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
         webView?.navigationDelegate = nil
-    }
-
-    private func userContentControllerCleanup() {
-        webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
