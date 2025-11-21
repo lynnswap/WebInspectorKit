@@ -275,10 +275,6 @@ final class WebInspectorCoordinator: NSObject {
             coordinatorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
         }
     }
-
-    private func removeMessageHandlers(from controller: WKUserContentController) {
-        HandlerName.allCases.forEach { controller.removeScriptMessageHandler(forName: $0.rawValue) }
-    }
 }
 
 extension WebInspectorCoordinator: WKScriptMessageHandler {
