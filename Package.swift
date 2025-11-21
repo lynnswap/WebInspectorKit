@@ -5,6 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "WebInspectorKit",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v18),.macOS(.v15)
     ],

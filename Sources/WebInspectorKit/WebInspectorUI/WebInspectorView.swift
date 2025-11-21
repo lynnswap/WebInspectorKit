@@ -68,14 +68,18 @@ public struct WebInspectorView: View {
                 }
                 .disabled(!model.hasPageWebView)
             }
-            ToolbarItem(placement: .confirmationAction) {
+            ToolbarItem(placement: .secondaryAction) {
                 Button {
                     Task { await model.reload() }
                 } label: {
                     if model.webBridge.isLoading {
                         ProgressView()
                     } else {
-                        Image(systemName: "arrow.clockwise")
+                        Label{
+                            Text("reload")
+                        }icon:{
+                            Image(systemName: "arrow.clockwise")
+                        }
                     }
                 }
                 .disabled(model.webBridge.isLoading)
