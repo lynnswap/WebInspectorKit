@@ -8,10 +8,12 @@
 import SwiftUI
 import WebKit
 import OSLog
+import Observation
 
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorInspectorModel")
 
 @MainActor
+@Observable
 final class WebInspectorInspectorModel: NSObject {
     private enum HandlerName: String, CaseIterable {
         case protocolMessage = "webInspectorProtocol"
