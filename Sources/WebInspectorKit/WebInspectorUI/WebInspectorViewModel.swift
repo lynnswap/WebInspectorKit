@@ -15,8 +15,6 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 @MainActor
 @Observable
 public final class WebInspectorViewModel {
-    @ObservationIgnored private weak var currentPageWebView: WKWebView?
-    @ObservationIgnored private weak var lastWebView: WKWebView?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -33,39 +31,15 @@ public final class WebInspectorViewModel {
     public init() {}
 
     func handleAppear(webView: WKWebView?) {
-        webBridge.errorMessage = nil
-        guard let webView else {
-            currentPageWebView = nil
-            webBridge.contentModel.webView = nil
-            webBridge.errorMessage = "WebView is not available."
-            return
-        }
-
-        let previousWebView = lastWebView
-        currentPageWebView = webView
-        webBridge.contentModel.webView = webView
-        lastWebView = webView
-
-        let needsReload = previousWebView == nil || previousWebView != webView
-        if needsReload {
-            Task { await reload() }
-        } else {
-            setAutoUpdateState(true)
-        }
+        webBridge.attachPageWebView(webView, requestedDepth: requestedDepth)
     }
 
     func handleDisappear() {
-        webBridge.contentModel.clearWebInspectorHighlight()
         cancelSelectionMode()
-        setAutoUpdateState(false)
 #if canImport(UIKit)
         restorePageScrollingState()
 #endif
-        if let currentPageWebView {
-            lastWebView = currentPageWebView
-        }
-        webBridge.contentModel.webView = nil
-        currentPageWebView = nil
+        webBridge.detachPageWebView(currentDepth: requestedDepth)
     }
 
     func reload(maxDepth: Int? = nil) async {
@@ -74,14 +48,8 @@ public final class WebInspectorViewModel {
             return
         }
 
-        webBridge.isLoading = true
-        webBridge.errorMessage = nil
-
         requestedDepth = maxDepth ?? requestedDepth
-        webBridge.updatePreferredDepth(requestedDepth)
-        webBridge.isLoading = false
-        webBridge.requestDocument(depth: requestedDepth, preserveState: false)
-        setAutoUpdateState(true)
+        await webBridge.reloadInspector(depth: requestedDepth, preserveState: false)
     }
 
     func toggleSelectionMode() {
@@ -99,8 +67,8 @@ public final class WebInspectorViewModel {
 #if canImport(UIKit)
         restorePageScrollingState()
 #endif
-        Task { @MainActor [webBridge] in
-            await webBridge.contentModel.cancelSelectionMode()
+        Task {
+            await webBridge.cancelSelectionMode()
         }
         isSelectingElement = false
     }
@@ -122,14 +90,13 @@ public final class WebInspectorViewModel {
 #endif
             }
             do {
-                let result = try await self.webBridge.contentModel.beginSelectionMode()
-                if Task.isCancelled || result.cancelled {
-                    return
+                if let targetDepth = try await self.webBridge.beginSelectionMode(currentDepth: self.requestedDepth) {
+                    if Task.isCancelled { return }
+                    self.requestedDepth = targetDepth
+                    await self.webBridge.reloadInspector(depth: targetDepth, preserveState: false)
                 }
-                let depth = max(self.requestedDepth, result.requiredDepth + 1)
-                await self.reload(maxDepth: depth)
             } catch is CancellationError {
-                await self.webBridge.contentModel.cancelSelectionMode()
+                await self.webBridge.cancelSelectionMode()
             } catch {
                 logger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
                 webBridge.errorMessage = error.localizedDescription
@@ -137,17 +104,9 @@ public final class WebInspectorViewModel {
         }
     }
 
-    private func setAutoUpdateState(_ enabled: Bool) {
-        guard webBridge.contentModel.webView != nil else { return }
-        let depth = requestedDepth
-        Task { @MainActor [webBridge] in
-            await webBridge.contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)
-        }
-    }
-
 #if canImport(UIKit)
     private func disablePageScrollingForSelection() {
-        guard let scrollView = currentPageWebView?.scrollView else { return }
+        guard let scrollView = webBridge.contentModel.webView?.scrollView else { return }
         if scrollBackup == nil {
             scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
         }
@@ -156,7 +115,7 @@ public final class WebInspectorViewModel {
     }
 
     private func restorePageScrollingState() {
-        guard let scrollView = currentPageWebView?.scrollView else {
+        guard let scrollView = webBridge.contentModel.webView?.scrollView else {
             scrollBackup = nil
             return
         }

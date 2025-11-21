@@ -22,6 +22,7 @@ final class WebInspectorBridge {
     var errorMessage: String?
     let contentModel = WebInspectorContentModel()
     let inspectorModel = WebInspectorInspectorModel()
+    @ObservationIgnored private weak var lastPageWebView: WKWebView?
 
     init() {
         contentModel.bridge = self
@@ -50,6 +51,69 @@ final class WebInspectorBridge {
 
     func requestDocument(depth: Int, preserveState: Bool) {
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+    }
+
+    func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
+        errorMessage = nil
+        let previousWebView = lastPageWebView
+        contentModel.webView = webView
+        guard let webView else {
+            errorMessage = "WebView is not available."
+            return
+        }
+        let needsReload = previousWebView == nil || previousWebView != webView
+        lastPageWebView = webView
+        Task {
+            if needsReload {
+                await self.reloadInspector(depth: requestedDepth, preserveState: false)
+            } else {
+                await self.configureAutoUpdate(enabled: true, depth: requestedDepth)
+            }
+        }
+    }
+
+    func detachPageWebView(currentDepth: Int) {
+        stopInspection(currentDepth: currentDepth)
+        contentModel.webView = nil
+        lastPageWebView = nil
+    }
+
+    func reloadInspector(depth: Int, preserveState: Bool) async {
+        guard contentModel.webView != nil else {
+            errorMessage = "WebView is not available."
+            return
+        }
+        isLoading = true
+        errorMessage = nil
+
+        updatePreferredDepth(depth)
+        isLoading = false
+        requestDocument(depth: depth, preserveState: preserveState)
+        await configureAutoUpdate(enabled: true, depth: depth)
+    }
+
+    func configureAutoUpdate(enabled: Bool, depth: Int) async {
+        await contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)
+    }
+
+    func stopInspection(currentDepth: Int) {
+        contentModel.clearWebInspectorHighlight()
+        Task {
+            await contentModel.cancelSelectionMode()
+            await contentModel.setAutoUpdate(enabled: false, maxDepth: currentDepth)
+        }
+    }
+
+    func beginSelectionMode(currentDepth: Int) async throws -> Int? {
+        let result = try await contentModel.beginSelectionMode()
+        if result.cancelled {
+            return nil
+        }
+        return max(currentDepth, result.requiredDepth + 1)
+    }
+
+    func cancelSelectionMode() async {
+        await contentModel.cancelSelectionMode()
     }
 
     func handleSnapshotFromPage(_ package: WebInspectorSnapshotPackage) {
