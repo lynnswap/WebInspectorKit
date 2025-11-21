@@ -20,21 +20,21 @@ public final class WebInspectorViewModel {
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
 #endif
 
-    var requestedDepth = WebInspectorConstants.defaultDepth
-    var isSelectingElement = false
-    var webBridge = WebInspectorBridge()
+    public private(set) var requestedDepth = WebInspectorConstants.defaultDepth
+    public private(set) var isSelectingElement = false
+    public let webBridge = WebInspectorBridge()
 
-    var hasPageWebView: Bool {
+    public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil
     }
 
     public init() {}
 
-    func handleAppear(webView: WKWebView?) {
+    public func handleAppear(webView: WKWebView?) {
         webBridge.attachPageWebView(webView, requestedDepth: requestedDepth)
     }
 
-    func handleDisappear() {
+    public func handleDisappear() {
         cancelSelectionMode()
 #if canImport(UIKit)
         restorePageScrollingState()
@@ -42,7 +42,7 @@ public final class WebInspectorViewModel {
         webBridge.detachPageWebView(currentDepth: requestedDepth)
     }
 
-    func reload(maxDepth: Int? = nil) async {
+    public func reload(maxDepth: Int? = nil) async {
         guard hasPageWebView else {
             webBridge.errorMessage = "WebView is not available."
             return
@@ -52,7 +52,7 @@ public final class WebInspectorViewModel {
         await webBridge.reloadInspector(depth: requestedDepth, preserveState: false)
     }
 
-    func toggleSelectionMode() {
+    public func toggleSelectionMode() {
         if isSelectingElement {
             cancelSelectionMode()
         } else {
@@ -60,7 +60,7 @@ public final class WebInspectorViewModel {
         }
     }
 
-    func cancelSelectionMode() {
+    public func cancelSelectionMode() {
         guard isSelectingElement || selectionTask != nil else { return }
         selectionTask?.cancel()
         selectionTask = nil

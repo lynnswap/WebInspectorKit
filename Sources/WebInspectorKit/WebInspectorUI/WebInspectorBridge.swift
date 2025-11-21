@@ -17,14 +17,14 @@ enum WebInspectorConstants {
 
 @MainActor
 @Observable
-final class WebInspectorBridge {
+public final class WebInspectorBridge {
     var isLoading = false
     var errorMessage: String?
     let contentModel = WebInspectorContentModel()
     let inspectorModel = WebInspectorInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
 
-    init() {
+    public init() {
         contentModel.bridge = self
         inspectorModel.bridge = self
     }
