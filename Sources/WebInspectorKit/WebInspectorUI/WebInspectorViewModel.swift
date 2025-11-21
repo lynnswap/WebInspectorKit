@@ -27,7 +27,7 @@ public final class WebInspectorViewModel {
     var webBridge = WebInspectorBridge()
 
     var hasPageWebView: Bool {
-        webBridge.contentModel.pageWebView != nil
+        webBridge.contentModel.webView != nil
     }
 
     public init() {}
@@ -36,14 +36,14 @@ public final class WebInspectorViewModel {
         webBridge.errorMessage = nil
         guard let webView else {
             currentPageWebView = nil
-            webBridge.contentModel.pageWebView = nil
+            webBridge.contentModel.webView = nil
             webBridge.errorMessage = "WebView is not available."
             return
         }
 
         let previousWebView = lastWebView
         currentPageWebView = webView
-        webBridge.contentModel.pageWebView = webView
+        webBridge.contentModel.webView = webView
         lastWebView = webView
 
         let needsReload = previousWebView == nil || previousWebView != webView
@@ -64,7 +64,7 @@ public final class WebInspectorViewModel {
         if let currentPageWebView {
             lastWebView = currentPageWebView
         }
-        webBridge.contentModel.pageWebView = nil
+        webBridge.contentModel.webView = nil
         currentPageWebView = nil
     }
 
@@ -138,7 +138,7 @@ public final class WebInspectorViewModel {
     }
 
     private func setAutoUpdateState(_ enabled: Bool) {
-        guard webBridge.contentModel.pageWebView != nil else { return }
+        guard webBridge.contentModel.webView != nil else { return }
         let depth = requestedDepth
         Task { @MainActor [webBridge] in
             await webBridge.contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)

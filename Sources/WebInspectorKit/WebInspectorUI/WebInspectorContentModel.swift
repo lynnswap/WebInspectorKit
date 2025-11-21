@@ -21,24 +21,19 @@ final class WebInspectorContentModel: NSObject {
     }
 
     weak var bridge: WebInspectorBridge?
-    weak var pageWebView: WKWebView? {
+    weak var webView: WKWebView? {
         didSet {
-            guard oldValue !== pageWebView else { return }
+            guard oldValue !== webView else { return }
             detachMessageHandlers(from: oldValue)
-            registerMessageHandlers(for: pageWebView)
+            registerMessageHandlers()
         }
     }
-    @ObservationIgnored private weak var registeredMessageWebView: WKWebView?
 
-    private func registerMessageHandlers(for webView: WKWebView?) {
-        guard let webView else {
-            registeredMessageWebView = nil
-            return
-        }
+    private func registerMessageHandlers() {
+        guard let webView else { return }
         let controller = webView.configuration.userContentController
         controller.add(self, contentWorld: .page, name: HandlerName.snapshot)
         controller.add(self, contentWorld: .page, name: HandlerName.mutation)
-        registeredMessageWebView = webView
     }
 
     private func detachMessageHandlers(from webView: WKWebView?) {
@@ -46,9 +41,6 @@ final class WebInspectorContentModel: NSObject {
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: HandlerName.snapshot, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: HandlerName.mutation, contentWorld: .page)
-        if registeredMessageWebView === webView {
-            registeredMessageWebView = nil
-        }
     }
 }
 
@@ -88,11 +80,11 @@ extension WebInspectorContentModel: WKScriptMessageHandler {
 @MainActor
 extension WebInspectorContentModel {
     func captureSnapshot(maxDepth: Int = WebInspectorConstants.defaultDepth) async throws -> WebInspectorSnapshotPackage {
-        guard let pageWebView else {
+        guard let webView else {
             throw WebInspectorError.scriptUnavailable
         }
-        try await injectScriptIfNeeded(on: pageWebView)
-        let rawResult = try await pageWebView.callAsyncJavaScript(
+        try await injectScriptIfNeeded(on: webView)
+        let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOM(maxDepth)",
             arguments: ["maxDepth": maxDepth],
             in: nil,
@@ -103,11 +95,11 @@ extension WebInspectorContentModel {
     }
 
     func captureSubtree(identifier: Int, maxDepth: Int = WebInspectorConstants.subtreeDepth) async throws -> WebInspectorSubtreePayload {
-        guard let pageWebView else {
+        guard let webView else {
             throw WebInspectorError.scriptUnavailable
         }
-        try await injectScriptIfNeeded(on: pageWebView)
-        let rawResult = try await pageWebView.callAsyncJavaScript(
+        try await injectScriptIfNeeded(on: webView)
+        let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOMSubtree(identifier, maxDepth)",
             arguments: ["identifier": identifier, "maxDepth": maxDepth],
             in: nil,
@@ -121,11 +113,11 @@ extension WebInspectorContentModel {
     }
 
     func beginSelectionMode() async throws -> WebInspectorSelectionResult {
-        guard let pageWebView else {
+        guard let webView else {
             throw WebInspectorError.scriptUnavailable
         }
-        try await injectScriptIfNeeded(on: pageWebView)
-        let rawResult = try await pageWebView.callAsyncJavaScript(
+        try await injectScriptIfNeeded(on: webView)
+        let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.startElementSelection()",
             arguments: [:],
             in: nil,
@@ -136,18 +128,18 @@ extension WebInspectorContentModel {
     }
 
     func cancelSelectionMode() async {
-        guard let pageWebView else { return }
-        try? await injectScriptIfNeeded(on: pageWebView)
-        try? await pageWebView.callAsyncVoidJavaScript(
+        guard let webView else { return }
+        try? await injectScriptIfNeeded(on: webView)
+        try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorKit.cancelElementSelection()",
             contentWorld: .page
         )
     }
 
     func highlightDOMNode(id: Int) async {
-        guard let pageWebView else { return }
-        try? await injectScriptIfNeeded(on: pageWebView)
-        try? await pageWebView.callAsyncVoidJavaScript(
+        guard let webView else { return }
+        try? await injectScriptIfNeeded(on: webView)
+        try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorKit.highlightDOMNode(identifier)",
             arguments: ["identifier": id],
             contentWorld: .page
@@ -155,15 +147,15 @@ extension WebInspectorContentModel {
     }
 
     func clearWebInspectorHighlight() {
-        pageWebView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
+        webView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
     }
 
     func setAutoUpdate(enabled: Bool, maxDepth: Int) async {
-        guard let pageWebView else { return }
+        guard let webView else { return }
         do {
-            try await injectScriptIfNeeded(on: pageWebView)
+            try await injectScriptIfNeeded(on: webView)
             let debounce = max(50, Int(WebInspectorConstants.autoUpdateDebounce * 1000))
-            try await pageWebView.callAsyncVoidJavaScript(
+            try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
                 arguments: [
                     "enabled": enabled,
