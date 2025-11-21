@@ -38,9 +38,6 @@ final class WebInspectorCoordinator: NSObject {
     }
 
     func attach(webView: WKWebView) {
-        if self.webView !== webView {
-            isReady = false
-        }
         self.webView = webView
         
         let controller = webView.configuration.userContentController
@@ -94,7 +91,6 @@ final class WebInspectorCoordinator: NSObject {
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue)
         }
-        webView.configuration.userContentController.removeAllScriptMessageHandlers()
         webView.navigationDelegate = nil
         self.webView = nil
         coordinatorLogger.debug("inspector detached")
