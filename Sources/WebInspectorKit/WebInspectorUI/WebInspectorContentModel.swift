@@ -20,8 +20,8 @@ final class WebInspectorContentModel: NSObject {
         static let mutation = "webInspectorMutationUpdate"
     }
 
-    @ObservationIgnored weak var bridge: WebInspectorBridge?
-    @ObservationIgnored weak var pageWebView: WKWebView? {
+    weak var bridge: WebInspectorBridge?
+    weak var pageWebView: WKWebView? {
         didSet {
             guard oldValue !== pageWebView else { return }
             detachMessageHandlers(from: oldValue)
