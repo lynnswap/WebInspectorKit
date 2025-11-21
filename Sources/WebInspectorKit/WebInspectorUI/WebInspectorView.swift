@@ -252,20 +252,6 @@ private final class WebInspectorPageViewController: UIViewController {
             bridge.teardownInspectorWebView(webView)
         }
     }
-
-    func updateBridgeIfNeeded(_ newBridge: WebInspectorBridge) {
-        guard bridge !== newBridge else { return }
-        if let webView {
-            bridge.teardownInspectorWebView(webView)
-        }
-        bridge = newBridge
-        guard isViewLoaded else { return }
-        let newWebView = newBridge.makeInspectorWebView()
-        newWebView.frame = view.bounds
-        newWebView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        webView = newWebView
-        view = newWebView
-    }
 }
 #endif
 
