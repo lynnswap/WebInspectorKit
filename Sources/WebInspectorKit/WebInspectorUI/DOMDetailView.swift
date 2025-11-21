@@ -21,7 +21,7 @@ public struct DOMDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             if let selection = model.webBridge.domSelection {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("選択中のDOM")
+                    Text("dom.detail.selected_title")
                         .font(.headline)
 
                     if !selection.path.isEmpty {
@@ -44,11 +44,11 @@ public struct DOMDetailView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("属性")
+                    Text("dom.detail.attributes")
                         .font(.headline)
 
                     if selection.attributes.isEmpty {
-                        Text("属性はありません")
+                        Text("dom.detail.attributes.empty")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
@@ -71,9 +71,9 @@ public struct DOMDetailView: View {
                 }
             } else {
                 ContentUnavailableView(
-                    "DOMを選択してください",
+                    "dom.detail.select_prompt",
                     systemImage: "cursorarrow.rays",
-                    description: Text("ページ上で要素を選択すると詳細が表示されます")
+                    description: Text("dom.detail.hint")
                 )
             }
         }
