@@ -113,8 +113,7 @@ public final class WebInspectorViewModel {
         isSelectingElement = true
         webBridge.contentModel.clearWebInspectorHighlight()
         selectionTask?.cancel()
-        selectionTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+        selectionTask = Task {
             defer {
                 self.isSelectingElement = false
                 self.selectionTask = nil
