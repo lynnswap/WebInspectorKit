@@ -73,7 +73,6 @@ public final class WebInspectorBridge {
     func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
-        lastPageWebView = nil
         domSelection = nil
     }
 
