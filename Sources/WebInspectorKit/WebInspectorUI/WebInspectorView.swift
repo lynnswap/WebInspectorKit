@@ -206,6 +206,7 @@ private struct WebInspectorTabBarContainer: UIViewControllerRepresentable {
         init(model: WebInspectorViewModel) {
             pageController = WebInspectorPageViewController(bridge: model.webBridge)
             domHost = UIHostingController(rootView: DOMDetailView(model))
+            domHost.view.backgroundColor = .clear
 
             configureTabItems()
         }
