@@ -95,13 +95,13 @@ html {
     display: grid;
     grid-template-columns: 1fr;
     gap: 16px;
-    padding: 16px 20px 20px;
+    padding: 0 20px 20px;
     min-height: 0;
 }
 
 .dom-tree-panel {
     border-radius: 16px;
-    padding: 12px 0;
+    padding: 0 0 12px;
     display: flex;
     flex-direction: column;
     min-height: 0;
