@@ -22,8 +22,31 @@ public struct WIDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let selection = model.webBridge.domSelection {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("dom.detail.selected_title")
-                            .font(.headline)
+                        HStack{
+                            Text("dom.detail.selected_title")
+                                .font(.headline)
+                            Spacer()
+                            Menu{
+                                Button{
+                                    model.copySelectionHTML()
+                                }label:{
+                                    Text("HTML" as String)
+                                }
+                                Button{
+                                    model.copySelectionSelectorPath()
+                                }label:{
+                                    Text("セレクタのパス" as String)
+                                }
+                                Button{
+                                    model.copySelectionXPath()
+                                }label:{
+                                    Text("XPath" as String)
+                                }
+                            }label:{
+                                Image(systemName:"document.on.document")
+                            }
+                            .disabled(selection.nodeId == nil)
+                        }
 
                         VStack(alignment: .leading, spacing: 8) {
                             if !selection.path.isEmpty {

@@ -150,6 +150,27 @@ extension WIContentModel {
         webView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
     }
 
+    func outerHTML(for identifier: Int) async throws -> String {
+        try await evaluateStringScript(
+            "return window.webInspectorKit?.outerHTMLForNode(identifier) ?? \"\"",
+            identifier: identifier
+        )
+    }
+
+    func selectorPath(for identifier: Int) async throws -> String {
+        try await evaluateStringScript(
+            "return window.webInspectorKit?.selectorPathForNode(identifier) ?? \"\"",
+            identifier: identifier
+        )
+    }
+
+    func xpath(for identifier: Int) async throws -> String {
+        try await evaluateStringScript(
+            "return window.webInspectorKit?.xpathForNode(identifier) ?? \"\"",
+            identifier: identifier
+        )
+    }
+
     func setAutoUpdate(enabled: Bool, maxDepth: Int) async {
         guard let webView else { return }
         do {
@@ -169,6 +190,20 @@ extension WIContentModel {
         } catch {
             contentLogger.error("configure auto snapshot failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func evaluateStringScript(_ script: String, identifier: Int) async throws -> String {
+        guard let webView else {
+            throw WIError.scriptUnavailable
+        }
+        try await injectScriptIfNeeded(on: webView)
+        let rawResult = try await webView.callAsyncJavaScript(
+            script,
+            arguments: ["identifier": identifier],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawResult as? String ?? ""
     }
 
     private func injectScriptIfNeeded(on webView: WKWebView) async throws {

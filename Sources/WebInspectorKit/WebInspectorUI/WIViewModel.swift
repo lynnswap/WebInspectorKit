@@ -9,6 +9,11 @@ import SwiftUI
 import OSLog
 import WebKit
 import Observation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 private let logger = Logger(subsystem: "WebInspectorKit", category: "WIViewModel")
 
@@ -40,6 +45,18 @@ public final class WIViewModel {
         restorePageScrollingState()
 #endif
         webBridge.detachPageWebView(currentDepth: requestedDepth)
+    }
+
+    public func copySelectionHTML() {
+        performCopy(.html)
+    }
+
+    public func copySelectionSelectorPath() {
+        performCopy(.selectorPath)
+    }
+
+    public func copySelectionXPath() {
+        performCopy(.xpath)
     }
 
     public func reload(maxDepth: Int? = nil) async {
@@ -102,6 +119,45 @@ public final class WIViewModel {
                 webBridge.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private enum SelectionCopyKind: String {
+        case html = "HTML"
+        case selectorPath = "selector"
+        case xpath = "XPath"
+
+        var logLabel: String { rawValue }
+    }
+
+    private func performCopy(_ kind: SelectionCopyKind) {
+        guard let nodeId = webBridge.domSelection?.nodeId else { return }
+        Task { @MainActor in
+            do {
+                let text: String
+                switch kind {
+                case .html:
+                    text = try await webBridge.contentModel.outerHTML(for: nodeId)
+                case .selectorPath:
+                    text = try await webBridge.contentModel.selectorPath(for: nodeId)
+                case .xpath:
+                    text = try await webBridge.contentModel.xpath(for: nodeId)
+                }
+                guard !text.isEmpty else { return }
+                copyToPasteboard(text)
+            } catch {
+                logger.error("copy \(kind.logLabel, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+#if canImport(UIKit)
+        UIPasteboard.general.string = text
+#elseif canImport(AppKit)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+#endif
     }
 
 #if canImport(UIKit)
