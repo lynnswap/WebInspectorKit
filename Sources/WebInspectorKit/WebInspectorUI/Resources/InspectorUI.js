@@ -1351,6 +1351,11 @@
     function sendHighlight(nodeId) {
         if (!nodeId || nodeId <= 0)
             return;
+        const node = state.nodes.get(nodeId);
+        if (node && !isNodeRendered(node)) {
+            clearPageHighlight();
+            return;
+        }
         sendCommand("DOM.highlightNode", { nodeId }).catch(() => {});
     }
 
