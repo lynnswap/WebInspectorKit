@@ -77,18 +77,9 @@
         }
     }
 
-    function isHeadElement(node) {
-        if (!node || node.nodeType !== Node.ELEMENT_NODE)
-            return false;
-        return node.tagName && node.tagName.toLowerCase() === "head";
-    }
-
     function elementIsRendered(element) {
         if (!element || !element.isConnected)
             return false;
-
-        if (element.tagName && element.tagName.toLowerCase() === "head")
-            return true;
 
         var style = null;
         try {
@@ -1038,10 +1029,6 @@
         var node = map.get(identifier);
         if (!node)
             return false;
-        if (isHeadElement(node)) {
-            clearHighlight();
-            return true;
-        }
         if (!nodeIsRendered(node)) {
             clearHighlight();
             return true;
