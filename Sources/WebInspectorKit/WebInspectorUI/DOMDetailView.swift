@@ -93,11 +93,10 @@ public struct DOMDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ContentUnavailableView(
-                        "dom.detail.select_prompt",
+                        String(localized:"dom.detail.select_prompt",bundle:.main),
                         systemImage: "cursorarrow.rays",
                         description: Text("dom.detail.hint")
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
