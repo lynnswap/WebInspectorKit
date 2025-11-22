@@ -18,66 +18,91 @@ public struct DOMDetailView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let selection = model.webBridge.domSelection {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("dom.detail.selected_title")
-                        .font(.headline)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let selection = model.webBridge.domSelection {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("dom.detail.selected_title")
+                            .font(.headline)
 
-                    if !selection.path.isEmpty {
-                        Text(selection.path.joined(separator: " › "))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Text(selection.preview)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-
-                    if !selection.description.isEmpty {
-                        Text(selection.description)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("dom.detail.attributes")
-                        .font(.headline)
-
-                    if selection.attributes.isEmpty {
-                        Text("dom.detail.attributes.empty")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.element.name)
-                                    .font(.subheadline.weight(.medium))
-                                Text(entry.element.value)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !selection.path.isEmpty {
+                                Text(selection.path.joined(separator: " › "))
                                     .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+
+                            Text(selection.preview)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+
+                            if !selection.description.isEmpty {
+                                Text(selection.description)
+                                    .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
                             }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.quaternary.opacity(0.2))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.secondary.opacity(0.12))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(.secondary.opacity(0.15))
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("dom.detail.attributes")
+                            .font(.headline)
+
+                        if selection.attributes.isEmpty {
+                            Text("dom.detail.attributes.empty")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(entry.element.name)
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(entry.element.value)
+                                            .font(.footnote.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(.vertical, 10)
+                                    .padding(.horizontal, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .fill(.secondary.opacity(0.12))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            .stroke(.secondary.opacity(0.15))
+                                    )
+                                }
+                            }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ContentUnavailableView(
+                        "dom.detail.select_prompt",
+                        systemImage: "cursorarrow.rays",
+                        description: Text("dom.detail.hint")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
-            } else {
-                ContentUnavailableView(
-                    "dom.detail.select_prompt",
-                    systemImage: "cursorarrow.rays",
-                    description: Text("dom.detail.hint")
-                )
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .scenePadding()
         }
-        .padding()
     }
 }
 
