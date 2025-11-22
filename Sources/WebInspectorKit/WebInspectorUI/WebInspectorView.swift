@@ -99,7 +99,7 @@ public struct WebInspectorView: View {
                     }
                     .disabled(!model.hasPageWebView)
                 }
-                ToolbarItem(placement: .secondaryAction) {
+                ToolbarItemGroup(placement: .secondaryAction) {
                     Button {
                         Task { await model.reload() }
                     } label: {
@@ -114,6 +114,31 @@ public struct WebInspectorView: View {
                         }
                     }
                     .disabled(model.webBridge.isLoading)
+                    
+                    Menu{
+                        Button{
+                            model.copySelectionHTML()
+                        }label:{
+                            Text("HTML" as String)
+                        }
+                        Button{
+                            model.copySelectionSelectorPath()
+                        }label:{
+                            Text("dom.detail.copy.selector_path")
+                        }
+                        Button{
+                            model.copySelectionXPath()
+                        }label:{
+                            Text("XPath" as String)
+                        }
+                    }label:{
+                        Label{
+                            Text("Copy")
+                        }icon:{
+                            Image(systemName:"document.on.document")
+                        }
+                    }
+                    .disabled(model.webBridge.domSelection?.nodeId == nil)
                 }
             }
     }

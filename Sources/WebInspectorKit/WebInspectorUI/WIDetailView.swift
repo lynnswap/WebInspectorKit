@@ -22,8 +22,11 @@ public struct WIDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let selection = model.webBridge.domSelection {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("dom.detail.selected_title")
-                            .font(.headline)
+                        HStack{
+                            Text("dom.detail.selected_title")
+                                .font(.headline)
+                            Spacer()
+                        }
 
                         VStack(alignment: .leading, spacing: 8) {
                             if !selection.path.isEmpty {
