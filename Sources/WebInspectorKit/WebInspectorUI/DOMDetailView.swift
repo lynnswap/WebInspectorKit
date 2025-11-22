@@ -9,10 +9,10 @@ import SwiftUI
 import Observation
 
 public struct DOMDetailView: View {
-    private var model: WebInspectorViewModel
+    private var model: WIViewModel
 
     public init(
-        _ viewModel: WebInspectorViewModel
+        _ viewModel: WIViewModel
     ) {
         self.model = viewModel
     }

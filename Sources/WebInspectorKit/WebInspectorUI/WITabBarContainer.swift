@@ -4,8 +4,8 @@
 import SwiftUI
 import WebKit
 
-struct WebInspectorTabBarContainer: UIViewControllerRepresentable {
-    var model: WebInspectorViewModel
+struct WITabBarContainer: UIViewControllerRepresentable {
+    var model: WIViewModel
 
     func makeCoordinator() -> Coordinator {
         Coordinator(model: model)
@@ -25,11 +25,11 @@ struct WebInspectorTabBarContainer: UIViewControllerRepresentable {
     final class Coordinator {
         var controllers: [UIViewController] { [pageController, domHost] }
 
-        private let pageController: WebInspectorPageViewController
+        private let pageController: WIPageViewController
         private let domHost: UIHostingController<DOMDetailView>
 
-        init(model: WebInspectorViewModel) {
-            pageController = WebInspectorPageViewController(bridge: model.webBridge)
+        init(model: WIViewModel) {
+            pageController = WIPageViewController(bridge: model.webBridge)
             domHost = UIHostingController(rootView: DOMDetailView(model))
             domHost.view.backgroundColor = .clear
             configureTabItems()
@@ -50,11 +50,11 @@ struct WebInspectorTabBarContainer: UIViewControllerRepresentable {
     }
 }
 
-private final class WebInspectorPageViewController: UIViewController {
-    private var bridge: WebInspectorBridge
+private final class WIPageViewController: UIViewController {
+    private var bridge: WIBridge
     private var webView: WKWebView?
 
-    init(bridge: WebInspectorBridge) {
+    init(bridge: WIBridge) {
         self.bridge = bridge
         super.init(nibName: nil, bundle: nil)
     }

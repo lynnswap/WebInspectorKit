@@ -2,19 +2,19 @@ import SwiftUI
 import WebKit
 import Observation
 
-struct WebInspectorSnapshotPackage {
+struct WISnapshotPackage {
     let rawJSON: String
 }
 
-struct WebInspectorSubtreePayload: Equatable {
+struct WISubtreePayload: Equatable {
     let rawJSON: String
 }
 
-struct WebInspectorDOMUpdatePayload: Equatable {
+struct WIDOMUpdatePayload: Equatable {
     let rawJSON: String
 }
 
-public struct WebInspectorDOMAttribute: Equatable {
+public struct WIDOMAttribute: Equatable {
     public let name: String
     public let value: String
 
@@ -24,18 +24,18 @@ public struct WebInspectorDOMAttribute: Equatable {
     }
 }
 
-public struct WebInspectorDOMSelection: Equatable {
+public struct WIDOMSelection: Equatable {
     public let nodeId: Int?
     public let preview: String
     public let description: String
-    public let attributes: [WebInspectorDOMAttribute]
+    public let attributes: [WIDOMAttribute]
     public let path: [String]
 
     public init(
         nodeId: Int?,
         preview: String,
         description: String,
-        attributes: [WebInspectorDOMAttribute],
+        attributes: [WIDOMAttribute],
         path: [String]
     ) {
         self.nodeId = nodeId
@@ -46,7 +46,7 @@ public struct WebInspectorDOMSelection: Equatable {
     }
 }
 
-struct WebInspectorSelectionResult: Decodable {
+struct WISelectionResult: Decodable {
     let cancelled: Bool
     let requiredDepth: Int
 }
@@ -55,11 +55,11 @@ struct WebInspectorSelectionResult: Decodable {
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    private var model: WebInspectorViewModel
+    private var model: WIViewModel
     private var webView: WKWebView?
 
     public init(
-        _ viewModel: WebInspectorViewModel,
+        _ viewModel: WIViewModel,
         webView: WKWebView?
     ) {
         self.webView = webView
@@ -121,11 +121,11 @@ public struct WebInspectorView: View {
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WebInspectorTabBarContainer(model: model)
+        WITabBarContainer(model: model)
             .ignoresSafeArea()
 #else
         TabView {
-            WebInspectorWebContainer(bridge: model.webBridge)
+            WIWebContainer(bridge: model.webBridge)
                 .tabItem {
                     Label {
                         Text(InspectorTab.tree.title)
@@ -176,23 +176,23 @@ enum InspectorTab: Int, CaseIterable {
 
 // MARK: - WebContainer Representable
 
-private struct WebInspectorWebContainer: View {
-    var bridge: WebInspectorBridge
+private struct WIWebContainer: View {
+    var bridge: WIBridge
 
     var body: some View {
-        WebInspectorWebViewContainerRepresentable(bridge: bridge)
+        WIWebViewContainerRepresentable(bridge: bridge)
             .ignoresSafeArea()
     }
 }
 
 @MainActor
-struct WebInspectorWebViewContainerRepresentable {
-    var bridge: WebInspectorBridge
+struct WIWebViewContainerRepresentable {
+    var bridge: WIBridge
 }
 
 #if os(macOS)
-extension WebInspectorWebViewContainerRepresentable: NSViewRepresentable {
-    typealias Coordinator = WebInspectorBridge
+extension WIWebViewContainerRepresentable: NSViewRepresentable {
+    typealias Coordinator = WIBridge
 
     func makeNSView(context: Context) -> WKWebView {
         bridge.makeInspectorWebView()
@@ -209,8 +209,8 @@ extension WebInspectorWebViewContainerRepresentable: NSViewRepresentable {
     }
 }
 #else
-extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
-    typealias Coordinator = WebInspectorBridge
+extension WIWebViewContainerRepresentable: UIViewRepresentable {
+    typealias Coordinator = WIBridge
 
     func makeUIView(context: Context) -> WKWebView {
         bridge.makeInspectorWebView()
@@ -230,7 +230,7 @@ extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
 
 // MARK: - Asset helpers
 
-enum WebInspectorAssets {
+enum WIAssets {
     private static let searchBundles = [Bundle.module, .main]
 
     static var mainFileURL: URL? {
@@ -253,7 +253,7 @@ enum WebInspectorAssets {
 
 // MARK: - PDWebView helpers
 
-enum WebInspectorError: LocalizedError {
+enum WIError: LocalizedError {
     case serializationFailed
     case subtreeUnavailable
     case scriptUnavailable
@@ -273,7 +273,7 @@ enum WebInspectorError: LocalizedError {
 
 
 @MainActor
-@Observable private final class WebInspectorPreviewModel {
+@Observable private final class WIPreviewModel {
     let webView: WKWebView
     
     init(url:URL) {
@@ -284,10 +284,10 @@ enum WebInspectorError: LocalizedError {
     }
     
 }
-private struct WebInspectorPreviewHost: View {
-    @State private var model :WebInspectorPreviewModel?
+private struct WIPreviewHost: View {
+    @State private var model :WIPreviewModel?
     @State private var isPresented:Bool = true
-    @State private var inspectorModel = WebInspectorViewModel()
+    @State private var inspectorModel = WIViewModel()
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         if let model {
@@ -315,7 +315,7 @@ private struct WebInspectorPreviewHost: View {
         }else{
             Color.clear
                 .onAppear(){
-                    self.model = WebInspectorPreviewModel(url:URL(string: "https://www.google.com")!)
+                    self.model = WIPreviewModel(url:URL(string: "https://www.google.com")!)
                 }
         }
     }
@@ -351,7 +351,7 @@ private struct PreviewWebViewRepresentable: UIViewRepresentable {
 #endif
 
 #Preview("WebInspector Sheet") {
-    WebInspectorPreviewHost()
+    WIPreviewHost()
 #if os(macOS)
         .frame(width: 800, height: 600)
 #endif

@@ -10,11 +10,11 @@ import WebKit
 import OSLog
 import Observation
 
-private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorInspectorModel")
+private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WIInspectorModel")
 
 @MainActor
 @Observable
-final class WebInspectorInspectorModel: NSObject {
+final class WIInspectorModel: NSObject {
     private enum HandlerName: String, CaseIterable {
         case protocolMessage = "webInspectorProtocol"
         case ready = "webInspectorReady"
@@ -33,7 +33,7 @@ final class WebInspectorInspectorModel: NSObject {
         let preserveState: Bool
     }
 
-    weak var bridge: WebInspectorBridge?
+    weak var bridge: WIBridge?
     private(set) var webView: WKWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
@@ -119,8 +119,8 @@ final class WebInspectorInspectorModel: NSObject {
 
     private func loadInspector(in webView: WKWebView) {
         guard
-            let mainURL = WebInspectorAssets.mainFileURL,
-            let baseURL = WebInspectorAssets.resourcesDirectory
+            let mainURL = WIAssets.mainFileURL,
+            let baseURL = WIAssets.resourcesDirectory
         else {
             inspectorLogger.error("missing inspector resources")
             return
@@ -172,17 +172,17 @@ final class WebInspectorInspectorModel: NSObject {
             do {
                 switch request.method {
                 case "DOM.getDocument":
-                    let depth = (request.params["depth"] as? Int) ?? WebInspectorConstants.defaultDepth
+                    let depth = (request.params["depth"] as? Int) ?? WIConstants.defaultDepth
                     guard let content = self.bridge?.contentModel else {
-                        throw WebInspectorError.scriptUnavailable
+                        throw WIError.scriptUnavailable
                     }
                     let payload = try await content.captureSnapshot(maxDepth: depth)
                     await self.sendResponse(id: request.id, result: payload.rawJSON)
                 case "DOM.requestChildNodes":
-                    let depth = (request.params["depth"] as? Int) ?? WebInspectorConstants.subtreeDepth
+                    let depth = (request.params["depth"] as? Int) ?? WIConstants.subtreeDepth
                     let identifier = request.params["nodeId"] as? Int ?? 0
                     guard let content = self.bridge?.contentModel else {
-                        throw WebInspectorError.scriptUnavailable
+                        throw WIError.scriptUnavailable
                     }
                     let subtree = try await content.captureSubtree(identifier: identifier, maxDepth: depth)
                     await self.sendResponse(id: request.id, result: subtree.rawJSON)
@@ -299,7 +299,7 @@ final class WebInspectorInspectorModel: NSObject {
     }
 }
 
-extension WebInspectorInspectorModel: WKScriptMessageHandler {
+extension WIInspectorModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
 
@@ -321,7 +321,7 @@ extension WebInspectorInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.updateDomSelection(WebInspectorDOMSelection(dictionary: dictionary))
+                bridge?.updateDomSelection(WIDOMSelection(dictionary: dictionary))
             } else {
                 bridge?.updateDomSelection(nil)
             }
@@ -329,16 +329,16 @@ extension WebInspectorInspectorModel: WKScriptMessageHandler {
     }
 }
 
-private extension WebInspectorDOMSelection {
+private extension WIDOMSelection {
     init(dictionary: [String: Any]) {
         let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
         let preview = dictionary["preview"] as? String ?? ""
         let description = dictionary["description"] as? String ?? ""
         let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
-        let attributes = attributesPayload.compactMap { entry -> WebInspectorDOMAttribute? in
+        let attributes = attributesPayload.compactMap { entry -> WIDOMAttribute? in
             guard let name = entry["name"] as? String else { return nil }
             let value = entry["value"] as? String ?? ""
-            return WebInspectorDOMAttribute(name: name, value: value)
+            return WIDOMAttribute(name: name, value: value)
         }
         let path = dictionary["path"] as? [String] ?? []
 
@@ -352,7 +352,7 @@ private extension WebInspectorDOMSelection {
     }
 }
 
-extension WebInspectorInspectorModel: WKNavigationDelegate {
+extension WIInspectorModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         inspectorLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
     }

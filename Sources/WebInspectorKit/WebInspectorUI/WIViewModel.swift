@@ -10,19 +10,19 @@ import OSLog
 import WebKit
 import Observation
 
-private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorViewModel")
+private let logger = Logger(subsystem: "WebInspectorKit", category: "WIViewModel")
 
 @MainActor
 @Observable
-public final class WebInspectorViewModel {
+public final class WIViewModel {
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
 #endif
 
-    public private(set) var requestedDepth = WebInspectorConstants.defaultDepth
+    public private(set) var requestedDepth = WIConstants.defaultDepth
     public private(set) var isSelectingElement = false
-    public let webBridge = WebInspectorBridge()
+    public let webBridge = WIBridge()
 
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil

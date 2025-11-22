@@ -9,7 +9,7 @@ import SwiftUI
 import WebKit
 import Observation
 
-enum WebInspectorConstants {
+enum WIConstants {
     static let defaultDepth = 4
     static let subtreeDepth = 3
     static let autoUpdateDebounce: TimeInterval = 0.6
@@ -17,12 +17,12 @@ enum WebInspectorConstants {
 
 @MainActor
 @Observable
-public final class WebInspectorBridge {
+public final class WIBridge {
     var isLoading = false
     var errorMessage: String?
-    var domSelection: WebInspectorDOMSelection?
-    let contentModel = WebInspectorContentModel()
-    let inspectorModel = WebInspectorInspectorModel()
+    var domSelection: WIDOMSelection?
+    let contentModel = WIContentModel()
+    let inspectorModel = WIInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
 
     public init() {
@@ -114,17 +114,17 @@ public final class WebInspectorBridge {
         await contentModel.cancelSelectionMode()
     }
 
-    func handleSnapshotFromPage(_ package: WebInspectorSnapshotPackage) {
+    func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
         enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
-    func handleDomUpdateFromPage(_ payload: WebInspectorDOMUpdatePayload) {
+    func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
         isLoading = false
         enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
-    func updateDomSelection(_ selection: WebInspectorDOMSelection?) {
+    func updateDomSelection(_ selection: WIDOMSelection?) {
         domSelection = selection
     }
 }

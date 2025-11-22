@@ -10,17 +10,17 @@ import OSLog
 import WebKit
 import Observation
 
-private let contentLogger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorContentModel")
+private let contentLogger = Logger(subsystem: "WebInspectorKit", category: "WIContentModel")
 
 @MainActor
 @Observable
-final class WebInspectorContentModel: NSObject {
+final class WIContentModel: NSObject {
     private enum HandlerName {
         static let snapshot = "webInspectorSnapshotUpdate"
         static let mutation = "webInspectorMutationUpdate"
     }
 
-    weak var bridge: WebInspectorBridge?
+    weak var bridge: WIBridge?
     weak var webView: WKWebView? {
         didSet {
             guard oldValue !== webView else { return }
@@ -44,7 +44,7 @@ final class WebInspectorContentModel: NSObject {
     }
 }
 
-extension WebInspectorContentModel: WKScriptMessageHandler {
+extension WIContentModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         switch message.name {
         case HandlerName.snapshot:
@@ -61,7 +61,7 @@ extension WebInspectorContentModel: WKScriptMessageHandler {
               let rawJSON = payload["snapshot"] as? String else {
             return
         }
-        let package = WebInspectorSnapshotPackage(rawJSON: rawJSON)
+        let package = WISnapshotPackage(rawJSON: rawJSON)
         bridge?.handleSnapshotFromPage(package)
     }
 
@@ -70,7 +70,7 @@ extension WebInspectorContentModel: WKScriptMessageHandler {
               let rawJSON = payload["bundle"] as? String ?? payload["updates"] as? String else {
             return
         }
-        let package = WebInspectorDOMUpdatePayload(rawJSON: rawJSON)
+        let package = WIDOMUpdatePayload(rawJSON: rawJSON)
         bridge?.handleDomUpdateFromPage(package)
     }
 }
@@ -78,10 +78,10 @@ extension WebInspectorContentModel: WKScriptMessageHandler {
 // MARK: - Page WebView helpers
 
 @MainActor
-extension WebInspectorContentModel {
-    func captureSnapshot(maxDepth: Int = WebInspectorConstants.defaultDepth) async throws -> WebInspectorSnapshotPackage {
+extension WIContentModel {
+    func captureSnapshot(maxDepth: Int = WIConstants.defaultDepth) async throws -> WISnapshotPackage {
         guard let webView else {
-            throw WebInspectorError.scriptUnavailable
+            throw WIError.scriptUnavailable
         }
         try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
@@ -91,12 +91,12 @@ extension WebInspectorContentModel {
             contentWorld: .page
         )
         let data = try serializePayload(rawResult)
-        return WebInspectorSnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
+        return WISnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
-    func captureSubtree(identifier: Int, maxDepth: Int = WebInspectorConstants.subtreeDepth) async throws -> WebInspectorSubtreePayload {
+    func captureSubtree(identifier: Int, maxDepth: Int = WIConstants.subtreeDepth) async throws -> WISubtreePayload {
         guard let webView else {
-            throw WebInspectorError.scriptUnavailable
+            throw WIError.scriptUnavailable
         }
         try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
@@ -107,14 +107,14 @@ extension WebInspectorContentModel {
         )
         let data = try serializePayload(rawResult)
         guard !data.isEmpty else {
-            throw WebInspectorError.subtreeUnavailable
+            throw WIError.subtreeUnavailable
         }
-        return WebInspectorSubtreePayload(rawJSON: String(decoding: data, as: UTF8.self))
+        return WISubtreePayload(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
-    func beginSelectionMode() async throws -> WebInspectorSelectionResult {
+    func beginSelectionMode() async throws -> WISelectionResult {
         guard let webView else {
-            throw WebInspectorError.scriptUnavailable
+            throw WIError.scriptUnavailable
         }
         try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
@@ -124,7 +124,7 @@ extension WebInspectorContentModel {
             contentWorld: .page
         )
         let data = try serializePayload(rawResult)
-        return try JSONDecoder().decode(WebInspectorSelectionResult.self, from: data)
+        return try JSONDecoder().decode(WISelectionResult.self, from: data)
     }
 
     func cancelSelectionMode() async {
@@ -154,7 +154,7 @@ extension WebInspectorContentModel {
         guard let webView else { return }
         do {
             try await injectScriptIfNeeded(on: webView)
-            let debounce = max(50, Int(WebInspectorConstants.autoUpdateDebounce * 1000))
+            let debounce = max(50, Int(WIConstants.autoUpdateDebounce * 1000))
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
                 arguments: [
@@ -172,14 +172,14 @@ extension WebInspectorContentModel {
     }
 
     private func injectScriptIfNeeded(on webView: WKWebView) async throws {
-        let script = try WebInspectorScript.bootstrap()
+        let script = try WIScript.bootstrap()
         _ = try await webView.evaluateJavaScript(script, in: nil, contentWorld: .page)
     }
 
     private func serializePayload(_ payload: Any?) throws -> Data {
         guard let payload else {
             contentLogger.error("snapshot payload is nil")
-            throw WebInspectorError.serializationFailed
+            throw WIError.serializationFailed
         }
 
         let resolved = unwrapOptionalPayload(payload) ?? payload
@@ -190,19 +190,19 @@ extension WebInspectorContentModel {
         if let dictionary = resolved as? [String: Any] {
             guard JSONSerialization.isValidJSONObject(dictionary) else {
                 contentLogger.error("snapshot payload dictionary is invalid for JSON serialization")
-                throw WebInspectorError.serializationFailed
+                throw WIError.serializationFailed
             }
             return try JSONSerialization.data(withJSONObject: dictionary)
         }
         if let array = resolved as? [Any] {
             guard JSONSerialization.isValidJSONObject(array) else {
                 contentLogger.error("snapshot payload array is invalid for JSON serialization")
-                throw WebInspectorError.serializationFailed
+                throw WIError.serializationFailed
             }
             return try JSONSerialization.data(withJSONObject: array)
         }
         contentLogger.error("unexpected snapshot payload type: \(String(describing: type(of: resolved)), privacy: .public)")
-        throw WebInspectorError.serializationFailed
+        throw WIError.serializationFailed
     }
 
     private func unwrapOptionalPayload(_ value: Any) -> Any? {
@@ -217,7 +217,7 @@ extension WebInspectorContentModel {
     }
 }
 
-private enum WebInspectorScript {
+private enum WIScript {
     @MainActor private static var cachedScript: String?
     private static let resourceName = "InspectorAgent"
     private static let resourceExtension = "js"
@@ -226,9 +226,9 @@ private enum WebInspectorScript {
         if let cachedScript {
             return cachedScript
         }
-        guard let url = WebInspectorAssets.locateResource(named: resourceName, withExtension: resourceExtension) else {
+        guard let url = WIAssets.locateResource(named: resourceName, withExtension: resourceExtension) else {
             contentLogger.error("missing web inspector script resource")
-            throw WebInspectorError.scriptUnavailable
+            throw WIError.scriptUnavailable
         }
         do {
             let script = try String(contentsOf: url, encoding: .utf8)
@@ -236,7 +236,7 @@ private enum WebInspectorScript {
             return script
         } catch {
             contentLogger.error("failed to load web inspector script: \(error.localizedDescription, privacy: .public)")
-            throw WebInspectorError.scriptUnavailable
+            throw WIError.scriptUnavailable
         }
     }
 }
