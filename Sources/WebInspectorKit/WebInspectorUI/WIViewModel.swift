@@ -93,7 +93,7 @@ public final class WIViewModel {
                 if let targetDepth = try await self.webBridge.beginSelectionMode(currentDepth: self.requestedDepth) {
                     if Task.isCancelled { return }
                     self.requestedDepth = targetDepth
-                    await self.webBridge.reloadInspector(depth: targetDepth, preserveState: false)
+                    await self.webBridge.reloadInspector(depth: targetDepth, preserveState: true)
                 }
             } catch is CancellationError {
                 await self.webBridge.cancelSelectionMode()

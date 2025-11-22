@@ -614,20 +614,29 @@
                 : null;
             const selectionCandidatePath = Array.isArray(snapshot.selectedNodePath) ? snapshot.selectedNodePath : null;
             const hasSelectionCandidate = !!selectionCandidateId || !!selectionCandidatePath;
-            const selectionChanged = !preserveState || (selectionCandidateId !== null && selectionCandidateId !== previousSelectionId);
-            const shouldAutoScrollSelection = hasSelectionCandidate && selectionChanged;
+            const selectionChanged = hasSelectionCandidate && selectionCandidateId !== null && selectionCandidateId !== previousSelectionId;
+            const shouldPreferSnapshotSelection = !preserveState || selectionChanged;
+            const shouldAutoScrollSelection = hasSelectionCandidate && shouldPreferSnapshotSelection;
             const selectionOptions = { shouldHighlight: false, autoScroll: shouldAutoScrollSelection };
+
+            const selectSnapshotCandidate = () => {
+                if (typeof selectionCandidateId === "number" && selectionCandidateId > 0)
+                    return selectNode(selectionCandidateId, selectionOptions);
+                if (Array.isArray(selectionCandidatePath))
+                    return selectNodeByPath(selectionCandidatePath, selectionOptions);
+                return false;
+            };
+
             let didSelect = false;
-            if (preserveState && typeof previousSelectionId === "number") {
+            if (shouldPreferSnapshotSelection)
+                didSelect = selectSnapshotCandidate();
+
+            if (!didSelect && preserveState && typeof previousSelectionId === "number")
                 didSelect = selectNode(previousSelectionId, selectionOptions);
-            }
-            if (!didSelect) {
-                if (typeof snapshot.selectedNodeId === "number" && snapshot.selectedNodeId > 0) {
-                    didSelect = selectNode(snapshot.selectedNodeId, selectionOptions);
-                } else if (Array.isArray(snapshot.selectedNodePath)) {
-                    didSelect = selectNodeByPath(snapshot.selectedNodePath, selectionOptions);
-                }
-            }
+
+            if (!didSelect && !shouldPreferSnapshotSelection)
+                didSelect = selectSnapshotCandidate();
+
             if (!didSelect) {
                 updateDetails(null);
                 reopenSelectionAncestors();
