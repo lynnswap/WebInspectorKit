@@ -1083,9 +1083,21 @@
         if (!parent || parent.nodeType === Node.DOCUMENT_NODE)
             return {value: nodeName, done: true};
 
-        var nthChildIndex = 1;
+        var lowerNodeName = nodeName;
+        if (lowerNodeName === "body" || lowerNodeName === "head" || lowerNodeName === "html")
+            return {value: nodeName, done: true};
+
+        if (node.id) {
+            var escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
+                ? CSS.escape(node.id)
+                : node.id.replace(/([\\.\\[\\]\\+\\*\\~\\>\\:\\(\\)\\$\\^\\=\\|\\{\\}\\#])/g, "\\$1");
+            return {value: "#" + escapedId, done: true};
+        }
+
+        var nthChildIndex = -1;
         var uniqueClasses = new Set(classNames(node));
         var hasUniqueTagName = true;
+        var elementIndex = 0;
 
         var children = parent.children || [];
         for (var i = 0; i < children.length; ++i) {
@@ -1093,10 +1105,11 @@
             if (!sibling || sibling.nodeType !== Node.ELEMENT_NODE)
                 continue;
 
-            if (sibling === node)
+            elementIndex++;
+            if (sibling === node) {
+                nthChildIndex = elementIndex;
                 continue;
-
-            ++nthChildIndex;
+            }
 
             if (sibling.tagName && sibling.tagName.toLowerCase() === nodeName)
                 hasUniqueTagName = false;
@@ -1113,7 +1126,7 @@
         if (!hasUniqueTagName) {
             if (uniqueClasses.size)
                 selector += escapedClassSelector(node);
-            else
+            else if (nthChildIndex > 0)
                 selector += ":nth-child(" + nthChildIndex + ")";
         }
 
