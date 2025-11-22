@@ -47,6 +47,7 @@
 
 html {
     overflow-y: scroll;
+    -webkit-text-size-adjust: 100%;
 }
 
 body,
@@ -93,15 +94,15 @@ html {
 .inspector__content {
     flex: 1;
     display: grid;
-    grid-template-columns: minmax(0, 2.2fr) minmax(200px, 1fr);
+    grid-template-columns: 1fr;
     gap: 16px;
-    padding: 16px 20px 20px;
+    padding: 0 20px 20px;
     min-height: 0;
 }
 
 .dom-tree-panel {
     border-radius: 16px;
-    padding: 12px 0;
+    padding: 0 0 12px;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -109,12 +110,18 @@ html {
 
 .dom-tree {
     flex: 1;
-    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
-    font-size: 13px;
-    line-height: 1.5;
+    font: 13px/1.5 "SFMono-Regular", "SF Mono", Menlo, Consolas, "Osaka-Mono", "Noto Sans Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
     padding: 4px 0 16px;
     overflow: auto;
     white-space: nowrap;
+}
+
+.tree-node,
+.tree-node * {
+    font: inherit;
 }
 
 .dom-tree::-webkit-scrollbar {
@@ -251,61 +258,6 @@ html {
     color: var(--text-secondary);
 }
 
-.dom-details {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    min-height: 0;
-}
-
-.details-card {
-    background: var(--inspector-panel);
-    border-radius: 16px;
-    border: 1px solid var(--inspector-border);
-    padding: 12px 16px;
-    min-height: 0;
-}
-
-.details-card header {
-    font-size: 12px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-tertiary);
-}
-
-.details-code {
-    margin: 8px 0 0;
-    min-height: 48px;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text-primary);
-    background: var(--inspector-panel-alt);
-    border-radius: 12px;
-    padding: 10px 12px;
-    overflow-x: auto;
-}
-
-.details-description {
-    margin: 8px 0 0;
-    color: var(--text-secondary);
-    font-size: 13px;
-}
-
-.details-attributes {
-    margin: 8px 0 0;
-    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
-    font-size: 12px;
-}
-
-.details-attributes dt {
-    color: var(--text-secondary);
-}
-
-.details-attributes dd {
-    margin: 2px 0 8px;
-    color: var(--text-primary);
-}
-
 .icon {
     width: 14px;
     height: 14px;
@@ -334,14 +286,5 @@ html {
 @media (max-width: 900px) {
     .inspector__content {
         grid-template-columns: 1fr;
-    }
-
-    .dom-details {
-        flex-direction: row;
-        flex-wrap: wrap;
-    }
-
-    .details-card {
-        flex: 1 1 320px;
     }
 }

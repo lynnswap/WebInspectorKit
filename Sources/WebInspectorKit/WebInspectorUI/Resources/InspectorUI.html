@@ -12,20 +12,9 @@
             <div class="dom-tree-panel">
                 <div id="dom-tree" class="dom-tree" role="tree" aria-label="DOM tree"></div>
                 <div id="dom-empty" class="dom-empty" hidden>
-                    <p>DOM情報を取得できませんでした。リロードしてください。</p>
+                    <p data-role="empty-message">Unable to load DOM. Please reload.</p>
                 </div>
             </div>
-            <aside class="dom-details" aria-live="polite">
-                <div class="details-card">
-                    <header>選択中のノード</header>
-                    <pre id="node-preview" class="details-code"></pre>
-                    <p id="node-description" class="details-description"></p>
-                </div>
-                <div class="details-card">
-                    <header>属性</header>
-                    <dl id="node-attributes" class="details-attributes"></dl>
-                </div>
-            </aside>
         </section>
     </div>
     <script src="InspectorUI.js"></script>

@@ -6,10 +6,7 @@
 
     const dom = {
         tree: document.getElementById("dom-tree"),
-        empty: document.getElementById("dom-empty"),
-        preview: document.getElementById("node-preview"),
-        description: document.getElementById("node-description"),
-        attributes: document.getElementById("node-attributes")
+        empty: document.getElementById("dom-empty")
     };
 
     function ensureDomElements() {
@@ -17,12 +14,6 @@
             dom.tree = document.getElementById("dom-tree");
         if (!dom.empty)
             dom.empty = document.getElementById("dom-empty");
-        if (!dom.preview)
-            dom.preview = document.getElementById("node-preview");
-        if (!dom.description)
-            dom.description = document.getElementById("node-description");
-        if (!dom.attributes)
-            dom.attributes = document.getElementById("node-attributes");
     }
 
     const NODE_TYPES = {
@@ -517,9 +508,7 @@
 
             if (!snapshot || !snapshot.root) {
                 dom.empty.hidden = false;
-                dom.preview.textContent = "";
-                dom.description.textContent = "";
-                dom.attributes.innerHTML = "";
+                updateDetails(null);
                 return;
             }
 
@@ -615,10 +604,10 @@
                     updateDetails(null);
                 }
             } else {
-            updateDetails(null);
-        }
+                updateDetails(null);
+            }
 
-        applyFilter();
+            applyFilter();
         } catch (error) {
             reportInspectorError("applySubtree", error);
             throw error;
@@ -1527,34 +1516,49 @@
         return fragment;
     }
 
-    function updateDetails(node) {
-        if (!node) {
-            dom.preview.textContent = "";
-            dom.description.textContent = "";
-            dom.attributes.innerHTML = "";
-            return;
+    function buildSelectionPath(node) {
+        if (!node)
+            return [];
+        const labels = [];
+        let current = node;
+        let guard = 0;
+        while (current && guard < 200) {
+            labels.unshift(renderPreview(current));
+            if (!current.parentId)
+                break;
+            current = state.nodes.get(current.parentId);
+            guard++;
         }
-        dom.preview.textContent = renderPreview(node);
-        dom.description.textContent = node.textContent ? trimText(node.textContent, 240) : "";
+        return labels;
+    }
 
-        dom.attributes.innerHTML = "";
-        if (Array.isArray(node.attributes) && node.attributes.length) {
-            for (const attr of node.attributes) {
-                const dt = document.createElement("dt");
-                dt.textContent = attr.name;
-                const dd = document.createElement("dd");
-                dd.textContent = attr.value;
-                dom.attributes.appendChild(dt);
-                dom.attributes.appendChild(dd);
+    function notifyNativeSelection(node) {
+        const handler = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorDomSelection : null;
+        if (!handler || typeof handler.postMessage !== "function")
+            return;
+        const payload = node ? {
+            id: typeof node.id === "number" ? node.id : null,
+            preview: renderPreview(node),
+            description: node.textContent ? trimText(node.textContent, 240) : "",
+            attributes: Array.isArray(node.attributes) ? node.attributes.map(attr => ({
+                name: attr.name || "",
+                value: attr.value || ""
+            })) : [],
+            path: buildSelectionPath(node)
+        } : null;
+        try {
+            handler.postMessage(payload);
+        } catch (error) {
+            try {
+                window.webkit.messageHandlers.webInspectorLog.postMessage(`domSelection: ${error && error.message ? error.message : error}`);
+            } catch {
+                // ignore logging failures
             }
-        } else {
-            const dt = document.createElement("dt");
-            dt.textContent = "属性";
-            const dd = document.createElement("dd");
-            dd.textContent = "なし";
-            dom.attributes.appendChild(dt);
-            dom.attributes.appendChild(dd);
         }
+    }
+
+    function updateDetails(node) {
+        notifyNativeSelection(node || null);
     }
 
     function renderPreview(node) {

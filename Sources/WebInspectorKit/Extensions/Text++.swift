@@ -22,3 +22,20 @@ extension Text {
         )
     }
 }
+
+extension String {
+    init(
+        localized keyAndValue: String.LocalizationValue,
+        table: String? = nil,
+        locale: Locale = .current,
+        comment: StaticString? = nil
+    ) {
+        self.init(
+            localized :keyAndValue,
+            table: table,
+            bundle : .module,
+            locale: locale,
+            comment: comment
+        )
+    }
+}

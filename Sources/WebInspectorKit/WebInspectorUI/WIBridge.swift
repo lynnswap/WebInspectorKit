@@ -9,7 +9,7 @@ import SwiftUI
 import WebKit
 import Observation
 
-enum WebInspectorConstants {
+enum WIConstants {
     static let defaultDepth = 4
     static let subtreeDepth = 3
     static let autoUpdateDebounce: TimeInterval = 0.6
@@ -17,11 +17,12 @@ enum WebInspectorConstants {
 
 @MainActor
 @Observable
-public final class WebInspectorBridge {
+public final class WIBridge {
     var isLoading = false
     var errorMessage: String?
-    let contentModel = WebInspectorContentModel()
-    let inspectorModel = WebInspectorInspectorModel()
+    var domSelection: WIDOMSelection?
+    let contentModel = WIContentModel()
+    let inspectorModel = WIInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
 
     public init() {
@@ -51,6 +52,7 @@ public final class WebInspectorBridge {
 
     func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
+        domSelection = nil
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -71,7 +73,7 @@ public final class WebInspectorBridge {
     func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
-        lastPageWebView = nil
+        domSelection = nil
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -112,13 +114,17 @@ public final class WebInspectorBridge {
         await contentModel.cancelSelectionMode()
     }
 
-    func handleSnapshotFromPage(_ package: WebInspectorSnapshotPackage) {
+    func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
         enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
-    func handleDomUpdateFromPage(_ payload: WebInspectorDOMUpdatePayload) {
+    func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
         isLoading = false
         enqueueMutationBundle(payload.rawJSON, preserveState: true)
+    }
+
+    func updateDomSelection(_ selection: WIDOMSelection?) {
+        domSelection = selection
     }
 }

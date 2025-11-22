@@ -2,19 +2,51 @@ import SwiftUI
 import WebKit
 import Observation
 
-struct WebInspectorSnapshotPackage {
+struct WISnapshotPackage {
     let rawJSON: String
 }
 
-struct WebInspectorSubtreePayload: Equatable {
+struct WISubtreePayload: Equatable {
     let rawJSON: String
 }
 
-struct WebInspectorDOMUpdatePayload: Equatable {
+struct WIDOMUpdatePayload: Equatable {
     let rawJSON: String
 }
 
-struct WebInspectorSelectionResult: Decodable {
+public struct WIDOMAttribute: Equatable {
+    public let name: String
+    public let value: String
+
+    public init(name: String, value: String) {
+        self.name = name
+        self.value = value
+    }
+}
+
+public struct WIDOMSelection: Equatable {
+    public let nodeId: Int?
+    public let preview: String
+    public let description: String
+    public let attributes: [WIDOMAttribute]
+    public let path: [String]
+
+    public init(
+        nodeId: Int?,
+        preview: String,
+        description: String,
+        attributes: [WIDOMAttribute],
+        path: [String]
+    ) {
+        self.nodeId = nodeId
+        self.preview = preview
+        self.description = description
+        self.attributes = attributes
+        self.path = path
+    }
+}
+
+struct WISelectionResult: Decodable {
     let cancelled: Bool
     let requiredDepth: Int
 }
@@ -23,11 +55,11 @@ struct WebInspectorSelectionResult: Decodable {
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    private var model: WebInspectorViewModel
+    private var model: WIViewModel
     private var webView: WKWebView?
 
     public init(
-        _ viewModel: WebInspectorViewModel,
+        _ viewModel: WIViewModel,
         webView: WKWebView?
     ) {
         self.webView = webView
@@ -35,78 +67,132 @@ public struct WebInspectorView: View {
     }
 
     public var body: some View {
-        ZStack {
-            WebInspectorWebContainer(bridge: model.webBridge)
-
-            if let errorMessage = model.webBridge.errorMessage {
-                ContentUnavailableView {
-                    Image(systemName:"exclamationmark.triangle")
-                        .foregroundStyle(.yellow)
-                } description: {
-                    Text(errorMessage)
+        tabContent
+            .overlay{
+                if let errorMessage = model.webBridge.errorMessage {
+                    ContentUnavailableView {
+                        Image(systemName:"exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                    } description: {
+                        Text(errorMessage)
+                    }
+                    .padding()
+                    .frame(maxWidth: 320)
+                    .transition(.opacity)
                 }
-                .padding()
-                .frame(maxWidth: 320)
-                .transition(.opacity)
             }
-        }
-        .onAppear {
-            model.handleAppear(webView: webView)
-        }
-        .onChange(of: webView) {
-            model.handleAppear(webView: webView)
-        }
-        .onDisappear {
-            model.handleDisappear()
-        }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.toggleSelectionMode()
-                } label: {
-                    Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
+            .onAppear {
+                model.handleAppear(webView: webView)
+            }
+            .onChange(of: webView) {
+                model.handleAppear(webView: webView)
+            }
+            .onDisappear {
+                model.handleDisappear()
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.toggleSelectionMode()
+                    } label: {
+                        Image(systemName: model.isSelectingElement ? "viewfinder.circle.fill" : "viewfinder.circle")
+                    }
+                    .disabled(!model.hasPageWebView)
                 }
-                .disabled(!model.hasPageWebView)
-            }
-            ToolbarItem(placement: .secondaryAction) {
-                Button {
-                    Task { await model.reload() }
-                } label: {
-                    if model.webBridge.isLoading {
-                        ProgressView()
-                    } else {
-                        Label{
-                            Text("reload")
-                        }icon:{
-                            Image(systemName: "arrow.clockwise")
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        Task { await model.reload() }
+                    } label: {
+                        if model.webBridge.isLoading {
+                            ProgressView()
+                        } else {
+                            Label{
+                                Text("reload")
+                            }icon:{
+                                Image(systemName: "arrow.clockwise")
+                            }
                         }
                     }
+                    .disabled(model.webBridge.isLoading)
                 }
-                .disabled(model.webBridge.isLoading)
             }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+#if canImport(UIKit)
+        WITabBarContainer(model: model)
+            .ignoresSafeArea()
+#else
+        TabView {
+            WIWebContainer(bridge: model.webBridge)
+                .tabItem {
+                    Label {
+                        Text(InspectorTab.tree.title)
+                    } icon: {
+                        Image(systemName: InspectorTab.tree.systemImage)
+                    }
+                }
+            DOMDetailView(model)
+                .tabItem {
+                    Label {
+                        Text(InspectorTab.detail.title)
+                    } icon: {
+                        Image(systemName: InspectorTab.detail.systemImage)
+                    }
+                }
         }
+#endif
     }
 }
 
+// MARK: - Tab Metadata
+
+enum InspectorTab: Int, CaseIterable {
+    case tree
+    case detail
+
+    var title: LocalizedStringResource {
+        switch self {
+        case .tree:
+            LocalizedStringResource("inspector.tab.tree", bundle: .module)
+        case .detail:
+            LocalizedStringResource("inspector.tab.detail", bundle: .module)
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .tree:
+            "chevron.left.forwardslash.chevron.right"
+        case .detail:
+            "info.circle"
+        }
+    }
+
+    var tag: Int { rawValue }
+}
+
+
 // MARK: - WebContainer Representable
 
-private struct WebInspectorWebContainer: View {
-    var bridge: WebInspectorBridge
+private struct WIWebContainer: View {
+    var bridge: WIBridge
 
     var body: some View {
-        WebInspectorWebViewContainerRepresentable(bridge: bridge)
+        WIWebViewContainerRepresentable(bridge: bridge)
             .ignoresSafeArea()
     }
 }
 
 @MainActor
-struct WebInspectorWebViewContainerRepresentable {
-    var bridge: WebInspectorBridge
+struct WIWebViewContainerRepresentable {
+    var bridge: WIBridge
 }
 
 #if os(macOS)
-extension WebInspectorWebViewContainerRepresentable: NSViewRepresentable {
-    typealias Coordinator = WebInspectorBridge
+extension WIWebViewContainerRepresentable: NSViewRepresentable {
+    typealias Coordinator = WIBridge
 
     func makeNSView(context: Context) -> WKWebView {
         bridge.makeInspectorWebView()
@@ -123,8 +209,8 @@ extension WebInspectorWebViewContainerRepresentable: NSViewRepresentable {
     }
 }
 #else
-extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
-    typealias Coordinator = WebInspectorBridge
+extension WIWebViewContainerRepresentable: UIViewRepresentable {
+    typealias Coordinator = WIBridge
 
     func makeUIView(context: Context) -> WKWebView {
         bridge.makeInspectorWebView()
@@ -144,7 +230,7 @@ extension WebInspectorWebViewContainerRepresentable: UIViewRepresentable {
 
 // MARK: - Asset helpers
 
-enum WebInspectorAssets {
+enum WIAssets {
     private static let searchBundles = [Bundle.module, .main]
 
     static var mainFileURL: URL? {
@@ -167,7 +253,7 @@ enum WebInspectorAssets {
 
 // MARK: - PDWebView helpers
 
-enum WebInspectorError: LocalizedError {
+enum WIError: LocalizedError {
     case serializationFailed
     case subtreeUnavailable
     case scriptUnavailable
@@ -187,7 +273,7 @@ enum WebInspectorError: LocalizedError {
 
 
 @MainActor
-@Observable private final class WebInspectorPreviewModel {
+@Observable private final class WIPreviewModel {
     let webView: WKWebView
     
     init(url:URL) {
@@ -198,10 +284,10 @@ enum WebInspectorError: LocalizedError {
     }
     
 }
-private struct WebInspectorPreviewHost: View {
-    @State private var model :WebInspectorPreviewModel?
+private struct WIPreviewHost: View {
+    @State private var model :WIPreviewModel?
     @State private var isPresented:Bool = true
-    @State private var inspectorModel = WebInspectorViewModel()
+    @State private var inspectorModel = WIViewModel()
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         if let model {
@@ -229,7 +315,7 @@ private struct WebInspectorPreviewHost: View {
         }else{
             Color.clear
                 .onAppear(){
-                    self.model = WebInspectorPreviewModel(url:URL(string: "https://www.google.com")!)
+                    self.model = WIPreviewModel(url:URL(string: "https://www.google.com")!)
                 }
         }
     }
@@ -265,7 +351,7 @@ private struct PreviewWebViewRepresentable: UIViewRepresentable {
 #endif
 
 #Preview("WebInspector Sheet") {
-    WebInspectorPreviewHost()
+    WIPreviewHost()
 #if os(macOS)
         .frame(width: 800, height: 600)
 #endif
