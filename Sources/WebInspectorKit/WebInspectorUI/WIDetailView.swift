@@ -35,7 +35,7 @@ public struct WIDetailView: View {
                                 Button{
                                     model.copySelectionSelectorPath()
                                 }label:{
-                                    Text("セレクタのパス" as String)
+                                    Text(LocalizedStringResource("dom.detail.copy.selector_path", bundle: .module))
                                 }
                                 Button{
                                     model.copySelectionXPath()
