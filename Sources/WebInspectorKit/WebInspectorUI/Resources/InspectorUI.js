@@ -1113,7 +1113,7 @@
             const disclosure = document.createElement("button");
             disclosure.className = "tree-node__disclosure";
             disclosure.type = "button";
-            disclosure.setAttribute("aria-label", "子ノードの展開/折りたたみ");
+            disclosure.setAttribute("aria-label", "Expand or collapse child nodes");
             disclosure.addEventListener("click", event => {
                 event.stopPropagation();
                 toggleNode(node.id);
@@ -1130,9 +1130,27 @@
         label.className = "tree-node__label";
         if (isPlaceholder) {
             row.classList.add("tree-node__row--placeholder");
-            const placeholderText = document.createElement("span");
-            placeholderText.textContent = `… ${node.childCount} more nodes`;
-            label.appendChild(placeholderText);
+
+            const loadPlaceholder = event => {
+                if (event)
+                    event.stopPropagation();
+                requestChildren(node);
+            };
+
+            const placeholderButton = document.createElement("button");
+            placeholderButton.type = "button";
+            placeholderButton.className = "tree-node__placeholder-button";
+            placeholderButton.textContent = `… ${node.childCount} more nodes`;
+            placeholderButton.setAttribute("aria-label", `Load remaining ${node.childCount} nodes`);
+            placeholderButton.addEventListener("click", loadPlaceholder);
+            placeholderButton.addEventListener("keydown", event => {
+                if (event.key !== "Enter" && event.key !== " ")
+                    return;
+                event.preventDefault();
+                loadPlaceholder(event);
+            });
+
+            label.appendChild(placeholderButton);
         } else {
             label.appendChild(createPrimaryLabel(node));
         }
@@ -1147,7 +1165,7 @@
         wrapper.style.padding = "0 16px 16px 16px";
 
         const placeholderButton = document.createElement("button");
-        placeholderButton.textContent = "読み込む";
+        placeholderButton.textContent = "Load";
         placeholderButton.className = "control-button";
         placeholderButton.style.width = "auto";
         placeholderButton.addEventListener("click", event => {

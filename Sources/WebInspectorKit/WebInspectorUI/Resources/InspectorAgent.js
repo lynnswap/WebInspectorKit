@@ -140,7 +140,7 @@
         return rect && (rect.width || rect.height);
     }
 
-    function describe(node, depth, maxDepth, selectionPath) {
+    function describe(node, depth, maxDepth, selectionPath, childLimit) {
         if (!node)
             return null;
 
@@ -183,14 +183,14 @@
         }
 
         if (depth < maxDepth && node.childNodes && node.childNodes.length) {
-            var limit = 150;
+            var limit = Number.isFinite(childLimit) ? childLimit : 150;
             var selectionIndex = Array.isArray(selectionPath) && selectionPath.length > depth ? selectionPath[depth] : -1;
             for (var childIndex = 0; childIndex < node.childNodes.length; ++childIndex) {
                 var childNode = node.childNodes[childIndex];
                 var mustInclude = selectionIndex === childIndex;
                 if (descriptor.children.length >= limit && !mustInclude)
                     break;
-                var childDescriptor = describe(childNode, depth + 1, maxDepth, selectionPath);
+                var childDescriptor = describe(childNode, depth + 1, maxDepth, selectionPath, childLimit);
                 if (childDescriptor)
                     descriptor.children.push(childDescriptor);
             }
@@ -979,7 +979,7 @@
         var node = map.get(identifier);
         if (!node)
             return "";
-        var tree = describe(node, 0, maxDepth || 4, null);
+        var tree = describe(node, 0, maxDepth || 4, null, Number.MAX_SAFE_INTEGER);
         return JSON.stringify(tree);
     }
 
