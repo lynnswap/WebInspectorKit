@@ -338,6 +338,30 @@
             this._recentlyModifiedNodes.add(nodeId);
         }
 
+        _cloneModifiedAttributes() {
+            const snapshot = new Map();
+            this._recentlyModifiedAttributes.forEach((nodes, attribute) => {
+                if (!nodes || !nodes.size)
+                    return;
+                snapshot.set(attribute, new Set(nodes));
+            });
+            return snapshot;
+        }
+
+        _buildModifiedAttributesByNode(attributeToNodes) {
+            const nodesToAttributes = new Map();
+            attributeToNodes.forEach((nodes, attribute) => {
+                nodes.forEach(nodeId => {
+                    if (typeof nodeId !== "number")
+                        return;
+                    if (!nodesToAttributes.has(nodeId))
+                        nodesToAttributes.set(nodeId, new Set());
+                    nodesToAttributes.get(nodeId).add(attribute);
+                });
+            });
+            return nodesToAttributes;
+        }
+
         _processPendingEvents() {
             if (!state.snapshot || !state.snapshot.root) {
                 this.reset();
@@ -368,6 +392,8 @@
                     break;
             }
 
+            const modifiedAttributes = this._cloneModifiedAttributes();
+            const modifiedAttrsByNode = this._buildModifiedAttributesByNode(modifiedAttributes);
             this._recentlyInsertedNodes.clear();
             this._recentlyDeletedNodes.clear();
             this._recentlyModifiedNodes.clear();
@@ -379,7 +405,7 @@
                 return;
             }
 
-            refreshTreeAfterDomUpdates(nodesToRefresh);
+            refreshTreeAfterDomUpdates(nodesToRefresh, modifiedAttrsByNode);
 
             if (index < pending.length) {
                 this._pendingEvents = pending.slice(index);
@@ -739,13 +765,15 @@
         }
     }
 
-    function refreshTreeAfterDomUpdates(nodesToRefresh) {
+    function refreshTreeAfterDomUpdates(nodesToRefresh, modifiedAttrsByNode = new Map()) {
         if (!nodesToRefresh || !nodesToRefresh.size)
             return;
         const preservedScrollPosition = captureTreeScrollPosition();
         nodesToRefresh.forEach(entry => {
-            if (entry && entry.node)
-                scheduleNodeRender(entry.node, { updateChildren: entry.updateChildren });
+            if (entry && entry.node) {
+                const modifiedAttributes = modifiedAttrsByNode ? modifiedAttrsByNode.get(entry.node.id) : null;
+                scheduleNodeRender(entry.node, { updateChildren: entry.updateChildren, modifiedAttributes });
+            }
         });
         if (state.selectedNodeId) {
             const selectedNode = state.nodes.get(state.selectedNodeId);
@@ -1097,7 +1125,8 @@
         return container;
     }
 
-    function createNodeRow(node) {
+    function createNodeRow(node, options = {}) {
+        const { modifiedAttributes = null } = options;
         const row = document.createElement("div");
         row.className = "tree-node__row";
         row.setAttribute("role", "treeitem");
@@ -1152,7 +1181,7 @@
 
             label.appendChild(placeholderButton);
         } else {
-            label.appendChild(createPrimaryLabel(node));
+            label.appendChild(createPrimaryLabel(node, { modifiedAttributes }));
         }
         row.appendChild(label);
 
@@ -1232,7 +1261,10 @@
     }
 
     function refreshNodeElement(node, options = {}) {
-        const updateChildren = options.updateChildren !== false;
+        const {
+            updateChildren = true,
+            modifiedAttributes = null
+        } = options;
         const element = state.elements.get(node.id);
         if (!element)
             return;
@@ -1242,7 +1274,7 @@
         element.style.setProperty("--indent-depth", clampIndentDepth(node.depth || 0));
         updateNodeElementState(element, node);
 
-        const newRow = createNodeRow(node);
+        const newRow = createNodeRow(node, { modifiedAttributes });
         const existingRow = element.querySelector(":scope > .tree-node__row");
         if (existingRow)
             existingRow.replaceWith(newRow);
@@ -1261,13 +1293,29 @@
         setNodeExpanded(node.id, nodeShouldBeExpanded(node));
     }
 
+    function mergeModifiedAttributes(current, next) {
+        const hasCurrent = current instanceof Set && current.size;
+        const hasNext = next instanceof Set && next.size;
+        if (!hasCurrent && !hasNext)
+            return null;
+        const merged = new Set(hasCurrent ? current : next);
+        if (hasCurrent && hasNext) {
+            next.forEach(attribute => {
+                merged.add(attribute);
+            });
+        }
+        return merged;
+    }
+
     function scheduleNodeRender(node, options = {}) {
         if (!node || typeof node.id === "undefined")
             return;
         const updateChildren = options.updateChildren !== false;
+        const modifiedAttributes = options.modifiedAttributes instanceof Set ? options.modifiedAttributes : null;
         const existing = renderState.pendingNodes.get(node.id);
-        const merged = existing ? (existing.updateChildren || updateChildren) : updateChildren;
-        renderState.pendingNodes.set(node.id, { node, updateChildren: merged });
+        const mergedUpdateChildren = existing ? (existing.updateChildren || updateChildren) : updateChildren;
+        const mergedAttributes = mergeModifiedAttributes(existing ? existing.modifiedAttributes : null, modifiedAttributes);
+        renderState.pendingNodes.set(node.id, { node, updateChildren: mergedUpdateChildren, modifiedAttributes: mergedAttributes });
         if (renderState.frameId !== null)
             return;
         renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
@@ -1290,7 +1338,7 @@
             index += 1;
             if (!item || !item.node)
                 continue;
-            refreshNodeElement(item.node, { updateChildren: item.updateChildren });
+            refreshNodeElement(item.node, { updateChildren: item.updateChildren, modifiedAttributes: item.modifiedAttributes });
             const elapsed = timeNow() - startedAt;
             if (index >= RENDER_BATCH_LIMIT || elapsed >= RENDER_TIME_BUDGET)
                 break;
@@ -1302,8 +1350,9 @@
                 if (!item || !item.node)
                     continue;
                 const existing = renderState.pendingNodes.get(item.node.id);
-                const merged = existing ? (existing.updateChildren || item.updateChildren) : item.updateChildren;
-                renderState.pendingNodes.set(item.node.id, { node: item.node, updateChildren: merged });
+                const mergedUpdateChildren = existing ? (existing.updateChildren || item.updateChildren) : item.updateChildren;
+                const mergedAttributes = mergeModifiedAttributes(existing ? existing.modifiedAttributes : null, item.modifiedAttributes);
+                renderState.pendingNodes.set(item.node.id, { node: item.node, updateChildren: mergedUpdateChildren, modifiedAttributes: mergedAttributes });
             }
             renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
         }
@@ -1567,12 +1616,41 @@
         });
     }
 
-    function createPrimaryLabel(node) {
+    function createPrimaryLabel(node, options = {}) {
+        const { modifiedAttributes = null } = options;
+        const highlightClass = "node-state-changed";
+        const hasModifiedAttributes = modifiedAttributes instanceof Set && modifiedAttributes.size > 0;
+        const textAttributeSymbol = domTreeUpdater._textContentAttributeSymbol;
+        const textModified = hasModifiedAttributes && modifiedAttributes.has(textAttributeSymbol);
+        const hasAttributeChanges = hasModifiedAttributes && (() => {
+            for (const attribute of modifiedAttributes) {
+                if (attribute !== textAttributeSymbol)
+                    return true;
+            }
+            return false;
+        })();
+
+        function applyFlash(element) {
+            if (!element)
+                return;
+            element.classList.remove(highlightClass);
+            void element.offsetWidth;
+            element.classList.add(highlightClass);
+        }
+
+        function shouldHighlightAttribute(name) {
+            if (!hasModifiedAttributes || typeof name !== "string")
+                return false;
+            return modifiedAttributes.has(name);
+        }
+
         const fragment = document.createDocumentFragment();
         if (node.nodeType === NODE_TYPES.TEXT_NODE) {
             const span = document.createElement("span");
             span.className = "tree-node__text";
             span.textContent = trimText(node.textContent || "");
+            if (textModified)
+                applyFlash(span);
             fragment.appendChild(span);
             return fragment;
         }
@@ -1580,6 +1658,8 @@
             const span = document.createElement("span");
             span.className = "tree-node__text";
             span.textContent = `<!-- ${trimText(node.textContent || "")} -->`;
+            if (textModified)
+                applyFlash(span);
             fragment.appendChild(span);
             return fragment;
         }
@@ -1589,6 +1669,7 @@
         tag.textContent = `<${node.displayName}>`;
         fragment.appendChild(tag);
 
+        let didHighlight = false;
         if (Array.isArray(node.attributes)) {
             for (const attr of node.attributes) {
                 const attrName = document.createElement("span");
@@ -1600,8 +1681,17 @@
                 attrValue.className = "tree-node__value";
                 attrValue.textContent = `="${attr.value}"`;
                 fragment.appendChild(attrValue);
+
+                if (shouldHighlightAttribute(attr.name)) {
+                    applyFlash(attrName);
+                    applyFlash(attrValue);
+                    didHighlight = true;
+                }
             }
         }
+
+        if (!didHighlight && hasAttributeChanges)
+            applyFlash(tag);
 
         fragment.appendChild(document.createTextNode(">"));
         return fragment;

@@ -10,6 +10,7 @@
     --accent: #0a84ff;
     --accent-soft: rgba(10, 132, 255, 0.35);
     --badge-bg: rgba(255, 255, 255, 0.05);
+    --value-changed-highlight: rgba(255, 219, 115, 0.35);
     --warning: #f8d949;
     --danger: #ff5d5d;
     --scroll-track: rgba(255, 255, 255, 0.04);
@@ -33,6 +34,7 @@
         --text-tertiary: #6b7280;
         --accent-soft: rgba(10, 132, 255, 0.18);
         --badge-bg: rgba(0, 0, 0, 0.04);
+        --value-changed-highlight: rgba(255, 201, 71, 0.42);
         --scroll-track: rgba(0, 0, 0, 0.06);
         --hover-overlay: rgba(0, 0, 0, 0.04);
         --node-name: #0f6bdc;
@@ -245,6 +247,10 @@ html {
     min-width: max-content;
 }
 
+.tree-node__label > * {
+    display: inline-block;
+}
+
 .tree-node__name {
     color: var(--node-name);
 }
@@ -271,6 +277,16 @@ html {
 
 .dom-tree.deemphasize-unrendered .tree-node.is-unrendered.is-selected > .tree-node__row {
     opacity: 0.9;
+}
+
+.dom-tree .node-state-changed {
+    animation: node-state-changed 1s cubic-bezier(0.25, 0, 0.25, 1);
+}
+
+@keyframes node-state-changed {
+    from {
+        background-color: var(--value-changed-highlight);
+    }
 }
 
 .tree-node__children {
