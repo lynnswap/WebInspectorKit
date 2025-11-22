@@ -114,6 +114,10 @@ public final class WIBridge {
         await contentModel.cancelSelectionMode()
     }
 
+    func deleteNode(identifier: Int) async {
+        await contentModel.removeNode(identifier: identifier)
+    }
+
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
         enqueueMutationBundle(package.rawJSON, preserveState: true)

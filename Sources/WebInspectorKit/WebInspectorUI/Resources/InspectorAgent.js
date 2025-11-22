@@ -1044,6 +1044,37 @@
         setOverlayTarget(null);
     }
 
+    function removeNode(identifier) {
+        var node = resolveNode(identifier);
+        if (!node)
+            return false;
+        var parent = node.parentNode;
+        if (!parent)
+            return false;
+
+        var removed = false;
+        suppressSnapshotAutoUpdate("remove-node");
+        try {
+            if (typeof parent.removeChild === "function") {
+                parent.removeChild(node);
+                removed = true;
+            } else if (typeof node.remove === "function") {
+                node.remove();
+                removed = true;
+            }
+        } catch {
+        } finally {
+            resumeSnapshotAutoUpdate("remove-node");
+        }
+
+        if (removed) {
+            clearHighlight();
+            triggerSnapshotUpdate("remove-node");
+        }
+
+        return removed;
+    }
+
     function resolveNode(identifier) {
         var map = inspector.map;
         if (!map || !map.size)
@@ -1332,6 +1363,7 @@
         outerHTMLForNode: outerHTMLForNode,
         selectorPathForNode: selectorPathForNode,
         xpathForNode: xpathForNode,
+        removeNode: removeNode,
         __installed: true
     };
     Object.defineProperty(window, "webInspectorKit", {

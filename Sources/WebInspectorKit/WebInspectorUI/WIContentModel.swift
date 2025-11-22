@@ -146,6 +146,20 @@ extension WIContentModel {
         )
     }
 
+    func removeNode(identifier: Int) async {
+        guard let webView else { return }
+        do {
+            try await injectScriptIfNeeded(on: webView)
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.removeNode(identifier)",
+                arguments: ["identifier": identifier],
+                contentWorld: .page
+            )
+        } catch {
+            contentLogger.error("remove node error: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     func clearWebInspectorHighlight() {
         webView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
     }

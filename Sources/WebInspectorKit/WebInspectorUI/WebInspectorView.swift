@@ -139,6 +139,17 @@ public struct WebInspectorView: View {
                         }
                     }
                     .disabled(model.webBridge.domSelection?.nodeId == nil)
+                    
+                    Button(role:.destructive){
+                        model.deleteSelectedNode()
+                    }label:{
+                        Label{
+                            Text("inspector.delete_node")
+                        }icon:{
+                            Image(systemName:"trash")
+                        }
+                    }
+                    .disabled(model.webBridge.domSelection?.nodeId == nil)
                 }
             }
     }

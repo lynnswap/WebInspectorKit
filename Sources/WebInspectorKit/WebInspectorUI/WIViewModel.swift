@@ -59,6 +59,13 @@ public final class WIViewModel {
         performCopy(.xpath)
     }
 
+    public func deleteSelectedNode() {
+        guard let nodeId = webBridge.domSelection?.nodeId else { return }
+        Task {
+            await webBridge.deleteNode(identifier: nodeId)
+        }
+    }
+
     public func reload(maxDepth: Int? = nil) async {
         guard hasPageWebView else {
             webBridge.errorMessage = "WebView is not available."
