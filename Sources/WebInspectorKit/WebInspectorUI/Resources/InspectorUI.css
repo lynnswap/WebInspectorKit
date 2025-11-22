@@ -47,6 +47,7 @@
 
 html {
     overflow-y: scroll;
+    -webkit-text-size-adjust: 100%;
 }
 
 body,
@@ -109,12 +110,18 @@ html {
 
 .dom-tree {
     flex: 1;
-    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
-    font-size: 13px;
-    line-height: 1.5;
+    font: 13px/1.5 "SFMono-Regular", "SF Mono", Menlo, Consolas, "Osaka-Mono", "Noto Sans Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: antialiased;
     padding: 4px 0 16px;
     overflow: auto;
     white-space: nowrap;
+}
+
+.tree-node,
+.tree-node * {
+    font: inherit;
 }
 
 .dom-tree::-webkit-scrollbar {
