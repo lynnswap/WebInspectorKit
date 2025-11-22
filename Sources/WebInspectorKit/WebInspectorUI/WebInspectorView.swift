@@ -194,17 +194,17 @@ struct WIWebViewContainerRepresentable {
 extension WIWebViewContainerRepresentable: NSViewRepresentable {
     typealias Coordinator = WIBridge
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> WIWebView {
         bridge.makeInspectorWebView()
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         bridge
     }
 
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: WIWebView, coordinator: Coordinator) {
         coordinator.teardownInspectorWebView(nsView)
     }
 }
@@ -212,17 +212,17 @@ extension WIWebViewContainerRepresentable: NSViewRepresentable {
 extension WIWebViewContainerRepresentable: UIViewRepresentable {
     typealias Coordinator = WIBridge
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> WIWebView {
         bridge.makeInspectorWebView()
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         bridge
     }
 
-    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+    static func dismantleUIView(_ uiView: WIWebView, coordinator: Coordinator) {
         coordinator.teardownInspectorWebView(uiView)
     }
 }

@@ -30,11 +30,11 @@ public final class WIBridge {
         inspectorModel.bridge = self
     }
 
-    func makeInspectorWebView() -> WKWebView {
+    func makeInspectorWebView() -> WIWebView {
         inspectorModel.makeInspectorWebView()
     }
 
-    func teardownInspectorWebView(_ webView: WKWebView) {
+    func teardownInspectorWebView(_ webView: WIWebView) {
         inspectorModel.teardownInspectorWebView(webView)
     }
 

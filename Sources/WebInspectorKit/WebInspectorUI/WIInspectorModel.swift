@@ -34,34 +34,19 @@ final class WIInspectorModel: NSObject {
     }
 
     weak var bridge: WIBridge?
-    private(set) var webView: WKWebView?
+    private(set) var webView: WIWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
 
-    func makeInspectorWebView() -> WKWebView {
+    func makeInspectorWebView() -> WIWebView {
         if let webView {
             attachInspectorWebView()
             return webView
         }
 
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-
-        let newWebView = WKWebView(frame: .zero, configuration: configuration)
-
-#if DEBUG
-        newWebView.isInspectable = true
-#endif
-
-#if canImport(UIKit)
-        newWebView.isOpaque = false
-        newWebView.backgroundColor = .clear
-        newWebView.scrollView.backgroundColor = .clear
-        newWebView.scrollView.isScrollEnabled = true
-        newWebView.scrollView.alwaysBounceVertical = true
-#endif
+        let newWebView = WIWebView()
 
         webView = newWebView
         attachInspectorWebView()
@@ -69,7 +54,7 @@ final class WIInspectorModel: NSObject {
         return newWebView
     }
 
-    func teardownInspectorWebView(_ webView: WKWebView) {
+    func teardownInspectorWebView(_ webView: WIWebView) {
         detachInspectorWebView(ifMatches: webView)
     }
 
@@ -107,7 +92,7 @@ final class WIInspectorModel: NSObject {
         webView.navigationDelegate = self
     }
 
-    private func detachInspectorWebView(ifMatches webView: WKWebView) {
+    private func detachInspectorWebView(ifMatches webView: WIWebView) {
         guard self.webView === webView else { return }
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
@@ -117,7 +102,7 @@ final class WIInspectorModel: NSObject {
         inspectorLogger.debug("inspector detached")
     }
 
-    private func loadInspector(in webView: WKWebView) {
+    private func loadInspector(in webView: WIWebView) {
         guard
             let mainURL = WIAssets.mainFileURL,
             let baseURL = WIAssets.resourcesDirectory

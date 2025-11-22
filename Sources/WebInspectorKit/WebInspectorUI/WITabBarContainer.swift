@@ -52,7 +52,7 @@ struct WITabBarContainer: UIViewControllerRepresentable {
 
 private final class WIPageViewController: UIViewController {
     private var bridge: WIBridge
-    private var webView: WKWebView?
+    private var webView: WIWebView?
 
     init(bridge: WIBridge) {
         self.bridge = bridge
