@@ -1,5 +1,5 @@
 //
-//  DOMDetailView.swift
+//  WIDetailView.swift
 //  WebInspectorKit
 //
 //  Created by Codex on 2024/12/08.
@@ -8,7 +8,7 @@
 import SwiftUI
 import Observation
 
-public struct DOMDetailView: View {
+public struct WIDetailView: View {
     private var model: WIViewModel
 
     public init(
@@ -107,14 +107,14 @@ public struct DOMDetailView: View {
 
 #if DEBUG
 @MainActor
-private func makeDOMDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
+private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
     let model = WIViewModel()
     model.webBridge.domSelection = selection
     return model
 }
 
 @MainActor
-private enum DOMDetailPreviewData {
+private enum WIDetailPreviewData {
     static let selected = WIDOMSelection(
         nodeId: 128,
         preview: "<article class=\"entry\">Preview post content</article>",
@@ -135,10 +135,10 @@ private enum DOMDetailPreviewData {
 }
 
 #Preview("DOM Selected") {
-    DOMDetailView(makeDOMDetailPreviewModel(selection: DOMDetailPreviewData.selected))
+    WIDetailView(makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
 }
 
 #Preview("No DOM Selection") {
-    DOMDetailView(makeDOMDetailPreviewModel(selection: nil))
+    WIDetailView(makeWIDetailPreviewModel(selection: nil))
 }
 #endif

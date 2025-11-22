@@ -26,11 +26,11 @@ struct WITabBarContainer: UIViewControllerRepresentable {
         var controllers: [UIViewController] { [pageController, domHost] }
 
         private let pageController: WIPageViewController
-        private let domHost: UIHostingController<DOMDetailView>
+        private let domHost: UIHostingController<WIDetailView>
 
         init(model: WIViewModel) {
             pageController = WIPageViewController(bridge: model.webBridge)
-            domHost = UIHostingController(rootView: DOMDetailView(model))
+            domHost = UIHostingController(rootView: WIDetailView(model))
             domHost.view.backgroundColor = .clear
             configureTabItems()
         }

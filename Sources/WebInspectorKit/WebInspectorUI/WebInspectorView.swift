@@ -133,7 +133,7 @@ public struct WebInspectorView: View {
                         Image(systemName: InspectorTab.tree.systemImage)
                     }
                 }
-            DOMDetailView(model)
+            WIDetailView(model)
                 .tabItem {
                     Label {
                         Text(InspectorTab.detail.title)
