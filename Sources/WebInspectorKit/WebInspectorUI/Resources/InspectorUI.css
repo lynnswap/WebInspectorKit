@@ -238,6 +238,18 @@ html {
     color: var(--node-value);
 }
 
+.dom-tree.deemphasize-unrendered .tree-node.is-unrendered > .tree-node__row .tree-node__label > * {
+    filter: grayscale(1);
+}
+
+.dom-tree.deemphasize-unrendered .tree-node.is-unrendered:not(.is-selected) > .tree-node__row {
+    opacity: 0.72;
+}
+
+.dom-tree.deemphasize-unrendered .tree-node.is-unrendered.is-selected > .tree-node__row {
+    opacity: 0.9;
+}
+
 .tree-node__children {
     margin-left: 0;
     padding-left: 0;

@@ -52,6 +52,94 @@
         return id;
     }
 
+    function layoutInfoForNode(node) {
+        var rendered = nodeIsRendered(node);
+        return {
+            layoutFlags: rendered ? ["rendered"] : [],
+            isRendered: rendered
+        };
+    }
+
+    function nodeIsRendered(node) {
+        if (!node)
+            return false;
+
+        switch (node.nodeType) {
+        case Node.ELEMENT_NODE:
+            return elementIsRendered(node);
+        case Node.TEXT_NODE:
+            return textNodeIsRendered(node);
+        case Node.DOCUMENT_NODE:
+        case Node.DOCUMENT_FRAGMENT_NODE:
+            return true;
+        default:
+            return true;
+        }
+    }
+
+    function elementIsRendered(element) {
+        if (!element || !element.isConnected)
+            return false;
+
+        var style = null;
+        try {
+            style = window.getComputedStyle(element);
+        } catch {
+        }
+
+        if (style && style.display === "none")
+            return false;
+
+        if (element.getClientRects) {
+            var rectList = element.getClientRects();
+            if (rectList && rectList.length) {
+                for (var i = 0; i < rectList.length; ++i) {
+                    var rect = rectList[i];
+                    if (rect && (rect.width || rect.height))
+                        return true;
+                }
+            }
+        }
+
+        if (element.getBoundingClientRect) {
+            var rect = element.getBoundingClientRect();
+            if (rect && (rect.width || rect.height))
+                return true;
+        }
+
+        if (typeof element.offsetWidth === "number" || typeof element.offsetHeight === "number") {
+            if (element.offsetWidth || element.offsetHeight)
+                return true;
+        }
+
+        if (style && (style.position === "fixed" || style.position === "sticky"))
+            return true;
+
+        if (typeof element.getBBox === "function") {
+            try {
+                var box = element.getBBox();
+                if (box && (box.width || box.height))
+                    return true;
+            } catch {
+            }
+        }
+
+        return style ? style.display !== "none" : true;
+    }
+
+    function textNodeIsRendered(node) {
+        if (!node || !node.parentNode || !node.nodeValue)
+            return false;
+        if (!nodeIsRendered(node.parentNode))
+            return false;
+        var range = document.createRange();
+        range.selectNodeContents(node);
+        var rect = range.getBoundingClientRect();
+        if (range.detach)
+            range.detach();
+        return rect && (rect.width || rect.height);
+    }
+
     function describe(node, depth, maxDepth, selectionPath) {
         if (!node)
             return null;
@@ -69,6 +157,9 @@
             childNodeCount: node.childNodes ? node.childNodes.length : 0,
             children: []
         };
+        var layoutInfo = layoutInfoForNode(node);
+        descriptor.layoutFlags = layoutInfo.layoutFlags;
+        descriptor.isRendered = layoutInfo.isRendered;
 
         if (node.attributes && node.attributes.length) {
             var serializedAttributes = [];
@@ -591,6 +682,7 @@
             var targetId = rememberNode(record.target);
             if (!targetId)
                 continue;
+            var layoutInfo = layoutInfoForNode(record.target);
             switch (record.type) {
             case "attributes":
                 var attrName = record.attributeName || "";
@@ -602,7 +694,9 @@
                         method: "DOM.attributeRemoved",
                         params: {
                             nodeId: targetId,
-                            name: attrName
+                            name: attrName,
+                            layoutFlags: layoutInfo.layoutFlags,
+                            isRendered: layoutInfo.isRendered
                         }
                     });
                 } else {
@@ -611,7 +705,9 @@
                         params: {
                             nodeId: targetId,
                             name: attrName,
-                            value: String(attrValue)
+                            value: String(attrValue),
+                            layoutFlags: layoutInfo.layoutFlags,
+                            isRendered: layoutInfo.isRendered
                         }
                     });
                 }
@@ -621,7 +717,9 @@
                     method: "DOM.characterDataModified",
                     params: {
                         nodeId: targetId,
-                        characterData: record.target.textContent || ""
+                        characterData: record.target.textContent || "",
+                        layoutFlags: layoutInfo.layoutFlags,
+                        isRendered: layoutInfo.isRendered
                     }
                 });
                 break;
@@ -659,7 +757,11 @@
                         referenceNode = addedNode;
                     }
                 }
-                childCountUpdates.set(targetId, record.target.childNodes ? record.target.childNodes.length : 0);
+                childCountUpdates.set(targetId, {
+                    count: record.target.childNodes ? record.target.childNodes.length : 0,
+                    layoutFlags: layoutInfo.layoutFlags,
+                    isRendered: layoutInfo.isRendered
+                });
                 break;
             default:
                 break;
@@ -669,12 +771,14 @@
         }
 
         if (childCountUpdates.size) {
-            childCountUpdates.forEach(function(count, nodeId) {
+            childCountUpdates.forEach(function(entry, nodeId) {
                 events.push({
                     method: "DOM.childNodeCountUpdated",
                     params: {
                         nodeId: nodeId,
-                        childNodeCount: count
+                        childNodeCount: entry.count,
+                        layoutFlags: entry.layoutFlags,
+                        isRendered: entry.isRendered
                     }
                 });
             });
@@ -682,12 +786,14 @@
 
         if (events.length > eventLimit) {
             var compact = [];
-            childCountUpdates.forEach(function(count, nodeId) {
+            childCountUpdates.forEach(function(entry, nodeId) {
                 compact.push({
                     method: "DOM.childNodeCountUpdated",
                     params: {
                         nodeId: nodeId,
-                        childNodeCount: count
+                        childNodeCount: entry.count,
+                        layoutFlags: entry.layoutFlags,
+                        isRendered: entry.isRendered
                     }
                 });
             });

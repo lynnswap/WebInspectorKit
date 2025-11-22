@@ -22,6 +22,7 @@
         COMMENT_NODE: 8
     };
     const INDENT_DEPTH_LIMIT = 6;
+    const LAYOUT_FLAG_RENDERED = "rendered";
 
     const DEFAULT_REQUEST_DEPTH = 4;
     const REQUEST_CHILDREN_DEPTH = 3;
@@ -75,6 +76,52 @@
         } catch {
             return null;
         }
+    }
+
+    function normalizeLayoutFlags(rawFlags) {
+        if (!Array.isArray(rawFlags))
+            return [];
+        const flags = [];
+        rawFlags.forEach(flag => {
+            if (typeof flag === "string" && !flags.includes(flag))
+                flags.push(flag);
+        });
+        return flags;
+    }
+
+    function resolveRenderedState(flags, explicitRendered) {
+        if (typeof explicitRendered === "boolean")
+            return explicitRendered;
+        if (Array.isArray(flags))
+            return flags.includes(LAYOUT_FLAG_RENDERED);
+        return true;
+    }
+
+    function applyLayoutState(node, flags, explicitRendered) {
+        if (!node)
+            return;
+        const normalizedFlags = normalizeLayoutFlags(flags);
+        node.layoutFlags = normalizedFlags;
+        node.isRendered = resolveRenderedState(normalizedFlags, explicitRendered);
+    }
+
+    function applyLayoutEntry(node, entry) {
+        if (!node || !entry)
+            return;
+        const hasInfo = Array.isArray(entry.layoutFlags) || typeof entry.isRendered === "boolean";
+        if (!hasInfo)
+            return;
+        applyLayoutState(node, entry.layoutFlags, entry.isRendered);
+    }
+
+    function isNodeRendered(node) {
+        if (!node)
+            return true;
+        if (typeof node.isRendered === "boolean")
+            return node.isRendered;
+        if (Array.isArray(node.layoutFlags))
+            return node.layoutFlags.includes(LAYOUT_FLAG_RENDERED);
+        return true;
     }
 
     function sendProtocolMessage(message) {
@@ -394,6 +441,8 @@
         const displayName = computeDisplayName(nodeType, nodeName, descriptor.localName);
         const attributes = deserializeAttributes(descriptor.attributes);
         const textContent = extractTextContent(nodeType, descriptor.nodeValue);
+        const layoutFlags = normalizeLayoutFlags(descriptor.layoutFlags);
+        const isRendered = resolveRenderedState(layoutFlags, descriptor.isRendered);
         const childCount = typeof descriptor.childNodeCount === "number"
             ? descriptor.childNodeCount
             : (typeof descriptor.childCount === "number"
@@ -419,6 +468,8 @@
             nodeType,
             attributes,
             textContent,
+            layoutFlags,
+            isRendered,
             children,
             childCount,
             placeholderParentId: null
@@ -465,6 +516,8 @@
             textContent: null,
             children: [],
             childCount: remainingCount,
+            layoutFlags: [],
+            isRendered: true,
             placeholderParentId: parentId || null
         };
     }
@@ -812,6 +865,7 @@
             requestNodeRefresh(entry.nodeId);
             return true;
         }
+        applyLayoutEntry(node, entry);
         if (!Array.isArray(node.attributes))
             node.attributes = [];
         const value = typeof entry.value === "string" ? entry.value : String(entry.value ?? "");
@@ -833,6 +887,7 @@
             requestNodeRefresh(entry.nodeId);
             return true;
         }
+        applyLayoutEntry(node, entry);
         if (!Array.isArray(node.attributes))
             node.attributes = [];
         const next = node.attributes.filter(attr => attr.name !== entry.name);
@@ -851,6 +906,7 @@
             requestNodeRefresh(entry.nodeId);
             return true;
         }
+        applyLayoutEntry(node, entry);
         node.textContent = entry.characterData || "";
         markNodeForRefresh(nodesToRefresh, node, { updateChildren: false });
         return true;
@@ -864,6 +920,7 @@
             requestNodeRefresh(entry.nodeId);
             return true;
         }
+        applyLayoutEntry(node, entry);
         const normalizedCount = typeof entry.childNodeCount === "number" ? entry.childNodeCount : entry.childCount;
         if (typeof normalizedCount === "number")
             node.childCount = normalizedCount;
@@ -940,6 +997,7 @@
         target.textContent = source.textContent || null;
         target.childCount = typeof source.childCount === "number" ? source.childCount : (Array.isArray(source.children) ? source.children.length : 0);
         target.placeholderParentId = source.placeholderParentId || null;
+        applyLayoutState(target, source.layoutFlags, source.isRendered);
         if (typeof depth === "number")
             target.depth = depth;
 
@@ -1007,12 +1065,21 @@
         });
     }
 
+    function updateNodeElementState(element, node) {
+        if (!element)
+            return;
+        const rendered = isNodeRendered(node);
+        element.classList.toggle("is-rendered", rendered);
+        element.classList.toggle("is-unrendered", !rendered);
+    }
+
     function buildNode(node) {
         const container = document.createElement("div");
         container.className = "tree-node";
         container.dataset.nodeId = node.id;
         container.style.setProperty("--depth", node.depth || 0);
         container.style.setProperty("--indent-depth", clampIndentDepth(node.depth || 0));
+        updateNodeElementState(container, node);
 
         const row = createNodeRow(node);
         container.appendChild(row);
@@ -1155,6 +1222,7 @@
         element.dataset.nodeId = node.id;
         element.style.setProperty("--depth", node.depth || 0);
         element.style.setProperty("--indent-depth", clampIndentDepth(node.depth || 0));
+        updateNodeElementState(element, node);
 
         const newRow = createNodeRow(node);
         const existingRow = element.querySelector(":scope > .tree-node__row");
