@@ -6,10 +6,7 @@
 
     const dom = {
         tree: document.getElementById("dom-tree"),
-        empty: document.getElementById("dom-empty"),
-        preview: document.getElementById("node-preview"),
-        description: document.getElementById("node-description"),
-        attributes: document.getElementById("node-attributes")
+        empty: document.getElementById("dom-empty")
     };
 
     function ensureDomElements() {
@@ -17,12 +14,6 @@
             dom.tree = document.getElementById("dom-tree");
         if (!dom.empty)
             dom.empty = document.getElementById("dom-empty");
-        if (!dom.preview)
-            dom.preview = document.getElementById("node-preview");
-        if (!dom.description)
-            dom.description = document.getElementById("node-description");
-        if (!dom.attributes)
-            dom.attributes = document.getElementById("node-attributes");
     }
 
     const NODE_TYPES = {
@@ -517,9 +508,7 @@
 
             if (!snapshot || !snapshot.root) {
                 dom.empty.hidden = false;
-                dom.preview.textContent = "";
-                dom.description.textContent = "";
-                dom.attributes.innerHTML = "";
+                updateDetails(null);
                 return;
             }
 
@@ -615,10 +604,10 @@
                     updateDetails(null);
                 }
             } else {
-            updateDetails(null);
-        }
+                updateDetails(null);
+            }
 
-        applyFilter();
+            applyFilter();
         } catch (error) {
             reportInspectorError("applySubtree", error);
             throw error;
@@ -1569,35 +1558,7 @@
     }
 
     function updateDetails(node) {
-        if (!node) {
-            dom.preview.textContent = "";
-            dom.description.textContent = "";
-            dom.attributes.innerHTML = "";
-            notifyNativeSelection(null);
-            return;
-        }
-        dom.preview.textContent = renderPreview(node);
-        dom.description.textContent = node.textContent ? trimText(node.textContent, 240) : "";
-
-        dom.attributes.innerHTML = "";
-        if (Array.isArray(node.attributes) && node.attributes.length) {
-            for (const attr of node.attributes) {
-                const dt = document.createElement("dt");
-                dt.textContent = attr.name;
-                const dd = document.createElement("dd");
-                dd.textContent = attr.value;
-                dom.attributes.appendChild(dt);
-                dom.attributes.appendChild(dd);
-            }
-        } else {
-            const dt = document.createElement("dt");
-            dt.textContent = "属性";
-            const dd = document.createElement("dd");
-            dd.textContent = "なし";
-            dom.attributes.appendChild(dt);
-            dom.attributes.appendChild(dd);
-        }
-        notifyNativeSelection(node);
+        notifyNativeSelection(node || null);
     }
 
     function renderPreview(node) {
