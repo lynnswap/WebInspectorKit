@@ -26,26 +26,6 @@ public struct WIDetailView: View {
                             Text("dom.detail.selected_title")
                                 .font(.headline)
                             Spacer()
-                            Menu{
-                                Button{
-                                    model.copySelectionHTML()
-                                }label:{
-                                    Text("HTML" as String)
-                                }
-                                Button{
-                                    model.copySelectionSelectorPath()
-                                }label:{
-                                    Text(LocalizedStringResource("dom.detail.copy.selector_path", bundle: .module))
-                                }
-                                Button{
-                                    model.copySelectionXPath()
-                                }label:{
-                                    Text("XPath" as String)
-                                }
-                            }label:{
-                                Image(systemName:"document.on.document")
-                            }
-                            .disabled(selection.nodeId == nil)
                         }
 
                         VStack(alignment: .leading, spacing: 8) {
