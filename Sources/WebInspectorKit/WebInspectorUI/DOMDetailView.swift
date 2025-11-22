@@ -80,3 +80,41 @@ public struct DOMDetailView: View {
         .padding()
     }
 }
+
+#if DEBUG
+@MainActor
+private func makeDOMDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
+    let model = WIViewModel()
+    model.webBridge.domSelection = selection
+    return model
+}
+
+@MainActor
+private enum DOMDetailPreviewData {
+    static let selected = WIDOMSelection(
+        nodeId: 128,
+        preview: "<article class=\"entry\">Preview post content</article>",
+        description: "article.entry#post-128",
+        attributes: [
+            WIDOMAttribute(name: "class", value: "entry card is-selected"),
+            WIDOMAttribute(name: "data-testid", value: "postText"),
+            WIDOMAttribute(name: "role", value: "article")
+        ],
+        path: [
+            "html",
+            "body.app-layout",
+            "main.timeline",
+            "section.thread",
+            "article.entry"
+        ]
+    )
+}
+
+#Preview("DOM Selected") {
+    DOMDetailView(makeDOMDetailPreviewModel(selection: DOMDetailPreviewData.selected))
+}
+
+#Preview("No DOM Selection") {
+    DOMDetailView(makeDOMDetailPreviewModel(selection: nil))
+}
+#endif
