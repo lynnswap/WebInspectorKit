@@ -81,6 +81,9 @@
         if (!element || !element.isConnected)
             return false;
 
+        if (element.tagName && element.tagName.toLowerCase() === "head")
+            return true;
+
         var style = null;
         try {
             style = window.getComputedStyle(element);
