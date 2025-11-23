@@ -17,6 +17,7 @@ public struct WIDetailView: View {
         self.model = viewModel
     }
     public var body: some View {
+#if canImport(UIKit)
         if let selection = model.webBridge.domSelection {
             List{
                 Section{
@@ -82,6 +83,7 @@ public struct WIDetailView: View {
                 description: Text("dom.detail.hint")
             )
         }
+#endif
     }
     @ViewBuilder
     private var listRowBackground:some View{
@@ -94,6 +96,7 @@ public struct WIDetailView: View {
     }
 }
 
+#if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var text: String
     var textStyle: UIFont.TextStyle = .body
@@ -167,6 +170,8 @@ private final class SelectionUITextView: UITextView {
         invalidateIntrinsicContentSize()
     }
 }
+#endif
+
 
 #if DEBUG
 @MainActor
