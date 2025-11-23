@@ -1675,7 +1675,7 @@
 
         const tag = document.createElement("span");
         tag.className = "tree-node__name";
-        tag.textContent = `<${node.displayName}>`;
+        tag.textContent = `<${node.displayName}`;
         fragment.appendChild(tag);
 
         let didHighlight = false;
@@ -1702,7 +1702,12 @@
         if (!didHighlight && hasAttributeChanges)
             applyFlash(tag);
 
-        fragment.appendChild(document.createTextNode(">"));
+        const closingBracket = document.createElement("span");
+        closingBracket.className = "tree-node__name";
+        closingBracket.textContent = ">";
+        fragment.appendChild(closingBracket);
+        if (!didHighlight && hasAttributeChanges)
+            applyFlash(closingBracket);
         return fragment;
     }
 
