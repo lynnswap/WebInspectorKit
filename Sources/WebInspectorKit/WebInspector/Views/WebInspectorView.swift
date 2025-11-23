@@ -2,52 +2,6 @@ import SwiftUI
 import WebKit
 import Observation
 
-struct WISnapshotPackage {
-    let rawJSON: String
-}
-
-struct WISubtreePayload: Equatable {
-    let rawJSON: String
-}
-
-struct WIDOMUpdatePayload: Equatable {
-    let rawJSON: String
-}
-
-public struct WIDOMAttribute: Equatable {
-    public let name: String
-    public let value: String
-
-    public init(name: String, value: String) {
-        self.name = name
-        self.value = value
-    }
-}
-
-public struct WIDOMSelection: Equatable {
-    public let nodeId: Int?
-    public let preview: String
-    public let attributes: [WIDOMAttribute]
-    public let path: [String]
-
-    public init(
-        nodeId: Int?,
-        preview: String,
-        attributes: [WIDOMAttribute],
-        path: [String]
-    ) {
-        self.nodeId = nodeId
-        self.preview = preview
-        self.attributes = attributes
-        self.path = path
-    }
-}
-
-struct WISelectionResult: Decodable {
-    let cancelled: Bool
-    let requiredDepth: Int
-}
-
 
 // MARK: - Main View
 
@@ -173,7 +127,7 @@ public struct WebInspectorView: View {
                     } icon: {
                         Image(systemName: InspectorTab.detail.systemImage)
                     }
-                }
+            }
         }
 #endif
     }
@@ -215,104 +169,6 @@ private struct WIWebContainer: View {
     var body: some View {
         WIWebViewContainerRepresentable(bridge: bridge)
             .ignoresSafeArea()
-    }
-}
-
-@MainActor
-struct WIWebViewContainerRepresentable {
-    var bridge: WIBridge
-}
-
-#if os(macOS)
-extension WIWebViewContainerRepresentable: NSViewRepresentable {
-    typealias Coordinator = WIBridge
-
-    func makeNSView(context: Context) -> WIWebView {
-        bridge.makeInspectorWebView()
-    }
-
-    func updateNSView(_ nsView: WIWebView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        bridge
-    }
-
-    static func dismantleNSView(_ nsView: WIWebView, coordinator: Coordinator) {
-        coordinator.teardownInspectorWebView(nsView)
-    }
-}
-#else
-extension WIWebViewContainerRepresentable: UIViewRepresentable {
-    typealias Coordinator = WIBridge
-
-    func makeUIView(context: Context) -> WIWebView {
-        bridge.makeInspectorWebView()
-    }
-
-    func updateUIView(_ uiView: WIWebView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        bridge
-    }
-
-    static func dismantleUIView(_ uiView: WIWebView, coordinator: Coordinator) {
-        coordinator.teardownInspectorWebView(uiView)
-    }
-}
-#endif
-
-// MARK: - Asset helpers
-
-enum WIAssets {
-    private static let searchBundles = [Bundle.module, .main]
-    private static let inspectorSubdirectory = "WebInspector/Views/DOMTreeView"
-
-    static var mainFileURL: URL? {
-        locateResource(named: "DOMTreeView", withExtension: "html")
-    }
-
-    static var resourcesDirectory: URL? {
-        mainFileURL?.deletingLastPathComponent()
-    }
-
-    static func locateResource(
-        named name: String,
-        withExtension fileExtension: String,
-        subdirectory: String? = inspectorSubdirectory
-    ) -> URL? {
-        for bundle in searchBundles {
-            if let subdirectory,
-               let url = bundle.url(
-                   forResource: name,
-                   withExtension: fileExtension,
-                   subdirectory: subdirectory
-               ) {
-                return url
-            }
-            if let url = bundle.url(forResource: name, withExtension: fileExtension) {
-                return url
-            }
-        }
-        return nil
-    }
-}
-
-// MARK: - PDWebView helpers
-
-enum WIError: LocalizedError {
-    case serializationFailed
-    case subtreeUnavailable
-    case scriptUnavailable
-    
-    var errorDescription: String? {
-        switch self {
-        case .serializationFailed:
-            return "Failed to serialize DOM tree."
-        case .subtreeUnavailable:
-            return "Failed to load child nodes."
-        case .scriptUnavailable:
-            return "Failed to load web inspector script."
-        }
     }
 }
 #if DEBUG
