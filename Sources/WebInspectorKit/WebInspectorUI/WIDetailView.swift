@@ -16,86 +16,79 @@ public struct WIDetailView: View {
     ) {
         self.model = viewModel
     }
-
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let selection = model.webBridge.domSelection {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack{
-                            Text("dom.detail.selected_title")
-                                .font(.headline)
-                            Spacer()
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            if !selection.path.isEmpty {
-                                Text(selection.path.joined(separator: " › "))
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-
-                            SelectionPreviewTextRepresentable(text: selection.preview)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(.secondary.opacity(0.12))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(.secondary.opacity(0.15))
-                        )
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("dom.detail.attributes")
-                            .font(.headline)
-
-                        if selection.attributes.isEmpty {
-                            Text("dom.detail.attributes.empty")
-                                .font(.subheadline)
+        if let selection = model.webBridge.domSelection {
+            List{
+                Section{
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !selection.path.isEmpty {
+                            Text(selection.path.joined(separator: " › "))
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
-                        } else {
-                            LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(entry.element.name)
-                                            .font(.subheadline.weight(.semibold))
-                                        Text(entry.element.value)
-                                            .font(.footnote.monospaced())
-                                            .foregroundStyle(.secondary)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(.vertical, 10)
-                                    .padding(.horizontal, 12)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .fill(.secondary.opacity(0.12))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .stroke(.secondary.opacity(0.15))
-                                    )
-                                }
+                                .lineLimit(2)
+                        }
+
+                        SelectionPreviewTextRepresentable(text: selection.preview)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(listRowBackground)
+                    .scenePadding(.horizontal)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(.init())
+                }header: {
+                    Text("dom.detail.selected_title")
+                }
+                Section{
+                    if selection.attributes.isEmpty {
+                        Text("dom.detail.attributes.empty")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(entry.element.name)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(entry.element.value)
+                                    .font(.footnote.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
                             }
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(listRowBackground)
+                            .scenePadding(.horizontal)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .listRowInsets(.init())
+                            
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    ContentUnavailableView(
-                        String(localized:"dom.detail.select_prompt",bundle:.module),
-                        systemImage: "cursorarrow.rays",
-                        description: Text("dom.detail.hint")
-                    )
+                }header:{
+                    Text("dom.detail.attributes")
                 }
+                .listSectionSeparatorTint(.clear)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .scenePadding()
+            .listStyle(.plain)
+            .listRowSpacing(10.0)
+        }else{
+            ContentUnavailableView(
+                String(localized:"dom.detail.select_prompt",bundle:.module),
+                systemImage: "cursorarrow.rays",
+                description: Text("dom.detail.hint")
+            )
+        }
+    }
+    @ViewBuilder
+    private var listRowBackground:some View{
+        ZStack{
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.12))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.secondary.opacity(0.15))
         }
     }
 }
@@ -289,10 +282,27 @@ private enum WIDetailPreviewData {
             "article.entry"
         ]
     )
+
+    static let attributesEmpty = WIDOMSelection(
+        nodeId: 256,
+        preview: "<section class=\"placeholder\">No attributes here</section>",
+        attributes: [],
+        path: [
+            "html",
+            "body.app-layout",
+            "main.timeline",
+            "section.thread",
+            "article.entry"
+        ]
+    )
 }
 
 #Preview("DOM Selected") {
     WIDetailView(makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
+}
+
+#Preview("Attributes Empty") {
+    WIDetailView(makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
 }
 
 #Preview("No DOM Selection") {
