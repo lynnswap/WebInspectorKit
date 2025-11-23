@@ -51,10 +51,19 @@ public struct WIDetailView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.element.name)
                                     .font(.subheadline.weight(.semibold))
-                                Text(entry.element.value)
-                                    .font(.footnote.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
+#if canImport(UIKit)
+                                SelectionPreviewTextRepresentable(
+                                    text: entry.element.value,
+                                    textStyle: .footnote,
+                                    textColor: .secondaryLabel
+                                )
+#elseif canImport(AppKit)
+                                SelectionPreviewTextRepresentable(
+                                    text: entry.element.value,
+                                    textStyle: .footnote,
+                                    textColor: .secondaryLabelColor
+                                )
+#endif
                             }
                             .padding(.vertical, 10)
                             .padding(.horizontal, 12)
@@ -96,18 +105,21 @@ public struct WIDetailView: View {
 #if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var text: String
+    var textStyle: UIFont.TextStyle = .body
+    var textColor: UIColor = .label
 
     func makeUIView(context: Context) -> SelectionUITextView {
-        SelectionUITextView()
+        let textView = SelectionUITextView()
+        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
+        return textView
     }
 
     func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        if textView.text != text {
-            textView.text = text
-        }
+        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
+        uiView.apply(text: text, textStyle: textStyle, textColor: textColor)
         let proposedWidth = proposal.width ?? uiView.bounds.width
         let targetWidth = proposedWidth > 0 ? proposedWidth : UIScreen.main.bounds.width
         let fittingSize = uiView.sizeThatFits(
@@ -144,6 +156,17 @@ private final class SelectionUITextView: UITextView {
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
+    func apply(text: String, textStyle: UIFont.TextStyle, textColor: UIColor) {
+        if self.text != text {
+            self.text = text
+        }
+        font = UIFont.monospacedSystemFont(
+            ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
+            weight: .regular
+        )
+        self.textColor = textColor
+    }
+
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height)
     }
@@ -156,11 +179,13 @@ private final class SelectionUITextView: UITextView {
 #elseif canImport(AppKit)
 private struct SelectionPreviewTextRepresentable: NSViewRepresentable {
     var text: String
+    var textStyle: NSFont.TextStyle = .body
+    var textColor: NSColor = .labelColor
 
     func makeNSView(context: Context) -> SelectionTextScrollView {
         let scrollView = SelectionTextScrollView()
         let textView = SelectionNSTextView(frame: .zero, textContainer: nil)
-        textView.string = text
+        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
         scrollView.documentView = textView
         textView.updateContainerSize(for: scrollView)
         return scrollView
@@ -168,9 +193,7 @@ private struct SelectionPreviewTextRepresentable: NSViewRepresentable {
 
     func updateNSView(_ scrollView: SelectionTextScrollView, context: Context) {
         guard let textView = scrollView.documentView as? SelectionNSTextView else { return }
-        if textView.string != text {
-            textView.string = text
-        }
+        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
         textView.updateContainerSize(for: scrollView)
         scrollView.invalidateIntrinsicContentSize()
     }
@@ -180,6 +203,7 @@ private struct SelectionPreviewTextRepresentable: NSViewRepresentable {
         let proposedWidth = proposal.width ?? scrollView.bounds.width
         let fallbackWidth = NSScreen.main?.visibleFrame.width ?? 800
         let targetWidth = proposedWidth > 0 ? proposedWidth : fallbackWidth
+        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
         textView.updateContainerSize(for: scrollView, targetWidth: targetWidth)
         let height = textView.fittingSize.height
         return CGSize(width: targetWidth, height: height)
@@ -232,6 +256,17 @@ private final class SelectionNSTextView: NSTextView {
             weight: .regular
         )
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    func apply(text: String, textStyle: NSFont.TextStyle, textColor: NSColor) {
+        if string != text {
+            string = text
+        }
+        font = NSFont.monospacedSystemFont(
+            ofSize: NSFont.preferredFont(forTextStyle: textStyle).pointSize,
+            weight: .regular
+        )
+        self.textColor = textColor
     }
 
     func updateContainerSize(for scrollView: NSScrollView, targetWidth: CGFloat? = nil) {
