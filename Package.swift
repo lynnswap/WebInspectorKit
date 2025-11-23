@@ -23,7 +23,9 @@ let package = Package(
         name: "WebInspectorKit",
         path: "Sources/WebInspectorKit",
         resources: [
-            .process("WebInspectorUI/Resources")
+            .process("Localizable.xcstrings"),
+            .process("WebInspector/Views/DOMTreeView"),
+            .process("WebInspector/Bridge/InspectorAgent.js")
         ]
     ),
 
