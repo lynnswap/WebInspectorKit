@@ -318,7 +318,6 @@ private extension WIDOMSelection {
     init(dictionary: [String: Any]) {
         let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
         let preview = dictionary["preview"] as? String ?? ""
-        let description = dictionary["description"] as? String ?? ""
         let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
         let attributes = attributesPayload.compactMap { entry -> WIDOMAttribute? in
             guard let name = entry["name"] as? String else { return nil }
@@ -330,7 +329,6 @@ private extension WIDOMSelection {
         self.init(
             nodeId: nodeId,
             preview: preview,
-            description: description,
             attributes: attributes,
             path: path
         )

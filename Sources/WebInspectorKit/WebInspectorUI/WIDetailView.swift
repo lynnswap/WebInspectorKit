@@ -38,13 +38,6 @@ public struct WIDetailView: View {
 
                             SelectionPreviewTextRepresentable(text: selection.preview)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-
-                            if !selection.description.isEmpty {
-                                Text(selection.description)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                            }
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -283,7 +276,6 @@ private enum WIDetailPreviewData {
     static let selected = WIDOMSelection(
         nodeId: 128,
         preview: "<article class=\"entry\">Preview post content</article>",
-        description: "article.entry#post-128",
         attributes: [
             WIDOMAttribute(name: "class", value: "entry card is-selected"),
             WIDOMAttribute(name: "data-testid", value: "postText"),

@@ -1729,7 +1729,6 @@
         const payload = node ? {
             id: typeof node.id === "number" ? node.id : null,
             preview: renderPreview(node),
-            description: node.textContent ? trimText(node.textContent, 240) : "",
             attributes: Array.isArray(node.attributes) ? node.attributes.map(attr => ({
                 name: attr.name || "",
                 value: attr.value || ""

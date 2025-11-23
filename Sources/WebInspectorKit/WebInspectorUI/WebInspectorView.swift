@@ -27,20 +27,17 @@ public struct WIDOMAttribute: Equatable {
 public struct WIDOMSelection: Equatable {
     public let nodeId: Int?
     public let preview: String
-    public let description: String
     public let attributes: [WIDOMAttribute]
     public let path: [String]
 
     public init(
         nodeId: Int?,
         preview: String,
-        description: String,
         attributes: [WIDOMAttribute],
         path: [String]
     ) {
         self.nodeId = nodeId
         self.preview = preview
-        self.description = description
         self.attributes = attributes
         self.path = path
     }
