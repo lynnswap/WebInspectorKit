@@ -75,7 +75,9 @@ public struct WIDetailView: View {
                 .listSectionSeparatorTint(.clear)
             }
             .listStyle(.plain)
-            .listRowSpacing(10.0)
+            .listRowSpacing(8)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.bottom, 24 ,for: .scrollContent)
         }else{
             ContentUnavailableView(
                 String(localized:"dom.detail.select_prompt",bundle:.module),
