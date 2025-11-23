@@ -51,19 +51,11 @@ public struct WIDetailView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.element.name)
                                     .font(.subheadline.weight(.semibold))
-#if canImport(UIKit)
                                 SelectionPreviewTextRepresentable(
                                     text: entry.element.value,
                                     textStyle: .footnote,
                                     textColor: .secondaryLabel
                                 )
-#elseif canImport(AppKit)
-                                SelectionPreviewTextRepresentable(
-                                    text: entry.element.value,
-                                    textStyle: .footnote,
-                                    textColor: .secondaryLabelColor
-                                )
-#endif
                             }
                             .padding(.vertical, 10)
                             .padding(.horizontal, 12)
@@ -102,7 +94,6 @@ public struct WIDetailView: View {
     }
 }
 
-#if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var text: String
     var textStyle: UIFont.TextStyle = .body
@@ -176,120 +167,6 @@ private final class SelectionUITextView: UITextView {
         invalidateIntrinsicContentSize()
     }
 }
-#elseif canImport(AppKit)
-private struct SelectionPreviewTextRepresentable: NSViewRepresentable {
-    var text: String
-    var textStyle: NSFont.TextStyle = .body
-    var textColor: NSColor = .labelColor
-
-    func makeNSView(context: Context) -> SelectionTextScrollView {
-        let scrollView = SelectionTextScrollView()
-        let textView = SelectionNSTextView(frame: .zero, textContainer: nil)
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        scrollView.documentView = textView
-        textView.updateContainerSize(for: scrollView)
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: SelectionTextScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? SelectionNSTextView else { return }
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        textView.updateContainerSize(for: scrollView)
-        scrollView.invalidateIntrinsicContentSize()
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: SelectionTextScrollView, context: Context) -> CGSize? {
-        guard let textView = scrollView.documentView as? SelectionNSTextView else { return nil }
-        let proposedWidth = proposal.width ?? scrollView.bounds.width
-        let fallbackWidth = NSScreen.main?.visibleFrame.width ?? 800
-        let targetWidth = proposedWidth > 0 ? proposedWidth : fallbackWidth
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        textView.updateContainerSize(for: scrollView, targetWidth: targetWidth)
-        let height = textView.fittingSize.height
-        return CGSize(width: targetWidth, height: height)
-    }
-}
-
-private final class SelectionTextScrollView: NSScrollView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        drawsBackground = false
-        hasVerticalScroller = false
-        hasHorizontalScroller = false
-        borderType = .noBorder
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override var intrinsicContentSize: NSSize {
-        documentView?.fittingSize ?? super.intrinsicContentSize
-    }
-}
-
-private final class SelectionNSTextView: NSTextView {
-    override init(frame frameRect: NSRect, textContainer: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: textContainer)
-        configure()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    private func configure() {
-        drawsBackground = false
-        isEditable = false
-        isSelectable = true
-        textContainerInset = .zero
-        textContainer?.lineFragmentPadding = 0
-        isVerticallyResizable = true
-        isHorizontallyResizable = false
-        textContainer?.widthTracksTextView = true
-        textContainer?.heightTracksTextView = false
-        textColor = .labelColor
-        font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
-            weight: .regular
-        )
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-
-    func apply(text: String, textStyle: NSFont.TextStyle, textColor: NSColor) {
-        if string != text {
-            string = text
-        }
-        font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: textStyle).pointSize,
-            weight: .regular
-        )
-        self.textColor = textColor
-    }
-
-    func updateContainerSize(for scrollView: NSScrollView, targetWidth: CGFloat? = nil) {
-        let width = targetWidth ?? max(scrollView.contentSize.width, scrollView.frame.width, 1)
-        let containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        if textContainer?.containerSize != containerSize {
-            textContainer?.containerSize = containerSize
-        }
-        if frame.size.width != width {
-            frame.size.width = width
-        }
-        let fittingHeight = fittingSize.height
-        if frame.size.height != fittingHeight {
-            frame.size.height = fittingHeight
-        }
-        invalidateIntrinsicContentSize()
-    }
-
-    override var intrinsicContentSize: NSSize {
-        fittingSize
-    }
-}
-#endif
 
 #if DEBUG
 @MainActor
