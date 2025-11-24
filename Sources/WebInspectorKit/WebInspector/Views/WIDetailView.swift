@@ -22,30 +22,15 @@ public struct WIDetailView: View {
         if selection.nodeId != nil {
             List{
                 Section{
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !selection.path.isEmpty {
-                            Text(selection.path.joined(separator: " › "))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-
-                        SelectionPreviewTextRepresentable(
-                            text: selection.preview,
-                            textStyle: .body,
-                            textColor: .label
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(14)
+                    SelectionPreviewTextRepresentable(
+                        text: selection.preview,
+                        textStyle: .footnote,
+                        textColor: .label
+                    )
+                    .listRowStyle()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(listRowBackground)
-                    .scenePadding(.horizontal)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(.init())
                 }header: {
-                    Text("dom.detail.selected_title")
+                    Text("Element" as String)
                 }
                 Section{
                     if selection.attributes.isEmpty {
@@ -63,24 +48,17 @@ public struct WIDetailView: View {
                                     textColor: .secondaryLabel
                                 )
                             }
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(listRowBackground)
-                            .scenePadding(.horizontal)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(.init())
-                            
+                            .listRowStyle()
                         }
                     }
                 }header:{
-                    Text("dom.detail.attributes")
+                    Text("Attributes" as String)
                 }
-                .listSectionSeparatorTint(.clear)
             }
+            .listSectionSeparatorTint(.clear)
             .listStyle(.plain)
             .listRowSpacing(8)
+            .listSectionSpacing(12)
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 24 ,for: .scrollContent)
         }else{
@@ -91,6 +69,21 @@ public struct WIDetailView: View {
             )
         }
 #endif
+    }
+}
+
+private extension View{
+    func listRowStyle() -> some View{
+        return self
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(listRowBackground)
+            .scenePadding(.horizontal)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(.init())
+        
     }
     @ViewBuilder
     private var listRowBackground:some View{
