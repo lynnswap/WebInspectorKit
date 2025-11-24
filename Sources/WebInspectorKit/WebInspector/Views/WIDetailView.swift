@@ -19,20 +19,20 @@ public struct WIDetailView: View {
     public var body: some View {
 #if canImport(UIKit)
         let selection = model.webBridge.domSelection
-        if selection.nodeId != nil {
-            List{
-                Section{
-                    SelectionPreviewTextRepresentable(
-                        text: selection.preview,
-                        textStyle: .footnote,
-                        textColor: .label
-                    )
-                    .listRowStyle()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }header: {
-                    Text("Element" as String)
-                }
-                if !selection.selectorPath.isEmpty {
+        Group{
+            if selection.nodeId != nil {
+                List{
+                    Section{
+                        SelectionPreviewTextRepresentable(
+                            text: selection.preview,
+                            textStyle: .footnote,
+                            textColor: .label
+                        )
+                        .listRowStyle()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }header: {
+                        Text("Element" as String)
+                    }
                     Section {
                         SelectionPreviewTextRepresentable(
                             text: selection.selectorPath,
@@ -44,54 +44,55 @@ public struct WIDetailView: View {
                     } header: {
                         Text("Selector" as String)
                     }
-                }
-                Section {
-                    if selection.attributes.isEmpty {
-                        Text("dom.detail.attributes.empty")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(selection.attributes) { element in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(element.name)
-                                    .font(.subheadline.weight(.semibold))
-                                SelectionPreviewTextRepresentable(
-                                    text: element.value,
-                                    textStyle: .footnote,
-                                    textColor: .secondaryLabel,
-                                    isEditable: true,
-                                    onChange: { newValue in
-                                        model.webBridge.updateAttributeValue(name: element.name, value: newValue)
-                                    }
-                                )
-                            }
-                            .listRowStyle()
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true){
-                                deleteButton(element)
-                                    .labelStyle(.iconOnly)
-                            }
-                            .contextMenu{
-                                deleteButton(element)
+                    Section {
+                        if selection.attributes.isEmpty {
+                            Text("dom.detail.attributes.empty")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(selection.attributes) { element in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(element.name)
+                                        .font(.subheadline.weight(.semibold))
+                                    SelectionPreviewTextRepresentable(
+                                        text: element.value,
+                                        textStyle: .footnote,
+                                        textColor: .secondaryLabel,
+                                        isEditable: true,
+                                        onChange: { newValue in
+                                            model.webBridge.updateAttributeValue(name: element.name, value: newValue)
+                                        }
+                                    )
+                                }
+                                .listRowStyle()
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true){
+                                    deleteButton(element)
+                                        .labelStyle(.iconOnly)
+                                }
+                                .contextMenu{
+                                    deleteButton(element)
+                                }
                             }
                         }
+                    }header:{
+                        Text("Attributes" as String)
                     }
-                }header:{
-                    Text("Attributes" as String)
                 }
+                .listSectionSeparator(.hidden)
+                .listStyle(.plain)
+                .listRowSpacing(8)
+                .listSectionSpacing(12)
+                .contentMargins(.top, 0, for: .scrollContent)
+                .contentMargins(.bottom, 24 ,for: .scrollContent)
+            }else{
+                ContentUnavailableView(
+                    String(localized:"dom.detail.select_prompt",bundle:.module),
+                    systemImage: "cursorarrow.rays",
+                    description: Text("dom.detail.hint")
+                )
             }
-            .listSectionSeparatorTint(.clear)
-            .listStyle(.plain)
-            .listRowSpacing(8)
-            .listSectionSpacing(12)
-            .contentMargins(.top, 0, for: .scrollContent)
-            .contentMargins(.bottom, 24 ,for: .scrollContent)
-        }else{
-            ContentUnavailableView(
-                String(localized:"dom.detail.select_prompt",bundle:.module),
-                systemImage: "cursorarrow.rays",
-                description: Text("dom.detail.hint")
-            )
         }
+        .animation(.easeInOut(duration:0.12),value:selection.nodeId == nil)
 #endif
     }
    
