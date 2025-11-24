@@ -20,6 +20,7 @@ final class WIInspectorModel: NSObject {
         case ready = "webInspectorReady"
         case log = "webInspectorLog"
         case domSelection = "webInspectorDomSelection"
+        case domSelector = "webInspectorDomSelector"
     }
 
     private struct InspectorProtocolRequest {
@@ -179,6 +180,13 @@ final class WIInspectorModel: NSObject {
                 case "Overlay.hideHighlight", "DOM.hideHighlight":
                     self.bridge?.contentModel.clearWebInspectorHighlight()
                     await self.sendResponse(id: request.id, result: [:])
+                case "DOM.getSelectorPath":
+                    let identifier = request.params["nodeId"] as? Int ?? 0
+                    guard let content = self.bridge?.contentModel else {
+                        throw WIError.scriptUnavailable
+                    }
+                    let selectorPath = try await content.selectorPath(for: identifier)
+                    await self.sendResponse(id: request.id, result: ["selectorPath": selectorPath])
                 default:
                     await self.sendError(id: request.id, message: "Unsupported method: \(request.method)")
                 }
@@ -309,6 +317,12 @@ extension WIInspectorModel: WKScriptMessageHandler {
                 bridge?.updateDomSelection(with: dictionary)
             } else {
                 bridge?.clearDomSelection()
+            }
+        case .domSelector:
+            if let dictionary = message.body as? [String: Any] {
+                let nodeId = dictionary["id"] as? Int
+                let selectorPath = dictionary["selectorPath"] as? String ?? ""
+                bridge?.updateDomSelectorPath(nodeId: nodeId, selectorPath: selectorPath)
             }
         }
     }

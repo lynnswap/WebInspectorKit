@@ -44,6 +44,7 @@
         refreshAttempts: new Map(),
         selectionChain: []
     };
+    let selectorRequestToken = 0;
 
     const renderState = {
         pendingNodes: new Map(),
@@ -1751,8 +1752,34 @@
         }
     }
 
+    function notifyNativeSelectorPath(node) {
+        const handler = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorDomSelector : null;
+        if (!handler || typeof handler.postMessage !== "function") {
+            return;
+        }
+        const nodeId = node && typeof node.id === "number" ? node.id : null;
+        const currentToken = ++selectorRequestToken;
+        if (!nodeId) {
+            handler.postMessage({ id: null, selectorPath: "" });
+            return;
+        }
+        sendCommand("DOM.getSelectorPath", { nodeId })
+            .then(result => {
+                if (currentToken !== selectorRequestToken)
+                    return;
+                const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
+                handler.postMessage({ id: nodeId, selectorPath });
+            })
+            .catch(() => {
+                if (currentToken !== selectorRequestToken)
+                    return;
+                handler.postMessage({ id: nodeId, selectorPath: "" });
+            });
+    }
+
     function updateDetails(node) {
         notifyNativeSelection(node || null);
+        notifyNativeSelectorPath(node || null);
     }
 
     function renderPreview(node) {

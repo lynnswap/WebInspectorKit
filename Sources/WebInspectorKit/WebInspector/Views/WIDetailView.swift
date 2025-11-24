@@ -32,7 +32,20 @@ public struct WIDetailView: View {
                 }header: {
                     Text("Element" as String)
                 }
-                Section{
+                if !selection.selectorPath.isEmpty {
+                    Section {
+                        SelectionPreviewTextRepresentable(
+                            text: selection.selectorPath,
+                            textStyle: .footnote,
+                            textColor: .label
+                        )
+                        .listRowStyle()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } header: {
+                        Text("Selector" as String)
+                    }
+                }
+                Section {
                     if selection.attributes.isEmpty {
                         Text("dom.detail.attributes.empty")
                             .font(.subheadline)
@@ -216,7 +229,8 @@ private enum WIDetailPreviewData {
             "main.timeline",
             "section.thread",
             "article.entry"
-        ]
+        ],
+        selectorPath: "html > body.app-layout > main.timeline > section.thread > article.entry"
     )
 
     static let attributesEmpty = WIDOMSelection(
@@ -229,7 +243,8 @@ private enum WIDetailPreviewData {
             "main.timeline",
             "section.thread",
             "article.entry"
-        ]
+        ],
+        selectorPath: "html > body.app-layout > main.timeline > section.thread > article.entry"
     )
 }
 

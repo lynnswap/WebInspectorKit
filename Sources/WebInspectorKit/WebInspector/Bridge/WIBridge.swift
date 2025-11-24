@@ -52,7 +52,7 @@ public final class WIBridge {
 
     func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
-        domSelection.clear()
+        clearDomSelection()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -73,7 +73,7 @@ public final class WIBridge {
     func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
-        domSelection.clear()
+        clearDomSelection()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -134,5 +134,13 @@ public final class WIBridge {
 
     func clearDomSelection() {
         domSelection.clear()
+    }
+
+    func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
+        guard
+            let nodeId,
+            domSelection.nodeId == nodeId
+        else { return }
+        domSelection.selectorPath = selectorPath
     }
 }

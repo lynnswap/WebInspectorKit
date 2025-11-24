@@ -6,6 +6,7 @@ struct WIDOMSelectionSnapshot {
     let preview: String
     let attributes: [(name: String, value: String)]
     let path: [String]
+    let selectorPath: String
 
     init?(dictionary: [String: Any]) {
         let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
@@ -17,8 +18,9 @@ struct WIDOMSelectionSnapshot {
             return (name: name, value: value)
         }
         let path = dictionary["path"] as? [String] ?? []
+        let selectorPath = dictionary["selectorPath"] as? String ?? ""
 
-        if preview.isEmpty && attributes.isEmpty && path.isEmpty && nodeId == nil {
+        if preview.isEmpty && attributes.isEmpty && path.isEmpty && selectorPath.isEmpty && nodeId == nil {
             return nil
         }
 
@@ -26,6 +28,7 @@ struct WIDOMSelectionSnapshot {
         self.preview = preview
         self.attributes = attributes
         self.path = path
+        self.selectorPath = selectorPath
     }
 }
 
@@ -45,17 +48,20 @@ public struct WIDOMAttribute: Hashable {
     public var preview: String
     public var attributes: [WIDOMAttribute]
     public var path: [String]
+    public var selectorPath: String
 
     public init(
         nodeId: Int? = nil,
         preview: String = "",
         attributes: [WIDOMAttribute] = [],
-        path: [String] = []
+        path: [String] = [],
+        selectorPath: String = ""
     ) {
         self.nodeId = nodeId
         self.preview = preview
         self.attributes = attributes
         self.path = path
+        self.selectorPath = selectorPath
     }
 
     func applySnapshot(from dictionary: [String: Any]) {
@@ -72,6 +78,7 @@ public struct WIDOMAttribute: Hashable {
         preview = snapshot.preview
         attributes = snapshot.attributes.map { WIDOMAttribute(name: $0.name, value: $0.value) }
         path = snapshot.path
+        selectorPath = snapshot.selectorPath
     }
 
     func clear() {
@@ -79,5 +86,6 @@ public struct WIDOMAttribute: Hashable {
         preview = ""
         attributes = []
         path = []
+        selectorPath = ""
     }
 }
