@@ -1094,6 +1094,23 @@
         return true;
     }
 
+    function removeAttributeForNode(identifier, name) {
+        var node = resolveNode(identifier);
+        if (!node || node.nodeType !== Node.ELEMENT_NODE)
+            return false;
+        var attributeName = String(name || "");
+        suppressSnapshotAutoUpdate("remove-attribute");
+        try {
+            node.removeAttribute(attributeName);
+        } catch {
+            resumeSnapshotAutoUpdate("remove-attribute");
+            return false;
+        }
+        resumeSnapshotAutoUpdate("remove-attribute");
+        triggerSnapshotUpdate("remove-attribute");
+        return true;
+    }
+
     function resolveNode(identifier) {
         var map = inspector.map;
         if (!map || !map.size)
@@ -1384,6 +1401,7 @@
         xpathForNode: xpathForNode,
         removeNode: removeNode,
         setAttributeForNode: setAttributeForNode,
+        removeAttributeForNode: removeAttributeForNode,
         __installed: true
     };
     Object.defineProperty(window, "webInspectorKit", {

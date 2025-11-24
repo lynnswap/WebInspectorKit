@@ -97,7 +97,7 @@ public struct WIDetailView: View {
    
     private func deleteButton(_ element:WIDOMAttribute) -> some View{
         Button(role:.destructive){
-            
+            model.webBridge.removeAttribute(name: element.name)
         }label:{
             Label{
                 Text("delete")

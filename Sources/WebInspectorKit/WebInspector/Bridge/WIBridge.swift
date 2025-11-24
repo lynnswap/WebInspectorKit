@@ -151,4 +151,12 @@ public final class WIBridge {
             await contentModel.setAttributeValue(identifier: nodeId, name: name, value: value)
         }
     }
+
+    func removeAttribute(name: String) {
+        guard let nodeId = domSelection.nodeId else { return }
+        domSelection.removeAttribute(nodeId: nodeId, name: name)
+        Task {
+            await contentModel.removeAttribute(identifier: nodeId, name: name)
+        }
+    }
 }

@@ -104,4 +104,9 @@ public struct WIDOMAttribute: Hashable,Identifiable {
         }
         attributes[index].value = value
     }
+
+    func removeAttribute(nodeId: Int?, name: String) {
+        guard nodeId == self.nodeId else { return }
+        attributes.removeAll { $0.name == name }
+    }
 }
