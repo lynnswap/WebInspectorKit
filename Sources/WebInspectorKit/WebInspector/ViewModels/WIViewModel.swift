@@ -60,7 +60,7 @@ public final class WIViewModel {
     }
 
     public func deleteSelectedNode() {
-        guard let nodeId = webBridge.domSelection?.nodeId else { return }
+        guard let nodeId = webBridge.domSelection.nodeId else { return }
         Task {
             await webBridge.deleteNode(identifier: nodeId)
         }
@@ -137,7 +137,7 @@ public final class WIViewModel {
     }
 
     private func performCopy(_ kind: SelectionCopyKind) {
-        guard let nodeId = webBridge.domSelection?.nodeId else { return }
+        guard let nodeId = webBridge.domSelection.nodeId else { return }
         Task { @MainActor in
             do {
                 let text: String

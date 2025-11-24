@@ -18,7 +18,8 @@ public struct WIDetailView: View {
     }
     public var body: some View {
 #if canImport(UIKit)
-        if let selection = model.webBridge.domSelection {
+        let selection = model.webBridge.domSelection
+        if selection.nodeId != nil {
             List{
                 Section{
                     VStack(alignment: .leading, spacing: 8) {
@@ -30,7 +31,7 @@ public struct WIDetailView: View {
                         }
 
                         SelectionPreviewTextRepresentable(
-                            textView: selection.previewView,
+                            text: selection.preview,
                             textStyle: .body,
                             textColor: .label
                         )
@@ -52,12 +53,12 @@ public struct WIDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
+                        ForEach(selection.attributes,id:\.self) { element in
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.element.name)
+                                Text(element.name)
                                     .font(.subheadline.weight(.semibold))
                                 SelectionPreviewTextRepresentable(
-                                    textView: entry.element.valueView,
+                                    text: element.value,
                                     textStyle: .footnote,
                                     textColor: .secondaryLabel
                                 )
@@ -104,16 +105,21 @@ public struct WIDetailView: View {
 
 #if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
-    var textView: SelectionUITextView
+    var text: String
     var textStyle: UIFont.TextStyle
     var textColor: UIColor
 
-    func makeUIView(context: Context) -> SelectionUITextView {
-        textView.applyStyle(textStyle: textStyle, textColor: textColor)
-        return textView
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: text, textStyle: textStyle, textColor: textColor)
     }
 
-    func updateUIView(_ textView: SelectionUITextView, context: Context) {}
+    func makeUIView(context: Context) -> SelectionUITextView {
+        context.coordinator.textView
+    }
+
+    func updateUIView(_ textView: SelectionUITextView, context: Context) {
+        context.coordinator.update(text: text)
+    }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
         let proposedWidth = proposal.width ?? uiView.bounds.width
@@ -122,6 +128,21 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
             CGSize(width: targetWidth, height: CGFloat.greatestFiniteMagnitude)
         )
         return CGSize(width: targetWidth, height: fittingSize.height)
+    }
+    @MainActor
+    final class Coordinator {
+        let textView: SelectionUITextView
+
+        init(text: String, textStyle: UIFont.TextStyle, textColor: UIColor) {
+            let textView = SelectionUITextView()
+            textView.applyStyle(textStyle: textStyle, textColor: textColor)
+            textView.apply(text: text)
+            self.textView = textView
+        }
+
+        func update(text: String) {
+            textView.apply(text: text)
+        }
     }
 }
 
@@ -178,7 +199,11 @@ public final class SelectionUITextView: UITextView {
 @MainActor
 private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
     let model = WIViewModel()
-    model.webBridge.domSelection = selection
+    if let selection {
+        model.webBridge.domSelection = selection
+    } else {
+        model.webBridge.domSelection.clear()
+    }
     return model
 }
 

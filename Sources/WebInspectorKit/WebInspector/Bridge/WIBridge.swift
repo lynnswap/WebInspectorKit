@@ -20,7 +20,7 @@ enum WIConstants {
 public final class WIBridge {
     var isLoading = false
     var errorMessage: String?
-    var domSelection: WIDOMSelection?
+    var domSelection = WIDOMSelection()
     let contentModel = WIContentModel()
     let inspectorModel = WIInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
@@ -52,7 +52,7 @@ public final class WIBridge {
 
     func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
-        domSelection = nil
+        domSelection.clear()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -73,7 +73,7 @@ public final class WIBridge {
     func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
-        domSelection = nil
+        domSelection.clear()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -129,14 +129,10 @@ public final class WIBridge {
     }
 
     func updateDomSelection(with dictionary: [String: Any]) {
-        if let existing = domSelection {
-            _ = WIDOMSelection.makeOrUpdate(from: dictionary, existing: existing)
-            return
-        }
-        domSelection = WIDOMSelection.makeOrUpdate(from: dictionary, existing: nil)
+        domSelection.applySnapshot(from: dictionary)
     }
 
-    func updateDomSelection(_ selection: WIDOMSelection?) {
-        domSelection = selection
+    func clearDomSelection() {
+        domSelection.clear()
     }
 }

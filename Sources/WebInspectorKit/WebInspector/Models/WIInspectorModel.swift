@@ -308,7 +308,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
                 bridge?.updateDomSelection(with: dictionary)
             } else {
-                bridge?.updateDomSelection(nil)
+                bridge?.clearDomSelection()
             }
         }
     }
