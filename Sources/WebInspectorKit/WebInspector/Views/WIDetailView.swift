@@ -66,6 +66,13 @@ public struct WIDetailView: View {
                                 )
                             }
                             .listRowStyle()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true){
+                                deleteButton(element)
+                                    .labelStyle(.iconOnly)
+                            }
+                            .contextMenu{
+                                deleteButton(element)
+                            }
                         }
                     }
                 }header:{
@@ -86,6 +93,18 @@ public struct WIDetailView: View {
             )
         }
 #endif
+    }
+   
+    private func deleteButton(_ element:WIDOMAttribute) -> some View{
+        Button(role:.destructive){
+            
+        }label:{
+            Label{
+                Text("delete")
+            }icon:{
+                Image(systemName:"trash")
+            }
+        }
     }
 }
 
