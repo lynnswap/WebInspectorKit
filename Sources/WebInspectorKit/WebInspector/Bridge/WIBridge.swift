@@ -128,6 +128,14 @@ public final class WIBridge {
         enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
+    func updateDomSelection(with dictionary: [String: Any]) {
+        if let existing = domSelection {
+            _ = WIDOMSelection.makeOrUpdate(from: dictionary, existing: existing)
+            return
+        }
+        domSelection = WIDOMSelection.makeOrUpdate(from: dictionary, existing: nil)
+    }
+
     func updateDomSelection(_ selection: WIDOMSelection?) {
         domSelection = selection
     }

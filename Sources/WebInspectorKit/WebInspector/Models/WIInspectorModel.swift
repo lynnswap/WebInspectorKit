@@ -306,32 +306,11 @@ extension WIInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.updateDomSelection(WIDOMSelection(dictionary: dictionary))
+                bridge?.updateDomSelection(with: dictionary)
             } else {
                 bridge?.updateDomSelection(nil)
             }
         }
-    }
-}
-
-private extension WIDOMSelection {
-    init(dictionary: [String: Any]) {
-        let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
-        let preview = dictionary["preview"] as? String ?? ""
-        let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
-        let attributes = attributesPayload.compactMap { entry -> WIDOMAttribute? in
-            guard let name = entry["name"] as? String else { return nil }
-            let value = entry["value"] as? String ?? ""
-            return WIDOMAttribute(name: name, value: value)
-        }
-        let path = dictionary["path"] as? [String] ?? []
-
-        self.init(
-            nodeId: nodeId,
-            preview: preview,
-            attributes: attributes,
-            path: path
-        )
     }
 }
 

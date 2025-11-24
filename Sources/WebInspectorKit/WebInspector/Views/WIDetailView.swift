@@ -29,8 +29,12 @@ public struct WIDetailView: View {
                                 .lineLimit(2)
                         }
 
-                        SelectionPreviewTextRepresentable(text: selection.preview)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        SelectionPreviewTextRepresentable(
+                            textView: selection.previewView,
+                            textStyle: .body,
+                            textColor: .label
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -53,7 +57,7 @@ public struct WIDetailView: View {
                                 Text(entry.element.name)
                                     .font(.subheadline.weight(.semibold))
                                 SelectionPreviewTextRepresentable(
-                                    text: entry.element.value,
+                                    textView: entry.element.valueView,
                                     textStyle: .footnote,
                                     textColor: .secondaryLabel
                                 )
@@ -100,23 +104,18 @@ public struct WIDetailView: View {
 
 #if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
-    var text: String
-    var textStyle: UIFont.TextStyle = .body
-    var textColor: UIColor = .label
+    var textView: SelectionUITextView
+    var textStyle: UIFont.TextStyle
+    var textColor: UIColor
 
     func makeUIView(context: Context) -> SelectionUITextView {
-        let textView = SelectionUITextView()
         textView.applyStyle(textStyle: textStyle, textColor: textColor)
-        textView.apply(text: text)
         return textView
     }
 
-    func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        textView.apply(text: text)
-    }
+    func updateUIView(_ textView: SelectionUITextView, context: Context) {}
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
-        uiView.apply(text: text)
         let proposedWidth = proposal.width ?? uiView.bounds.width
         let targetWidth = proposedWidth > 0 ? proposedWidth : UIScreen.main.bounds.width
         let fittingSize = uiView.sizeThatFits(
@@ -126,8 +125,8 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     }
 }
 
-private final class SelectionUITextView: UITextView {
-    override init(frame: CGRect, textContainer: NSTextContainer?) {
+public final class SelectionUITextView: UITextView {
+    public override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         configure()
     }
@@ -163,11 +162,11 @@ private final class SelectionUITextView: UITextView {
         }
     }
 
-    override var intrinsicContentSize: CGSize {
+    public override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height)
     }
 
-    override func layoutSubviews() {
+    public override func layoutSubviews() {
         super.layoutSubviews()
         invalidateIntrinsicContentSize()
     }
