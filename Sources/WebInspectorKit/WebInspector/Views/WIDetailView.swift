@@ -51,7 +51,7 @@ public struct WIDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(selection.attributes, id: \.id) { element in
+                        ForEach(selection.attributes) { element in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(element.name)
                                     .font(.subheadline.weight(.semibold))
@@ -61,7 +61,7 @@ public struct WIDetailView: View {
                                     textColor: .secondaryLabel,
                                     isEditable: true,
                                     onChange: { newValue in
-                                        model.updateSelectedAttribute(name: element.name, value: newValue)
+                                        model.webBridge.updateAttributeValue(name: element.name, value: newValue)
                                     }
                                 )
                             }
@@ -224,9 +224,7 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
 
     func apply(text: String) {
         guard self.text != text else { return }
-        isApplyingText = true
         self.text = text
-        isApplyingText = false
     }
 
     public override var intrinsicContentSize: CGSize {
@@ -251,14 +249,10 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
     }
 
     public func textViewDidChange(_ textView: UITextView) {
-        guard !isApplyingText else { return }
-        print("SelectionUITextView edited: \(textView.text ?? "")")
         onChange?(textView.text ?? "")
     }
 
     var onChange: ((String) -> Void)?
-
-    private var isApplyingText = false
 }
 #endif
 

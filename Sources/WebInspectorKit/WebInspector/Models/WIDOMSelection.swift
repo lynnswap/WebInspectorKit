@@ -32,16 +32,17 @@ struct WIDOMSelectionSnapshot {
     }
 }
 
-public struct WIDOMAttribute: Hashable {
-    public var nodeId: Int?
-    public var name: String
-    public var value: String
+public struct WIDOMAttribute: Hashable,Identifiable {
     public var id: String {
         if let nodeId {
             return "\(nodeId)#\(name)"
         }
         return "nil#\(name)"
     }
+    
+    public var nodeId: Int?
+    public var name: String
+    public var value: String
 
     public init(nodeId: Int? = nil, name: String, value: String) {
         self.nodeId = nodeId
@@ -98,7 +99,9 @@ public struct WIDOMAttribute: Hashable {
     }
 
     func updateAttributeValue(nodeId: Int?, name: String, value: String) {
-        guard let index = attributes.firstIndex(where: { $0.nodeId == nodeId && $0.name == name }) else { return }
+        guard nodeId == self.nodeId, let index = attributes.firstIndex(where: { $0.name == name }) else {
+            return
+        }
         attributes[index].value = value
     }
 }
