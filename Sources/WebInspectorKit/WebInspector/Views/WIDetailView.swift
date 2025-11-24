@@ -25,8 +25,7 @@ public struct WIDetailView: View {
                     SelectionPreviewTextRepresentable(
                         text: selection.preview,
                         textStyle: .footnote,
-                        textColor: .label,
-                        isEditable: true
+                        textColor: .label
                     )
                     .listRowStyle()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -38,8 +37,7 @@ public struct WIDetailView: View {
                         SelectionPreviewTextRepresentable(
                             text: selection.selectorPath,
                             textStyle: .footnote,
-                            textColor: .label,
-                            isEditable: true
+                            textColor: .label
                         )
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -198,6 +196,7 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
         textContainer.lineFragmentPadding = 0
         adjustsFontForContentSizeCategory = true
         textColor = .label
+        returnKeyType = .done
         delegate = initialEditable ? self : nil
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
@@ -223,6 +222,18 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
     public override func layoutSubviews() {
         super.layoutSubviews()
         invalidateIntrinsicContentSize()
+    }
+
+    public func textView(
+        _ textView: UITextView,
+        shouldChangeTextIn range: NSRange,
+        replacementText text: String
+    ) -> Bool {
+        if text == "\n" {
+            textView.resignFirstResponder()
+            return false
+        }
+        return true
     }
 
     public func textViewDidChange(_ textView: UITextView) {
