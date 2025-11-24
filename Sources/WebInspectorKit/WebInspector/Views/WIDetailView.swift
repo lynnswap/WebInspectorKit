@@ -106,16 +106,17 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SelectionUITextView {
         let textView = SelectionUITextView()
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
+        textView.applyStyle(textStyle: textStyle, textColor: textColor)
+        textView.apply(text: text, textColor: textColor)
         return textView
     }
 
     func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
+        textView.apply(text: text, textColor: textColor)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
-        uiView.apply(text: text, textStyle: textStyle, textColor: textColor)
+        uiView.apply(text: text, textColor: textColor)
         let proposedWidth = proposal.width ?? uiView.bounds.width
         let targetWidth = proposedWidth > 0 ? proposedWidth : UIScreen.main.bounds.width
         let fittingSize = uiView.sizeThatFits(
@@ -136,6 +137,8 @@ private final class SelectionUITextView: UITextView {
         nil
     }
 
+    private var configuredTextStyle: UIFont.TextStyle?
+
     private func configure() {
         isEditable = false
         isSelectable = true
@@ -145,22 +148,29 @@ private final class SelectionUITextView: UITextView {
         textContainer.lineFragmentPadding = 0
         adjustsFontForContentSizeCategory = true
         textColor = .label
-        font = UIFont.monospacedSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize,
-            weight: .regular
-        )
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
-    func apply(text: String, textStyle: UIFont.TextStyle, textColor: UIColor) {
+    func applyStyle(textStyle: UIFont.TextStyle, textColor: UIColor) {
+        if configuredTextStyle != textStyle {
+            configuredTextStyle = textStyle
+            font = UIFont.monospacedSystemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
+                weight: .regular
+            )
+        }
+        if self.textColor != textColor {
+            self.textColor = textColor
+        }
+    }
+
+    func apply(text: String, textColor: UIColor) {
         if self.text != text {
             self.text = text
         }
-        font = UIFont.monospacedSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
-            weight: .regular
-        )
-        self.textColor = textColor
+        if self.textColor != textColor {
+            self.textColor = textColor
+        }
     }
 
     override var intrinsicContentSize: CGSize {
