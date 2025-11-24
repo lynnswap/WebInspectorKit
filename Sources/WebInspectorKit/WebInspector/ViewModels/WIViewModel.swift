@@ -136,6 +136,10 @@ public final class WIViewModel {
         var logLabel: String { rawValue }
     }
 
+    func updateSelectedAttribute(name: String, value: String) {
+        webBridge.updateAttributeValue(name: name, value: value)
+    }
+
     private func performCopy(_ kind: SelectionCopyKind) {
         guard let nodeId = webBridge.domSelection.nodeId else { return }
         Task { @MainActor in

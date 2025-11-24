@@ -1075,6 +1075,25 @@
         return removed;
     }
 
+    function setAttributeForNode(identifier, name, value) {
+        var node = resolveNode(identifier);
+        if (!node || node.nodeType !== Node.ELEMENT_NODE)
+            return false;
+        var attributeName = String(name || "");
+        var attributeValue = String(value || "");
+
+        suppressSnapshotAutoUpdate("set-attribute");
+        try {
+            node.setAttribute(attributeName, attributeValue);
+        } catch {
+            resumeSnapshotAutoUpdate("set-attribute");
+            return false;
+        }
+        resumeSnapshotAutoUpdate("set-attribute");
+        triggerSnapshotUpdate("set-attribute");
+        return true;
+    }
+
     function resolveNode(identifier) {
         var map = inspector.map;
         if (!map || !map.size)
@@ -1364,6 +1383,7 @@
         selectorPathForNode: selectorPathForNode,
         xpathForNode: xpathForNode,
         removeNode: removeNode,
+        setAttributeForNode: setAttributeForNode,
         __installed: true
     };
     Object.defineProperty(window, "webInspectorKit", {

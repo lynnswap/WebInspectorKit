@@ -51,7 +51,7 @@ public struct WIDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(selection.attributes,id:\.self) { element in
+                        ForEach(selection.attributes, id: \.id) { element in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(element.name)
                                     .font(.subheadline.weight(.semibold))
@@ -59,7 +59,10 @@ public struct WIDetailView: View {
                                     text: element.value,
                                     textStyle: .footnote,
                                     textColor: .secondaryLabel,
-                                    isEditable: true
+                                    isEditable: true,
+                                    onChange: { newValue in
+                                        model.updateSelectedAttribute(name: element.name, value: newValue)
+                                    }
                                 )
                             }
                             .listRowStyle()
@@ -116,13 +119,15 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var textStyle: UIFont.TextStyle
     var textColor: UIColor
     var isEditable: Bool = false
+    var onChange: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: text,
             textStyle: textStyle,
             textColor: textColor,
-            isEditable: isEditable
+            isEditable: isEditable,
+            onChange: onChange
         )
     }
 
@@ -131,7 +136,7 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        context.coordinator.update(text: text)
+        context.coordinator.update(text: text, onChange: onChange)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
@@ -146,14 +151,22 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     final class Coordinator {
         let textView: SelectionUITextView
 
-        init(text: String, textStyle: UIFont.TextStyle, textColor: UIColor, isEditable: Bool) {
+        init(
+            text: String,
+            textStyle: UIFont.TextStyle,
+            textColor: UIColor,
+            isEditable: Bool,
+            onChange: ((String) -> Void)?
+        ) {
             let textView = SelectionUITextView(isEditable: isEditable)
             textView.applyStyle(textStyle: textStyle, textColor: textColor)
+            textView.onChange = onChange
             textView.apply(text: text)
             self.textView = textView
         }
 
-        func update(text: String) {
+        func update(text: String, onChange: ((String) -> Void)?) {
+            textView.onChange = onChange
             textView.apply(text: text)
         }
     }
@@ -210,9 +223,10 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
     }
 
     func apply(text: String) {
-        if self.text != text {
-            self.text = text
-        }
+        guard self.text != text else { return }
+        isApplyingText = true
+        self.text = text
+        isApplyingText = false
     }
 
     public override var intrinsicContentSize: CGSize {
@@ -237,8 +251,14 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
     }
 
     public func textViewDidChange(_ textView: UITextView) {
+        guard !isApplyingText else { return }
         print("SelectionUITextView edited: \(textView.text ?? "")")
+        onChange?(textView.text ?? "")
     }
+
+    var onChange: ((String) -> Void)?
+
+    private var isApplyingText = false
 }
 #endif
 
@@ -261,9 +281,9 @@ private enum WIDetailPreviewData {
         nodeId: 128,
         preview: "<article class=\"entry\">Preview post content</article>",
         attributes: [
-            WIDOMAttribute(name: "class", value: "entry card is-selected"),
-            WIDOMAttribute(name: "data-testid", value: "postText"),
-            WIDOMAttribute(name: "role", value: "article")
+            WIDOMAttribute(nodeId: 128, name: "class", value: "entry card is-selected"),
+            WIDOMAttribute(nodeId: 128, name: "data-testid", value: "postText"),
+            WIDOMAttribute(nodeId: 128, name: "role", value: "article")
         ],
         path: [
             "html",

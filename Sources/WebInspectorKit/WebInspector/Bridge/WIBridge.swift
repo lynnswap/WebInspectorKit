@@ -143,4 +143,12 @@ public final class WIBridge {
         else { return }
         domSelection.selectorPath = selectorPath
     }
+
+    func updateAttributeValue(name: String, value: String) {
+        guard let nodeId = domSelection.nodeId else { return }
+        domSelection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
+        Task {
+            await contentModel.setAttributeValue(identifier: nodeId, name: name, value: value)
+        }
+    }
 }
