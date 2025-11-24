@@ -206,6 +206,41 @@ extension WIContentModel {
         }
     }
 
+    func setAttributeValue(identifier: Int, name: String, value: String) async {
+        guard let webView else { return }
+        do {
+            try await injectScriptIfNeeded(on: webView)
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.setAttributeForNode(identifier, name, value)",
+                arguments: [
+                    "identifier": identifier,
+                    "name": name,
+                    "value": value
+                ],
+                contentWorld: .page
+            )
+        } catch {
+            contentLogger.error("set attribute failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func removeAttribute(identifier: Int, name: String) async {
+        guard let webView else { return }
+        do {
+            try await injectScriptIfNeeded(on: webView)
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.removeAttributeForNode(identifier, name)",
+                arguments: [
+                    "identifier": identifier,
+                    "name": name
+                ],
+                contentWorld: .page
+            )
+        } catch {
+            contentLogger.error("remove attribute failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func evaluateStringScript(_ script: String, identifier: Int) async throws -> String {
         guard let webView else {
             throw WIError.scriptUnavailable

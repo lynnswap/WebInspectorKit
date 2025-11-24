@@ -43,6 +43,8 @@ final class WIWebView: WKWebView {
         scrollView.alwaysBounceVertical = true
 #endif
     }
+    
+#if canImport(UIKit)
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         
@@ -68,4 +70,5 @@ final class WIWebView: WKWebView {
         
         builder.insertChild(menu, atStartOfMenu: .root)
     }
+#endif
 }

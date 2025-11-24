@@ -17,72 +17,74 @@ public struct WIDetailView: View {
         self.model = viewModel
     }
     public var body: some View {
-        if let selection = model.webBridge.domSelection {
+#if canImport(UIKit)
+        let selection = model.webBridge.domSelection
+        if selection.nodeId != nil {
             List{
                 Section{
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !selection.path.isEmpty {
-                            Text(selection.path.joined(separator: " › "))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-
-                        SelectionPreviewTextRepresentable(text: selection.preview)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(14)
+                    SelectionPreviewTextRepresentable(
+                        text: selection.preview,
+                        textStyle: .footnote,
+                        textColor: .label
+                    )
+                    .listRowStyle()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(listRowBackground)
-                    .scenePadding(.horizontal)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(.init())
                 }header: {
-                    Text("dom.detail.selected_title")
+                    Text("Element" as String)
                 }
-                Section{
+                if !selection.selectorPath.isEmpty {
+                    Section {
+                        SelectionPreviewTextRepresentable(
+                            text: selection.selectorPath,
+                            textStyle: .footnote,
+                            textColor: .label
+                        )
+                        .listRowStyle()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } header: {
+                        Text("Selector" as String)
+                    }
+                }
+                Section {
                     if selection.attributes.isEmpty {
                         Text("dom.detail.attributes.empty")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(Array(selection.attributes.enumerated()), id: \.offset) { entry in
+                        ForEach(selection.attributes) { element in
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.element.name)
+                                Text(element.name)
                                     .font(.subheadline.weight(.semibold))
-#if canImport(UIKit)
                                 SelectionPreviewTextRepresentable(
-                                    text: entry.element.value,
+                                    text: element.value,
                                     textStyle: .footnote,
-                                    textColor: .secondaryLabel
+                                    textColor: .secondaryLabel,
+                                    isEditable: true,
+                                    onChange: { newValue in
+                                        model.webBridge.updateAttributeValue(name: element.name, value: newValue)
+                                    }
                                 )
-#elseif canImport(AppKit)
-                                SelectionPreviewTextRepresentable(
-                                    text: entry.element.value,
-                                    textStyle: .footnote,
-                                    textColor: .secondaryLabelColor
-                                )
-#endif
                             }
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(listRowBackground)
-                            .scenePadding(.horizontal)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(.init())
-                            
+                            .listRowStyle()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true){
+                                deleteButton(element)
+                                    .labelStyle(.iconOnly)
+                            }
+                            .contextMenu{
+                                deleteButton(element)
+                            }
                         }
                     }
                 }header:{
-                    Text("dom.detail.attributes")
+                    Text("Attributes" as String)
                 }
-                .listSectionSeparatorTint(.clear)
             }
+            .listSectionSeparatorTint(.clear)
             .listStyle(.plain)
-            .listRowSpacing(10.0)
+            .listRowSpacing(8)
+            .listSectionSpacing(12)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .contentMargins(.bottom, 24 ,for: .scrollContent)
         }else{
             ContentUnavailableView(
                 String(localized:"dom.detail.select_prompt",bundle:.module),
@@ -90,6 +92,34 @@ public struct WIDetailView: View {
                 description: Text("dom.detail.hint")
             )
         }
+#endif
+    }
+   
+    private func deleteButton(_ element:WIDOMAttribute) -> some View{
+        Button(role:.destructive){
+            model.webBridge.removeAttribute(name: element.name)
+        }label:{
+            Label{
+                Text("delete")
+            }icon:{
+                Image(systemName:"trash")
+            }
+        }
+    }
+}
+
+private extension View{
+    func listRowStyle() -> some View{
+        return self
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(listRowBackground)
+            .scenePadding(.horizontal)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(.init())
+        
     }
     @ViewBuilder
     private var listRowBackground:some View{
@@ -105,21 +135,30 @@ public struct WIDetailView: View {
 #if canImport(UIKit)
 private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var text: String
-    var textStyle: UIFont.TextStyle = .body
-    var textColor: UIColor = .label
+    var textStyle: UIFont.TextStyle
+    var textColor: UIColor
+    var isEditable: Bool = false
+    var onChange: ((String) -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            text: text,
+            textStyle: textStyle,
+            textColor: textColor,
+            isEditable: isEditable,
+            onChange: onChange
+        )
+    }
 
     func makeUIView(context: Context) -> SelectionUITextView {
-        let textView = SelectionUITextView()
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        return textView
+        context.coordinator.textView
     }
 
     func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
+        context.coordinator.update(text: text, onChange: onChange)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
-        uiView.apply(text: text, textStyle: textStyle, textColor: textColor)
         let proposedWidth = proposal.width ?? uiView.bounds.width
         let targetWidth = proposedWidth > 0 ? proposedWidth : UIScreen.main.bounds.width
         let fittingSize = uiView.sizeThatFits(
@@ -127,10 +166,50 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
         )
         return CGSize(width: targetWidth, height: fittingSize.height)
     }
+    @MainActor
+    final class Coordinator {
+        let textView: SelectionUITextView
+
+        init(
+            text: String,
+            textStyle: UIFont.TextStyle,
+            textColor: UIColor,
+            isEditable: Bool,
+            onChange: ((String) -> Void)?
+        ) {
+            let textView = SelectionUITextView(isEditable: isEditable)
+            textView.applyStyle(textStyle: textStyle, textColor: textColor)
+            textView.onChange = onChange
+            textView.apply(text: text)
+            self.textView = textView
+        }
+
+        func update(text: String, onChange: ((String) -> Void)?) {
+            textView.onChange = onChange
+            textView.apply(text: text)
+        }
+    }
 }
 
-private final class SelectionUITextView: UITextView {
-    override init(frame: CGRect, textContainer: NSTextContainer?) {
+public final class SelectionUITextView: UITextView, UITextViewDelegate {
+    private let initialEditable: Bool
+
+    public convenience init(isEditable: Bool) {
+        self.init(isEditable: isEditable, frame: .zero, textContainer: nil)
+    }
+
+    public init(
+        isEditable: Bool,
+        frame: CGRect = .zero,
+        textContainer: NSTextContainer? = nil
+    ) {
+        self.initialEditable = isEditable
+        super.init(frame: frame, textContainer: textContainer)
+        configure()
+    }
+
+    public override init(frame: CGRect, textContainer: NSTextContainer?) {
+        self.initialEditable = true
         super.init(frame: frame, textContainer: textContainer)
         configure()
     }
@@ -141,7 +220,7 @@ private final class SelectionUITextView: UITextView {
     }
 
     private func configure() {
-        isEditable = false
+        isEditable = initialEditable
         isSelectable = true
         isScrollEnabled = false
         backgroundColor = .clear
@@ -149,17 +228,12 @@ private final class SelectionUITextView: UITextView {
         textContainer.lineFragmentPadding = 0
         adjustsFontForContentSizeCategory = true
         textColor = .label
-        font = UIFont.monospacedSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: .body).pointSize,
-            weight: .regular
-        )
+        returnKeyType = .done
+        delegate = initialEditable ? self : nil
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
-    func apply(text: String, textStyle: UIFont.TextStyle, textColor: UIColor) {
-        if self.text != text {
-            self.text = text
-        }
+    func applyStyle(textStyle: UIFont.TextStyle, textColor: UIColor) {
         font = UIFont.monospacedSystemFont(
             ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
             weight: .regular
@@ -167,135 +241,50 @@ private final class SelectionUITextView: UITextView {
         self.textColor = textColor
     }
 
-    override var intrinsicContentSize: CGSize {
+    func apply(text: String) {
+        guard self.text != text else { return }
+        self.text = text
+    }
+
+    public override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height)
     }
 
-    override func layoutSubviews() {
+    public override func layoutSubviews() {
         super.layoutSubviews()
         invalidateIntrinsicContentSize()
     }
-}
-#elseif canImport(AppKit)
-private struct SelectionPreviewTextRepresentable: NSViewRepresentable {
-    var text: String
-    var textStyle: NSFont.TextStyle = .body
-    var textColor: NSColor = .labelColor
 
-    func makeNSView(context: Context) -> SelectionTextScrollView {
-        let scrollView = SelectionTextScrollView()
-        let textView = SelectionNSTextView(frame: .zero, textContainer: nil)
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        scrollView.documentView = textView
-        textView.updateContainerSize(for: scrollView)
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: SelectionTextScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? SelectionNSTextView else { return }
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        textView.updateContainerSize(for: scrollView)
-        scrollView.invalidateIntrinsicContentSize()
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: SelectionTextScrollView, context: Context) -> CGSize? {
-        guard let textView = scrollView.documentView as? SelectionNSTextView else { return nil }
-        let proposedWidth = proposal.width ?? scrollView.bounds.width
-        let fallbackWidth = NSScreen.main?.visibleFrame.width ?? 800
-        let targetWidth = proposedWidth > 0 ? proposedWidth : fallbackWidth
-        textView.apply(text: text, textStyle: textStyle, textColor: textColor)
-        textView.updateContainerSize(for: scrollView, targetWidth: targetWidth)
-        let height = textView.fittingSize.height
-        return CGSize(width: targetWidth, height: height)
-    }
-}
-
-private final class SelectionTextScrollView: NSScrollView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        drawsBackground = false
-        hasVerticalScroller = false
-        hasHorizontalScroller = false
-        borderType = .noBorder
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override var intrinsicContentSize: NSSize {
-        documentView?.fittingSize ?? super.intrinsicContentSize
-    }
-}
-
-private final class SelectionNSTextView: NSTextView {
-    override init(frame frameRect: NSRect, textContainer: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: textContainer)
-        configure()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    private func configure() {
-        drawsBackground = false
-        isEditable = false
-        isSelectable = true
-        textContainerInset = .zero
-        textContainer?.lineFragmentPadding = 0
-        isVerticallyResizable = true
-        isHorizontallyResizable = false
-        textContainer?.widthTracksTextView = true
-        textContainer?.heightTracksTextView = false
-        textColor = .labelColor
-        font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
-            weight: .regular
-        )
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-
-    func apply(text: String, textStyle: NSFont.TextStyle, textColor: NSColor) {
-        if string != text {
-            string = text
+    public func textView(
+        _ textView: UITextView,
+        shouldChangeTextIn range: NSRange,
+        replacementText text: String
+    ) -> Bool {
+        if text == "\n" {
+            textView.resignFirstResponder()
+            return false
         }
-        font = NSFont.monospacedSystemFont(
-            ofSize: NSFont.preferredFont(forTextStyle: textStyle).pointSize,
-            weight: .regular
-        )
-        self.textColor = textColor
+        return true
     }
 
-    func updateContainerSize(for scrollView: NSScrollView, targetWidth: CGFloat? = nil) {
-        let width = targetWidth ?? max(scrollView.contentSize.width, scrollView.frame.width, 1)
-        let containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        if textContainer?.containerSize != containerSize {
-            textContainer?.containerSize = containerSize
-        }
-        if frame.size.width != width {
-            frame.size.width = width
-        }
-        let fittingHeight = fittingSize.height
-        if frame.size.height != fittingHeight {
-            frame.size.height = fittingHeight
-        }
-        invalidateIntrinsicContentSize()
+    public func textViewDidChange(_ textView: UITextView) {
+        onChange?(textView.text ?? "")
     }
 
-    override var intrinsicContentSize: NSSize {
-        fittingSize
-    }
+    var onChange: ((String) -> Void)?
 }
 #endif
+
 
 #if DEBUG
 @MainActor
 private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
     let model = WIViewModel()
-    model.webBridge.domSelection = selection
+    if let selection {
+        model.webBridge.domSelection = selection
+    } else {
+        model.webBridge.domSelection.clear()
+    }
     return model
 }
 
@@ -305,9 +294,9 @@ private enum WIDetailPreviewData {
         nodeId: 128,
         preview: "<article class=\"entry\">Preview post content</article>",
         attributes: [
-            WIDOMAttribute(name: "class", value: "entry card is-selected"),
-            WIDOMAttribute(name: "data-testid", value: "postText"),
-            WIDOMAttribute(name: "role", value: "article")
+            WIDOMAttribute(nodeId: 128, name: "class", value: "entry card is-selected"),
+            WIDOMAttribute(nodeId: 128, name: "data-testid", value: "postText"),
+            WIDOMAttribute(nodeId: 128, name: "role", value: "article")
         ],
         path: [
             "html",
@@ -315,7 +304,8 @@ private enum WIDetailPreviewData {
             "main.timeline",
             "section.thread",
             "article.entry"
-        ]
+        ],
+        selectorPath: "html > body.app-layout > main.timeline > section.thread > article.entry"
     )
 
     static let attributesEmpty = WIDOMSelection(
@@ -328,7 +318,8 @@ private enum WIDetailPreviewData {
             "main.timeline",
             "section.thread",
             "article.entry"
-        ]
+        ],
+        selectorPath: "html > body.app-layout > main.timeline > section.thread > article.entry"
     )
 }
 

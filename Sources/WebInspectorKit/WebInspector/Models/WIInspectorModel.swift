@@ -20,6 +20,7 @@ final class WIInspectorModel: NSObject {
         case ready = "webInspectorReady"
         case log = "webInspectorLog"
         case domSelection = "webInspectorDomSelection"
+        case domSelector = "webInspectorDomSelector"
     }
 
     private struct InspectorProtocolRequest {
@@ -179,6 +180,13 @@ final class WIInspectorModel: NSObject {
                 case "Overlay.hideHighlight", "DOM.hideHighlight":
                     self.bridge?.contentModel.clearWebInspectorHighlight()
                     await self.sendResponse(id: request.id, result: [:])
+                case "DOM.getSelectorPath":
+                    let identifier = request.params["nodeId"] as? Int ?? 0
+                    guard let content = self.bridge?.contentModel else {
+                        throw WIError.scriptUnavailable
+                    }
+                    let selectorPath = try await content.selectorPath(for: identifier)
+                    await self.sendResponse(id: request.id, result: ["selectorPath": selectorPath])
                 default:
                     await self.sendError(id: request.id, message: "Unsupported method: \(request.method)")
                 }
@@ -306,32 +314,17 @@ extension WIInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.updateDomSelection(WIDOMSelection(dictionary: dictionary))
+                bridge?.updateDomSelection(with: dictionary)
             } else {
-                bridge?.updateDomSelection(nil)
+                bridge?.clearDomSelection()
+            }
+        case .domSelector:
+            if let dictionary = message.body as? [String: Any] {
+                let nodeId = dictionary["id"] as? Int
+                let selectorPath = dictionary["selectorPath"] as? String ?? ""
+                bridge?.updateDomSelectorPath(nodeId: nodeId, selectorPath: selectorPath)
             }
         }
-    }
-}
-
-private extension WIDOMSelection {
-    init(dictionary: [String: Any]) {
-        let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
-        let preview = dictionary["preview"] as? String ?? ""
-        let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
-        let attributes = attributesPayload.compactMap { entry -> WIDOMAttribute? in
-            guard let name = entry["name"] as? String else { return nil }
-            let value = entry["value"] as? String ?? ""
-            return WIDOMAttribute(name: name, value: value)
-        }
-        let path = dictionary["path"] as? [String] ?? []
-
-        self.init(
-            nodeId: nodeId,
-            preview: preview,
-            attributes: attributes,
-            path: path
-        )
     }
 }
 

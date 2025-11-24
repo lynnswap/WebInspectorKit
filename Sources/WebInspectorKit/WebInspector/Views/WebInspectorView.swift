@@ -89,7 +89,7 @@ public struct WebInspectorView: View {
                             Image(systemName:"document.on.document")
                         }
                     }
-                    .disabled(model.webBridge.domSelection?.nodeId == nil)
+                    .disabled(model.webBridge.domSelection.nodeId == nil)
                     
                     Button(role:.destructive){
                         model.deleteSelectedNode()
@@ -100,7 +100,7 @@ public struct WebInspectorView: View {
                             Image(systemName:"trash")
                         }
                     }
-                    .disabled(model.webBridge.domSelection?.nodeId == nil)
+                    .disabled(model.webBridge.domSelection.nodeId == nil)
                 }
             }
     }

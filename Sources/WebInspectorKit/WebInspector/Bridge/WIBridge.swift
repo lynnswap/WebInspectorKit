@@ -20,7 +20,7 @@ enum WIConstants {
 public final class WIBridge {
     var isLoading = false
     var errorMessage: String?
-    var domSelection: WIDOMSelection?
+    var domSelection = WIDOMSelection()
     let contentModel = WIContentModel()
     let inspectorModel = WIInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
@@ -52,7 +52,7 @@ public final class WIBridge {
 
     func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
-        domSelection = nil
+        clearDomSelection()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -73,7 +73,7 @@ public final class WIBridge {
     func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
         contentModel.webView = nil
-        domSelection = nil
+        clearDomSelection()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -128,7 +128,35 @@ public final class WIBridge {
         enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
-    func updateDomSelection(_ selection: WIDOMSelection?) {
-        domSelection = selection
+    func updateDomSelection(with dictionary: [String: Any]) {
+        domSelection.applySnapshot(from: dictionary)
+    }
+
+    func clearDomSelection() {
+        domSelection.clear()
+    }
+
+    func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
+        guard
+            let nodeId,
+            domSelection.nodeId == nodeId
+        else { return }
+        domSelection.selectorPath = selectorPath
+    }
+
+    func updateAttributeValue(name: String, value: String) {
+        guard let nodeId = domSelection.nodeId else { return }
+        domSelection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
+        Task {
+            await contentModel.setAttributeValue(identifier: nodeId, name: name, value: value)
+        }
+    }
+
+    func removeAttribute(name: String) {
+        guard let nodeId = domSelection.nodeId else { return }
+        domSelection.removeAttribute(nodeId: nodeId, name: name)
+        Task {
+            await contentModel.removeAttribute(identifier: nodeId, name: name)
+        }
     }
 }
