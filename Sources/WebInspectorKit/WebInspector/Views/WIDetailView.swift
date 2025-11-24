@@ -25,7 +25,8 @@ public struct WIDetailView: View {
                     SelectionPreviewTextRepresentable(
                         text: selection.preview,
                         textStyle: .footnote,
-                        textColor: .label
+                        textColor: .label,
+                        isEditable: true
                     )
                     .listRowStyle()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -37,7 +38,8 @@ public struct WIDetailView: View {
                         SelectionPreviewTextRepresentable(
                             text: selection.selectorPath,
                             textStyle: .footnote,
-                            textColor: .label
+                            textColor: .label,
+                            isEditable: true
                         )
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -58,7 +60,8 @@ public struct WIDetailView: View {
                                 SelectionPreviewTextRepresentable(
                                     text: element.value,
                                     textStyle: .footnote,
-                                    textColor: .secondaryLabel
+                                    textColor: .secondaryLabel,
+                                    isEditable: true
                                 )
                             }
                             .listRowStyle()
@@ -114,9 +117,15 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     var text: String
     var textStyle: UIFont.TextStyle
     var textColor: UIColor
+    var isEditable: Bool = false
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: text, textStyle: textStyle, textColor: textColor)
+        Coordinator(
+            text: text,
+            textStyle: textStyle,
+            textColor: textColor,
+            isEditable: isEditable
+        )
     }
 
     func makeUIView(context: Context) -> SelectionUITextView {
@@ -139,8 +148,8 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     final class Coordinator {
         let textView: SelectionUITextView
 
-        init(text: String, textStyle: UIFont.TextStyle, textColor: UIColor) {
-            let textView = SelectionUITextView()
+        init(text: String, textStyle: UIFont.TextStyle, textColor: UIColor, isEditable: Bool) {
+            let textView = SelectionUITextView(isEditable: isEditable)
             textView.applyStyle(textStyle: textStyle, textColor: textColor)
             textView.apply(text: text)
             self.textView = textView
@@ -152,8 +161,25 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     }
 }
 
-public final class SelectionUITextView: UITextView {
+public final class SelectionUITextView: UITextView, UITextViewDelegate {
+    private let initialEditable: Bool
+
+    public convenience init(isEditable: Bool) {
+        self.init(isEditable: isEditable, frame: .zero, textContainer: nil)
+    }
+
+    public init(
+        isEditable: Bool,
+        frame: CGRect = .zero,
+        textContainer: NSTextContainer? = nil
+    ) {
+        self.initialEditable = isEditable
+        super.init(frame: frame, textContainer: textContainer)
+        configure()
+    }
+
     public override init(frame: CGRect, textContainer: NSTextContainer?) {
+        self.initialEditable = true
         super.init(frame: frame, textContainer: textContainer)
         configure()
     }
@@ -164,7 +190,7 @@ public final class SelectionUITextView: UITextView {
     }
 
     private func configure() {
-        isEditable = false
+        isEditable = initialEditable
         isSelectable = true
         isScrollEnabled = false
         backgroundColor = .clear
@@ -172,6 +198,7 @@ public final class SelectionUITextView: UITextView {
         textContainer.lineFragmentPadding = 0
         adjustsFontForContentSizeCategory = true
         textColor = .label
+        delegate = initialEditable ? self : nil
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
@@ -196,6 +223,10 @@ public final class SelectionUITextView: UITextView {
     public override func layoutSubviews() {
         super.layoutSubviews()
         invalidateIntrinsicContentSize()
+    }
+
+    public func textViewDidChange(_ textView: UITextView) {
+        print("SelectionUITextView edited: \(textView.text ?? "")")
     }
 }
 #endif
