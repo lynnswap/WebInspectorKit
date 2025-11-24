@@ -107,16 +107,16 @@ private struct SelectionPreviewTextRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> SelectionUITextView {
         let textView = SelectionUITextView()
         textView.applyStyle(textStyle: textStyle, textColor: textColor)
-        textView.apply(text: text, textColor: textColor)
+        textView.apply(text: text)
         return textView
     }
 
     func updateUIView(_ textView: SelectionUITextView, context: Context) {
-        textView.apply(text: text, textColor: textColor)
+        textView.apply(text: text)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: SelectionUITextView, context: Context) -> CGSize? {
-        uiView.apply(text: text, textColor: textColor)
+        uiView.apply(text: text)
         let proposedWidth = proposal.width ?? uiView.bounds.width
         let targetWidth = proposedWidth > 0 ? proposedWidth : UIScreen.main.bounds.width
         let fittingSize = uiView.sizeThatFits(
@@ -137,8 +137,6 @@ private final class SelectionUITextView: UITextView {
         nil
     }
 
-    private var configuredTextStyle: UIFont.TextStyle?
-
     private func configure() {
         isEditable = false
         isSelectable = true
@@ -152,24 +150,16 @@ private final class SelectionUITextView: UITextView {
     }
 
     func applyStyle(textStyle: UIFont.TextStyle, textColor: UIColor) {
-        if configuredTextStyle != textStyle {
-            configuredTextStyle = textStyle
-            font = UIFont.monospacedSystemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
-                weight: .regular
-            )
-        }
-        if self.textColor != textColor {
-            self.textColor = textColor
-        }
+        font = UIFont.monospacedSystemFont(
+            ofSize: UIFont.preferredFont(forTextStyle: textStyle).pointSize,
+            weight: .regular
+        )
+        self.textColor = textColor
     }
 
-    func apply(text: String, textColor: UIColor) {
+    func apply(text: String) {
         if self.text != text {
             self.text = text
-        }
-        if self.textColor != textColor {
-            self.textColor = textColor
         }
     }
 
