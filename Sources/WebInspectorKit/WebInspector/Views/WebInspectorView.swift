@@ -19,19 +19,6 @@ public struct WebInspectorView: View {
 
     public var body: some View {
         tabContent
-            .overlay{
-                if let errorMessage = model.webBridge.errorMessage {
-                    ContentUnavailableView {
-                        Image(systemName:"exclamationmark.triangle")
-                            .foregroundStyle(.yellow)
-                    } description: {
-                        Text(errorMessage)
-                    }
-                    .padding()
-                    .frame(maxWidth: 320)
-                    .transition(.opacity)
-                }
-            }
             .onAppear {
                 model.handleAppear(webView: webView)
             }
@@ -112,7 +99,7 @@ public struct WebInspectorView: View {
             .ignoresSafeArea()
 #else
         TabView {
-            WIWebContainer(bridge: model.webBridge)
+            WIDOMView(model)
                 .tabItem {
                     Label {
                         Text(InspectorTab.tree.title)
@@ -160,20 +147,7 @@ enum InspectorTab: Int, CaseIterable {
     var tag: Int { rawValue }
 }
 
-
-// MARK: - WebContainer Representable
-
-private struct WIWebContainer: View {
-    var bridge: WIBridge
-
-    var body: some View {
-        WIWebViewContainerRepresentable(bridge: bridge)
-            .ignoresSafeArea()
-    }
-}
 #if DEBUG
-
-
 @MainActor
 @Observable private final class WIPreviewModel {
     let webView: WKWebView
