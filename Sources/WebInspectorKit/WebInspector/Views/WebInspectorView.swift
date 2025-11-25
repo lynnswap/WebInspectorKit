@@ -41,7 +41,7 @@ public struct WebInspectorView: View {
                     Button {
                         Task { await model.reload() }
                     } label: {
-                        if model.webBridge.isLoading {
+                        if model.webBridge.contentModel.isLoading {
                             ProgressView()
                         } else {
                             Label{
@@ -51,7 +51,7 @@ public struct WebInspectorView: View {
                             }
                         }
                     }
-                    .disabled(model.webBridge.isLoading)
+                    .disabled(model.webBridge.contentModel.isLoading)
                     
                     Menu{
                         Button{

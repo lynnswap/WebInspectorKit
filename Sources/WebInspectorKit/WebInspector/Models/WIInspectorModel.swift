@@ -317,7 +317,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
             isReady = true
             Task{
                 await flushPendingWork()
-                bridge?.isLoading = false
+                bridge?.contentModel.isLoading = false
             }
         case .log:
             if let dictionary = message.body as? [String: Any],

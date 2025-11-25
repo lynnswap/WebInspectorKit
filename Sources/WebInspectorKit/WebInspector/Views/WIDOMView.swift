@@ -14,7 +14,7 @@ public struct WIDOMView: View {
         WIDOMViewRepresentable(bridge: model.webBridge)
             .ignoresSafeArea()
             .overlay{
-                if let errorMessage = model.webBridge.errorMessage {
+                if let errorMessage = model.webBridge.contentModel.errorMessage {
                     ContentUnavailableView {
                         Image(systemName:"exclamationmark.triangle")
                             .foregroundStyle(.yellow)
