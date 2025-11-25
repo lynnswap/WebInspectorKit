@@ -59,13 +59,6 @@ final class WIInspectorModel: NSObject {
         detachInspectorWebView(ifMatches: webView)
     }
 
-    func detachInspectorWebView() {
-        guard let webView else { return }
-        detachInspectorWebView(ifMatches: webView)
-        resetInspectorState()
-        self.webView = nil
-    }
-
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
         applyMutationBundle(payload)
@@ -108,13 +101,6 @@ final class WIInspectorModel: NSObject {
         }
         webView.navigationDelegate = nil
         inspectorLogger.debug("inspector detached")
-    }
-
-    private func resetInspectorState() {
-        isReady = false
-        pendingBundles.removeAll()
-        pendingPreferredDepth = nil
-        pendingDocumentRequest = nil
     }
 
     private func loadInspector(in webView: WIWebView) {

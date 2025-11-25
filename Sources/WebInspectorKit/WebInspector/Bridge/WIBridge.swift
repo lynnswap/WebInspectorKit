@@ -15,12 +15,6 @@ enum WIConstants {
     static let autoUpdateDebounce: TimeInterval = 0.6
 }
 
-public enum WILifecycleState {
-    case attach(WKWebView?)
-    case suspend
-    case detach
-}
-
 @MainActor
 @Observable
 public final class WIBridge {
@@ -36,20 +30,27 @@ public final class WIBridge {
         inspectorModel.bridge = self
     }
 
-    func setLifecycle(_ state: WILifecycleState, requestedDepth: Int) {
-        switch state {
-        case .attach(let webView):
-            handleAttach(webView: webView, requestedDepth: requestedDepth)
-        case .suspend:
-            handleSuspend(currentDepth: requestedDepth)
-        case .detach:
-            handleSuspend(currentDepth: requestedDepth)
-            inspectorModel.detachInspectorWebView()
-            lastPageWebView = nil
-        }
+    func makeInspectorWebView() -> WIWebView {
+        inspectorModel.makeInspectorWebView()
     }
 
-    private func handleAttach(webView: WKWebView?, requestedDepth: Int) {
+    func teardownInspectorWebView(_ webView: WIWebView) {
+        inspectorModel.teardownInspectorWebView(webView)
+    }
+
+    func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
+        inspectorModel.enqueueMutationBundle(rawJSON, preserveState: preserveState)
+    }
+
+    func updatePreferredDepth(_ depth: Int) {
+        inspectorModel.setPreferredDepth(depth)
+    }
+
+    func requestDocument(depth: Int, preserveState: Bool) {
+        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+    }
+
+    func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
         clearDomSelection()
         let previousWebView = lastPageWebView
@@ -69,9 +70,8 @@ public final class WIBridge {
         }
     }
 
-    private func handleSuspend(currentDepth: Int) {
+    func detachPageWebView(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
-        isLoading = false
         contentModel.webView = nil
         clearDomSelection()
     }
@@ -84,9 +84,9 @@ public final class WIBridge {
         isLoading = true
         errorMessage = nil
 
-        inspectorModel.setPreferredDepth(depth)
+        updatePreferredDepth(depth)
         isLoading = false
-        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+        requestDocument(depth: depth, preserveState: preserveState)
         await configureAutoUpdate(enabled: true, depth: depth)
     }
 
@@ -110,14 +110,22 @@ public final class WIBridge {
         return max(currentDepth, result.requiredDepth + 1)
     }
 
+    func cancelSelectionMode() async {
+        await contentModel.cancelSelectionMode()
+    }
+
+    func deleteNode(identifier: Int) async {
+        await contentModel.removeNode(identifier: identifier)
+    }
+
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
-        inspectorModel.enqueueMutationBundle(package.rawJSON, preserveState: true)
+        enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
     func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
         isLoading = false
-        inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
+        enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
     func updateDomSelection(with dictionary: [String: Any]) {

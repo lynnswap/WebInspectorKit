@@ -20,13 +20,13 @@ public struct WebInspectorView: View {
     public var body: some View {
         tabContent
             .onAppear {
-                model.attach(webView: webView)
+                model.handleAppear(webView: webView)
             }
             .onChange(of: webView) {
-                model.attach(webView: webView)
+                model.handleAppear(webView: webView)
             }
             .onDisappear {
-                model.suspend()
+                model.handleDisappear()
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
