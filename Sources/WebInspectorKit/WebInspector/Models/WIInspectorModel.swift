@@ -200,7 +200,7 @@ final class WIInspectorModel: NSObject {
                     guard let content = self.bridge?.contentModel else {
                         throw WIError.scriptUnavailable
                     }
-                    let selectorPath = try await content.selectorPath(for: identifier)
+                    let selectorPath = try await content.selectionCopyText(for: identifier, kind: .selectorPath)
                     await self.sendResponse(id: request.id, result: ["selectorPath": selectorPath])
                 default:
                     await self.sendError(id: request.id, message: "Unsupported method: \(request.method)")

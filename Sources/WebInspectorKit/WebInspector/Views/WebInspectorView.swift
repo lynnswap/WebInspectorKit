@@ -6,15 +6,28 @@ import Observation
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    private var model: WIViewModel
-    private var webView: WKWebView?
+    private let model: WIViewModel
+    private let webView: WKWebView?
+    private let tabs: [WITab]
+
+    public init(
+        _ viewModel: WIViewModel,
+        webView: WKWebView?,
+        @WITabBuilder tabs: () -> [WITab]
+    ) {
+        self.model = viewModel
+        self.webView = webView
+        self.tabs = tabs()
+    }
 
     public init(
         _ viewModel: WIViewModel,
         webView: WKWebView?
     ) {
-        self.webView = webView
-        self.model = viewModel
+        self.init(viewModel, webView: webView) {
+            WITab.dom()
+            WITab.detail()
+        }
     }
 
     public var body: some View {
@@ -55,17 +68,17 @@ public struct WebInspectorView: View {
                     
                     Menu{
                         Button{
-                            model.copySelectionHTML()
+                            model.copySelection(.html)
                         }label:{
                             Text("HTML" as String)
                         }
                         Button{
-                            model.copySelectionSelectorPath()
+                            model.copySelection(.selectorPath)
                         }label:{
                             Text("dom.detail.copy.selector_path")
                         }
                         Button{
-                            model.copySelectionXPath()
+                            model.copySelection(.xpath)
                         }label:{
                             Text("XPath" as String)
                         }
@@ -90,62 +103,44 @@ public struct WebInspectorView: View {
                     .disabled(model.webBridge.domSelection.nodeId == nil)
                 }
             }
+            .environment(model)
     }
 
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WITabBarContainer(model: model)
+        WITabBarContainer(tabs: tabs)
             .ignoresSafeArea()
-#else
+#elseif canImport(AppKit)
         TabView {
-            WIDOMView(model)
-                .tabItem {
-                    Label {
-                        Text(InspectorTab.dom.title)
-                    } icon: {
-                        Image(systemName: InspectorTab.dom.systemImage)
+            ForEach(tabs) { tab in
+                WITabContentHost(tab: tab, model: model)
+                    .tabItem {
+                        Label {
+                            Text(tab.title)
+                        } icon: {
+                            Image(systemName: tab.systemImage)
+                        }
                     }
-                }
-            WIDetailView(model)
-                .tabItem {
-                    Label {
-                        Text(InspectorTab.detail.title)
-                    } icon: {
-                        Image(systemName: InspectorTab.detail.systemImage)
-                    }
+                    .tag(tab.id)
             }
         }
+        .environment(model)
 #endif
     }
 }
+#if canImport(AppKit)
+private struct WITabContentHost: NSViewControllerRepresentable {
+    let tab: WITab
+    let model: WIViewModel
 
-// MARK: - Tab Metadata
-
-enum InspectorTab: Int, CaseIterable {
-    case dom
-    case detail
-
-    var title: LocalizedStringResource {
-        switch self {
-        case .dom:
-            LocalizedStringResource("inspector.tab.dom", bundle: .module)
-        case .detail:
-            LocalizedStringResource("inspector.tab.detail", bundle: .module)
-        }
+    func makeNSViewController(context: Context) -> NSViewController {
+        tab.viewController(with: model)
     }
 
-    var systemImage: String {
-        switch self {
-        case .dom:
-            "chevron.left.forwardslash.chevron.right"
-        case .detail:
-            "info.circle"
-        }
-    }
-
-    var tag: Int { rawValue }
+    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
 }
+#endif
 
 #if DEBUG
 @MainActor

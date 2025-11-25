@@ -169,25 +169,10 @@ extension WIContentModel {
         webView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
     }
 
-    func outerHTML(for identifier: Int) async throws -> String {
-        try await evaluateStringScript(
-            "return window.webInspectorKit?.outerHTMLForNode(identifier) ?? \"\"",
-            identifier: identifier
-        )
-    }
-
-    func selectorPath(for identifier: Int) async throws -> String {
-        try await evaluateStringScript(
-            "return window.webInspectorKit?.selectorPathForNode(identifier) ?? \"\"",
-            identifier: identifier
-        )
-    }
-
-    func xpath(for identifier: Int) async throws -> String {
-        try await evaluateStringScript(
-            "return window.webInspectorKit?.xpathForNode(identifier) ?? \"\"",
-            identifier: identifier
-        )
+    func selectionCopyText(for identifier: Int, kind: WISelectionCopyKind) async throws -> String {
+        try await evaluateStringScript("""
+        return window.webInspectorKit?.\(kind.jsFunction)(identifier) ?? \"\"
+        """, identifier: identifier)
     }
 
     func setAutoUpdate(enabled: Bool, maxDepth: Int) async {

@@ -1,51 +1,40 @@
-
-
 #if canImport(UIKit)
 import SwiftUI
 
+@available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
-    var model: WIViewModel
-
+    var tabs: [WITab]
+    @Environment(WIViewModel.self) private var model
+    
     func makeCoordinator() -> Coordinator {
-        Coordinator(model: model)
+        Coordinator(model:model,tabs: tabs)
     }
 
     func makeUIViewController(context: Context) -> UITabBarController {
-        let tabBarController = UITabBarController()
-        tabBarController.viewControllers = context.coordinator.controllers
-        tabBarController.view.backgroundColor = .clear
-        tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
-        return tabBarController
+        let controller = UITabBarController()
+        controller.setTabs(context.coordinator.tabs, animated: false)
+        controller.view.backgroundColor = .clear
+        controller.tabBar.scrollEdgeAppearance = controller.tabBar.standardAppearance
+        return controller
     }
 
-    func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {}
+    func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
+    }
 
     @MainActor
     final class Coordinator {
-        var controllers: [UIViewController] { [webHost, domHost] }
+        
+        let tabs: [UITab]
 
-        private let webHost: UIHostingController<WIDOMView>
-        private let domHost: UIHostingController<WIDetailView>
-
-        init(model: WIViewModel) {
-            webHost = UIHostingController(rootView: WIDOMView(model))
-            webHost.view.backgroundColor = .clear
-            domHost = UIHostingController(rootView: WIDetailView(model))
-            domHost.view.backgroundColor = .clear
-            configureTabItems()
-        }
-
-        private func configureTabItems() {
-            setTabBarItem(for: .dom, controller: webHost)
-            setTabBarItem(for: .detail, controller: domHost)
-        }
-
-        private func setTabBarItem(for tab: InspectorTab, controller: UIViewController) {
-            controller.tabBarItem = UITabBarItem(
-                title: String(localized: tab.title),
-                image: UIImage(systemName: tab.systemImage),
-                tag: tab.tag
-            )
+        init(model:WIViewModel,tabs: [WITab]) {
+            self.tabs = tabs.map { tab in
+                let host = tab.viewController(with: model)
+                return UITab(
+                    title: String(localized: tab.title),
+                    image: UIImage(systemName: tab.systemImage),
+                    identifier: tab.id
+                ) { _ in host }
+            }
         }
     }
 }

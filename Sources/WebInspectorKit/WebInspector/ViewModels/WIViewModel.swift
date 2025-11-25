@@ -67,16 +67,8 @@ public final class WIViewModel {
 #endif
     }
 
-    public func copySelectionHTML() {
-        performCopy(.html)
-    }
-
-    public func copySelectionSelectorPath() {
-        performCopy(.selectorPath)
-    }
-
-    public func copySelectionXPath() {
-        performCopy(.xpath)
+    public func copySelection(_ kind: WISelectionCopyKind) {
+        performCopy(kind)
     }
 
     public func deleteSelectedNode() {
@@ -149,27 +141,11 @@ public final class WIViewModel {
         }
     }
 
-    private enum SelectionCopyKind: String {
-        case html = "HTML"
-        case selectorPath = "selector"
-        case xpath = "XPath"
-
-        var logLabel: String { rawValue }
-    }
-
-    private func performCopy(_ kind: SelectionCopyKind) {
+    private func performCopy(_ kind: WISelectionCopyKind) {
         guard let nodeId = webBridge.domSelection.nodeId else { return }
         Task { @MainActor in
             do {
-                let text: String
-                switch kind {
-                case .html:
-                    text = try await webBridge.contentModel.outerHTML(for: nodeId)
-                case .selectorPath:
-                    text = try await webBridge.contentModel.selectorPath(for: nodeId)
-                case .xpath:
-                    text = try await webBridge.contentModel.xpath(for: nodeId)
-                }
+                let text = try await webBridge.contentModel.selectionCopyText(for: nodeId, kind: kind)
                 guard !text.isEmpty else { return }
                 copyToPasteboard(text)
             } catch {

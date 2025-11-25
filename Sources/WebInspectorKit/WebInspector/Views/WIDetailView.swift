@@ -9,13 +9,10 @@ import SwiftUI
 import Observation
 
 public struct WIDetailView: View {
-    private var model: WIViewModel
-
-    public init(
-        _ viewModel: WIViewModel
-    ) {
-        self.model = viewModel
-    }
+    @Environment(WIViewModel.self) private var model
+    
+    public init() {}
+    
     public var body: some View {
 #if canImport(UIKit)
         let selection = model.webBridge.domSelection
@@ -49,6 +46,7 @@ public struct WIDetailView: View {
                             Text("dom.detail.attributes.empty")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                                .listRowSeparator(.hidden)
                         } else {
                             ForEach(selection.attributes) { element in
                                 VStack(alignment: .leading, spacing: 6) {
@@ -325,14 +323,17 @@ private enum WIDetailPreviewData {
 }
 
 #Preview("DOM Selected") {
-    WIDetailView(makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
+    WIDetailView()
+        .environment(makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
 }
 
 #Preview("Attributes Empty") {
-    WIDetailView(makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
+    WIDetailView()
+        .environment(makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
 }
 
 #Preview("No DOM Selection") {
-    WIDetailView(makeWIDetailPreviewModel(selection: nil))
+    WIDetailView()
+        .environment(makeWIDetailPreviewModel(selection: nil))
 }
 #endif
