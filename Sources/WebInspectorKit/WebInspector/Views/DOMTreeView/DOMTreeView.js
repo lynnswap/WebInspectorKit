@@ -480,24 +480,33 @@
         const displayName = computeDisplayName(nodeType, nodeName, descriptor.localName);
         const attributes = deserializeAttributes(descriptor.attributes);
         const textContent = extractTextContent(nodeType, descriptor.nodeValue);
+        if (shouldOmitTextNode(nodeType, textContent))
+            return null;
         const layoutFlags = normalizeLayoutFlags(descriptor.layoutFlags);
         const isRendered = resolveRenderedState(layoutFlags, descriptor.isRendered);
-        const childCount = typeof descriptor.childNodeCount === "number"
+        const rawChildCount = typeof descriptor.childNodeCount === "number"
             ? descriptor.childNodeCount
             : (typeof descriptor.childCount === "number"
                 ? descriptor.childCount
                 : (Array.isArray(descriptor.children) ? descriptor.children.length : 0));
         const children = [];
         const rawChildren = Array.isArray(descriptor.children) ? descriptor.children : [];
+        let filteredChildren = 0;
 
         rawChildren.forEach(child => {
+            if (isIgnorableTextDescriptor(child)) {
+                filteredChildren += 1;
+                return;
+            }
             const normalized = normalizeNodeDescriptor(child);
             if (normalized)
                 children.push(normalized);
         });
 
-        if (childCount > children.length) {
-            children.push(createPlaceholderNode(resolvedId, childCount - children.length));
+        const visibleChildCount = Math.max(children.length, rawChildCount - filteredChildren);
+
+        if (visibleChildCount > children.length) {
+            children.push(createPlaceholderNode(resolvedId, visibleChildCount - children.length));
         }
 
         return {
@@ -510,7 +519,7 @@
             layoutFlags,
             isRendered,
             children,
-            childCount,
+            childCount: visibleChildCount,
             placeholderParentId: null
         };
     }
@@ -533,6 +542,20 @@
             return text.length ? text : null;
         }
         return null;
+    }
+
+    function shouldOmitTextNode(nodeType, textContent) {
+        if (nodeType !== NODE_TYPES.TEXT_NODE && nodeType !== NODE_TYPES.COMMENT_NODE)
+            return false;
+        return !textContent;
+    }
+
+    function isIgnorableTextDescriptor(descriptor) {
+        if (!descriptor || typeof descriptor !== "object")
+            return false;
+        const nodeType = typeof descriptor.nodeType === "number" ? descriptor.nodeType : 0;
+        const textContent = extractTextContent(nodeType, descriptor.nodeValue);
+        return shouldOmitTextNode(nodeType, textContent);
     }
 
     function computeDisplayName(nodeType, nodeName, localName) {
