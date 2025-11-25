@@ -13,8 +13,13 @@ struct WITabBarContainer: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UITabBarController {
         let controller = UITabBarController()
         controller.setTabs(context.coordinator.tabs, animated: false)
+        if let selectedTabIdentifier = model.selectedTabIdentifier,
+           let selectedTab = context.coordinator.tabs.first(where: { $0.identifier == selectedTabIdentifier }) {
+            controller.selectedTab = selectedTab
+        }
         controller.view.backgroundColor = .clear
         controller.tabBar.scrollEdgeAppearance = controller.tabBar.standardAppearance
+        controller.delegate = context.coordinator
         return controller
     }
 
@@ -22,11 +27,12 @@ struct WITabBarContainer: UIViewControllerRepresentable {
     }
 
     @MainActor
-    final class Coordinator {
-        
+    final class Coordinator: NSObject ,UITabBarControllerDelegate{
+        private weak var model:WebInspectorModel?
         let tabs: [UITab]
 
         init(model:WebInspectorModel,tabs: [WITab]) {
+            self.model = model
             self.tabs = tabs.map { tab in
                 let host = tab.viewController(with: model)
                 return UITab(
@@ -35,6 +41,13 @@ struct WITabBarContainer: UIViewControllerRepresentable {
                     identifier: tab.id
                 ) { _ in host }
             }
+        }
+        func tabBarController(
+            _ tabBarController: UITabBarController,
+            didSelectTab selectedTab: UITab,
+            previousTab: UITab?
+        ) {
+            model?.selectedTabIdentifier = selectedTab.identifier
         }
     }
 }

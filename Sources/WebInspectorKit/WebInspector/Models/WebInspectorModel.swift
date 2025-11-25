@@ -28,6 +28,7 @@ public final class WebInspectorModel {
     public private(set) var requestedDepth = WIConstants.defaultDepth
     public private(set) var isSelectingElement = false
     public let webBridge = WIBridgeModel()
+    public var selectedTabIdentifier: String? = nil
 
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil

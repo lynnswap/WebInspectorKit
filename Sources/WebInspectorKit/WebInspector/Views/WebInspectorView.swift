@@ -112,7 +112,7 @@ public struct WebInspectorView: View {
         WITabBarContainer(tabs: tabs)
             .ignoresSafeArea()
 #elseif canImport(AppKit)
-        TabView {
+        TabView(selection: Bindable(model).selectedTabIdentifier) {
             ForEach(tabs) { tab in
                 WITabContentHost(tab: tab, model: model)
                     .tabItem {
@@ -162,6 +162,12 @@ private struct WIPreviewHost: View {
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         if let model {
+#if os(macOS)
+            HSplitView{
+                PreviewWebViewRepresentable(webView: model.webView)
+                WebInspectorView(inspectorModel, webView: model.webView)
+            }
+#else
             PreviewWebViewRepresentable(webView: model.webView)
                 .sheet(isPresented: $isPresented) {
                     NavigationStack {
@@ -176,13 +182,14 @@ private struct WIPreviewHost: View {
                                 }
                             }
                             .background(backgroundColor.opacity(0.5))
-                           
+                        
                     }
-                   
+                    
                     .presentationBackgroundInteraction(.enabled)
                     .presentationDetents([.medium, .large])
                     .presentationContentInteraction(.scrolls)
                 }
+#endif
         }else{
             Color.clear
                 .onAppear(){
