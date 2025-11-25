@@ -29,6 +29,10 @@ final class WIContentModel: NSObject {
         }
     }
 
+    private var configuration: WebInspectorModel.Configuration {
+        bridge?.configuration ?? .init()
+    }
+
     private func registerMessageHandlers() {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
@@ -84,14 +88,15 @@ extension WIContentModel: WKScriptMessageHandler {
 
 @MainActor
 extension WIContentModel {
-    func captureSnapshot(maxDepth: Int = WIConstants.defaultDepth) async throws -> WISnapshotPackage {
+    func captureSnapshot(maxDepth: Int? = nil) async throws -> WISnapshotPackage {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
+        let depth = maxDepth ?? configuration.snapshotDepth
         try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOM(maxDepth)",
-            arguments: ["maxDepth": maxDepth],
+            arguments: ["maxDepth": depth],
             in: nil,
             contentWorld: .page
         )
@@ -99,14 +104,15 @@ extension WIContentModel {
         return WISnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
-    func captureSubtree(identifier: Int, maxDepth: Int = WIConstants.subtreeDepth) async throws -> WISubtreePayload {
+    func captureSubtree(identifier: Int, maxDepth: Int? = nil) async throws -> WISubtreePayload {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
+        let depth = maxDepth ?? configuration.subtreeDepth
         try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOMSubtree(identifier, maxDepth)",
-            arguments: ["identifier": identifier, "maxDepth": maxDepth],
+            arguments: ["identifier": identifier, "maxDepth": depth],
             in: nil,
             contentWorld: .page
         )
@@ -179,7 +185,7 @@ extension WIContentModel {
         guard let webView else { return }
         do {
             try await injectScriptIfNeeded(on: webView)
-            let debounce = max(50, Int(WIConstants.autoUpdateDebounce * 1000))
+            let debounce = max(50, Int(configuration.autoUpdateDebounce * 1000))
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
                 arguments: [

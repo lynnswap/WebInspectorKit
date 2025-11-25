@@ -9,12 +9,6 @@ import SwiftUI
 import WebKit
 import Observation
 
-enum WIConstants {
-    static let defaultDepth = 4
-    static let subtreeDepth = 3
-    static let autoUpdateDebounce: TimeInterval = 0.6
-}
-
 public enum WILifecycleState {
     case attach(WKWebView?)
     case suspend
@@ -27,29 +21,31 @@ public final class WIBridgeModel {
     var isLoading = false
     var errorMessage: String?
     var domSelection = WIDOMSelection()
+    private(set) var configuration: WebInspectorModel.Configuration
     let contentModel = WIContentModel()
     let inspectorModel = WIInspectorModel()
     @ObservationIgnored private weak var lastPageWebView: WKWebView?
 
-    public init() {
+    public init(configuration: WebInspectorModel.Configuration = .init()) {
+        self.configuration = configuration
         contentModel.bridge = self
         inspectorModel.bridge = self
     }
 
-    func setLifecycle(_ state: WILifecycleState, requestedDepth: Int) {
+    func setLifecycle(_ state: WILifecycleState) {
         switch state {
         case .attach(let webView):
-            handleAttach(webView: webView, requestedDepth: requestedDepth)
+            handleAttach(webView: webView)
         case .suspend:
-            handleSuspend(currentDepth: requestedDepth)
+            handleSuspend()
         case .detach:
-            handleSuspend(currentDepth: requestedDepth)
+            handleSuspend()
             inspectorModel.detachInspectorWebView()
             lastPageWebView = nil
         }
     }
 
-    private func handleAttach(webView: WKWebView?, requestedDepth: Int) {
+    private func handleAttach(webView: WKWebView?) {
         errorMessage = nil
         domSelection.clear()
         let previousWebView = lastPageWebView
@@ -62,21 +58,27 @@ public final class WIBridgeModel {
         lastPageWebView = webView
         Task {
             if needsReload {
-                await self.reloadInspector(depth: requestedDepth, preserveState: false)
+                await self.reloadInspector(preserveState: false)
             } else {
-                await self.contentModel.setAutoUpdate(enabled: true, maxDepth: requestedDepth)
+                await self.contentModel.setAutoUpdate(enabled: true, maxDepth: configuration.snapshotDepth)
             }
         }
     }
 
-    private func handleSuspend(currentDepth: Int) {
-        contentModel.stopInspection(maxDepth: currentDepth)
+    private func handleSuspend() {
+        contentModel.stopInspection(maxDepth: configuration.snapshotDepth)
         isLoading = false
         contentModel.webView = nil
         domSelection.clear()
     }
 
-    func reloadInspector(depth: Int, preserveState: Bool) async {
+    func updateSnapshotDepth(_ depth: Int) {
+        let clamped = max(1, depth)
+        configuration.snapshotDepth = clamped
+        inspectorModel.setPreferredDepth(clamped)
+    }
+
+    func reloadInspector(preserveState: Bool) async {
         guard contentModel.webView != nil else {
             errorMessage = "WebView is not available."
             return
@@ -84,6 +86,7 @@ public final class WIBridgeModel {
         isLoading = true
         errorMessage = nil
 
+        let depth = configuration.snapshotDepth
         inspectorModel.setPreferredDepth(depth)
         isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)

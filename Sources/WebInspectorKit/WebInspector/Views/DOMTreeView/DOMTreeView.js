@@ -24,8 +24,29 @@
     const INDENT_DEPTH_LIMIT = 6;
     const LAYOUT_FLAG_RENDERED = "rendered";
 
-    const DEFAULT_REQUEST_DEPTH = 4;
-    const REQUEST_CHILDREN_DEPTH = 3;
+
+    const protocolState = {
+        lastId: 0,
+        pending: new Map(),
+        eventHandlers: new Map(),
+        snapshotDepth: 4,
+        subtreeDepth: 3
+    };
+
+    function updateConfig(partial) {
+        if (typeof partial !== "object" || partial === null)
+            return;
+        if (typeof partial.snapshotDepth === "number")
+            protocolState.snapshotDepth = partial.snapshotDepth;
+        if (typeof partial.subtreeDepth === "number")
+            protocolState.subtreeDepth = partial.subtreeDepth;
+    }
+
+
+    function subtreeDepth() {
+        return protocolState.subtreeDepth;
+    }
+
     const DOM_EVENT_BATCH_LIMIT = 120;
     const DOM_EVENT_TIME_BUDGET = 6;
     const RENDER_BATCH_LIMIT = 180;
@@ -51,16 +72,8 @@
         frameId: null
     };
 
-    const protocolState = {
-        lastId: 0,
-        pending: new Map(),
-        eventHandlers: new Map(),
-        defaultDepth: DEFAULT_REQUEST_DEPTH
-    };
-
     function childRequestDepth() {
-        const preferred = Math.max(1, protocolState.defaultDepth);
-        return Math.max(1, Math.min(preferred, REQUEST_CHILDREN_DEPTH));
+        return subtreeDepth();
     }
 
     function timeNow() {
@@ -201,9 +214,8 @@
     }
 
     function requestDocument(options = {}) {
-        const depthOption = typeof options.depth === "number" && options.depth > 0 ? options.depth : protocolState.defaultDepth;
-        const depth = Math.max(1, depthOption);
-        protocolState.defaultDepth = depth;
+        const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
+        protocolState.snapshotDepth = depth;
         const preserveState = !!options.preserveState;
         return sendCommand("DOM.getDocument", { depth }).then(result => {
             if (result && result.root)
@@ -1856,8 +1868,8 @@
     }
 
     function setPreferredDepth(depth) {
-        if (typeof depth === "number" && depth > 0)
-            protocolState.defaultDepth = Math.max(1, depth);
+        if (typeof depth === "number")
+            protocolState.snapshotDepth = depth;
     }
 
     const webInspectorKit = {
@@ -1867,6 +1879,7 @@
         requestDocument,
         setSearchTerm,
         setPreferredDepth,
+        updateConfig,
         __installed: true
     };
 

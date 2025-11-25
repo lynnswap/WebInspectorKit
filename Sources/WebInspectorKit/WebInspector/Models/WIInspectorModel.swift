@@ -40,6 +40,9 @@ final class WIInspectorModel: NSObject {
     private var pendingBundles: [PendingBundle] = []
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
+    private var configuration: WebInspectorModel.Configuration {
+        bridge?.configuration ?? .init()
+    }
 
     func makeInspectorWebView() -> WIWebView {
         if let webView {
@@ -86,6 +89,26 @@ final class WIInspectorModel: NSObject {
             Task {
                 await requestDocumentNow(depth: depth, preserveState: preserveState)
             }
+        }
+    }
+
+    private func applyConfigurationToInspector() async {
+        guard let webView else { return }
+        let config = configuration
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.updateConfig?.(config)",
+                arguments: [
+                    "config": [
+                        "snapshotDepth": config.snapshotDepth,
+                        "subtreeDepth": config.subtreeDepth,
+                        "autoUpdateDebounce": config.autoUpdateDebounce
+                    ]
+                ],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("apply config failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -173,14 +196,14 @@ final class WIInspectorModel: NSObject {
             do {
                 switch request.method {
                 case "DOM.getDocument":
-                    let depth = (request.params["depth"] as? Int) ?? WIConstants.defaultDepth
+                    let depth = (request.params["depth"] as? Int) ?? configuration.snapshotDepth
                     guard let content = self.bridge?.contentModel else {
                         throw WIError.scriptUnavailable
                     }
                     let payload = try await content.captureSnapshot(maxDepth: depth)
                     await self.sendResponse(id: request.id, result: payload.rawJSON)
                 case "DOM.requestChildNodes":
-                    let depth = (request.params["depth"] as? Int) ?? WIConstants.subtreeDepth
+                    let depth = (request.params["depth"] as? Int) ?? configuration.subtreeDepth
                     let identifier = request.params["nodeId"] as? Int ?? 0
                     guard let content = self.bridge?.contentModel else {
                         throw WIError.scriptUnavailable
@@ -317,6 +340,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
         case .ready:
             isReady = true
             Task{
+                await applyConfigurationToInspector()
                 await flushPendingWork()
                 bridge?.isLoading = false
             }

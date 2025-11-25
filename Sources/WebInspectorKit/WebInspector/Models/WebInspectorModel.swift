@@ -20,21 +20,44 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 @MainActor
 @Observable
 public final class WebInspectorModel {
+    public struct Configuration {
+        /// Maximum DOM depth captured in the initial/full document snapshot.
+        public var snapshotDepth: Int
+        /// Depth used when requesting child subtrees (DOM.requestChildNodes).
+        public var subtreeDepth: Int
+        /// Debounce window (seconds) for automatic DOM snapshot updates.
+        public var autoUpdateDebounce: TimeInterval
+
+        public init(
+            snapshotDepth: Int = 4,
+            subtreeDepth: Int = 3,
+            autoUpdateDebounce: TimeInterval = 0.6
+        ) {
+            self.snapshotDepth = max(1, snapshotDepth)
+            self.subtreeDepth = max(1, subtreeDepth)
+            self.autoUpdateDebounce = max(0, autoUpdateDebounce)
+        }
+    }
+
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
 #endif
 
-    public private(set) var requestedDepth = WIConstants.defaultDepth
+    public let webBridge: WIBridgeModel
+    public var configuration:Configuration{
+        webBridge.configuration
+    }
     public private(set) var isSelectingElement = false
-    public let webBridge = WIBridgeModel()
     public var selectedTabIdentifier: String? = nil
 
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil
     }
 
-    public init() {}
+    public init(configuration: Configuration = .init()) {
+        self.webBridge = WIBridgeModel(configuration: configuration)
+    }
 
     public func attach(webView: WKWebView?) {
         updateLifecycle(.attach(webView))
@@ -51,13 +74,13 @@ public final class WebInspectorModel {
     public func updateLifecycle(_ state: WILifecycleState) {
         switch state {
         case .attach(let webView):
-            webBridge.setLifecycle(.attach(webView), requestedDepth: requestedDepth)
+            webBridge.setLifecycle(.attach(webView))
         case .suspend:
             resetInteractionState()
-            webBridge.setLifecycle(.suspend, requestedDepth: requestedDepth)
+            webBridge.setLifecycle(.suspend)
         case .detach:
             resetInteractionState()
-            webBridge.setLifecycle(.detach, requestedDepth: requestedDepth)
+            webBridge.setLifecycle(.detach)
         }
     }
 
@@ -79,14 +102,13 @@ public final class WebInspectorModel {
         }
     }
 
-    public func reload(maxDepth: Int? = nil) async {
+    public func reload() async {
         guard hasPageWebView else {
             webBridge.errorMessage = "WebView is not available."
             return
         }
 
-        requestedDepth = maxDepth ?? requestedDepth
-        await webBridge.reloadInspector(depth: requestedDepth, preserveState: false)
+        await webBridge.reloadInspector(preserveState: false)
     }
 
     public func toggleSelectionMode() {
@@ -130,9 +152,9 @@ public final class WebInspectorModel {
                 let result = try await self.webBridge.contentModel.beginSelectionMode()
                 guard !result.cancelled else { return }
                 if Task.isCancelled { return }
-                let targetDepth = max(self.requestedDepth, result.requiredDepth + 1)
-                self.requestedDepth = targetDepth
-                await self.webBridge.reloadInspector(depth: targetDepth, preserveState: true)
+                let requestedDepth = max(self.configuration.snapshotDepth, result.requiredDepth + 1)
+                self.webBridge.updateSnapshotDepth(requestedDepth)
+                await self.webBridge.reloadInspector(preserveState: true)
             } catch is CancellationError {
                 await self.webBridge.contentModel.cancelSelectionMode()
             } catch {
