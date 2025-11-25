@@ -50,25 +50,9 @@ final class WIWebView: WKWebView {
         
         guard builder.system == .context else { return }
         
-        builder.remove(menu: .standardEdit)
         builder.remove(menu: .lookup)
         builder.remove(menu: .share)
-        
-        let action = UIAction(
-            title: "Custom Menu"
-        ) { [weak self] _ in
-            
-        }
-        
-        let menu = UIMenu(
-            title: "",
-            image: nil,
-            identifier: UIMenu.Identifier("com.example.custom-edit"),
-            options: [.displayInline],
-            children: [action]
-        )
-        
-        builder.insertChild(menu, atStartOfMenu: .root)
+    
     }
 #endif
 }
