@@ -102,12 +102,7 @@ final class WIInspectorModel: NSObject {
 
     private func detachInspectorWebView(ifMatches webView: WIWebView) {
         guard self.webView === webView else { return }
-        let controller = webView.configuration.userContentController
-        HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue)
-        }
-        webView.navigationDelegate = nil
-        inspectorLogger.debug("inspector detached")
+        detachMessageHandlers(from: webView)
     }
 
     private func resetInspectorState() {
@@ -115,6 +110,15 @@ final class WIInspectorModel: NSObject {
         pendingBundles.removeAll()
         pendingPreferredDepth = nil
         pendingDocumentRequest = nil
+    }
+
+    private func detachMessageHandlers(from webView: WIWebView) {
+        let controller = webView.configuration.userContentController
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue)
+        }
+        webView.navigationDelegate = nil
+        inspectorLogger.debug("detached inspector message handlers")
     }
 
     private func loadInspector(in webView: WIWebView) {
@@ -130,12 +134,9 @@ final class WIInspectorModel: NSObject {
     }
 
     @MainActor deinit {
-        if let controller = webView?.configuration.userContentController{
-            HandlerName.allCases.forEach {
-                controller.removeScriptMessageHandler(forName: $0.rawValue)
-            }
+        if let webView {
+            detachMessageHandlers(from: webView)
         }
-        webView?.navigationDelegate = nil
     }
 
     private func applyMutationBundle(_ payload: PendingBundle) {

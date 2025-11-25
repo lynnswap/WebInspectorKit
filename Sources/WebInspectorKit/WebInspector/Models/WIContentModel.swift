@@ -41,6 +41,11 @@ final class WIContentModel: NSObject {
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: HandlerName.snapshot, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: HandlerName.mutation, contentWorld: .page)
+        contentLogger.debug("detached content message handlers")
+    }
+
+    @MainActor deinit {
+        detachMessageHandlers(from: webView)
     }
 }
 
