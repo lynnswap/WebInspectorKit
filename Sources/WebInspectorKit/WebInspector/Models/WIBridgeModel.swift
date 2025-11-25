@@ -1,5 +1,5 @@
 //
-//  WebInspectorBridge.swift
+//  WIBridgeModel.swift
 //  WebInspectorKit
 //
 //  Created by Kazuki Nakashima on 2025/11/20.
@@ -23,7 +23,7 @@ public enum WILifecycleState {
 
 @MainActor
 @Observable
-public final class WIBridge {
+public final class WIBridgeModel {
     var isLoading = false
     var errorMessage: String?
     var domSelection = WIDOMSelection()

@@ -27,12 +27,12 @@ public struct WIDOMView: View {
 
 @MainActor
 struct WIDOMViewRepresentable {
-    var bridge: WIBridge
+    var bridge: WIBridgeModel
 }
 
 #if os(macOS)
 extension WIDOMViewRepresentable: NSViewRepresentable {
-    typealias Coordinator = WIBridge
+    typealias Coordinator = WIBridgeModel
 
     func makeNSView(context: Context) -> WIWebView {
         bridge.inspectorModel.makeInspectorWebView()
@@ -46,7 +46,7 @@ extension WIDOMViewRepresentable: NSViewRepresentable {
 }
 #else
 extension WIDOMViewRepresentable: UIViewRepresentable {
-    typealias Coordinator = WIBridge
+    typealias Coordinator = WIBridgeModel
 
     func makeUIView(context: Context) -> WIWebView {
         bridge.inspectorModel.makeInspectorWebView()

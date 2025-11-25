@@ -34,7 +34,7 @@ final class WIInspectorModel: NSObject {
         let preserveState: Bool
     }
 
-    weak var bridge: WIBridge?
+    weak var bridge: WIBridgeModel?
     private(set) var webView: WIWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []

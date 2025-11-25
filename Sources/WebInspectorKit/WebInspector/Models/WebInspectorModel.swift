@@ -27,7 +27,7 @@ public final class WebInspectorModel {
 
     public private(set) var requestedDepth = WIConstants.defaultDepth
     public private(set) var isSelectingElement = false
-    public let webBridge = WIBridge()
+    public let webBridge = WIBridgeModel()
 
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil

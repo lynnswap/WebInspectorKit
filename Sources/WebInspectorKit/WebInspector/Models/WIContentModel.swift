@@ -20,7 +20,7 @@ final class WIContentModel: NSObject {
         static let mutation = "webInspectorMutationUpdate"
     }
 
-    weak var bridge: WIBridge?
+    weak var bridge: WIBridgeModel?
     weak var webView: WKWebView? {
         didSet {
             guard oldValue !== webView else { return }
