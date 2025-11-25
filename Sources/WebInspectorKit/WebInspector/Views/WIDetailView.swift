@@ -49,6 +49,7 @@ public struct WIDetailView: View {
                             Text("dom.detail.attributes.empty")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                                .listRowSeparator(.hidden)
                         } else {
                             ForEach(selection.attributes) { element in
                                 VStack(alignment: .leading, spacing: 6) {
