@@ -35,16 +35,36 @@ public final class WIViewModel {
 
     public init() {}
 
-    public func handleAppear(webView: WKWebView?) {
-        webBridge.attachPageWebView(webView, requestedDepth: requestedDepth)
+    public func attach(webView: WKWebView?) {
+        updateLifecycle(.attach(webView))
     }
 
-    public func handleDisappear() {
+    public func suspend() {
+        updateLifecycle(.suspend)
+    }
+
+    public func detach() {
+        updateLifecycle(.detach)
+    }
+    
+    public func updateLifecycle(_ state: WILifecycleState) {
+        switch state {
+        case .attach(let webView):
+            webBridge.setLifecycle(.attach(webView), requestedDepth: requestedDepth)
+        case .suspend:
+            resetInteractionState()
+            webBridge.setLifecycle(.suspend, requestedDepth: requestedDepth)
+        case .detach:
+            resetInteractionState()
+            webBridge.setLifecycle(.detach, requestedDepth: requestedDepth)
+        }
+    }
+
+    private func resetInteractionState() {
         cancelSelectionMode()
 #if canImport(UIKit)
         restorePageScrollingState()
 #endif
-        webBridge.detachPageWebView(currentDepth: requestedDepth)
     }
 
     public func copySelectionHTML() {
@@ -62,7 +82,7 @@ public final class WIViewModel {
     public func deleteSelectedNode() {
         guard let nodeId = webBridge.domSelection.nodeId else { return }
         Task {
-            await webBridge.deleteNode(identifier: nodeId)
+            await webBridge.contentModel.removeNode(identifier: nodeId)
         }
     }
 
@@ -92,7 +112,7 @@ public final class WIViewModel {
         restorePageScrollingState()
 #endif
         Task {
-            await webBridge.cancelSelectionMode()
+            await webBridge.contentModel.cancelSelectionMode()
         }
         isSelectingElement = false
     }
@@ -120,7 +140,7 @@ public final class WIViewModel {
                     await self.webBridge.reloadInspector(depth: targetDepth, preserveState: true)
                 }
             } catch is CancellationError {
-                await self.webBridge.cancelSelectionMode()
+                await self.webBridge.contentModel.cancelSelectionMode()
             } catch {
                 logger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
                 webBridge.errorMessage = error.localizedDescription
