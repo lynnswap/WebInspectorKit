@@ -102,9 +102,9 @@ public struct WebInspectorView: View {
             WIDOMView(model)
                 .tabItem {
                     Label {
-                        Text(InspectorTab.tree.title)
+                        Text(InspectorTab.dom.title)
                     } icon: {
-                        Image(systemName: InspectorTab.tree.systemImage)
+                        Image(systemName: InspectorTab.dom.systemImage)
                     }
                 }
             WIDetailView(model)
@@ -123,13 +123,13 @@ public struct WebInspectorView: View {
 // MARK: - Tab Metadata
 
 enum InspectorTab: Int, CaseIterable {
-    case tree
+    case dom
     case detail
 
     var title: LocalizedStringResource {
         switch self {
-        case .tree:
-            LocalizedStringResource("inspector.tab.tree", bundle: .module)
+        case .dom:
+            LocalizedStringResource("inspector.tab.dom", bundle: .module)
         case .detail:
             LocalizedStringResource("inspector.tab.detail", bundle: .module)
         }
@@ -137,7 +137,7 @@ enum InspectorTab: Int, CaseIterable {
 
     var systemImage: String {
         switch self {
-        case .tree:
+        case .dom:
             "chevron.left.forwardslash.chevron.right"
         case .detail:
             "info.circle"

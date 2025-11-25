@@ -36,7 +36,7 @@ struct WITabBarContainer: UIViewControllerRepresentable {
         }
 
         private func configureTabItems() {
-            setTabBarItem(for: .tree, controller: webHost)
+            setTabBarItem(for: .dom, controller: webHost)
             setTabBarItem(for: .detail, controller: domHost)
         }
 

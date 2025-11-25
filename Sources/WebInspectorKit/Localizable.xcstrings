@@ -1139,145 +1139,145 @@
         }
       }
     },
-    "inspector.tab.tree" : {
-      "comment" : "Tab title that displays the DOM tree.",
+    "inspector.tab.dom" : {
+      "comment" : "Tab title that displays the DOM inspector.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "شجرة"
+            "value" : "DOM"
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Baum"
+            "value" : "DOM"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tree"
+            "value" : "DOM"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tree"
+            "value" : "DOM"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tree"
+            "value" : "DOM"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Árbol"
+            "value" : "DOM"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Árbol"
+            "value" : "DOM"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arbre"
+            "value" : "DOM"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arbre"
+            "value" : "DOM"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ट्री"
+            "value" : "DOM"
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pohon"
+            "value" : "DOM"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Albero"
+            "value" : "DOM"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ツリー"
+            "value" : "DOM"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "트리"
+            "value" : "DOM"
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Boom"
+            "value" : "DOM"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Árvore"
+            "value" : "DOM"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Árvore"
+            "value" : "DOM"
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arbore"
+            "value" : "DOM"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Дерево"
+            "value" : "DOM"
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ทรี"
+            "value" : "DOM"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ağaç"
+            "value" : "DOM"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "树"
+            "value" : "DOM"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "樹"
+            "value" : "DOM"
           }
         }
       }
