@@ -111,10 +111,10 @@ public struct WebInspectorView: View {
 #if canImport(UIKit)
         WITabBarContainer(tabs: tabs)
             .ignoresSafeArea()
-#else
+#elseif canImport(AppKit)
         TabView {
             ForEach(tabs) { tab in
-                tab.makeContent()
+                WITabContentHost(tab: tab, model: model)
                     .tabItem {
                         Label {
                             Text(tab.title)
@@ -129,6 +129,18 @@ public struct WebInspectorView: View {
 #endif
     }
 }
+#if canImport(AppKit)
+private struct WITabContentHost: NSViewControllerRepresentable {
+    let tab: WITab
+    let model: WIViewModel
+
+    func makeNSViewController(context: Context) -> NSViewController {
+        tab.viewController(with: model)
+    }
+
+    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
+}
+#endif
 
 #if DEBUG
 @MainActor

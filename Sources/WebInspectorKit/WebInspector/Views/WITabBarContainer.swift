@@ -28,10 +28,7 @@ struct WITabBarContainer: UIViewControllerRepresentable {
 
         init(model:WIViewModel,tabs: [WITab]) {
             self.tabs = tabs.map { tab in
-                let view = tab.makeContent()
-                    .environment(model)
-                let host = UIHostingController(rootView: view)
-                host.view.backgroundColor = .clear
+                let host = tab.viewController(with: model)
                 return UITab(
                     title: String(localized: tab.title),
                     image: UIImage(systemName: tab.systemImage),
