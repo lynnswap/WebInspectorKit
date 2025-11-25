@@ -206,6 +206,14 @@ extension WIContentModel {
         }
     }
 
+    func stopInspection(maxDepth: Int) {
+        clearWebInspectorHighlight()
+        Task {
+            await cancelSelectionMode()
+            await setAutoUpdate(enabled: false, maxDepth: maxDepth)
+        }
+    }
+
     func setAttributeValue(identifier: Int, name: String, value: String) async {
         guard let webView else { return }
         do {

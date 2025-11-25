@@ -70,7 +70,7 @@ public final class WIBridge {
     }
 
     private func handleSuspend(currentDepth: Int) {
-        stopInspection(currentDepth: currentDepth)
+        contentModel.stopInspection(maxDepth: currentDepth)
         isLoading = false
         contentModel.webView = nil
         domSelection.clear()
@@ -88,14 +88,6 @@ public final class WIBridge {
         isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
         await contentModel.setAutoUpdate(enabled: true, maxDepth: depth)
-    }
-
-    func stopInspection(currentDepth: Int) {
-        contentModel.clearWebInspectorHighlight()
-        Task {
-            await contentModel.cancelSelectionMode()
-            await contentModel.setAutoUpdate(enabled: false, maxDepth: currentDepth)
-        }
     }
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
