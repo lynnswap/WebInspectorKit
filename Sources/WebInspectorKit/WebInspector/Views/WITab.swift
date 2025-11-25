@@ -1,6 +1,6 @@
 import SwiftUI
 
-public struct InspectorTab: Identifiable {
+public struct WITab: Identifiable {
     public let id: String
     public let title: LocalizedStringResource
     public let systemImage: String

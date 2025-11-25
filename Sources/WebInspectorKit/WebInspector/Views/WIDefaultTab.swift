@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum DefaultInspectorTab: Int, CaseIterable {
+enum WIDefaultTab: Int, CaseIterable {
     case dom
     case detail
 
@@ -32,23 +32,23 @@ enum DefaultInspectorTab: Int, CaseIterable {
     }
 }
 @MainActor
-public extension InspectorTab {
-    static func dom() -> InspectorTab {
-        InspectorTab(
-            id: DefaultInspectorTab.dom.identifier,
-            title: DefaultInspectorTab.dom.title,
-            systemImage: DefaultInspectorTab.dom.systemImage,
+public extension WITab {
+    static func dom() -> WITab {
+        WITab(
+            id: WIDefaultTab.dom.identifier,
+            title: WIDefaultTab.dom.title,
+            systemImage: WIDefaultTab.dom.systemImage,
             content: {
                 WIDOMView()
             }
         )
     }
 
-    static func detail() -> InspectorTab {
-        InspectorTab(
-            id: DefaultInspectorTab.detail.identifier,
-            title: DefaultInspectorTab.detail.title,
-            systemImage: DefaultInspectorTab.detail.systemImage,
+    static func detail() -> WITab {
+        WITab(
+            id: WIDefaultTab.detail.identifier,
+            title: WIDefaultTab.detail.title,
+            systemImage: WIDefaultTab.detail.systemImage,
             content: {
                 WIDetailView()
             }

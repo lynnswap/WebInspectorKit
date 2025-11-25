@@ -3,7 +3,7 @@ import SwiftUI
 
 @available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
-    var tabs: [InspectorTab]
+    var tabs: [WITab]
     @Environment(WIViewModel.self) private var model
     
     func makeCoordinator() -> Coordinator {
@@ -26,7 +26,7 @@ struct WITabBarContainer: UIViewControllerRepresentable {
         
         let tabs: [UITab]
 
-        init(model:WIViewModel,tabs: [InspectorTab]) {
+        init(model:WIViewModel,tabs: [WITab]) {
             self.tabs = tabs.map { tab in
                 let view = tab.makeContent()
                     .environment(model)

@@ -8,12 +8,12 @@ import Observation
 public struct WebInspectorView: View {
     private let model: WIViewModel
     private let webView: WKWebView?
-    private let tabs: [InspectorTab]
+    private let tabs: [WITab]
 
     public init(
         _ viewModel: WIViewModel,
         webView: WKWebView?,
-        @InspectorTabsBuilder tabs: () -> [InspectorTab]
+        @WITabBuilder tabs: () -> [WITab]
     ) {
         self.model = viewModel
         self.webView = webView
@@ -25,8 +25,8 @@ public struct WebInspectorView: View {
         webView: WKWebView?
     ) {
         self.init(viewModel, webView: webView) {
-            InspectorTab.dom()
-            InspectorTab.detail()
+            WITab.dom()
+            WITab.detail()
         }
     }
 
