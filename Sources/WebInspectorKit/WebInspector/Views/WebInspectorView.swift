@@ -25,8 +25,8 @@ public struct WebInspectorView: View {
         webView: WKWebView?
     ) {
         self.init(viewModel, webView: webView) {
-            InspectorTab.dom(model: viewModel)
-            InspectorTab.detail(model: viewModel)
+            InspectorTab.dom()
+            InspectorTab.detail()
         }
     }
 
@@ -103,6 +103,7 @@ public struct WebInspectorView: View {
                     .disabled(model.webBridge.domSelection.nodeId == nil)
                 }
             }
+            .environment(model)
     }
 
     @ViewBuilder
@@ -124,6 +125,7 @@ public struct WebInspectorView: View {
                     .tag(tab.id)
             }
         }
+        .environment(model)
 #endif
     }
 }

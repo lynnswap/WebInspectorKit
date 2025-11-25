@@ -2,14 +2,10 @@ import SwiftUI
 import WebKit
 
 public struct WIDOMView: View {
-    private var model: WIViewModel
-    
-    public init(
-        _ viewModel: WIViewModel
-    ) {
-        self.model = viewModel
-    }
+    @Environment(WIViewModel.self) private var model
 
+    public init() {}
+    
     public var body: some View {
         WIDOMViewRepresentable(bridge: model.webBridge)
             .ignoresSafeArea()

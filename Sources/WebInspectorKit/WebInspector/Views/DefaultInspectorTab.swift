@@ -33,24 +33,24 @@ enum DefaultInspectorTab: Int, CaseIterable {
 }
 @MainActor
 public extension InspectorTab {
-    static func dom(model: WIViewModel) -> InspectorTab {
+    static func dom() -> InspectorTab {
         InspectorTab(
             id: DefaultInspectorTab.dom.identifier,
             title: DefaultInspectorTab.dom.title,
             systemImage: DefaultInspectorTab.dom.systemImage,
             content: {
-                WIDOMView(model)
+                WIDOMView()
             }
         )
     }
 
-    static func detail(model: WIViewModel) -> InspectorTab {
+    static func detail() -> InspectorTab {
         InspectorTab(
             id: DefaultInspectorTab.detail.identifier,
             title: DefaultInspectorTab.detail.title,
             systemImage: DefaultInspectorTab.detail.systemImage,
             content: {
-                WIDetailView(model)
+                WIDetailView()
             }
         )
     }
