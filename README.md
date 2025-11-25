@@ -39,7 +39,7 @@ struct ContentView: View {
 WebInspectorView(inspector, webView: pageWebView) {
     WITab.dom()
     WITab.detail()
-    WITab(LocalizedStringResource("Network"), systemImage: "wave.3.right.circle") {
+    WITab("Network", systemImage: "wave.3.right.circle") {
         NetworkInspectorView()  // your custom tab content
     }
 }
