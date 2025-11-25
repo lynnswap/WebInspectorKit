@@ -9,7 +9,7 @@ import SwiftUI
 import Observation
 
 public struct WIDetailView: View {
-    @Environment(WIViewModel.self) private var model
+    @Environment(WebInspectorModel.self) private var model
     
     public init() {}
     
@@ -277,8 +277,8 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
 
 #if DEBUG
 @MainActor
-private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIViewModel {
-    let model = WIViewModel()
+private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WebInspectorModel {
+    let model = WebInspectorModel()
     if let selection {
         model.webBridge.domSelection = selection
     } else {

@@ -1,5 +1,5 @@
 //
-//  WebInspectorViewModel.swift
+//  WebInspectorModel.swift
 //  WebInspectorKit
 //
 //  Created by Kazuki Nakashima on 2025/11/20.
@@ -15,11 +15,11 @@ import UIKit
 import AppKit
 #endif
 
-private let logger = Logger(subsystem: "WebInspectorKit", category: "WIViewModel")
+private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorModel")
 
 @MainActor
 @Observable
-public final class WIViewModel {
+public final class WebInspectorModel {
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?

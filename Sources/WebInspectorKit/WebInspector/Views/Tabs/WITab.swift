@@ -14,7 +14,7 @@ public struct WITab: Identifiable {
     public let id: String
     public let title: LocalizedStringResource
     public let systemImage: String
-    private let makeViewController: @MainActor (WIViewModel) -> WITabViewController
+    private let makeViewController: @MainActor (WebInspectorModel) -> WITabViewController
 
     @MainActor
     public init(
@@ -40,7 +40,7 @@ public struct WITab: Identifiable {
     }
 
     @MainActor
-    func viewController(with model: WIViewModel) -> WITabViewController {
+    func viewController(with model: WebInspectorModel) -> WITabViewController {
         makeViewController(model)
     }
 }

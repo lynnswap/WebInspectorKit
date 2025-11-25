@@ -4,7 +4,7 @@ import SwiftUI
 @available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
     var tabs: [WITab]
-    @Environment(WIViewModel.self) private var model
+    @Environment(WebInspectorModel.self) private var model
     
     func makeCoordinator() -> Coordinator {
         Coordinator(model:model,tabs: tabs)
@@ -26,7 +26,7 @@ struct WITabBarContainer: UIViewControllerRepresentable {
         
         let tabs: [UITab]
 
-        init(model:WIViewModel,tabs: [WITab]) {
+        init(model:WebInspectorModel,tabs: [WITab]) {
             self.tabs = tabs.map { tab in
                 let host = tab.viewController(with: model)
                 return UITab(

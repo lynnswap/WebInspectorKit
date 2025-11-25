@@ -6,12 +6,12 @@ import Observation
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    private let model: WIViewModel
+    private let model: WebInspectorModel
     private let webView: WKWebView?
     private let tabs: [WITab]
 
     public init(
-        _ viewModel: WIViewModel,
+        _ viewModel: WebInspectorModel,
         webView: WKWebView?,
         @WITabBuilder tabs: () -> [WITab]
     ) {
@@ -21,7 +21,7 @@ public struct WebInspectorView: View {
     }
 
     public init(
-        _ viewModel: WIViewModel,
+        _ viewModel: WebInspectorModel,
         webView: WKWebView?
     ) {
         self.init(viewModel, webView: webView) {
@@ -132,7 +132,7 @@ public struct WebInspectorView: View {
 #if canImport(AppKit)
 private struct WITabContentHost: NSViewControllerRepresentable {
     let tab: WITab
-    let model: WIViewModel
+    let model: WebInspectorModel
 
     func makeNSViewController(context: Context) -> NSViewController {
         tab.viewController(with: model)
@@ -158,7 +158,7 @@ private struct WITabContentHost: NSViewControllerRepresentable {
 private struct WIPreviewHost: View {
     @State private var model :WIPreviewModel?
     @State private var isPresented:Bool = true
-    @State private var inspectorModel = WIViewModel()
+    @State private var inspectorModel = WebInspectorModel()
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
         if let model {

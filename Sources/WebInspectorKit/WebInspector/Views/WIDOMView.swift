@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 public struct WIDOMView: View {
-    @Environment(WIViewModel.self) private var model
+    @Environment(WebInspectorModel.self) private var model
 
     public init() {}
     
