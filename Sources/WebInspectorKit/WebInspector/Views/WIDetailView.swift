@@ -31,7 +31,7 @@ public struct WIDetailView: View {
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }header: {
-                        Text("Element" as String)
+                        Text("dom.detail.section.element")
                     }
                     Section {
                         SelectionPreviewTextRepresentable(
@@ -42,7 +42,7 @@ public struct WIDetailView: View {
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     } header: {
-                        Text("Selector" as String)
+                        Text("dom.detail.section.selector")
                     }
                     Section {
                         if selection.attributes.isEmpty {
@@ -75,7 +75,7 @@ public struct WIDetailView: View {
                             }
                         }
                     }header:{
-                        Text("Attributes" as String)
+                        Text("dom.detail.section.attributes")
                     }
                 }
                 .listSectionSeparator(.hidden)
