@@ -35,9 +35,9 @@ enum WIDefaultTab: Int, CaseIterable {
 public extension WITab {
     static func dom() -> WITab {
         WITab(
-            id: WIDefaultTab.dom.identifier,
-            title: WIDefaultTab.dom.title,
+            WIDefaultTab.dom.title,
             systemImage: WIDefaultTab.dom.systemImage,
+            value:WIDefaultTab.dom.identifier,
             content: {
                 WIDOMView()
             }
@@ -46,9 +46,9 @@ public extension WITab {
 
     static func detail() -> WITab {
         WITab(
-            id: WIDefaultTab.detail.identifier,
-            title: WIDefaultTab.detail.title,
+            WIDefaultTab.detail.title,
             systemImage: WIDefaultTab.detail.systemImage,
+            value:WIDefaultTab.detail.identifier,
             content: {
                 WIDetailView()
             }
