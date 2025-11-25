@@ -311,7 +311,7 @@ private enum WIScript {
         guard let url = WIAssets.locateResource(
             named: resourceName,
             withExtension: resourceExtension,
-            subdirectory: "WebInspector/Bridge"
+            subdirectory: "WebInspector/Support"
         ) else {
             contentLogger.error("missing web inspector script resource")
             throw WIError.scriptUnavailable
