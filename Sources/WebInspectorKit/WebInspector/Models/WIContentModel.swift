@@ -41,6 +41,11 @@ final class WIContentModel: NSObject {
         let controller = webView.configuration.userContentController
         controller.removeScriptMessageHandler(forName: HandlerName.snapshot, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: HandlerName.mutation, contentWorld: .page)
+        contentLogger.debug("detached content message handlers")
+    }
+
+    @MainActor deinit {
+        detachMessageHandlers(from: webView)
     }
 }
 
@@ -203,6 +208,14 @@ extension WIContentModel {
             )
         } catch {
             contentLogger.error("configure auto snapshot failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func stopInspection(maxDepth: Int) {
+        clearWebInspectorHighlight()
+        Task {
+            await cancelSelectionMode()
+            await setAutoUpdate(enabled: false, maxDepth: maxDepth)
         }
     }
 

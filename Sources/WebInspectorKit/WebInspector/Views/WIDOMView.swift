@@ -39,7 +39,7 @@ extension WIDOMViewRepresentable: NSViewRepresentable {
     typealias Coordinator = WIBridge
 
     func makeNSView(context: Context) -> WIWebView {
-        bridge.makeInspectorWebView()
+        bridge.inspectorModel.makeInspectorWebView()
     }
 
     func updateNSView(_ nsView: WIWebView, context: Context) {}
@@ -47,27 +47,19 @@ extension WIDOMViewRepresentable: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         bridge
     }
-
-    static func dismantleNSView(_ nsView: WIWebView, coordinator: Coordinator) {
-        coordinator.teardownInspectorWebView(nsView)
-    }
 }
 #else
 extension WIDOMViewRepresentable: UIViewRepresentable {
     typealias Coordinator = WIBridge
 
     func makeUIView(context: Context) -> WIWebView {
-        bridge.makeInspectorWebView()
+        bridge.inspectorModel.makeInspectorWebView()
     }
 
     func updateUIView(_ uiView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         bridge
-    }
-
-    static func dismantleUIView(_ uiView: WIWebView, coordinator: Coordinator) {
-        coordinator.teardownInspectorWebView(uiView)
     }
 }
 #endif

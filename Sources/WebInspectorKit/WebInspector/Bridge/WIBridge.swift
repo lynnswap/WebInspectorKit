@@ -15,6 +15,12 @@ enum WIConstants {
     static let autoUpdateDebounce: TimeInterval = 0.6
 }
 
+public enum WILifecycleState {
+    case attach(WKWebView?)
+    case suspend
+    case detach
+}
+
 @MainActor
 @Observable
 public final class WIBridge {
@@ -30,29 +36,22 @@ public final class WIBridge {
         inspectorModel.bridge = self
     }
 
-    func makeInspectorWebView() -> WIWebView {
-        inspectorModel.makeInspectorWebView()
+    func setLifecycle(_ state: WILifecycleState, requestedDepth: Int) {
+        switch state {
+        case .attach(let webView):
+            handleAttach(webView: webView, requestedDepth: requestedDepth)
+        case .suspend:
+            handleSuspend(currentDepth: requestedDepth)
+        case .detach:
+            handleSuspend(currentDepth: requestedDepth)
+            inspectorModel.detachInspectorWebView()
+            lastPageWebView = nil
+        }
     }
 
-    func teardownInspectorWebView(_ webView: WIWebView) {
-        inspectorModel.teardownInspectorWebView(webView)
-    }
-
-    func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
-        inspectorModel.enqueueMutationBundle(rawJSON, preserveState: preserveState)
-    }
-
-    func updatePreferredDepth(_ depth: Int) {
-        inspectorModel.setPreferredDepth(depth)
-    }
-
-    func requestDocument(depth: Int, preserveState: Bool) {
-        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
-    }
-
-    func attachPageWebView(_ webView: WKWebView?, requestedDepth: Int) {
+    private func handleAttach(webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
-        clearDomSelection()
+        domSelection.clear()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -65,15 +64,16 @@ public final class WIBridge {
             if needsReload {
                 await self.reloadInspector(depth: requestedDepth, preserveState: false)
             } else {
-                await self.configureAutoUpdate(enabled: true, depth: requestedDepth)
+                await self.contentModel.setAutoUpdate(enabled: true, maxDepth: requestedDepth)
             }
         }
     }
 
-    func detachPageWebView(currentDepth: Int) {
-        stopInspection(currentDepth: currentDepth)
+    private func handleSuspend(currentDepth: Int) {
+        contentModel.stopInspection(maxDepth: currentDepth)
+        isLoading = false
         contentModel.webView = nil
-        clearDomSelection()
+        domSelection.clear()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -84,64 +84,20 @@ public final class WIBridge {
         isLoading = true
         errorMessage = nil
 
-        updatePreferredDepth(depth)
+        inspectorModel.setPreferredDepth(depth)
         isLoading = false
-        requestDocument(depth: depth, preserveState: preserveState)
-        await configureAutoUpdate(enabled: true, depth: depth)
-    }
-
-    func configureAutoUpdate(enabled: Bool, depth: Int) async {
-        await contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)
-    }
-
-    func stopInspection(currentDepth: Int) {
-        contentModel.clearWebInspectorHighlight()
-        Task {
-            await contentModel.cancelSelectionMode()
-            await contentModel.setAutoUpdate(enabled: false, maxDepth: currentDepth)
-        }
-    }
-
-    func beginSelectionMode(currentDepth: Int) async throws -> Int? {
-        let result = try await contentModel.beginSelectionMode()
-        if result.cancelled {
-            return nil
-        }
-        return max(currentDepth, result.requiredDepth + 1)
-    }
-
-    func cancelSelectionMode() async {
-        await contentModel.cancelSelectionMode()
-    }
-
-    func deleteNode(identifier: Int) async {
-        await contentModel.removeNode(identifier: identifier)
+        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+        await contentModel.setAutoUpdate(enabled: true, maxDepth: depth)
     }
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
-        enqueueMutationBundle(package.rawJSON, preserveState: true)
+        inspectorModel.enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
     func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
         isLoading = false
-        enqueueMutationBundle(payload.rawJSON, preserveState: true)
-    }
-
-    func updateDomSelection(with dictionary: [String: Any]) {
-        domSelection.applySnapshot(from: dictionary)
-    }
-
-    func clearDomSelection() {
-        domSelection.clear()
-    }
-
-    func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
-        guard
-            let nodeId,
-            domSelection.nodeId == nodeId
-        else { return }
-        domSelection.selectorPath = selectorPath
+        inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
     func updateAttributeValue(name: String, value: String) {

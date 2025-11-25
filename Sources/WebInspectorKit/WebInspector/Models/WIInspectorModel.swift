@@ -59,6 +59,13 @@ final class WIInspectorModel: NSObject {
         detachInspectorWebView(ifMatches: webView)
     }
 
+    func detachInspectorWebView() {
+        guard let webView else { return }
+        detachInspectorWebView(ifMatches: webView)
+        resetInspectorState()
+        self.webView = nil
+    }
+
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
         applyMutationBundle(payload)
@@ -95,12 +102,23 @@ final class WIInspectorModel: NSObject {
 
     private func detachInspectorWebView(ifMatches webView: WIWebView) {
         guard self.webView === webView else { return }
+        detachMessageHandlers(from: webView)
+    }
+
+    private func resetInspectorState() {
+        isReady = false
+        pendingBundles.removeAll()
+        pendingPreferredDepth = nil
+        pendingDocumentRequest = nil
+    }
+
+    private func detachMessageHandlers(from webView: WIWebView) {
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue)
         }
         webView.navigationDelegate = nil
-        inspectorLogger.debug("inspector detached")
+        inspectorLogger.debug("detached inspector message handlers")
     }
 
     private func loadInspector(in webView: WIWebView) {
@@ -116,12 +134,9 @@ final class WIInspectorModel: NSObject {
     }
 
     @MainActor deinit {
-        if let controller = webView?.configuration.userContentController{
-            HandlerName.allCases.forEach {
-                controller.removeScriptMessageHandler(forName: $0.rawValue)
-            }
+        if let webView {
+            detachMessageHandlers(from: webView)
         }
-        webView?.navigationDelegate = nil
     }
 
     private func applyMutationBundle(_ payload: PendingBundle) {
@@ -314,15 +329,17 @@ extension WIInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.updateDomSelection(with: dictionary)
+                bridge?.domSelection.applySnapshot(from: dictionary)
             } else {
-                bridge?.clearDomSelection()
+                bridge?.domSelection.clear()
             }
         case .domSelector:
             if let dictionary = message.body as? [String: Any] {
                 let nodeId = dictionary["id"] as? Int
                 let selectorPath = dictionary["selectorPath"] as? String ?? ""
-                bridge?.updateDomSelectorPath(nodeId: nodeId, selectorPath: selectorPath)
+                if let nodeId, bridge?.domSelection.nodeId == nodeId {
+                    bridge?.domSelection.selectorPath = selectorPath
+                }
             }
         }
     }
