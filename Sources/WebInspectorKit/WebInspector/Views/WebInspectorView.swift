@@ -55,17 +55,17 @@ public struct WebInspectorView: View {
                     
                     Menu{
                         Button{
-                            model.copySelectionHTML()
+                            model.copySelection(.html)
                         }label:{
                             Text("HTML" as String)
                         }
                         Button{
-                            model.copySelectionSelectorPath()
+                            model.copySelection(.selectorPath)
                         }label:{
                             Text("dom.detail.copy.selector_path")
                         }
                         Button{
-                            model.copySelectionXPath()
+                            model.copySelection(.xpath)
                         }label:{
                             Text("XPath" as String)
                         }
