@@ -328,7 +328,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.updateDomSelection(with: dictionary)
+                bridge?.domSelection.applySnapshot(from: dictionary)
             } else {
                 bridge?.domSelection.clear()
             }
@@ -336,7 +336,9 @@ extension WIInspectorModel: WKScriptMessageHandler {
             if let dictionary = message.body as? [String: Any] {
                 let nodeId = dictionary["id"] as? Int
                 let selectorPath = dictionary["selectorPath"] as? String ?? ""
-                bridge?.updateDomSelectorPath(nodeId: nodeId, selectorPath: selectorPath)
+                if let nodeId, bridge?.domSelection.nodeId == nodeId {
+                    bridge?.domSelection.selectorPath = selectorPath
+                }
             }
         }
     }

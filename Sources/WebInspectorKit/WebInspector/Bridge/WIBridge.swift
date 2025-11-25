@@ -64,7 +64,7 @@ public final class WIBridge {
             if needsReload {
                 await self.reloadInspector(depth: requestedDepth, preserveState: false)
             } else {
-                await self.configureAutoUpdate(enabled: true, depth: requestedDepth)
+                await self.contentModel.setAutoUpdate(enabled: true, maxDepth: requestedDepth)
             }
         }
     }
@@ -87,11 +87,7 @@ public final class WIBridge {
         inspectorModel.setPreferredDepth(depth)
         isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
-        await configureAutoUpdate(enabled: true, depth: depth)
-    }
-
-    func configureAutoUpdate(enabled: Bool, depth: Int) async {
-        await contentModel.setAutoUpdate(enabled: enabled, maxDepth: depth)
+        await contentModel.setAutoUpdate(enabled: true, maxDepth: depth)
     }
 
     func stopInspection(currentDepth: Int) {
@@ -100,14 +96,6 @@ public final class WIBridge {
             await contentModel.cancelSelectionMode()
             await contentModel.setAutoUpdate(enabled: false, maxDepth: currentDepth)
         }
-    }
-
-    func beginSelectionMode(currentDepth: Int) async throws -> Int? {
-        let result = try await contentModel.beginSelectionMode()
-        if result.cancelled {
-            return nil
-        }
-        return max(currentDepth, result.requiredDepth + 1)
     }
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
@@ -120,15 +108,8 @@ public final class WIBridge {
         inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
-    func updateDomSelection(with dictionary: [String: Any]) {
-        domSelection.applySnapshot(from: dictionary)
-    }
-
     func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
-        guard
-            let nodeId,
-            domSelection.nodeId == nodeId
-        else { return }
+        guard let nodeId, domSelection.nodeId == nodeId else { return }
         domSelection.selectorPath = selectorPath
     }
 
