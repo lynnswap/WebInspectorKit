@@ -33,22 +33,30 @@ enum WIDefaultTab: Int, CaseIterable {
 }
 @MainActor
 public extension WITab {
-    static func dom() -> WITab {
+    static func dom(
+        title: LocalizedStringResource? = nil,
+        systemImage: String? = nil,
+        value: String? = nil
+    ) -> WITab {
         WITab(
-            WIDefaultTab.dom.title,
-            systemImage: WIDefaultTab.dom.systemImage,
-            value:WIDefaultTab.dom.identifier,
+            title ?? WIDefaultTab.dom.title,
+            systemImage: systemImage ?? WIDefaultTab.dom.systemImage,
+            value: value ?? WIDefaultTab.dom.identifier,
             content: {
                 WIDOMView()
             }
         )
     }
 
-    static func detail() -> WITab {
+    static func detail(
+        title: LocalizedStringResource? = nil,
+        systemImage: String? = nil,
+        value: String? = nil
+    ) -> WITab {
         WITab(
-            WIDefaultTab.detail.title,
-            systemImage: WIDefaultTab.detail.systemImage,
-            value:WIDefaultTab.detail.identifier,
+            title ?? WIDefaultTab.detail.title,
+            systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
+            value: value ?? WIDefaultTab.detail.identifier,
             content: {
                 WIDetailView()
             }
