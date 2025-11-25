@@ -6,15 +6,28 @@ import Observation
 // MARK: - Main View
 
 public struct WebInspectorView: View {
-    private var model: WIViewModel
-    private var webView: WKWebView?
+    private let model: WIViewModel
+    private let webView: WKWebView?
+    private let tabs: [InspectorTab]
+
+    public init(
+        _ viewModel: WIViewModel,
+        webView: WKWebView?,
+        @InspectorTabsBuilder tabs: (WIViewModel) -> [InspectorTab]
+    ) {
+        self.model = viewModel
+        self.webView = webView
+        self.tabs = tabs(viewModel)
+    }
 
     public init(
         _ viewModel: WIViewModel,
         webView: WKWebView?
     ) {
-        self.webView = webView
-        self.model = viewModel
+        self.init(viewModel, webView: webView) { model in
+            InspectorTab.dom    { _ in WIDOMView(model) }
+            InspectorTab.detail { _ in WIDetailView(model) }
+        }
     }
 
     public var body: some View {
@@ -95,56 +108,24 @@ public struct WebInspectorView: View {
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WITabBarContainer(model: model)
+        WITabBarContainer(model: model, tabs: tabs)
             .ignoresSafeArea()
 #else
         TabView {
-            WIDOMView(model)
-                .tabItem {
-                    Label {
-                        Text(InspectorTab.dom.title)
-                    } icon: {
-                        Image(systemName: InspectorTab.dom.systemImage)
+            ForEach(tabs) { tab in
+                tab.makeContent(model)
+                    .tabItem {
+                        Label {
+                            Text(tab.title)
+                        } icon: {
+                            Image(systemName: tab.systemImage)
+                        }
                     }
-                }
-            WIDetailView(model)
-                .tabItem {
-                    Label {
-                        Text(InspectorTab.detail.title)
-                    } icon: {
-                        Image(systemName: InspectorTab.detail.systemImage)
-                    }
+                    .tag(tab.id)
             }
         }
 #endif
     }
-}
-
-// MARK: - Tab Metadata
-
-enum InspectorTab: Int, CaseIterable {
-    case dom
-    case detail
-
-    var title: LocalizedStringResource {
-        switch self {
-        case .dom:
-            LocalizedStringResource("inspector.tab.dom", bundle: .module)
-        case .detail:
-            LocalizedStringResource("inspector.tab.detail", bundle: .module)
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .dom:
-            "chevron.left.forwardslash.chevron.right"
-        case .detail:
-            "info.circle"
-        }
-    }
-
-    var tag: Int { rawValue }
 }
 
 #if DEBUG
