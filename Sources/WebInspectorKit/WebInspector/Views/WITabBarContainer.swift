@@ -3,11 +3,10 @@ import SwiftUI
 
 @available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
-    var model: WIViewModel
     var tabs: [InspectorTab]
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(model: model, tabs: tabs)
+        Coordinator(tabs: tabs)
     }
 
     func makeUIViewController(context: Context) -> UITabBarController {
@@ -25,9 +24,9 @@ struct WITabBarContainer: UIViewControllerRepresentable {
     final class Coordinator {
         let tabs: [UITab]
 
-        init(model: WIViewModel, tabs: [InspectorTab]) {
+        init(tabs: [InspectorTab]) {
             self.tabs = tabs.map { tab in
-                let host = UIHostingController(rootView: tab.makeContent(model))
+                let host = UIHostingController(rootView: tab.makeContent())
                 host.view.backgroundColor = .clear
                 return UITab(
                     title: String(localized: tab.title),

@@ -13,20 +13,20 @@ public struct WebInspectorView: View {
     public init(
         _ viewModel: WIViewModel,
         webView: WKWebView?,
-        @InspectorTabsBuilder tabs: (WIViewModel) -> [InspectorTab]
+        @InspectorTabsBuilder tabs: () -> [InspectorTab]
     ) {
         self.model = viewModel
         self.webView = webView
-        self.tabs = tabs(viewModel)
+        self.tabs = tabs()
     }
 
     public init(
         _ viewModel: WIViewModel,
         webView: WKWebView?
     ) {
-        self.init(viewModel, webView: webView) { model in
-            InspectorTab.dom    { _ in WIDOMView(model) }
-            InspectorTab.detail { _ in WIDetailView(model) }
+        self.init(viewModel, webView: webView) {
+            InspectorTab.dom    { WIDOMView(viewModel) }
+            InspectorTab.detail { WIDetailView(viewModel) }
         }
     }
 
@@ -108,12 +108,12 @@ public struct WebInspectorView: View {
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WITabBarContainer(model: model, tabs: tabs)
+        WITabBarContainer(tabs: tabs)
             .ignoresSafeArea()
 #else
         TabView {
             ForEach(tabs) { tab in
-                tab.makeContent(model)
+                tab.makeContent()
                     .tabItem {
                         Label {
                             Text(tab.title)

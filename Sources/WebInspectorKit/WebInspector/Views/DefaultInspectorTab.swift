@@ -33,7 +33,7 @@ enum DefaultInspectorTab: Int, CaseIterable {
 }
 
 public extension InspectorTab {
-    static func dom(@ViewBuilder _ content: @escaping (WIViewModel) -> some View) -> InspectorTab {
+    static func dom(@ViewBuilder _ content: @escaping () -> some View) -> InspectorTab {
         InspectorTab(
             id: DefaultInspectorTab.dom.identifier,
             title: DefaultInspectorTab.dom.title,
@@ -42,7 +42,7 @@ public extension InspectorTab {
         )
     }
 
-    static func detail(@ViewBuilder _ content: @escaping (WIViewModel) -> some View) -> InspectorTab {
+    static func detail(@ViewBuilder _ content: @escaping () -> some View) -> InspectorTab {
         InspectorTab(
             id: DefaultInspectorTab.detail.identifier,
             title: DefaultInspectorTab.detail.title,
