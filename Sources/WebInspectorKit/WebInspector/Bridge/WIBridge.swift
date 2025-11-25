@@ -108,11 +108,6 @@ public final class WIBridge {
         inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 
-    func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
-        guard let nodeId, domSelection.nodeId == nodeId else { return }
-        domSelection.selectorPath = selectorPath
-    }
-
     func updateAttributeValue(name: String, value: String) {
         guard let nodeId = domSelection.nodeId else { return }
         domSelection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
