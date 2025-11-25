@@ -88,7 +88,7 @@ public final class WIViewModel {
 
     public func reload(maxDepth: Int? = nil) async {
         guard hasPageWebView else {
-            webBridge.contentModel.errorMessage = "WebView is not available."
+            webBridge.errorMessage = "WebView is not available."
             return
         }
 
@@ -143,7 +143,7 @@ public final class WIViewModel {
                 await self.webBridge.contentModel.cancelSelectionMode()
             } catch {
                 logger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-                webBridge.contentModel.errorMessage = error.localizedDescription
+                webBridge.errorMessage = error.localizedDescription
             }
         }
     }

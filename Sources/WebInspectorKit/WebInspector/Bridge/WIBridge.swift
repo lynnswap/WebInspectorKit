@@ -24,6 +24,8 @@ public enum WILifecycleState {
 @MainActor
 @Observable
 public final class WIBridge {
+    var isLoading = false
+    var errorMessage: String?
     var domSelection = WIDOMSelection()
     let contentModel = WIContentModel()
     let inspectorModel = WIInspectorModel()
@@ -48,12 +50,12 @@ public final class WIBridge {
     }
 
     private func handleAttach(webView: WKWebView?, requestedDepth: Int) {
-        contentModel.errorMessage = nil
+        errorMessage = nil
         clearDomSelection()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
-            contentModel.errorMessage = "WebView is not available."
+            errorMessage = "WebView is not available."
             return
         }
         let needsReload = previousWebView == nil || previousWebView != webView
@@ -69,21 +71,21 @@ public final class WIBridge {
 
     private func handleSuspend(currentDepth: Int) {
         stopInspection(currentDepth: currentDepth)
-        contentModel.isLoading = false
+        isLoading = false
         contentModel.webView = nil
         clearDomSelection()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
         guard contentModel.webView != nil else {
-            contentModel.errorMessage = "WebView is not available."
+            errorMessage = "WebView is not available."
             return
         }
-        contentModel.isLoading = true
-        contentModel.errorMessage = nil
+        isLoading = true
+        errorMessage = nil
 
         inspectorModel.setPreferredDepth(depth)
-        contentModel.isLoading = false
+        isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
         await configureAutoUpdate(enabled: true, depth: depth)
     }
@@ -109,12 +111,12 @@ public final class WIBridge {
     }
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
-        contentModel.isLoading = false
+        isLoading = false
         inspectorModel.enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
     func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
-        contentModel.isLoading = false
+        isLoading = false
         inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 

@@ -20,9 +20,6 @@ final class WIContentModel: NSObject {
         static let mutation = "webInspectorMutationUpdate"
     }
 
-    var isLoading = false
-    var errorMessage: String?
-
     weak var bridge: WIBridge?
     weak var webView: WKWebView? {
         didSet {
