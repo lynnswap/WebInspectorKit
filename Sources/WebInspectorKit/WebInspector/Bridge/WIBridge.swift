@@ -51,7 +51,7 @@ public final class WIBridge {
 
     private func handleAttach(webView: WKWebView?, requestedDepth: Int) {
         errorMessage = nil
-        clearDomSelection()
+        domSelection.clear()
         let previousWebView = lastPageWebView
         contentModel.webView = webView
         guard let webView else {
@@ -73,7 +73,7 @@ public final class WIBridge {
         stopInspection(currentDepth: currentDepth)
         isLoading = false
         contentModel.webView = nil
-        clearDomSelection()
+        domSelection.clear()
     }
 
     func reloadInspector(depth: Int, preserveState: Bool) async {
@@ -122,10 +122,6 @@ public final class WIBridge {
 
     func updateDomSelection(with dictionary: [String: Any]) {
         domSelection.applySnapshot(from: dictionary)
-    }
-
-    func clearDomSelection() {
-        domSelection.clear()
     }
 
     func updateDomSelectorPath(nodeId: Int?, selectorPath: String) {
