@@ -25,8 +25,8 @@ public struct WebInspectorView: View {
         webView: WKWebView?
     ) {
         self.init(viewModel, webView: webView) {
-            InspectorTab.dom    { WIDOMView(viewModel) }
-            InspectorTab.detail { WIDetailView(viewModel) }
+            InspectorTab.dom(model: viewModel)
+            InspectorTab.detail(model: viewModel)
         }
     }
 
