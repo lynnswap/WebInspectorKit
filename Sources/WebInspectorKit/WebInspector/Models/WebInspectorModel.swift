@@ -49,7 +49,7 @@ public final class WebInspectorModel {
         webBridge.configuration
     }
     public private(set) var isSelectingElement = false
-    public var selectedTabIdentifier: String? = nil
+    public var selectedTab: WITab? = nil
 
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil

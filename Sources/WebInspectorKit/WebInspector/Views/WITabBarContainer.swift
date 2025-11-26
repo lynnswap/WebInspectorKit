@@ -12,10 +12,18 @@ struct WITabBarContainer: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UITabBarController {
         let controller = UITabBarController()
-        controller.setTabs(context.coordinator.tabs, animated: false)
-        if let selectedTabIdentifier = model.selectedTabIdentifier,
-           let selectedTab = context.coordinator.tabs.first(where: { $0.identifier == selectedTabIdentifier }) {
-            controller.selectedTab = selectedTab
+        controller.setTabs(context.coordinator.uiTabs, animated: false)
+        
+        if let selectedTab = model.selectedTab,
+           let selectedUITab = context.coordinator.uiTabs.first(where: { $0.identifier == selectedTab.id }){
+            controller.selectedTab = selectedUITab
+        }else{
+            if let firstTab = context.coordinator.uiTabs.first {
+                controller.selectedTab = firstTab
+                if let firstWITab = tabs.first(where: {$0.id == firstTab.identifier}){
+                    model.selectedTab = firstWITab
+                }
+            }
         }
         controller.view.backgroundColor = .clear
         controller.tabBar.scrollEdgeAppearance = controller.tabBar.standardAppearance
@@ -29,11 +37,13 @@ struct WITabBarContainer: UIViewControllerRepresentable {
     @MainActor
     final class Coordinator: NSObject ,UITabBarControllerDelegate{
         private weak var model:WebInspectorModel?
-        let tabs: [UITab]
+        let uiTabs: [UITab]
+        let wiTabs: [WITab]
 
         init(model:WebInspectorModel,tabs: [WITab]) {
             self.model = model
-            self.tabs = tabs.map { tab in
+            self.wiTabs = tabs
+            self.uiTabs = tabs.map { tab in
                 let host = tab.viewController(with: model)
                 return UITab(
                     title: String(localized: tab.title),
@@ -47,7 +57,11 @@ struct WITabBarContainer: UIViewControllerRepresentable {
             didSelectTab selectedTab: UITab,
             previousTab: UITab?
         ) {
-            model?.selectedTabIdentifier = selectedTab.identifier
+            guard let model else { return }
+            let selectedTabIdentifier = selectedTab.identifier
+            if let selectedWITab = self.wiTabs.first(where: {$0.id == selectedTabIdentifier}){
+                model.selectedTab = selectedWITab
+            }
         }
     }
 }

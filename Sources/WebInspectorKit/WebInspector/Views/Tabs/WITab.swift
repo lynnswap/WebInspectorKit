@@ -10,10 +10,11 @@ typealias WITabHostingController<Content: View> = NSHostingController<Content>
 typealias WITabViewController = NSViewController
 #endif
 
-public struct WITab: Identifiable {
+public struct WITab: Identifiable,Hashable{
     public let id: String
     public let title: LocalizedStringResource
     public let systemImage: String
+    public let role: WITabRole
     private let makeViewController: @MainActor (WebInspectorModel) -> WITabViewController
 
     @MainActor
@@ -21,6 +22,7 @@ public struct WITab: Identifiable {
         _ title: LocalizedStringResource,
         systemImage: String,
         value: String? = nil,
+        role: WITabRole = .other,
         @ViewBuilder content: @escaping () -> some View
     ) {
         if let value {
@@ -30,6 +32,7 @@ public struct WITab: Identifiable {
         }
         self.title = title
         self.systemImage = systemImage
+        self.role = role
         self.makeViewController = { model in
             let host = WITabHostingController(rootView: content().environment(model))
 #if canImport(UIKit)
@@ -43,4 +46,16 @@ public struct WITab: Identifiable {
     func viewController(with model: WebInspectorModel) -> WITabViewController {
         makeViewController(model)
     }
+    
+    public static func == (lhs: WITab, rhs: WITab) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+public enum WITabRole {
+    case inspector
+    case other
 }

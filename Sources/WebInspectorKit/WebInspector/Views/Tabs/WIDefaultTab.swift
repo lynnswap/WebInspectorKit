@@ -35,13 +35,13 @@ enum WIDefaultTab: Int, CaseIterable {
 public extension WITab {
     static func dom(
         title: LocalizedStringResource? = nil,
-        systemImage: String? = nil,
-        value: String? = nil
+        systemImage: String? = nil
     ) -> WITab {
         WITab(
             title ?? WIDefaultTab.dom.title,
             systemImage: systemImage ?? WIDefaultTab.dom.systemImage,
-            value: value ?? WIDefaultTab.dom.identifier,
+            value: WIDefaultTab.dom.identifier,
+            role: .inspector,
             content: {
                 WIDOMView()
             }
@@ -50,13 +50,13 @@ public extension WITab {
 
     static func detail(
         title: LocalizedStringResource? = nil,
-        systemImage: String? = nil,
-        value: String? = nil
+        systemImage: String? = nil
     ) -> WITab {
         WITab(
             title ?? WIDefaultTab.detail.title,
             systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
-            value: value ?? WIDefaultTab.detail.identifier,
+            value: WIDefaultTab.detail.identifier,
+            role: .inspector,
             content: {
                 WIDetailView()
             }

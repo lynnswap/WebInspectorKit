@@ -51,7 +51,7 @@ public struct WebInspectorView: View {
         WITabBarContainer(tabs: tabs)
             .ignoresSafeArea()
 #elseif canImport(AppKit)
-        TabView(selection: Bindable(model).selectedTabIdentifier) {
+        TabView(selection: Bindable(model).selectedTab) {
             ForEach(tabs) { tab in
                 WITabContentHost(tab: tab, model: model)
                     .tabItem {
@@ -61,7 +61,7 @@ public struct WebInspectorView: View {
                             Image(systemName: tab.systemImage)
                         }
                     }
-                    .tag(tab.id)
+                    .tag(tab)
             }
         }
         .environment(model)
