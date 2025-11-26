@@ -856,8 +856,11 @@
             inspector.snapshotAutoUpdateDebounce = options.debounce;
     }
 
-    function enableAutoSnapshot(options) {
+    function setAutoSnapshotOptions(options) {
         configureAutoSnapshotOptions(options || null);
+    }
+
+    function enableAutoSnapshot() {
         if (inspector.snapshotAutoUpdateEnabled)
             return true;
         inspector.snapshotAutoUpdateEnabled = true;
@@ -1419,6 +1422,7 @@
         cancelElementSelection: cancelElementSelection,
         highlightDOMNode: highlightDOMNode,
         clearHighlight: clearHighlight,
+        setAutoSnapshotOptions: setAutoSnapshotOptions,
         setAutoSnapshotEnabled: enableAutoSnapshot,
         disableAutoSnapshot: disableAutoSnapshot,
         detach: detachInspector,

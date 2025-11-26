@@ -236,18 +236,20 @@ extension WIContentModel {
     private func setAutoUpdate(for webView: WKWebView, maxDepth: Int) async {
         do {
             let debounce = max(50, Int(configuration.autoUpdateDebounce * 1000))
+            let options: [String: Any] = [
+                "maxDepth": max(1, maxDepth),
+                "debounce": debounce
+            ]
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.setAutoSnapshotEnabled(options)",
-                arguments: [
-                    "options": [
-                        "maxDepth": max(1, maxDepth),
-                        "debounce": debounce
-                    ]
-                ],
+                """
+                window.webInspectorKit.setAutoSnapshotOptions(options);
+                window.webInspectorKit.setAutoSnapshotEnabled();
+                """,
+                arguments: ["options": options],
                 contentWorld: .page
             )
         } catch {
-            contentLogger.error("configure auto snapshot failed: \(error.localizedDescription, privacy: .public)")
+            contentLogger.error("configure/enable auto snapshot failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
