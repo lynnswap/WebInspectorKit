@@ -23,16 +23,22 @@ final class WIContentModel: NSObject {
     }
 
     weak var bridge: WIBridgeModel?
-    weak var webView: WKWebView? {
-        didSet {
-            guard oldValue !== webView else { return }
-            detachMessageHandlers(from: oldValue)
-            registerMessageHandlers()
-        }
-    }
+    private(set) weak var webView: WKWebView?
 
     private var configuration: WebInspectorModel.Configuration {
         bridge?.configuration ?? .init()
+    }
+
+    func attachPageWebView(_ webView: WKWebView?) {
+        guard self.webView !== webView else { return }
+        detachMessageHandlers(from: self.webView)
+        self.webView = webView
+        registerMessageHandlers()
+    }
+
+    func detachPageWebView() {
+        detachMessageHandlers(from: self.webView)
+        self.webView = nil
     }
 
     private func registerMessageHandlers() {
@@ -85,7 +91,7 @@ final class WIContentModel: NSObject {
     }
 
     @MainActor deinit {
-        detachMessageHandlers(from: webView)
+        detachPageWebView()
     }
 }
 

@@ -49,7 +49,7 @@ public final class WIBridgeModel {
         errorMessage = nil
         domSelection.clear()
         let previousWebView = lastPageWebView
-        contentModel.webView = webView
+        contentModel.attachPageWebView(webView)
         guard let webView else {
             errorMessage = "WebView is not available."
             return
@@ -68,7 +68,7 @@ public final class WIBridgeModel {
     private func handleSuspend() {
         contentModel.stopInspection(maxDepth: configuration.snapshotDepth)
         isLoading = false
-        contentModel.webView = nil
+        contentModel.detachPageWebView()
         domSelection.clear()
     }
 
