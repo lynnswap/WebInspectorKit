@@ -592,6 +592,11 @@
         return window.webkit.messageHandlers.webInspectorMutationUpdate || null;
     }
 
+    function enableAutoSnapshotIfSupported() {
+        if (autoSnapshotHandler())
+            enableAutoSnapshot();
+    }
+
     function ensureAutoSnapshotObserver() {
         if (inspector.snapshotAutoUpdateObserver)
             return inspector.snapshotAutoUpdateObserver;
@@ -1441,4 +1446,10 @@
         writable: false,
         configurable: false
     });
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", enableAutoSnapshotIfSupported, {once: true});
+    } else {
+        enableAutoSnapshotIfSupported();
+    }
 })();
