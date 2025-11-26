@@ -49,24 +49,23 @@ public final class WIBridgeModel {
         errorMessage = nil
         domSelection.clear()
         let previousWebView = lastPageWebView
-        contentModel.attachPageWebView(webView)
         guard let webView else {
             errorMessage = "WebView is not available."
+            contentModel.detachPageWebView()
+            lastPageWebView = nil
             return
         }
+        contentModel.attachPageWebView(webView)
         let needsReload = previousWebView == nil || previousWebView != webView
         lastPageWebView = webView
         Task {
             if needsReload {
                 await self.reloadInspector(preserveState: false)
-            } else {
-                await self.contentModel.setAutoUpdate(enabled: true, maxDepth: configuration.snapshotDepth)
             }
         }
     }
 
     private func handleSuspend() {
-        contentModel.stopInspection(maxDepth: configuration.snapshotDepth)
         isLoading = false
         contentModel.detachPageWebView()
         domSelection.clear()
@@ -90,7 +89,6 @@ public final class WIBridgeModel {
         inspectorModel.setPreferredDepth(depth)
         isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
-        await contentModel.setAutoUpdate(enabled: true, maxDepth: depth)
     }
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {

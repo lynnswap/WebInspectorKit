@@ -856,30 +856,39 @@
             inspector.snapshotAutoUpdateDebounce = options.debounce;
     }
 
-    function setAutoSnapshotEnabled(enabled, options) {
+    function enableAutoSnapshot(options) {
         configureAutoSnapshotOptions(options || null);
-        var shouldEnable = !!enabled;
-        if (shouldEnable === inspector.snapshotAutoUpdateEnabled)
-            return inspector.snapshotAutoUpdateEnabled;
-        inspector.snapshotAutoUpdateEnabled = shouldEnable;
-        if (shouldEnable) {
-            if (!Array.isArray(inspector.pendingMutations))
-                inspector.pendingMutations = [];
-            connectAutoSnapshotObserver();
-            scheduleSnapshotAutoUpdate("initial");
-        } else {
-            if (inspector.snapshotAutoUpdateTimer) {
-                clearTimeout(inspector.snapshotAutoUpdateTimer);
-                inspector.snapshotAutoUpdateTimer = null;
-            }
+        if (inspector.snapshotAutoUpdateEnabled)
+            return true;
+        inspector.snapshotAutoUpdateEnabled = true;
+        if (!Array.isArray(inspector.pendingMutations))
             inspector.pendingMutations = [];
-            inspector.snapshotAutoUpdatePending = false;
-            inspector.snapshotAutoUpdateSuppressedCount = 0;
-            inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
-            inspector.snapshotAutoUpdatePendingReason = null;
-            disconnectAutoSnapshotObserver();
-        }
+        connectAutoSnapshotObserver();
+        scheduleSnapshotAutoUpdate("initial");
         return inspector.snapshotAutoUpdateEnabled;
+    }
+
+    function disableAutoSnapshot() {
+        if (!inspector.snapshotAutoUpdateEnabled)
+            return false;
+        inspector.snapshotAutoUpdateEnabled = false;
+        if (inspector.snapshotAutoUpdateTimer) {
+            clearTimeout(inspector.snapshotAutoUpdateTimer);
+            inspector.snapshotAutoUpdateTimer = null;
+        }
+        inspector.pendingMutations = [];
+        inspector.snapshotAutoUpdatePending = false;
+        inspector.snapshotAutoUpdateSuppressedCount = 0;
+        inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
+        inspector.snapshotAutoUpdatePendingReason = null;
+        disconnectAutoSnapshotObserver();
+        return inspector.snapshotAutoUpdateEnabled;
+    }
+
+    function detachInspector() {
+        cancelElementSelection();
+        clearHighlight();
+        disableAutoSnapshot();
     }
 
     function triggerSnapshotUpdate(reason) {
@@ -1394,7 +1403,9 @@
         cancelElementSelection: cancelElementSelection,
         highlightDOMNode: highlightDOMNode,
         clearHighlight: clearHighlight,
-        setAutoSnapshotEnabled: setAutoSnapshotEnabled,
+        setAutoSnapshotEnabled: enableAutoSnapshot,
+        disableAutoSnapshot: disableAutoSnapshot,
+        detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,
         outerHTMLForNode: outerHTMLForNode,
         selectorPathForNode: selectorPathForNode,

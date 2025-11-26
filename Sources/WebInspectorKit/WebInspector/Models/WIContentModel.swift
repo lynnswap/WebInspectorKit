@@ -17,9 +17,9 @@ private let inspectorPresenceProbeScript: String = """
 @MainActor
 @Observable
 final class WIContentModel: NSObject {
-    private enum HandlerName {
-        static let snapshot = "webInspectorSnapshotUpdate"
-        static let mutation = "webInspectorMutationUpdate"
+    private enum HandlerName :String, CaseIterable{
+        case snapshot = "webInspectorSnapshotUpdate"
+        case mutation = "webInspectorMutationUpdate"
     }
 
     weak var bridge: WIBridgeModel?
@@ -29,31 +29,46 @@ final class WIContentModel: NSObject {
         bridge?.configuration ?? .init()
     }
 
-    func attachPageWebView(_ webView: WKWebView?) {
-        guard self.webView !== webView else { return }
-        detachMessageHandlers(from: self.webView)
-        self.webView = webView
+    func attachPageWebView(_ newWebView: WKWebView?) {
+        guard self.webView !== newWebView else { return }
+        guard let newWebView else {
+            detachPageWebView()
+            return
+        }
+        if let previousWebView = self.webView {
+            stopAutoUpdate(for:previousWebView)
+            detachMessageHandlers(from: previousWebView)
+        }
+        self.webView = newWebView
         registerMessageHandlers()
+        Task {
+            await self.setAutoUpdate(for: newWebView, maxDepth: self.configuration.snapshotDepth)
+        }
     }
 
     func detachPageWebView() {
-        detachMessageHandlers(from: self.webView)
-        self.webView = nil
+        guard let currentWebView = webView else { return }
+        stopAutoUpdate(for:currentWebView)
+        detachMessageHandlers(from: currentWebView)
+        webView = nil
     }
 
     private func registerMessageHandlers() {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
-        controller.add(self, contentWorld: .page, name: HandlerName.snapshot)
-        controller.add(self, contentWorld: .page, name: HandlerName.mutation)
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue,contentWorld: .page)
+            controller.add(self, contentWorld: .page, name: $0.rawValue)
+        }
         installInspectorAgentScriptIfNeeded(on: webView)
     }
 
     private func detachMessageHandlers(from webView: WKWebView?) {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
-        controller.removeScriptMessageHandler(forName: HandlerName.snapshot, contentWorld: .page)
-        controller.removeScriptMessageHandler(forName: HandlerName.mutation, contentWorld: .page)
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
+        }
         contentLogger.debug("detached content message handlers")
     }
 
@@ -97,13 +112,12 @@ final class WIContentModel: NSObject {
 
 extension WIContentModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        switch message.name {
-        case HandlerName.snapshot:
+        guard let handlerName = HandlerName(rawValue: message.name) else { return }
+        switch handlerName {
+        case .snapshot:
             handleSnapshotMessage(message)
-        case HandlerName.mutation:
+        case .mutation:
             handleMutationMessage(message)
-        default:
-            break
         }
     }
 
@@ -177,8 +191,8 @@ extension WIContentModel {
         return try JSONDecoder().decode(WISelectionResult.self, from: data)
     }
 
-    func cancelSelectionMode() async {
-        guard let webView else { return }
+    func cancelSelectionMode(using targetWebView: WKWebView? = nil) async {
+        guard let webView = targetWebView ?? self.webView else { return }
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorKit.cancelElementSelection()",
             contentWorld: .page
@@ -216,15 +230,15 @@ extension WIContentModel {
         return window.webInspectorKit?.\(kind.jsFunction)(identifier) ?? \"\"
         """, identifier: identifier)
     }
-
-    func setAutoUpdate(enabled: Bool, maxDepth: Int) async {
-        guard let webView else { return }
+    private func stopAutoUpdate(for webView: WKWebView){
+        webView.evaluateJavaScript("(() => { window.webInspectorKit.detach(); })();  ",in: nil, in: .page)
+    }
+    private func setAutoUpdate(for webView: WKWebView, maxDepth: Int) async {
         do {
             let debounce = max(50, Int(configuration.autoUpdateDebounce * 1000))
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
+                "window.webInspectorKit.setAutoSnapshotEnabled(options)",
                 arguments: [
-                    "enabled": enabled,
                     "options": [
                         "maxDepth": max(1, maxDepth),
                         "debounce": debounce
@@ -234,14 +248,6 @@ extension WIContentModel {
             )
         } catch {
             contentLogger.error("configure auto snapshot failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    func stopInspection(maxDepth: Int) {
-        clearWebInspectorHighlight()
-        Task {
-            await cancelSelectionMode()
-            await setAutoUpdate(enabled: false, maxDepth: maxDepth)
         }
     }
 
