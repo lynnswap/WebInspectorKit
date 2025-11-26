@@ -1396,6 +1396,22 @@
         return xpath(node);
     }
 
+    function debugStatus() {
+        var status = {
+            snapshotAutoUpdateEnabled: !!inspector.snapshotAutoUpdateEnabled,
+            snapshotAutoUpdatePending: !!inspector.snapshotAutoUpdatePending,
+            snapshotAutoUpdateTimer: !!inspector.snapshotAutoUpdateTimer,
+            snapshotAutoUpdateDebounce: inspector.snapshotAutoUpdateDebounce,
+            snapshotAutoUpdateMaxDepth: inspector.snapshotAutoUpdateMaxDepth,
+            pendingMutations: Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.length : 0,
+            overlayActive: !!inspector.overlayTarget,
+            selectionActive: !!inspector.selectionState,
+            documentURL: inspector.documentURL || document.URL || ""
+        };
+        console.log("[webInspectorKit] status:", status);
+        return status;
+    }
+
     var webInspectorKit = {
         captureDOM: captureDOM,
         captureDOMSubtree: captureDOMSubtree,
@@ -1413,6 +1429,7 @@
         removeNode: removeNode,
         setAttributeForNode: setAttributeForNode,
         removeAttributeForNode: removeAttributeForNode,
+        debugStatus: debugStatus,
         __installed: true
     };
     Object.defineProperty(window, "webInspectorKit", {
