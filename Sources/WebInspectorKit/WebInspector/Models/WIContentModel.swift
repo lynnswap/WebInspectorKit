@@ -11,7 +11,9 @@ import WebKit
 import Observation
 
 private let contentLogger = Logger(subsystem: "WebInspectorKit", category: "WIContentModel")
-
+private let inspectorPresenceProbeScript: String = """
+(function() { })();
+"""
 @MainActor
 @Observable
 final class WIContentModel: NSObject {
@@ -38,6 +40,7 @@ final class WIContentModel: NSObject {
         let controller = webView.configuration.userContentController
         controller.add(self, contentWorld: .page, name: HandlerName.snapshot)
         controller.add(self, contentWorld: .page, name: HandlerName.mutation)
+        installInspectorAgentScriptIfNeeded(on: webView)
     }
 
     private func detachMessageHandlers(from webView: WKWebView?) {
@@ -46,6 +49,39 @@ final class WIContentModel: NSObject {
         controller.removeScriptMessageHandler(forName: HandlerName.snapshot, contentWorld: .page)
         controller.removeScriptMessageHandler(forName: HandlerName.mutation, contentWorld: .page)
         contentLogger.debug("detached content message handlers")
+    }
+
+    private func installInspectorAgentScriptIfNeeded(on webView: WKWebView) {
+        let controller = webView.configuration.userContentController
+        if controller.userScripts.contains(where: { $0.source == inspectorPresenceProbeScript }) {
+            return
+        }
+        
+        let scriptSource: String
+        do {
+            scriptSource = try WIScript.bootstrap()
+        } catch {
+            contentLogger.error("failed to prepare inspector script: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        
+        let userScript = WKUserScript(
+            source: scriptSource,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        let checkScript = WKUserScript(
+            source: inspectorPresenceProbeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        controller.addUserScript(userScript)
+        controller.addUserScript(checkScript)
+        Task{
+            _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+        }
+        contentLogger.debug("installed inspector agent user script")
+        
     }
 
     @MainActor deinit {
@@ -93,7 +129,6 @@ extension WIContentModel {
             throw WIError.scriptUnavailable
         }
         let depth = maxDepth ?? configuration.snapshotDepth
-        try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOM(maxDepth)",
             arguments: ["maxDepth": depth],
@@ -109,7 +144,6 @@ extension WIContentModel {
             throw WIError.scriptUnavailable
         }
         let depth = maxDepth ?? configuration.subtreeDepth
-        try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOMSubtree(identifier, maxDepth)",
             arguments: ["identifier": identifier, "maxDepth": depth],
@@ -127,7 +161,6 @@ extension WIContentModel {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
-        try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.startElementSelection()",
             arguments: [:],
@@ -140,7 +173,6 @@ extension WIContentModel {
 
     func cancelSelectionMode() async {
         guard let webView else { return }
-        try? await injectScriptIfNeeded(on: webView)
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorKit.cancelElementSelection()",
             contentWorld: .page
@@ -149,7 +181,6 @@ extension WIContentModel {
 
     func highlightDOMNode(id: Int) async {
         guard let webView else { return }
-        try? await injectScriptIfNeeded(on: webView)
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorKit.highlightDOMNode(identifier)",
             arguments: ["identifier": id],
@@ -160,7 +191,6 @@ extension WIContentModel {
     func removeNode(identifier: Int) async {
         guard let webView else { return }
         do {
-            try await injectScriptIfNeeded(on: webView)
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.removeNode(identifier)",
                 arguments: ["identifier": identifier],
@@ -184,7 +214,6 @@ extension WIContentModel {
     func setAutoUpdate(enabled: Bool, maxDepth: Int) async {
         guard let webView else { return }
         do {
-            try await injectScriptIfNeeded(on: webView)
             let debounce = max(50, Int(configuration.autoUpdateDebounce * 1000))
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.setAutoSnapshotEnabled(enabled, options)",
@@ -213,7 +242,6 @@ extension WIContentModel {
     func setAttributeValue(identifier: Int, name: String, value: String) async {
         guard let webView else { return }
         do {
-            try await injectScriptIfNeeded(on: webView)
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.setAttributeForNode(identifier, name, value)",
                 arguments: [
@@ -231,7 +259,6 @@ extension WIContentModel {
     func removeAttribute(identifier: Int, name: String) async {
         guard let webView else { return }
         do {
-            try await injectScriptIfNeeded(on: webView)
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorKit.removeAttributeForNode(identifier, name)",
                 arguments: [
@@ -249,7 +276,6 @@ extension WIContentModel {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
-        try await injectScriptIfNeeded(on: webView)
         let rawResult = try await webView.callAsyncJavaScript(
             script,
             arguments: ["identifier": identifier],
@@ -257,11 +283,6 @@ extension WIContentModel {
             contentWorld: .page
         )
         return rawResult as? String ?? ""
-    }
-
-    private func injectScriptIfNeeded(on webView: WKWebView) async throws {
-        let script = try WIScript.bootstrap()
-        _ = try await webView.evaluateJavaScript(script, in: nil, contentWorld: .page)
     }
 
     private func serializePayload(_ payload: Any?) throws -> Data {
