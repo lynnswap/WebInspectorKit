@@ -52,10 +52,11 @@ public struct WIDetailView: View {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(element.name)
                                         .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.secondary)
                                     SelectionPreviewTextRepresentable(
                                         text: element.value,
                                         textStyle: .footnote,
-                                        textColor: .secondaryLabel,
+                                        textColor: .label,
                                         isEditable: true,
                                         onChange: { newValue in
                                             model.webBridge.updateAttributeValue(name: element.name, value: newValue)
