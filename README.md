@@ -75,4 +75,4 @@ If selection mode requires deeper nodes, the inspector automatically raises `sna
 - Network and console features are not implemented.
 
 ## License
-See `LICENSE`.
+See [LICENSE](LICENSE).
