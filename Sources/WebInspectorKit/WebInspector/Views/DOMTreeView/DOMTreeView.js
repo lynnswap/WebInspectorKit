@@ -143,12 +143,17 @@
         window.webkit.messageHandlers.webInspectorProtocol.postMessage(payload);
     }
 
-    function sendCommand(method, params = {}) {
+    async function sendCommand(method, params = {}) {
         const id = ++protocolState.lastId;
         const message = { id, method, params };
         return new Promise((resolve, reject) => {
             protocolState.pending.set(id, { resolve, reject, method });
-            sendProtocolMessage(message);
+            try {
+                sendProtocolMessage(message);
+            } catch (error) {
+                protocolState.pending.delete(id);
+                reject(error);
+            }
         });
     }
 
@@ -213,14 +218,17 @@
         }
     }
 
-    function requestDocument(options = {}) {
+    async function requestDocument(options = {}) {
         const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
         protocolState.snapshotDepth = depth;
         const preserveState = !!options.preserveState;
-        return sendCommand("DOM.getDocument", { depth }).then(result => {
+        try {
+            const result = await sendCommand("DOM.getDocument", { depth });
             if (result && result.root)
                 setSnapshot(result, { preserveState });
-        }).catch(error => reportInspectorError("DOM.getDocument", error));
+        } catch (error) {
+            reportInspectorError("DOM.getDocument", error);
+        }
     }
 
     function applyMutationBundle(bundle) {
@@ -837,7 +845,7 @@
     function requestSnapshotReload(reason) {
         const reloadReason = reason || "dom-sync";
         console.debug("[tweetpd-inspector] request reload:", reloadReason);
-        requestDocument({ preserveState: true }).catch(() => {});
+        void requestDocument({ preserveState: true });
     }
 
     function markNodeForRefresh(collection, node, options = {}) {
@@ -1021,7 +1029,7 @@
         });
     }
 
-    function requestNodeRefresh(nodeId, options = {}) {
+    async function requestNodeRefresh(nodeId, options = {}) {
         if (typeof nodeId !== "number" || nodeId <= 0)
             return;
         if (!state.pendingRefreshRequests)
@@ -1040,11 +1048,13 @@
 
         state.refreshAttempts.set(targetNodeId, { count: attempts.count + 1, lastRequested: now });
         state.pendingRefreshRequests.add(targetNodeId);
-        sendCommand("DOM.requestChildNodes", { nodeId: targetNodeId, depth: childRequestDepth() }).catch(error => {
+        try {
+            await sendCommand("DOM.requestChildNodes", { nodeId: targetNodeId, depth: childRequestDepth() });
+        } catch (error) {
             reportInspectorError("requestChildNodes", error);
-        }).finally(() => {
+        } finally {
             state.pendingRefreshRequests.delete(targetNodeId);
-        });
+        }
     }
 
     function preserveExpansionState(node, storage = new Map()) {
@@ -1460,7 +1470,7 @@
         selectNode(node.id);
     }
 
-    function sendHighlight(nodeId) {
+    async function sendHighlight(nodeId) {
         if (!nodeId || nodeId <= 0)
             return;
         const node = state.nodes.get(nodeId);
@@ -1468,11 +1478,23 @@
             clearPageHighlight();
             return;
         }
-        sendCommand("DOM.highlightNode", { nodeId }).catch(() => {});
+        try {
+            await sendCommand("DOM.highlightNode", { nodeId });
+        } catch {
+            // noop
+        }
     }
 
     function clearPageHighlight() {
-        sendCommand("Overlay.hideHighlight", {}).catch(() => {});
+        void hideHighlight();
+    }
+
+    async function hideHighlight() {
+        try {
+            await sendCommand("Overlay.hideHighlight", {});
+        } catch {
+            // noop
+        }
     }
 
     function handleRowHover(node) {
@@ -1648,17 +1670,21 @@
         return true;
     }
 
-    function requestChildren(node) {
+    async function requestChildren(node) {
         if (!node.placeholderParentId && node.id > 0) {
-            sendCommand("DOM.requestChildNodes", { nodeId: node.id, depth: childRequestDepth() }).catch(error => {
+            try {
+                await sendCommand("DOM.requestChildNodes", { nodeId: node.id, depth: childRequestDepth() });
+            } catch (error) {
                 reportInspectorError("requestChildNodes", error);
-            });
+            }
             return;
         }
         const parent = node.placeholderParentId || node.parentId || node.id;
-        sendCommand("DOM.requestChildNodes", { nodeId: parent, depth: childRequestDepth() }).catch(error => {
+        try {
+            await sendCommand("DOM.requestChildNodes", { nodeId: parent, depth: childRequestDepth() });
+        } catch (error) {
             reportInspectorError("requestChildNodes", error);
-        });
+        }
     }
 
     function createPrimaryLabel(node, options = {}) {
@@ -1787,7 +1813,7 @@
         }
     }
 
-    function notifyNativeSelectorPath(node) {
+    async function notifyNativeSelectorPath(node) {
         const handler = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorDomSelector : null;
         if (!handler || typeof handler.postMessage !== "function") {
             return;
@@ -1798,18 +1824,17 @@
             handler.postMessage({ id: null, selectorPath: "" });
             return;
         }
-        sendCommand("DOM.getSelectorPath", { nodeId })
-            .then(result => {
-                if (currentToken !== selectorRequestToken)
-                    return;
-                const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
-                handler.postMessage({ id: nodeId, selectorPath });
-            })
-            .catch(() => {
-                if (currentToken !== selectorRequestToken)
-                    return;
-                handler.postMessage({ id: nodeId, selectorPath: "" });
-            });
+        try {
+            const result = await sendCommand("DOM.getSelectorPath", { nodeId });
+            if (currentToken !== selectorRequestToken)
+                return;
+            const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
+            handler.postMessage({ id: nodeId, selectorPath });
+        } catch {
+            if (currentToken !== selectorRequestToken)
+                return;
+            handler.postMessage({ id: nodeId, selectorPath: "" });
+        }
     }
 
     function updateDetails(node) {
@@ -1887,7 +1912,7 @@
         } catch {
             // ignore
         }
-        requestDocument({ preserveState: false }).catch(() => {});
+        void requestDocument({ preserveState: false });
     }
 
     function setPreferredDepth(depth) {
