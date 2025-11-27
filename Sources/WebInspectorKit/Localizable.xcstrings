@@ -1854,7 +1854,7 @@
       }
     },
     "reload.target.inspector" : {
-      "comment" : "Reload menu item label for reloading the inspector web view.",
+      "comment" : "Reload submenu label for reloading the inspector view.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1997,7 +1997,7 @@
       }
     },
     "reload.target.page" : {
-      "comment" : "Reload menu item label for reloading the inspected page.",
+      "comment" : "Reload submenu label for reloading the inspected page.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
