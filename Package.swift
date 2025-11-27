@@ -19,16 +19,20 @@ let package = Package(
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
-    .target(
-        name: "WebInspectorKit",
-        path: "Sources/WebInspectorKit",
-        resources: [
-            .process("Localizable.xcstrings"),
-            .process("WebInspector/Views/DOMTreeView"),
-            .process("WebInspector/Support/InspectorAgent.js"),
-            .process("WebInspector/Support/InspectorAgent")
-        ]
-    ),
+        .target(
+            name: "WebInspectorKit",
+            path: "Sources/WebInspectorKit",
+            resources: [
+                .process("Localizable.xcstrings"),
+                .process("WebInspector/Views/DOMTreeView"),
+                .process("WebInspector/Support/InspectorAgent.js"),
+                .process("WebInspector/Support/InspectorAgent")
+            ]
+        ),
+        .testTarget(
+            name: "WebInspectorKitTests",
+            dependencies: ["WebInspectorKit"]
+        ),
 
     ]
 )
