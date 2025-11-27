@@ -342,28 +342,96 @@ extension WIContentModel {
 
 private enum WIScript {
     @MainActor private static var cachedScript: String?
-    private static let resourceName = "InspectorAgent"
-    private static let resourceExtension = "js"
+    // Inline module sources to avoid CSP blocking external script loads in inspected pages.
+    private static let moduleNames = [
+        "InspectorAgent/state",
+        "InspectorAgent/dom-core",
+        "InspectorAgent/overlay",
+        "InspectorAgent/snapshot",
+        "InspectorAgent/selection",
+        "InspectorAgent/dom-utils",
+        "InspectorAgent"
+    ]
 
     @MainActor static func bootstrap() throws -> String {
         if let cachedScript {
             return cachedScript
         }
-        guard let url = WIAssets.locateResource(
-            named: resourceName,
-            withExtension: resourceExtension,
-            subdirectory: "WebInspector/Support"
-        ) else {
-            contentLogger.error("missing web inspector script resource")
+        let body = try moduleNames
+            .map { try loadModule(named: $0) }
+            .joined(separator: "\n\n")
+
+        let script = """
+        (function() {
+            "use strict";
+        \(body)
+        })();
+        """
+        cachedScript = script
+        return script
+    }
+
+    private static func loadModule(named name: String) throws -> String {
+        let components = name.split(separator: "/").map(String.init)
+        let fileName = components.last ?? name
+        let subpath = components.dropLast().joined(separator: "/")
+
+        let candidateSubdirectories = [
+            ["WebInspector", "Support", subpath].filter { !$0.isEmpty }.joined(separator: "/"),
+            "WebInspector/Support",
+            nil
+        ]
+
+        var resolvedURL: URL?
+        for subdir in candidateSubdirectories {
+            if let url = WIAssets.locateResource(
+                named: fileName,
+                withExtension: "js",
+                subdirectory: subdir
+            ) {
+                resolvedURL = url
+                break
+            }
+        }
+
+        guard let url = resolvedURL else {
+            contentLogger.error("missing web inspector module: \(name, privacy: .public)")
             throw WIError.scriptUnavailable
         }
+
+        let rawSource: String
         do {
-            let script = try String(contentsOf: url, encoding: .utf8)
-            cachedScript = script
-            return script
+            rawSource = try String(contentsOf: url, encoding: .utf8)
         } catch {
-            contentLogger.error("failed to load web inspector script: \(error.localizedDescription, privacy: .public)")
+            contentLogger.error("failed to load web inspector module \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             throw WIError.scriptUnavailable
         }
+
+        let withoutImports = rawSource
+            // Remove single-line and multi-line import statements.
+            .replacingOccurrences(
+                of: #"(?ms)^\s*import[\s\S]*?;\s*$"#,
+                with: "",
+                options: [.regularExpression]
+            )
+
+        let trimmedImports = withoutImports
+            .split(whereSeparator: \.isNewline)
+            .map { $0 }
+            .joined(separator: "\n")
+
+        let strippedExports = trimmedImports
+            .replacingOccurrences(
+                of: #"export\s+(function|const|let|var)\s+"#,
+                with: "$1 ",
+                options: [.regularExpression]
+            )
+            .replacingOccurrences(
+                of: #"(?ms)^\s*export\s+\{[\s\S]*?\}\s*;?\s*$"#,
+                with: "",
+                options: [.regularExpression]
+            )
+
+        return strippedExports
     }
 }
