@@ -1,6 +1,6 @@
-import {inspector} from "./state.js";
-import {clearHighlight} from "./overlay.js";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./snapshot.js";
+import {inspector} from "./InspectorAgentState.js";
+import {clearHighlight} from "./InspectorAgentOverlay.js";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./InspectorAgentSnapshot.js";
 
 function resolveNode(identifier) {
     var map = inspector.map;
