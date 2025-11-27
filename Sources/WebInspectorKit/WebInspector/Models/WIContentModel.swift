@@ -407,19 +407,30 @@ private enum WIScript {
             throw WIError.scriptUnavailable
         }
 
-        let trimmedImports = rawSource
+        let withoutImports = rawSource
+            // Remove single-line and multi-line import statements.
+            .replacingOccurrences(
+                of: #"(?ms)^\s*import[\s\S]*?;\s*$"#,
+                with: "",
+                options: [.regularExpression]
+            )
+
+        let trimmedImports = withoutImports
             .split(whereSeparator: \.isNewline)
-            .filter { line in
-                let content = line.trimmingCharacters(in: .whitespaces)
-                return !content.hasPrefix("import ")
-            }
+            .map { $0 }
             .joined(separator: "\n")
 
-        let strippedExports = trimmedImports.replacingOccurrences(
-            of: #"export\s+(function|const|let|var)\s+"#,
-            with: "$1 ",
-            options: [.regularExpression]
-        )
+        let strippedExports = trimmedImports
+            .replacingOccurrences(
+                of: #"export\s+(function|const|let|var)\s+"#,
+                with: "$1 ",
+                options: [.regularExpression]
+            )
+            .replacingOccurrences(
+                of: #"(?ms)^\s*export\s+\{[\s\S]*?\}\s*;?\s*$"#,
+                with: "",
+                options: [.regularExpression]
+            )
 
         return strippedExports
     }
