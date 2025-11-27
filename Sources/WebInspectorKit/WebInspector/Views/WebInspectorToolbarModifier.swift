@@ -20,20 +20,26 @@ struct WebInspectorToolbarModifier: ViewModifier {
                         .disabled(!model.hasPageWebView)
                     }
                     ToolbarItemGroup(placement: .secondaryAction) {
-                        Button {
-                            Task { await model.reload() }
-                        } label: {
-                            if model.webBridge.isLoading {
-                                ProgressView()
-                            } else {
-                                Label {
-                                    Text("reload")
-                                } icon: {
-                                    Image(systemName: "arrow.clockwise")
-                                }
+                        Menu{
+                            Button {
+                                Task { await model.reload() }
+                            } label: {
+                                Text("reload.target.inspector")
+                            }
+                            .disabled(model.webBridge.isLoading)
+                            Button {
+                                model.webBridge.contentModel.webView?.reload()
+                            } label: {
+                                Text("reload.target.page")
+                            }
+                        }label:{
+                            Label {
+                                Text("reload")
+                            } icon: {
+                                Image(systemName: "arrow.clockwise")
                             }
                         }
-                        .disabled(model.webBridge.isLoading)
+                        .disabled(!model.hasPageWebView)
                         
                         Menu {
                             Button {
