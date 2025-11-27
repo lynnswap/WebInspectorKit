@@ -1,5 +1,5 @@
-import {inspector} from "./state.js";
-import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./dom-core.js";
+import {inspector} from "./InspectorAgentState.js";
+import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./InspectorAgentDOMCore.js";
 
 function autoSnapshotHandler() {
     if (!window.webkit || !window.webkit.messageHandlers)

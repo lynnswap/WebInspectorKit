@@ -344,12 +344,12 @@ private enum WIScript {
     @MainActor private static var cachedScript: String?
     // Inline module sources to avoid CSP blocking external script loads in inspected pages.
     private static let moduleNames = [
-        "InspectorAgent/state",
-        "InspectorAgent/dom-core",
-        "InspectorAgent/overlay",
-        "InspectorAgent/snapshot",
-        "InspectorAgent/selection",
-        "InspectorAgent/dom-utils",
+        "InspectorAgent/InspectorAgentState",
+        "InspectorAgent/InspectorAgentDOMCore",
+        "InspectorAgent/InspectorAgentOverlay",
+        "InspectorAgent/InspectorAgentSnapshot",
+        "InspectorAgent/InspectorAgentSelection",
+        "InspectorAgent/InspectorAgentDOMUtils",
         "InspectorAgent"
     ]
 

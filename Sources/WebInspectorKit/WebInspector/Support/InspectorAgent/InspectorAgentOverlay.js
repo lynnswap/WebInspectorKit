@@ -1,5 +1,5 @@
-import {inspector} from "./state.js";
-import {nodeIsRendered, rectForNode} from "./dom-core.js";
+import {inspector} from "./InspectorAgentState.js";
+import {nodeIsRendered, rectForNode} from "./InspectorAgentDOMCore.js";
 
 function ensureOverlay() {
     var overlay = inspector.overlay;
