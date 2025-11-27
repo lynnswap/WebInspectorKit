@@ -372,11 +372,29 @@ private enum WIScript {
     }
 
     private static func loadModule(named name: String) throws -> String {
-        guard let url = WIAssets.locateResource(
-            named: name,
-            withExtension: "js",
-            subdirectory: "WebInspector/Support"
-        ) else {
+        let components = name.split(separator: "/").map(String.init)
+        let fileName = components.last ?? name
+        let subpath = components.dropLast().joined(separator: "/")
+
+        let candidateSubdirectories = [
+            ["WebInspector", "Support", subpath].filter { !$0.isEmpty }.joined(separator: "/"),
+            "WebInspector/Support",
+            nil
+        ]
+
+        var resolvedURL: URL?
+        for subdir in candidateSubdirectories {
+            if let url = WIAssets.locateResource(
+                named: fileName,
+                withExtension: "js",
+                subdirectory: subdir
+            ) {
+                resolvedURL = url
+                break
+            }
+        }
+
+        guard let url = resolvedURL else {
             contentLogger.error("missing web inspector module: \(name, privacy: .public)")
             throw WIError.scriptUnavailable
         }
