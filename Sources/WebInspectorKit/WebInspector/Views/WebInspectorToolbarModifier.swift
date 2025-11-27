@@ -20,27 +20,6 @@ struct WebInspectorToolbarModifier: ViewModifier {
                         .disabled(!model.hasPageWebView)
                     }
                     ToolbarItemGroup(placement: .secondaryAction) {
-                        Menu{
-                            Button {
-                                Task { await model.reload() }
-                            } label: {
-                                Text("reload.target.inspector")
-                            }
-                            .disabled(model.webBridge.isLoading)
-                            Button {
-                                model.webBridge.contentModel.webView?.reload()
-                            } label: {
-                                Text("reload.target.page")
-                            }
-                        }label:{
-                            Label {
-                                Text("reload")
-                            } icon: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                        }
-                        .disabled(!model.hasPageWebView)
-                        
                         Menu {
                             Button {
                                 model.copySelection(.html)
@@ -66,16 +45,39 @@ struct WebInspectorToolbarModifier: ViewModifier {
                         }
                         .disabled(model.webBridge.domSelection.nodeId == nil)
                         
-                        Button(role: .destructive) {
-                            model.deleteSelectedNode()
-                        } label: {
+                   
+                        Menu{
+                            Button {
+                                Task { await model.reload() }
+                            } label: {
+                                Text("reload.target.inspector")
+                            }
+                            .disabled(model.webBridge.isLoading)
+                            Button {
+                                model.webBridge.contentModel.webView?.reload()
+                            } label: {
+                                Text("reload.target.page")
+                            }
+                        }label:{
                             Label {
-                                Text("inspector.delete_node")
+                                Text("reload")
                             } icon: {
-                                Image(systemName: "trash")
+                                Image(systemName: "arrow.clockwise")
                             }
                         }
-                        .disabled(model.webBridge.domSelection.nodeId == nil)
+                        .disabled(!model.hasPageWebView)
+                        Section{
+                            Button(role: .destructive) {
+                                model.deleteSelectedNode()
+                            } label: {
+                                Label {
+                                    Text("inspector.delete_node")
+                                } icon: {
+                                    Image(systemName: "trash")
+                                }
+                            }
+                            .disabled(model.webBridge.domSelection.nodeId == nil)
+                        }
                     }
                 }
             }
