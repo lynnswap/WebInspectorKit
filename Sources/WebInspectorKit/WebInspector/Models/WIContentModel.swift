@@ -342,28 +342,67 @@ extension WIContentModel {
 
 private enum WIScript {
     @MainActor private static var cachedScript: String?
-    private static let resourceName = "InspectorAgent"
-    private static let resourceExtension = "js"
+    // Inline module sources to avoid CSP blocking external script loads in inspected pages.
+    private static let moduleNames = [
+        "InspectorAgent/state",
+        "InspectorAgent/dom-core",
+        "InspectorAgent/overlay",
+        "InspectorAgent/snapshot",
+        "InspectorAgent/selection",
+        "InspectorAgent/dom-utils",
+        "InspectorAgent"
+    ]
 
     @MainActor static func bootstrap() throws -> String {
         if let cachedScript {
             return cachedScript
         }
+        let body = try moduleNames
+            .map { try loadModule(named: $0) }
+            .joined(separator: "\n\n")
+
+        let script = """
+        (function() {
+            "use strict";
+        \(body)
+        })();
+        """
+        cachedScript = script
+        return script
+    }
+
+    private static func loadModule(named name: String) throws -> String {
         guard let url = WIAssets.locateResource(
-            named: resourceName,
-            withExtension: resourceExtension,
+            named: name,
+            withExtension: "js",
             subdirectory: "WebInspector/Support"
         ) else {
-            contentLogger.error("missing web inspector script resource")
+            contentLogger.error("missing web inspector module: \(name, privacy: .public)")
             throw WIError.scriptUnavailable
         }
+
+        let rawSource: String
         do {
-            let script = try String(contentsOf: url, encoding: .utf8)
-            cachedScript = script
-            return script
+            rawSource = try String(contentsOf: url, encoding: .utf8)
         } catch {
-            contentLogger.error("failed to load web inspector script: \(error.localizedDescription, privacy: .public)")
+            contentLogger.error("failed to load web inspector module \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             throw WIError.scriptUnavailable
         }
+
+        let trimmedImports = rawSource
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                let content = line.trimmingCharacters(in: .whitespaces)
+                return !content.hasPrefix("import ")
+            }
+            .joined(separator: "\n")
+
+        let strippedExports = trimmedImports.replacingOccurrences(
+            of: #"export\s+(function|const|let|var)\s+"#,
+            with: "$1 ",
+            options: [.regularExpression]
+        )
+
+        return strippedExports
     }
 }
