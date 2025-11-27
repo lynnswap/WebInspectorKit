@@ -1788,7 +1788,7 @@
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リロード"
+            "value" : "再読み込み"
           }
         },
         "ko" : {
