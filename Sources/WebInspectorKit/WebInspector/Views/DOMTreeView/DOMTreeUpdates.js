@@ -8,7 +8,11 @@
         childRequestDepth,
         treeState: state
     } = scope.DOMTreeState;
-    const {applyLayoutEntry, timeNow} = scope.DOMTreeUtilities;
+    const {
+        applyLayoutEntry,
+        resolveRenderedState,
+        timeNow
+    } = scope.DOMTreeUtilities;
     const {reportInspectorError, sendCommand} = scope.DOMTreeProtocol;
     const {
         findInsertionIndex,
@@ -287,7 +291,7 @@
             if (!Array.isArray(parent.children))
                 parent.children = [];
             const children = parent.children;
-            const descriptor = normalizeNodeDescriptor(entry.node);
+            const descriptor = normalizeNodeDescriptor(entry.node, parent.isRendered !== false);
             if (!descriptor || typeof descriptor.id !== "number")
                 return true;
 
@@ -345,7 +349,9 @@
                 requestNodeRefresh(entry.nodeId);
                 return true;
             }
-            applyLayoutEntry(node, entry);
+            const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
+            const parentRendered = parentNode ? parentNode.isRendered !== false : true;
+            const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             if (!Array.isArray(node.attributes))
                 node.attributes = [];
             const value = typeof entry.value === "string" ? entry.value : String(entry.value ?? "");
@@ -355,6 +361,8 @@
                 node.attributes[index] = record;
             else
                 node.attributes.push(record);
+            if (layoutChange.changed)
+                this._propagateRenderedState(node, parentRendered, nodesToRefresh);
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             return true;
         }
@@ -367,12 +375,16 @@
                 requestNodeRefresh(entry.nodeId);
                 return true;
             }
-            applyLayoutEntry(node, entry);
+            const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
+            const parentRendered = parentNode ? parentNode.isRendered !== false : true;
+            const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             if (!Array.isArray(node.attributes))
                 node.attributes = [];
             const next = node.attributes.filter(attr => attr.name !== entry.name);
             if (next.length !== node.attributes.length) {
                 node.attributes = next;
+                if (layoutChange.changed)
+                    this._propagateRenderedState(node, parentRendered, nodesToRefresh);
                 this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             }
             return true;
@@ -386,8 +398,12 @@
                 requestNodeRefresh(entry.nodeId);
                 return true;
             }
-            applyLayoutEntry(node, entry);
+            const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
+            const parentRendered = parentNode ? parentNode.isRendered !== false : true;
+            const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             node.textContent = entry.characterData || "";
+            if (layoutChange.changed)
+                this._propagateRenderedState(node, parentRendered, nodesToRefresh);
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             return true;
         }
@@ -400,12 +416,33 @@
                 requestNodeRefresh(entry.nodeId);
                 return true;
             }
-            applyLayoutEntry(node, entry);
+            const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
+            const parentRendered = parentNode ? parentNode.isRendered !== false : true;
+            const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             const normalizedCount = typeof entry.childNodeCount === "number" ? entry.childNodeCount : entry.childCount;
             if (typeof normalizedCount === "number")
                 node.childCount = normalizedCount;
+            if (layoutChange.changed)
+                this._propagateRenderedState(node, parentRendered, nodesToRefresh);
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: true});
             return true;
+        }
+
+        _propagateRenderedState(node, parentRendered, nodesToRefresh) {
+            if (!node)
+                return;
+            const renderedSelf = resolveRenderedState(Array.isArray(node.layoutFlags) ? node.layoutFlags : [], typeof node.renderedSelf === "boolean" ? node.renderedSelf : undefined);
+            const ancestorRendered = typeof parentRendered === "boolean" ? parentRendered : true;
+            const isRendered = ancestorRendered && renderedSelf;
+            const changed = node.isRendered !== isRendered;
+            node.renderedSelf = renderedSelf;
+            node.isRendered = isRendered;
+            if (changed)
+                this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
+            if (Array.isArray(node.children)) {
+                for (const child of node.children)
+                    this._propagateRenderedState(child, isRendered, nodesToRefresh);
+            }
         }
 
         _markNodeForRefresh(collection, node, options = {}) {

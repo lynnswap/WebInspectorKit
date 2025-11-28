@@ -6,7 +6,7 @@
         resolveRenderedState
     } = scope.DOMTreeUtilities;
 
-    function normalizeNodeDescriptor(descriptor) {
+    function normalizeNodeDescriptor(descriptor, parentRendered = true) {
         if (!descriptor || typeof descriptor !== "object")
             return null;
 
@@ -23,7 +23,8 @@
         if (shouldOmitTextNode(nodeType, textContent))
             return null;
         const layoutFlags = normalizeLayoutFlags(descriptor.layoutFlags);
-        const isRendered = resolveRenderedState(layoutFlags, descriptor.isRendered);
+        const renderedSelf = resolveRenderedState(layoutFlags, descriptor.isRendered);
+        const isRendered = parentRendered && renderedSelf;
         const rawChildCount = typeof descriptor.childNodeCount === "number"
             ? descriptor.childNodeCount
             : (typeof descriptor.childCount === "number"
@@ -38,7 +39,7 @@
                 filteredChildren += 1;
                 return;
             }
-            const normalized = normalizeNodeDescriptor(child);
+            const normalized = normalizeNodeDescriptor(child, isRendered);
             if (normalized)
                 children.push(normalized);
         });
@@ -46,7 +47,7 @@
         const visibleChildCount = Math.max(children.length, rawChildCount - filteredChildren);
 
         if (visibleChildCount > children.length) {
-            children.push(createPlaceholderNode(resolvedId, visibleChildCount - children.length));
+            children.push(createPlaceholderNode(resolvedId, visibleChildCount - children.length, isRendered));
         }
 
         return {
@@ -57,6 +58,7 @@
             attributes,
             textContent,
             layoutFlags,
+            renderedSelf,
             isRendered,
             children,
             childCount: visibleChildCount,
@@ -108,7 +110,7 @@
         return nodeName || "";
     }
 
-    function createPlaceholderNode(parentId, remainingCount) {
+    function createPlaceholderNode(parentId, remainingCount, parentRendered = true) {
         return {
             id: -Math.abs(parentId || 0) || -1,
             nodeName: "...",
@@ -119,7 +121,8 @@
             children: [],
             childCount: remainingCount,
             layoutFlags: [],
-            isRendered: true,
+            renderedSelf: true,
+            isRendered: parentRendered,
             placeholderParentId: parentId || null
         };
     }
@@ -150,7 +153,9 @@
         target.textContent = source.textContent || null;
         target.childCount = typeof source.childCount === "number" ? source.childCount : (Array.isArray(source.children) ? source.children.length : 0);
         target.placeholderParentId = source.placeholderParentId || null;
-        applyLayoutState(target, source.layoutFlags, source.isRendered);
+        const parent = typeof target.parentId === "number" ? state.nodes.get(target.parentId) : null;
+        const parentRendered = parent ? parent.isRendered !== false : true;
+        applyLayoutState(target, source.layoutFlags, typeof source.renderedSelf === "boolean" ? source.renderedSelf : source.isRendered, parentRendered);
         if (typeof depth === "number")
             target.depth = depth;
 

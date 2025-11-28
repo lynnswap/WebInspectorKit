@@ -200,7 +200,19 @@
                 reportInspectorError("parse-subtree", error);
                 return;
             }
-            const normalized = normalizeNodeDescriptor(subtree);
+            const targetId = subtree && typeof subtree === "object"
+                ? (typeof subtree.nodeId === "number" ? subtree.nodeId : (typeof subtree.id === "number" ? subtree.id : null))
+                : null;
+            const parentRendered = (() => {
+                if (typeof targetId !== "number")
+                    return true;
+                const existing = state.nodes.get(targetId);
+                if (!existing || typeof existing.parentId !== "number")
+                    return true;
+                const parent = state.nodes.get(existing.parentId);
+                return !parent || parent.isRendered !== false;
+            })();
+            const normalized = normalizeNodeDescriptor(subtree, parentRendered);
             if (!normalized)
                 return;
             const target = state.nodes.get(normalized.id);
@@ -253,8 +265,9 @@
         state.refreshAttempts.delete(parentId);
 
         const normalizedChildren = [];
+        const parentRendered = parent.isRendered !== false;
         for (const child of params.nodes) {
-            const normalized = normalizeNodeDescriptor(child);
+            const normalized = normalizeNodeDescriptor(child, parentRendered);
             if (normalized)
                 normalizedChildren.push(normalized);
         }

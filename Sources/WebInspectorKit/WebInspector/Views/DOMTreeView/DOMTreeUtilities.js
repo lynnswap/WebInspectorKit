@@ -1,7 +1,8 @@
 (function(scope) {
     const {
         INDENT_DEPTH_LIMIT,
-        LAYOUT_FLAG_RENDERED
+        LAYOUT_FLAG_RENDERED,
+        treeState: state
     } = scope.DOMTreeState;
 
     function timeNow() {
@@ -39,21 +40,31 @@
         return true;
     }
 
-    function applyLayoutState(node, flags, explicitRendered) {
+    function applyLayoutState(node, flags, explicitRendered, parentRendered) {
         if (!node)
-            return;
+            return {changed: false, isRendered: true, renderedSelf: true};
         const normalizedFlags = normalizeLayoutFlags(flags);
+        const previous = typeof node.isRendered === "boolean" ? node.isRendered : true;
+        const renderedSelf = resolveRenderedState(normalizedFlags, explicitRendered);
+        const ancestorRendered = typeof parentRendered === "boolean" ? parentRendered : true;
+        const isRendered = ancestorRendered && renderedSelf;
         node.layoutFlags = normalizedFlags;
-        node.isRendered = resolveRenderedState(normalizedFlags, explicitRendered);
+        node.renderedSelf = renderedSelf;
+        node.isRendered = isRendered;
+        return {
+            changed: previous !== isRendered,
+            isRendered,
+            renderedSelf
+        };
     }
 
-    function applyLayoutEntry(node, entry) {
+    function applyLayoutEntry(node, entry, parentRendered) {
         if (!node || !entry)
-            return;
+            return {changed: false, isRendered: true, renderedSelf: true};
         const hasInfo = Array.isArray(entry.layoutFlags) || typeof entry.isRendered === "boolean";
         if (!hasInfo)
-            return;
-        applyLayoutState(node, entry.layoutFlags, entry.isRendered);
+            return {changed: false, isRendered: true, renderedSelf: true};
+        return applyLayoutState(node, entry.layoutFlags, entry.isRendered, parentRendered);
     }
 
     function isNodeRendered(node) {
@@ -61,9 +72,10 @@
             return true;
         if (typeof node.isRendered === "boolean")
             return node.isRendered;
-        if (Array.isArray(node.layoutFlags))
-            return node.layoutFlags.includes(LAYOUT_FLAG_RENDERED);
-        return true;
+        const renderedSelf = resolveRenderedState(Array.isArray(node.layoutFlags) ? node.layoutFlags : [], typeof node.renderedSelf === "boolean" ? node.renderedSelf : undefined);
+        const parent = node.parentId && state.nodes ? state.nodes.get(node.parentId) : null;
+        const ancestorRendered = parent ? isNodeRendered(parent) : true;
+        return ancestorRendered && renderedSelf;
     }
 
     function clampIndentDepth(depth) {
