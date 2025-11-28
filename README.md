@@ -2,7 +2,7 @@
 
 WebInspectorKit is a SwiftUI-powered inspector for WKWebView. It captures the page DOM, renders a dedicated inspector UI, and lets you inspect and edit nodes. Built-in features include DOM tree browsing, element highlighting, attribute editing/removal, copying HTML/CSS selector/XPath for the selected node, node deletion, and auto-reloading of DOM snapshots. Tab composition is configurable with a SwiftUI-style result builder.
 
-This repository is under active development, and future updates may introduce major changes to the API or behavior.
+This repository is under active development, and future updates may introduce major changes to the API or behavior. It remains lightweight, using only system frameworks like SwiftUI and WebKit with no extra dependencies.
 
 ## Requirements
 - Swift 6.2+
