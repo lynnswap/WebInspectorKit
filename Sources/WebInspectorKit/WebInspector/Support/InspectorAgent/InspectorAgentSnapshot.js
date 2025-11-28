@@ -131,7 +131,7 @@ function sendFullSnapshot(reason) {
 
 function buildDomMutationEvents(records, maxDepth) {
     if (!Array.isArray(records) || !records.length)
-        return [];
+        return {events: [], compactTriggered: false};
     var events = [];
     var childCountUpdates = new Map();
     var descriptorDepth = Math.min(1, Math.max(0, typeof maxDepth === "number" ? maxDepth : 1));
@@ -267,16 +267,21 @@ function buildDomMutationEvents(records, maxDepth) {
                 continue;
             compact.push(event);
         }
-        return compact;
+        return {events: compact, compactTriggered: true};
     }
 
-    return events;
+    return {events: events, compactTriggered: compactMode};
 }
 
 function sendAutoSnapshotUpdate() {
     var handler = mutationUpdateHandler();
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
+    var mapSize = inspector.map && inspector.map.size ? inspector.map.size : 0;
+    if (!mapSize) {
+        sendFullSnapshot("initial");
+        return;
+    }
     if (!handler) {
         sendFullSnapshot("handler-missing");
         return;
@@ -285,9 +290,14 @@ function sendAutoSnapshotUpdate() {
         sendFullSnapshot("mutation");
         return;
     }
-    var messages = buildDomMutationEvents(pending, 0);
+    var result = buildDomMutationEvents(pending, 0);
+    var messages = result.events;
     if (!messages.length) {
         sendFullSnapshot("fallback");
+        return;
+    }
+    if (result.compactTriggered) {
+        sendFullSnapshot("compact");
         return;
     }
     var reason = inspector.snapshotAutoUpdateReason || "mutation";

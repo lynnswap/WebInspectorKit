@@ -89,12 +89,12 @@ final class WIContentModel: NSObject {
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         let checkScript = WKUserScript(
             source: inspectorPresenceProbeScript,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
@@ -102,7 +102,6 @@ final class WIContentModel: NSObject {
             _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         }
         contentLogger.debug("installed inspector agent user script")
-        
     }
 
     @MainActor deinit {
@@ -112,6 +111,9 @@ final class WIContentModel: NSObject {
 
 extension WIContentModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame else {
+            return
+        }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
         case .snapshot:
