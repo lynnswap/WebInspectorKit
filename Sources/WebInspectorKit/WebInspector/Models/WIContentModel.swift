@@ -97,12 +97,12 @@ final class WIContentModel: NSObject {
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         let checkScript = WKUserScript(
             source: inspectorPresenceProbeScript,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+            forMainFrameOnly: true
         )
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
@@ -120,6 +120,10 @@ final class WIContentModel: NSObject {
 
 extension WIContentModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame else {
+            contentLogger.debug("ignore message from non-main frame:\(message.name, privacy: .public)")
+            return
+        }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
         case .snapshot:
