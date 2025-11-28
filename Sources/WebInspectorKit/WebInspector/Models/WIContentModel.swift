@@ -69,6 +69,7 @@ final class WIContentModel: NSObject {
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
         }
+        contentLogger.debug("detached content message handlers")
     }
 
     private func installInspectorAgentScriptIfNeeded(on webView: WKWebView) {
@@ -100,7 +101,7 @@ final class WIContentModel: NSObject {
         Task{
             _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         }
-
+        contentLogger.debug("installed inspector agent user script")
     }
 
     @MainActor deinit {
