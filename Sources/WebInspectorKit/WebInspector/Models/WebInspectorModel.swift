@@ -54,27 +54,20 @@ public final class WebInspectorModel {
     public var hasPageWebView: Bool {
         webBridge.contentModel.webView != nil
     }
-    private func webViewID(_ webView: WKWebView?) -> String {
-        guard let webView else { return "nil" }
-        return String(Int(bitPattern: UInt(bitPattern: ObjectIdentifier(webView))))
-    }
 
     public init(configuration: Configuration = .init()) {
         self.webBridge = WIBridgeModel(configuration: configuration)
     }
 
     public func attach(webView: WKWebView?) {
-        logger.debug("lifecycle attach webView:\(self.webViewID(webView), privacy: .public)")
         updateLifecycle(.attach(webView))
     }
 
     public func suspend() {
-        logger.debug("lifecycle suspend")
         updateLifecycle(.suspend)
     }
 
     public func detach() {
-        logger.debug("lifecycle detach")
         updateLifecycle(.detach)
     }
     
@@ -115,7 +108,6 @@ public final class WebInspectorModel {
             return
         }
 
-        logger.debug("reload inspector requested depth:\(self.configuration.snapshotDepth, privacy: .public)")
         await webBridge.reloadInspector(preserveState: false)
     }
 
