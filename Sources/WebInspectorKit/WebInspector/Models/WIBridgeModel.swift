@@ -8,6 +8,9 @@
 import SwiftUI
 import WebKit
 import Observation
+import OSLog
+
+private let bridgeLogger = Logger(subsystem: "WebInspectorKit", category: "WIBridgeModel")
 
 public enum WILifecycleState {
     case attach(WKWebView?)
@@ -31,6 +34,10 @@ public final class WIBridgeModel {
         contentModel.bridge = self
         inspectorModel.bridge = self
     }
+    private func webViewID(_ webView: WKWebView?) -> String {
+        guard let webView else { return "nil" }
+        return String(Int(bitPattern: UInt(bitPattern: ObjectIdentifier(webView))))
+    }
 
     func setLifecycle(_ state: WILifecycleState) {
         switch state {
@@ -50,11 +57,13 @@ public final class WIBridgeModel {
         domSelection.clear()
         let previousWebView = lastPageWebView
         guard let webView else {
+            bridgeLogger.debug("handleAttach nil webView (detach)")
             errorMessage = "WebView is not available."
             contentModel.detachPageWebView()
             lastPageWebView = nil
             return
         }
+        bridgeLogger.debug("handleAttach webView:\(self.webViewID(webView), privacy: .public) previous:\(self.webViewID(previousWebView), privacy: .public)")
         contentModel.attachPageWebView(webView)
         let needsReload = previousWebView == nil || previousWebView != webView
         lastPageWebView = webView
@@ -69,6 +78,7 @@ public final class WIBridgeModel {
         isLoading = false
         contentModel.detachPageWebView()
         domSelection.clear()
+        bridgeLogger.debug("handleSuspend")
     }
 
     func updateSnapshotDepth(_ depth: Int) {
@@ -86,6 +96,7 @@ public final class WIBridgeModel {
         errorMessage = nil
 
         let depth = configuration.snapshotDepth
+        bridgeLogger.debug("reloadInspector preserveState:\(preserveState, privacy: .public) depth:\(depth, privacy: .public)")
         inspectorModel.setPreferredDepth(depth)
         isLoading = false
         inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
@@ -93,11 +104,13 @@ public final class WIBridgeModel {
 
     func handleSnapshotFromPage(_ package: WISnapshotPackage) {
         isLoading = false
+        bridgeLogger.debug("handleSnapshotFromPage bytes:\(package.rawJSON.utf8.count, privacy: .public)")
         inspectorModel.enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
     func handleDomUpdateFromPage(_ payload: WIDOMUpdatePayload) {
         isLoading = false
+        bridgeLogger.debug("handleDomUpdateFromPage bytes:\(payload.rawJSON.utf8.count, privacy: .public)")
         inspectorModel.enqueueMutationBundle(payload.rawJSON, preserveState: true)
     }
 

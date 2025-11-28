@@ -43,9 +43,14 @@ final class WIInspectorModel: NSObject {
     private var configuration: WebInspectorModel.Configuration {
         bridge?.configuration ?? .init()
     }
+    private func webViewID(_ webView: WKWebView?) -> String {
+        guard let webView else { return "nil" }
+        return String(Int(bitPattern: UInt(bitPattern: ObjectIdentifier(webView))))
+    }
 
     func makeInspectorWebView() -> WIWebView {
         if let webView {
+            inspectorLogger.debug("reuse inspector webView:\(self.webViewID(webView), privacy: .public) isReady:\(self.isReady, privacy: .public)")
             attachInspectorWebView()
             return webView
         }
@@ -53,6 +58,7 @@ final class WIInspectorModel: NSObject {
         let newWebView = WIWebView()
 
         webView = newWebView
+        inspectorLogger.debug("make inspector webView:\(self.webViewID(newWebView), privacy: .public)")
         attachInspectorWebView()
         loadInspector(in: newWebView)
         return newWebView
@@ -71,11 +77,13 @@ final class WIInspectorModel: NSObject {
 
     func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
         let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
+        inspectorLogger.debug("enqueueMutationBundle bytes:\(rawJSON.utf8.count, privacy: .public) preserveState:\(preserveState, privacy: .public) isReady:\(self.isReady, privacy: .public)")
         applyMutationBundle(payload)
     }
 
     func setPreferredDepth(_ depth: Int) {
         pendingPreferredDepth = depth
+        inspectorLogger.debug("setPreferredDepth pending depth:\(depth, privacy: .public) isReady:\(self.isReady, privacy: .public)")
         if isReady {
             Task {
                 await applyPreferredDepthNow(depth)
@@ -85,6 +93,7 @@ final class WIInspectorModel: NSObject {
 
     func requestDocument(depth: Int, preserveState: Bool) {
         pendingDocumentRequest = (depth, preserveState)
+        inspectorLogger.debug("requestDocument queued depth:\(depth, privacy: .public) preserveState:\(preserveState, privacy: .public) isReady:\(self.isReady, privacy: .public)")
         if isReady {
             Task {
                 await requestDocumentNow(depth: depth, preserveState: preserveState)
@@ -107,6 +116,7 @@ final class WIInspectorModel: NSObject {
                 ],
                 contentWorld: .page
             )
+            inspectorLogger.debug("applyConfigurationToInspector success config:\(config.snapshotDepth)-\(config.subtreeDepth)-\(config.autoUpdateDebounce, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             inspectorLogger.error("apply config failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -121,6 +131,7 @@ final class WIInspectorModel: NSObject {
             controller.add(self, name: $0.rawValue)
         }
         webView.navigationDelegate = self
+        inspectorLogger.debug("attached inspector handlers webView:\(self.webViewID(webView), privacy: .public)")
     }
 
     private func detachInspectorWebView(ifMatches webView: WIWebView) {
@@ -141,7 +152,7 @@ final class WIInspectorModel: NSObject {
             controller.removeScriptMessageHandler(forName: $0.rawValue)
         }
         webView.navigationDelegate = nil
-        inspectorLogger.debug("detached inspector message handlers")
+        inspectorLogger.debug("detached inspector message handlers webView:\(self.webViewID(webView), privacy: .public)")
     }
 
     private func loadInspector(in webView: WIWebView) {
@@ -153,6 +164,7 @@ final class WIInspectorModel: NSObject {
             return
         }
         isReady = false
+        inspectorLogger.debug("loadInspector start base:\(baseURL.absoluteString, privacy: .public)")
         webView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
     }
 
@@ -168,6 +180,7 @@ final class WIInspectorModel: NSObject {
                 await applyBundleNow(payload)
             }
         } else {
+            inspectorLogger.debug("queue mutation bundle pendingCount:\(self.pendingBundles.count + 1, privacy: .public)")
             pendingBundles.append(payload)
         }
     }
@@ -186,6 +199,7 @@ final class WIInspectorModel: NSObject {
         else {
             return
         }
+        inspectorLogger.debug("protocol payload id:\(id, privacy: .public) method:\(method, privacy: .public)")
         let params = dictionary["params"] as? [String: Any] ?? [:]
         let request = InspectorProtocolRequest(id: id, method: method, params: params)
         processProtocolRequest(request)
@@ -271,6 +285,7 @@ final class WIInspectorModel: NSObject {
             pendingDocumentRequest = nil
         }
         if !pendingBundles.isEmpty {
+            inspectorLogger.debug("flushPendingWork bundles:\(self.pendingBundles.count, privacy: .public)")
             await applyBundlesNow(pendingBundles)
             pendingBundles.removeAll()
         }
@@ -285,6 +300,7 @@ final class WIInspectorModel: NSObject {
                 arguments: ["bundles": payloads],
                 contentWorld: .page
             )
+            inspectorLogger.debug("applyBundlesNow count:\(bundles.count, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -298,6 +314,7 @@ final class WIInspectorModel: NSObject {
                 arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
                 contentWorld: .page
             )
+            inspectorLogger.debug("applyBundleNow bytes:\(payload.rawJSON.utf8.count, privacy: .public) preserveState:\(payload.preserveState, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             inspectorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -311,6 +328,7 @@ final class WIInspectorModel: NSObject {
                 arguments: ["depth": depth],
                 contentWorld: .page
             )
+            inspectorLogger.debug("applyPreferredDepthNow depth:\(depth, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             inspectorLogger.error("send preferred depth failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -324,6 +342,7 @@ final class WIInspectorModel: NSObject {
                 arguments: ["options": ["depth": depth, "preserveState": preserveState]],
                 contentWorld: .page
             )
+            inspectorLogger.debug("requestDocumentNow depth:\(depth, privacy: .public) preserveState:\(preserveState, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             inspectorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -344,6 +363,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
                 await flushPendingWork()
                 bridge?.isLoading = false
             }
+            inspectorLogger.debug("inspector ready pendingBundles:\(self.pendingBundles.count, privacy: .public) pendingDoc:\(self.pendingDocumentRequest != nil, privacy: .public) pendingDepth:\(self.pendingPreferredDepth ?? -1, privacy: .public)")
         case .log:
             if let dictionary = message.body as? [String: Any],
                let logMessage = dictionary["message"] as? String {

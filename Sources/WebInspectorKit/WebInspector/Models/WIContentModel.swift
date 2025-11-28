@@ -28,6 +28,10 @@ final class WIContentModel: NSObject {
     private var configuration: WebInspectorModel.Configuration {
         bridge?.configuration ?? .init()
     }
+    private func webViewID(_ webView: WKWebView?) -> String {
+        guard let webView else { return "nil" }
+        return String(Int(bitPattern: UInt(bitPattern: ObjectIdentifier(webView))))
+    }
 
     func attachPageWebView(_ newWebView: WKWebView?) {
         guard self.webView !== newWebView else { return }
@@ -35,6 +39,7 @@ final class WIContentModel: NSObject {
             detachPageWebView()
             return
         }
+        contentLogger.debug("attachPageWebView start new:\(self.webViewID(newWebView), privacy: .public) prev:\(self.webViewID(self.webView), privacy: .public)")
         if let previousWebView = self.webView {
             stopAutoUpdate(for:previousWebView)
             detachMessageHandlers(from: previousWebView)
@@ -48,6 +53,7 @@ final class WIContentModel: NSObject {
 
     func detachPageWebView() {
         guard let currentWebView = webView else { return }
+        contentLogger.debug("detachPageWebView current:\(self.webViewID(currentWebView), privacy: .public)")
         stopAutoUpdate(for:currentWebView)
         detachMessageHandlers(from: currentWebView)
         webView = nil
@@ -60,6 +66,7 @@ final class WIContentModel: NSObject {
             controller.removeScriptMessageHandler(forName: $0.rawValue,contentWorld: .page)
             controller.add(self, contentWorld: .page, name: $0.rawValue)
         }
+        contentLogger.debug("registered content message handlers for:\(self.webViewID(webView), privacy: .public)")
         installInspectorAgentScriptIfNeeded(on: webView)
     }
 
@@ -69,12 +76,13 @@ final class WIContentModel: NSObject {
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
         }
-        contentLogger.debug("detached content message handlers")
+        contentLogger.debug("detached content message handlers for:\(self.webViewID(webView), privacy: .public)")
     }
 
     private func installInspectorAgentScriptIfNeeded(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
         if controller.userScripts.contains(where: { $0.source == inspectorPresenceProbeScript }) {
+            contentLogger.debug("skip inspector agent install (already present) for:\(self.webViewID(webView), privacy: .public)")
             return
         }
         
@@ -101,8 +109,8 @@ final class WIContentModel: NSObject {
         Task{
             _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         }
-        contentLogger.debug("installed inspector agent user script")
-        
+        contentLogger.debug("installed inspector agent user script for:\(self.webViewID(webView), privacy: .public) length:\(scriptSource.utf8.count, privacy: .public)")
+
     }
 
     @MainActor deinit {
@@ -126,6 +134,8 @@ extension WIContentModel: WKScriptMessageHandler {
               let rawJSON = payload["snapshot"] as? String else {
             return
         }
+        let prefix = String(rawJSON.prefix(200))
+        contentLogger.debug("received snapshot bundle bytes:\(rawJSON.utf8.count, privacy: .public) prefix:\(prefix, privacy: .public)")
         let package = WISnapshotPackage(rawJSON: rawJSON)
         bridge?.handleSnapshotFromPage(package)
     }
@@ -135,6 +145,8 @@ extension WIContentModel: WKScriptMessageHandler {
               let rawJSON = payload["bundle"] as? String ?? payload["updates"] as? String else {
             return
         }
+        let prefix = String(rawJSON.prefix(200))
+        contentLogger.debug("received mutation bundle bytes:\(rawJSON.utf8.count, privacy: .public) prefix:\(prefix, privacy: .public)")
         let package = WIDOMUpdatePayload(rawJSON: rawJSON)
         bridge?.handleDomUpdateFromPage(package)
     }
@@ -149,6 +161,7 @@ extension WIContentModel {
             throw WIError.scriptUnavailable
         }
         let depth = maxDepth ?? configuration.snapshotDepth
+        contentLogger.debug("captureSnapshot depth:\(depth, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOM(maxDepth)",
             arguments: ["maxDepth": depth],
@@ -156,6 +169,7 @@ extension WIContentModel {
             contentWorld: .page
         )
         let data = try serializePayload(rawResult)
+        contentLogger.debug("captureSnapshot payload bytes:\(data.count, privacy: .public)")
         return WISnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
@@ -164,6 +178,7 @@ extension WIContentModel {
             throw WIError.scriptUnavailable
         }
         let depth = maxDepth ?? configuration.subtreeDepth
+        contentLogger.debug("captureSubtree id:\(identifier, privacy: .public) depth:\(depth, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         let rawResult = try await webView.callAsyncJavaScript(
             "return window.webInspectorKit.captureDOMSubtree(identifier, maxDepth)",
             arguments: ["identifier": identifier, "maxDepth": depth],
@@ -174,6 +189,7 @@ extension WIContentModel {
         guard !data.isEmpty else {
             throw WIError.subtreeUnavailable
         }
+        contentLogger.debug("captureSubtree payload bytes:\(data.count, privacy: .public)")
         return WISubtreePayload(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
@@ -232,6 +248,7 @@ extension WIContentModel {
     }
     private func stopAutoUpdate(for webView: WKWebView){
         webView.evaluateJavaScript("(() => { window.webInspectorKit.detach(); })();  ",in: nil, in: .page)
+        contentLogger.debug("stopAutoUpdate issued for:\(self.webViewID(webView), privacy: .public)")
     }
     private func setAutoUpdate(for webView: WKWebView, maxDepth: Int) async {
         do {
@@ -248,6 +265,7 @@ extension WIContentModel {
                 arguments: ["options": options],
                 contentWorld: .page
             )
+            contentLogger.debug("setAutoUpdate success options:\(options, privacy: .public) webView:\(self.webViewID(webView), privacy: .public)")
         } catch {
             contentLogger.error("configure/enable auto snapshot failed: \(error.localizedDescription, privacy: .public)")
         }
