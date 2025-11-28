@@ -121,7 +121,6 @@ final class WIContentModel: NSObject {
 extension WIContentModel: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame else {
-            contentLogger.debug("ignore message from non-main frame:\(message.name, privacy: .public)")
             return
         }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
