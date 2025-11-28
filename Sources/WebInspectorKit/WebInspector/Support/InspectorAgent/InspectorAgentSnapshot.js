@@ -13,25 +13,6 @@ function mutationUpdateHandler() {
     return window.webkit.messageHandlers.webInspectorMutationUpdate || null;
 }
 
-function logAutoSnapshotStatus(reason, stats) {
-    if (!stats)
-        stats = {};
-    var summary = "[tweetpd-inspector] auto-snapshot " + reason
-        + " pending:" + (stats.pendingCount || 0)
-        + " events:" + (stats.eventCount || 0)
-        + " compact:" + (!!stats.compactTriggered);
-    try {
-        var logger = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorLog : null;
-        if (logger && typeof logger.postMessage === "function") {
-            logger.postMessage(summary);
-            return;
-        }
-    } catch {
-    }
-    if (typeof console !== "undefined" && console.debug)
-        console.debug(summary);
-}
-
 export function enableAutoSnapshotIfSupported() {
     if (autoSnapshotHandler())
         enableAutoSnapshot();
@@ -148,18 +129,14 @@ function sendFullSnapshot(reason) {
     }
 }
 
-function buildDomMutationEvents(records, maxDepth, stats) {
+function buildDomMutationEvents(records, maxDepth) {
     if (!Array.isArray(records) || !records.length)
-        return [];
+        return {events: [], compactTriggered: false};
     var events = [];
     var childCountUpdates = new Map();
     var descriptorDepth = Math.min(1, Math.max(0, typeof maxDepth === "number" ? maxDepth : 1));
     var eventLimit = 600;
     var compactMode = false;
-    if (stats) {
-        stats.pendingCount = Array.isArray(records) ? records.length : 0;
-        stats.compactTriggered = false;
-    }
     for (var i = 0; i < records.length; ++i) {
         var record = records[i];
         if (!record || !record.target)
@@ -290,25 +267,18 @@ function buildDomMutationEvents(records, maxDepth, stats) {
                 continue;
             compact.push(event);
         }
-        return compact;
+        return {events: compact, compactTriggered: true};
     }
 
-    if (stats) {
-        stats.compactTriggered = stats.compactTriggered || compactMode;
-        stats.eventCount = compactMode ? compact.length : events.length;
-    }
-
-    return compactMode ? compact : events;
+    return {events: events, compactTriggered: compactMode};
 }
 
 function sendAutoSnapshotUpdate() {
     var handler = mutationUpdateHandler();
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
-    var stats = {pendingCount: pending.length};
     var mapSize = inspector.map && inspector.map.size ? inspector.map.size : 0;
     if (!mapSize) {
-        logAutoSnapshotStatus("initial-full", stats);
         sendFullSnapshot("initial");
         return;
     }
@@ -320,20 +290,16 @@ function sendAutoSnapshotUpdate() {
         sendFullSnapshot("mutation");
         return;
     }
-    var messages = buildDomMutationEvents(pending, 0, stats);
+    var result = buildDomMutationEvents(pending, 0);
+    var messages = result.events;
     if (!messages.length) {
-        stats.eventCount = 0;
-        logAutoSnapshotStatus("fallback", stats);
         sendFullSnapshot("fallback");
         return;
     }
-    stats.eventCount = messages.length;
-    if (stats.compactTriggered) {
-        logAutoSnapshotStatus("compact-full", stats);
+    if (result.compactTriggered) {
         sendFullSnapshot("compact");
         return;
     }
-    logAutoSnapshotStatus("delta", stats);
     var reason = inspector.snapshotAutoUpdateReason || "mutation";
     var chunkSize = 200;
     try {
