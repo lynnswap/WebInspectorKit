@@ -10,39 +10,48 @@ function enableSelectionCursor() {
             body: document.body ? document.body.style.cursor : ""
         };
     }
-    if (document.documentElement)
+    if (document.documentElement) {
         document.documentElement.style.cursor = "crosshair";
-    if (document.body)
+    }
+    if (document.body) {
         document.body.style.cursor = "crosshair";
+    }
 }
 
 function restoreSelectionCursor() {
     var backup = inspector.cursorBackup || {};
-    if (document.documentElement)
+    if (document.documentElement) {
         document.documentElement.style.cursor = backup.html || "";
-    if (document.body)
+    }
+    if (document.body) {
         document.body.style.cursor = backup.body || "";
+    }
     inspector.cursorBackup = null;
 }
 
 function interceptEvent(event) {
-    if (!event)
+    if (!event) {
         return;
-    if (event.cancelable)
+    }
+    if (event.cancelable) {
         event.preventDefault();
+    }
     event.stopPropagation();
-    if (event.stopImmediatePropagation)
+    if (event.stopImmediatePropagation) {
         event.stopImmediatePropagation();
+    }
 }
 
 function installWindowClickBlocker() {
-    if (inspector.windowClickBlockerHandler)
+    if (inspector.windowClickBlockerHandler) {
         return;
+    }
     inspector.windowClickBlockerPendingRelease = false;
     var handler = function(event) {
         interceptEvent(event);
-        if (!inspector.selectionState && inspector.windowClickBlockerPendingRelease)
+        if (!inspector.selectionState && inspector.windowClickBlockerPendingRelease) {
             uninstallWindowClickBlocker();
+        }
     };
     inspector.windowClickBlockerHandler = handler;
     window.addEventListener("click", handler, true);
@@ -54,18 +63,21 @@ function uninstallWindowClickBlocker() {
         clearTimeout(inspector.windowClickBlockerRemovalTimer);
         inspector.windowClickBlockerRemovalTimer = null;
     }
-    if (!inspector.windowClickBlockerHandler)
+    if (!inspector.windowClickBlockerHandler) {
         return;
+    }
     window.removeEventListener("click", inspector.windowClickBlockerHandler, true);
     inspector.windowClickBlockerHandler = null;
 }
 
 function scheduleWindowClickBlockerRelease() {
-    if (!inspector.windowClickBlockerHandler)
+    if (!inspector.windowClickBlockerHandler) {
         return;
+    }
     inspector.windowClickBlockerPendingRelease = true;
-    if (inspector.windowClickBlockerRemovalTimer)
+    if (inspector.windowClickBlockerRemovalTimer) {
         return;
+    }
     inspector.windowClickBlockerRemovalTimer = setTimeout(function() {
         uninstallWindowClickBlocker();
     }, 350);
@@ -101,8 +113,9 @@ export function startElementSelection() {
         }
 
         function finish(payload) {
-            if (!state.active)
+            if (!state.active) {
                 return;
+            }
             state.active = false;
             removeListeners();
             restoreSelectionCursor();
@@ -137,8 +150,9 @@ export function startElementSelection() {
         }
 
         function resolveEventTarget(event) {
-            if (!event)
+            if (!event) {
                 return null;
+            }
             if (event.touches && event.touches.length) {
                 var touch = event.touches[event.touches.length - 1];
                 var candidate = document.elementFromPoint(touch.clientX, touch.clientY);
@@ -158,8 +172,9 @@ export function startElementSelection() {
 
         function updateLatestTarget(event) {
             var target = resolveEventTarget(event);
-            if (!target)
+            if (!target) {
                 return;
+            }
             state.latestTarget = target;
             highlightSelectionNode(target);
         }

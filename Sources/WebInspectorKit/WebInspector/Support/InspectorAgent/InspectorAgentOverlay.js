@@ -3,8 +3,9 @@ import {nodeIsRendered, rectForNode} from "./InspectorAgentDOMCore.js";
 
 function ensureOverlay() {
     var overlay = inspector.overlay;
-    if (overlay && overlay.parentNode)
+    if (overlay && overlay.parentNode) {
         return overlay;
+    }
     overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.background = "rgba(0, 122, 255, 0.25)";
@@ -20,13 +21,15 @@ function ensureOverlay() {
 
 function hideOverlay() {
     var overlay = inspector.overlay;
-    if (overlay)
+    if (overlay) {
         overlay.style.display = "none";
+    }
 }
 
 function installOverlayAutoUpdateHandlers() {
-    if (inspector.overlayAutoUpdateConfigured)
+    if (inspector.overlayAutoUpdateConfigured) {
         return;
+    }
     inspector.overlayAutoUpdateConfigured = true;
 
     function handleViewportChange() {
@@ -43,25 +46,29 @@ function installOverlayAutoUpdateHandlers() {
 }
 
 function connectOverlayMutationObserver() {
-    if (inspector.overlayMutationObserverActive)
+    if (inspector.overlayMutationObserverActive) {
         return;
-    if (typeof MutationObserver === "undefined")
+    }
+    if (typeof MutationObserver === "undefined") {
         return;
+    }
     if (!inspector.overlayMutationObserver) {
         inspector.overlayMutationObserver = new MutationObserver(function() {
             scheduleOverlayUpdate();
         });
     }
     var target = document.documentElement || document.body;
-    if (!target)
+    if (!target) {
         return;
+    }
     inspector.overlayMutationObserver.observe(target, {attributes: true, childList: true, subtree: true, characterData: true});
     inspector.overlayMutationObserverActive = true;
 }
 
 function disconnectOverlayMutationObserver() {
-    if (!inspector.overlayMutationObserverActive || !inspector.overlayMutationObserver)
+    if (!inspector.overlayMutationObserverActive || !inspector.overlayMutationObserver) {
         return;
+    }
     inspector.overlayMutationObserver.disconnect();
     inspector.overlayMutationObserverActive = false;
 }
@@ -92,10 +99,12 @@ function updateOverlayForCurrentTarget() {
 }
 
 function scheduleOverlayUpdate() {
-    if (!inspector.overlayTarget)
+    if (!inspector.overlayTarget) {
         return;
-    if (inspector.pendingOverlayUpdate)
+    }
+    if (inspector.pendingOverlayUpdate) {
         return;
+    }
     inspector.pendingOverlayUpdate = true;
     requestAnimationFrame(function() {
         inspector.pendingOverlayUpdate = false;
@@ -130,8 +139,9 @@ function viewportMetrics() {
 }
 
 function scrollRectIntoViewIfNeeded(rect) {
-    if (!rect)
+    if (!rect) {
         return false;
+    }
     var margin = 8;
     var viewport = viewportMetrics();
     var rectTop = rect.top + viewport.top;
@@ -144,36 +154,42 @@ function scrollRectIntoViewIfNeeded(rect) {
     var visibleRight = viewport.left + viewport.width - margin;
     var verticallyVisible = rectBottom > visibleTop && rectTop < visibleBottom;
     var horizontallyVisible = rectRight > visibleLeft && rectLeft < visibleRight;
-    if (verticallyVisible && horizontallyVisible)
+    if (verticallyVisible && horizontallyVisible) {
         return false;
+    }
 
     var targetTop = rectTop - viewport.height / 3;
     var targetLeft = rectLeft - viewport.width / 5;
     var maxTop = Math.max(0, (document.documentElement ? document.documentElement.scrollHeight : 0) - viewport.height);
     var maxLeft = Math.max(0, (document.documentElement ? document.documentElement.scrollWidth : 0) - viewport.width);
-    if (isFinite(maxTop))
+    if (isFinite(maxTop)) {
         targetTop = Math.min(Math.max(0, targetTop), maxTop);
-    if (isFinite(maxLeft))
+    }
+    if (isFinite(maxLeft)) {
         targetLeft = Math.min(Math.max(0, targetLeft), maxLeft);
+    }
     window.scrollTo({top: targetTop, left: targetLeft, behavior: "auto"});
     return true;
 }
 
 export function highlightDOMNode(identifier) {
     var map = inspector.map;
-    if (!map || !map.size)
+    if (!map || !map.size) {
         return false;
+    }
     var node = map.get(identifier);
-    if (!node)
+    if (!node) {
         return false;
+    }
     if (!nodeIsRendered(node)) {
         clearHighlight();
         return true;
     }
     setOverlayTarget(node);
     var rect = rectForNode(node);
-    if (rect)
+    if (rect) {
         scrollRectIntoViewIfNeeded(rect);
+    }
     return true;
 }
 

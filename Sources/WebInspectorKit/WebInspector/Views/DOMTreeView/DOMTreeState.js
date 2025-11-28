@@ -5,10 +5,12 @@
     };
 
     function ensureDomElements() {
-        if (!dom.tree)
+        if (!dom.tree) {
             dom.tree = document.getElementById("dom-tree");
-        if (!dom.empty)
+        }
+        if (!dom.empty) {
             dom.empty = document.getElementById("dom-empty");
+        }
     }
 
     const NODE_TYPES = {

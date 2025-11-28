@@ -45,16 +45,18 @@
         const preserveState = !!options.preserveState;
         try {
             const result = await sendCommand("DOM.getDocument", {depth});
-            if (result && result.root)
+            if (result && result.root) {
                 setSnapshot(result, {preserveState});
+            }
         } catch (error) {
             reportInspectorError("DOM.getDocument", error);
         }
     }
 
     function applyMutationBundle(bundle) {
-        if (!bundle)
+        if (!bundle) {
             return;
+        }
         let preserveState = true;
         let payload = bundle;
         if (typeof bundle === "object" && bundle.bundle !== undefined) {
@@ -62,8 +64,9 @@
             payload = bundle.bundle;
         }
         const parsed = safeParseJSON(payload);
-        if (!parsed || typeof parsed !== "object")
+        if (!parsed || typeof parsed !== "object") {
             return;
+        }
         if (parsed.snapshot && !parsed.messages) {
             setSnapshot(parsed.snapshot, {preserveState});
             return;
@@ -131,8 +134,9 @@
             dom.empty.hidden = true;
 
             const normalizedRoot = normalizeNodeDescriptor(snapshot.root);
-            if (!normalizedRoot)
+            if (!normalizedRoot) {
                 return;
+            }
             snapshot.root = normalizedRoot;
             indexNode(normalizedRoot, 0, null);
             dom.tree.appendChild(buildNode(normalizedRoot));
@@ -157,30 +161,36 @@
             const selectionOptions = {shouldHighlight: false, autoScroll: shouldAutoScrollSelection};
 
             const selectSnapshotCandidate = () => {
-                if (typeof selectionCandidateId === "number" && selectionCandidateId > 0)
+                if (typeof selectionCandidateId === "number" && selectionCandidateId > 0) {
                     return selectNode(selectionCandidateId, selectionOptions);
-                if (Array.isArray(selectionCandidatePath))
+                }
+                if (Array.isArray(selectionCandidatePath)) {
                     return selectNodeByPath(selectionCandidatePath, selectionOptions);
+                }
                 return false;
             };
 
             let didSelect = false;
-            if (shouldPreferSnapshotSelection)
+            if (shouldPreferSnapshotSelection) {
                 didSelect = selectSnapshotCandidate();
+            }
 
-            if (!didSelect && preserveState && typeof previousSelectionId === "number")
+            if (!didSelect && preserveState && typeof previousSelectionId === "number") {
                 didSelect = selectNode(previousSelectionId, selectionOptions);
+            }
 
-            if (!didSelect && !shouldPreferSnapshotSelection)
+            if (!didSelect && !shouldPreferSnapshotSelection) {
                 didSelect = selectSnapshotCandidate();
+            }
 
             if (!didSelect) {
                 updateDetails(null);
                 reopenSelectionAncestors();
             }
             state.selectedNodeId = didSelect ? state.selectedNodeId : null;
-            if (preservedScrollPosition)
+            if (preservedScrollPosition) {
                 restoreTreeScrollPosition(preservedScrollPosition);
+            }
         } catch (error) {
             reportInspectorError("setSnapshot", error);
             throw error;
@@ -190,8 +200,9 @@
     function applySubtree(payload) {
         try {
             ensureDomElements();
-            if (!payload)
+            if (!payload) {
                 return;
+            }
             let subtree = null;
             try {
                 subtree = typeof payload === "string" ? JSON.parse(payload) : payload;
@@ -204,23 +215,28 @@
                 ? (typeof subtree.nodeId === "number" ? subtree.nodeId : (typeof subtree.id === "number" ? subtree.id : null))
                 : null;
             const parentRendered = (() => {
-                if (typeof targetId !== "number")
+                if (typeof targetId !== "number") {
                     return true;
+                }
                 const existing = state.nodes.get(targetId);
-                if (!existing || typeof existing.parentId !== "number")
+                if (!existing || typeof existing.parentId !== "number") {
                     return true;
+                }
                 const parent = state.nodes.get(existing.parentId);
                 return !parent || parent.isRendered !== false;
             })();
             const normalized = normalizeNodeDescriptor(subtree, parentRendered);
-            if (!normalized)
+            if (!normalized) {
                 return;
+            }
             const target = state.nodes.get(normalized.id);
-            if (!target)
+            if (!target) {
                 return;
+            }
 
-            if (state.pendingRefreshRequests.has(normalized.id))
+            if (state.pendingRefreshRequests.has(normalized.id)) {
                 state.pendingRefreshRequests.delete(normalized.id);
+            }
             state.refreshAttempts.delete(normalized.id);
 
             const preservedExpansion = preserveExpansionState(normalized, new Map());
@@ -253,23 +269,26 @@
 
     function applySetChildNodes(params) {
         const parentId = typeof params.parentId === "number" ? params.parentId : params.parentNodeId;
-        if (typeof parentId !== "number" || !Array.isArray(params.nodes))
+        if (typeof parentId !== "number" || !Array.isArray(params.nodes)) {
             return;
+        }
         const parent = state.nodes.get(parentId);
         if (!parent) {
             requestNodeRefresh(parentId);
             return;
         }
-        if (state.pendingRefreshRequests.has(parentId))
+        if (state.pendingRefreshRequests.has(parentId)) {
             state.pendingRefreshRequests.delete(parentId);
+        }
         state.refreshAttempts.delete(parentId);
 
         const normalizedChildren = [];
         const parentRendered = parent.isRendered !== false;
         for (const child of params.nodes) {
             const normalized = normalizeNodeDescriptor(child, parentRendered);
-            if (normalized)
+            if (normalized) {
                 normalizedChildren.push(normalized);
+            }
         }
         const normalizedParent = {
             ...parent,
@@ -308,8 +327,9 @@
     }
 
     function setPreferredDepth(depth) {
-        if (typeof depth === "number")
+        if (typeof depth === "number") {
             protocolState.snapshotDepth = depth;
+        }
     }
 
     function registerProtocolHandlers() {
@@ -320,8 +340,9 @@
         onProtocolEvent("DOM.setChildNodes", params => applySetChildNodes(params || {}));
         onProtocolEvent("DOM.documentUpdated", () => requestDocument({preserveState: false}));
         onProtocolEvent("DOM.inspect", params => {
-            if (params && typeof params.nodeId === "number")
+            if (params && typeof params.nodeId === "number") {
                 selectNode(params.nodeId, {shouldHighlight: false});
+            }
         });
         setRequestChildNodesHandler(applySubtree);
     }

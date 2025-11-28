@@ -20,8 +20,9 @@
     let selectorRequestToken = 0;
 
     function captureTreeScrollPosition() {
-        if (!dom.tree)
+        if (!dom.tree) {
             return null;
+        }
         return {
             top: dom.tree.scrollTop,
             left: dom.tree.scrollLeft
@@ -29,15 +30,17 @@
     }
 
     function restoreTreeScrollPosition(position) {
-        if (!position || !dom.tree)
+        if (!position || !dom.tree) {
             return;
+        }
         dom.tree.scrollTop = position.top;
         dom.tree.scrollLeft = position.left;
     }
 
     function updateNodeElementState(element, node) {
-        if (!element)
+        if (!element) {
             return;
+        }
         const rendered = isNodeRendered(node);
         element.classList.toggle("is-rendered", rendered);
         element.classList.toggle("is-unrendered", !rendered);
@@ -103,8 +106,9 @@
             row.classList.add("tree-node__row--placeholder");
 
             const loadPlaceholder = event => {
-                if (event)
+                if (event) {
                     event.stopPropagation();
+                }
                 requestChildren(node);
             };
 
@@ -115,8 +119,9 @@
             placeholderButton.setAttribute("aria-label", `Load remaining ${node.childCount} nodes`);
             placeholderButton.addEventListener("click", loadPlaceholder);
             placeholderButton.addEventListener("keydown", event => {
-                if (event.key !== "Enter" && event.key !== " ")
+                if (event.key !== "Enter" && event.key !== " ") {
                     return;
+                }
                 event.preventDefault();
                 loadPlaceholder(event);
             });
@@ -149,8 +154,9 @@
     }
 
     function renderChildren(container, node, {initialRender = false} = {}) {
-        if (!container)
+        if (!container) {
             return;
+        }
 
         const isPlaceholder = node.nodeType === 0 && node.childCount > 0;
         if (isPlaceholder) {
@@ -172,8 +178,9 @@
         const existingElements = new Map();
         container.querySelectorAll(":scope > .tree-node").forEach(element => {
             const id = Number(element.dataset.nodeId);
-            if (!Number.isNaN(id))
+            if (!Number.isNaN(id)) {
                 existingElements.set(id, element);
+            }
         });
 
         const desiredChildren = Array.isArray(node.children) ? node.children : [];
@@ -208,8 +215,9 @@
             modifiedAttributes = null
         } = options;
         const element = state.elements.get(node.id);
-        if (!element)
+        if (!element) {
             return;
+        }
 
         element.dataset.nodeId = node.id;
         element.style.setProperty("--depth", node.depth || 0);
@@ -218,10 +226,11 @@
 
         const newRow = createNodeRow(node, {modifiedAttributes});
         const existingRow = element.querySelector(":scope > .tree-node__row");
-        if (existingRow)
+        if (existingRow) {
             existingRow.replaceWith(newRow);
-        else
+        } else {
             element.insertBefore(newRow, element.firstChild);
+        }
 
         let childrenContainer = element.querySelector(":scope > .tree-node__children");
         if (!childrenContainer) {
@@ -229,8 +238,9 @@
             childrenContainer.className = "tree-node__children";
             element.appendChild(childrenContainer);
         }
-        if (updateChildren)
+        if (updateChildren) {
             renderChildren(childrenContainer, node);
+        }
 
         setNodeExpanded(node.id, nodeShouldBeExpanded(node));
     }
@@ -238,8 +248,9 @@
     function mergeModifiedAttributes(current, next) {
         const hasCurrent = current instanceof Set && current.size;
         const hasNext = next instanceof Set && next.size;
-        if (!hasCurrent && !hasNext)
+        if (!hasCurrent && !hasNext) {
             return null;
+        }
         const merged = new Set(hasCurrent ? current : next);
         if (hasCurrent && hasNext) {
             next.forEach(attribute => {
@@ -250,16 +261,18 @@
     }
 
     function scheduleNodeRender(node, options = {}) {
-        if (!node || typeof node.id === "undefined")
+        if (!node || typeof node.id === "undefined") {
             return;
+        }
         const updateChildren = options.updateChildren !== false;
         const modifiedAttributes = options.modifiedAttributes instanceof Set ? options.modifiedAttributes : null;
         const existing = renderState.pendingNodes.get(node.id);
         const mergedUpdateChildren = existing ? (existing.updateChildren || updateChildren) : updateChildren;
         const mergedAttributes = mergeModifiedAttributes(existing ? existing.modifiedAttributes : null, modifiedAttributes);
         renderState.pendingNodes.set(node.id, {node, updateChildren: mergedUpdateChildren, modifiedAttributes: mergedAttributes});
-        if (renderState.frameId !== null)
+        if (renderState.frameId !== null) {
             return;
+        }
         renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
     }
 
@@ -267,8 +280,9 @@
         renderState.frameId = null;
         const pending = Array.from(renderState.pendingNodes.values());
         renderState.pendingNodes.clear();
-        if (!pending.length)
+        if (!pending.length) {
             return;
+        }
 
         pending.sort((a, b) => (a.node.depth || 0) - (b.node.depth || 0));
 
@@ -278,19 +292,22 @@
         while (index < pending.length) {
             const item = pending[index];
             index += 1;
-            if (!item || !item.node)
+            if (!item || !item.node) {
                 continue;
+            }
             refreshNodeElement(item.node, {updateChildren: item.updateChildren, modifiedAttributes: item.modifiedAttributes});
             const elapsed = timeNow() - startedAt;
-            if (index >= RENDER_BATCH_LIMIT || elapsed >= RENDER_TIME_BUDGET)
+            if (index >= RENDER_BATCH_LIMIT || elapsed >= RENDER_TIME_BUDGET) {
                 break;
+            }
         }
 
         if (index < pending.length) {
             for (; index < pending.length; ++index) {
                 const item = pending[index];
-                if (!item || !item.node)
+                if (!item || !item.node) {
                     continue;
+                }
                 const existing = renderState.pendingNodes.get(item.node.id);
                 const mergedUpdateChildren = existing ? (existing.updateChildren || item.updateChildren) : item.updateChildren;
                 const mergedAttributes = mergeModifiedAttributes(existing ? existing.modifiedAttributes : null, item.modifiedAttributes);
@@ -301,16 +318,19 @@
     }
 
     function nodeShouldBeExpanded(node) {
-        if (state.openState.has(node.id))
+        if (state.openState.has(node.id)) {
             return state.openState.get(node.id);
-        if (shouldCollapseByDefault(node))
+        }
+        if (shouldCollapseByDefault(node)) {
             return false;
+        }
         return (node.depth || 0) <= 1;
     }
 
     function shouldCollapseByDefault(node) {
-        if (!node)
+        if (!node) {
             return false;
+        }
         const name = (node.displayName || node.nodeName || "").toLowerCase();
         return name === "head";
     }
@@ -318,25 +338,29 @@
     function setNodeExpanded(nodeId, expanded) {
         state.openState.set(nodeId, expanded);
         const element = state.elements.get(nodeId);
-        if (!element)
+        if (!element) {
             return;
-        if (expanded)
+        }
+        if (expanded) {
             element.classList.remove("is-collapsed");
-        else
+        } else {
             element.classList.add("is-collapsed");
+        }
         element.setAttribute("aria-expanded", expanded ? "true" : "false");
         const row = element.firstElementChild;
         if (row) {
             const disclosure = row.querySelector(".tree-node__disclosure");
-            if (disclosure)
+            if (disclosure) {
                 disclosure.setAttribute("aria-expanded", expanded ? "true" : "false");
+            }
         }
     }
 
     function toggleNode(nodeId) {
         const node = state.nodes.get(nodeId);
-        if (!node)
+        if (!node) {
             return;
+        }
         const current = nodeShouldBeExpanded(node);
         setNodeExpanded(nodeId, !current);
     }
@@ -350,8 +374,9 @@
     }
 
     async function sendHighlight(nodeId) {
-        if (!nodeId || nodeId <= 0)
+        if (!nodeId || nodeId <= 0) {
             return;
+        }
         const node = state.nodes.get(nodeId);
         if (node && !isNodeRendered(node)) {
             clearPageHighlight();
@@ -377,8 +402,9 @@
     }
 
     function handleRowHover(node) {
-        if (node.id > 0)
+        if (node.id > 0) {
             sendHighlight(node.id);
+        }
     }
 
     function handleRowLeave() {
@@ -386,8 +412,9 @@
     }
 
     function scheduleSelectionScroll(nodeId) {
-        if (!nodeId || !dom.tree)
+        if (!nodeId || !dom.tree) {
             return;
+        }
         requestAnimationFrame(() => {
             scrollSelectionIntoView(nodeId);
         });
@@ -396,10 +423,12 @@
     function scrollSelectionIntoView(nodeId) {
         const container = dom.tree;
         const element = state.elements.get(nodeId);
-        if (!container || !element)
+        if (!container || !element) {
             return false;
-        if (state.selectedNodeId !== nodeId)
+        }
+        if (state.selectedNodeId !== nodeId) {
             return true;
+        }
         const row = element.querySelector(".tree-node__row") || element;
         const containerRect = container.getBoundingClientRect();
         const targetRect = row.getBoundingClientRect();
@@ -430,8 +459,9 @@
         const visibleInViewportH = targetRect.right > margin && targetRect.left < viewportWidth - margin;
         const verticallyVisible = contentBottom > visibleTop + margin && contentTop < visibleBottom - margin;
         const horizontallyVisible = contentRight > visibleLeft + margin && contentLeft < visibleRight - margin;
-        if (verticallyVisible && horizontallyVisible)
+        if (verticallyVisible && horizontallyVisible) {
             return true;
+        }
 
         let nextTop = container.scrollTop;
         if (!verticallyVisible) {
@@ -456,24 +486,28 @@
             }
         }
         const alreadyAtTarget = Math.abs(container.scrollTop - nextTop) < 0.5 && Math.abs(container.scrollLeft - nextLeft) < 0.5;
-        if (alreadyAtTarget)
+        if (alreadyAtTarget) {
             return true;
+        }
         container.scrollTo({top: nextTop, left: nextLeft, behavior: "auto"});
         return false;
     }
 
     function selectNode(nodeId, options = {}) {
-        if (!state.nodes.has(nodeId))
+        if (!state.nodes.has(nodeId)) {
             return false;
+        }
         const {shouldHighlight = true, autoScroll = false} = options;
         revealAncestors(nodeId);
         const previous = state.elements.get(state.selectedNodeId);
-        if (previous)
+        if (previous) {
             previous.classList.remove("is-selected");
+        }
 
         const element = state.elements.get(nodeId);
-        if (element)
+        if (element) {
             element.classList.add("is-selected");
+        }
 
         state.selectedNodeId = nodeId;
         setNodeExpanded(nodeId, true);
@@ -481,11 +515,13 @@
         updateDetails(node);
         updateSelectionChain(nodeId);
 
-        if (nodeId > 0 && shouldHighlight)
+        if (nodeId > 0 && shouldHighlight) {
             sendHighlight(nodeId);
+        }
 
-        if (autoScroll)
+        if (autoScroll) {
             scheduleSelectionScroll(nodeId);
+        }
 
         return true;
     }
@@ -495,22 +531,25 @@
         let current = state.nodes.get(nodeId);
         while (current) {
             chain.unshift(current.id);
-            if (!current.parentId)
+            if (!current.parentId) {
                 break;
+            }
             current = state.nodes.get(current.parentId);
         }
         state.selectionChain = chain;
     }
 
     function reopenSelectionAncestors() {
-        if (!Array.isArray(state.selectionChain) || !state.selectionChain.length)
+        if (!Array.isArray(state.selectionChain) || !state.selectionChain.length) {
             return;
+        }
         const nextChain = [];
         for (let index = 0; index < state.selectionChain.length; ++index) {
             const nodeId = state.selectionChain[index];
             const node = state.nodes.get(nodeId);
-            if (!node)
+            if (!node) {
                 break;
+            }
             nextChain.push(nodeId);
             setNodeExpanded(nodeId, true);
         }
@@ -526,16 +565,20 @@
     }
 
     function resolveNodeByPath(path) {
-        if (!state.snapshot || !state.snapshot.root)
+        if (!state.snapshot || !state.snapshot.root) {
             return null;
-        if (!Array.isArray(path))
+        }
+        if (!Array.isArray(path)) {
             return null;
+        }
         let node = state.snapshot.root;
-        if (!path.length)
+        if (!path.length) {
             return node;
+        }
         for (const index of path) {
-            if (!node.children || index < 0 || index >= node.children.length)
+            if (!node.children || index < 0 || index >= node.children.length) {
                 return null;
+            }
             node = node.children[index];
         }
         return node;
@@ -543,8 +586,9 @@
 
     function selectNodeByPath(path, options = {}) {
         const target = resolveNodeByPath(path);
-        if (!target)
+        if (!target) {
             return false;
+        }
         selectNode(target.id, options);
         return true;
     }
@@ -573,23 +617,26 @@
         const textModified = hasModifiedAttributes && modifiedAttributes.has(TEXT_CONTENT_ATTRIBUTE);
         const hasAttributeChanges = hasModifiedAttributes && (() => {
             for (const attribute of modifiedAttributes) {
-                if (attribute !== TEXT_CONTENT_ATTRIBUTE)
+                if (attribute !== TEXT_CONTENT_ATTRIBUTE) {
                     return true;
+                }
             }
             return false;
         })();
 
         function applyFlash(element) {
-            if (!element)
+            if (!element) {
                 return;
+            }
             element.classList.remove(highlightClass);
             void element.offsetWidth;
             element.classList.add(highlightClass);
         }
 
         function shouldHighlightAttribute(name) {
-            if (!hasModifiedAttributes || typeof name !== "string")
+            if (!hasModifiedAttributes || typeof name !== "string") {
                 return false;
+            }
             return modifiedAttributes.has(name);
         }
 
@@ -598,8 +645,9 @@
             const span = document.createElement("span");
             span.className = "tree-node__text";
             span.textContent = trimText(node.textContent || "");
-            if (textModified)
+            if (textModified) {
                 applyFlash(span);
+            }
             fragment.appendChild(span);
             return fragment;
         }
@@ -607,8 +655,9 @@
             const span = document.createElement("span");
             span.className = "tree-node__text";
             span.textContent = `<!-- ${trimText(node.textContent || "")} -->`;
-            if (textModified)
+            if (textModified) {
                 applyFlash(span);
+            }
             fragment.appendChild(span);
             return fragment;
         }
@@ -639,28 +688,32 @@
             }
         }
 
-        if (!didHighlight && hasAttributeChanges)
+        if (!didHighlight && hasAttributeChanges) {
             applyFlash(tag);
+        }
 
         const closingBracket = document.createElement("span");
         closingBracket.className = "tree-node__name";
         closingBracket.textContent = ">";
         fragment.appendChild(closingBracket);
-        if (!didHighlight && hasAttributeChanges)
+        if (!didHighlight && hasAttributeChanges) {
             applyFlash(closingBracket);
+        }
         return fragment;
     }
 
     function buildSelectionPath(node) {
-        if (!node)
+        if (!node) {
             return [];
+        }
         const labels = [];
         let current = node;
         let guard = 0;
         while (current && guard < 200) {
             labels.unshift(renderPreview(current));
-            if (!current.parentId)
+            if (!current.parentId) {
                 break;
+            }
             current = state.nodes.get(current.parentId);
             guard++;
         }
@@ -669,8 +722,9 @@
 
     function notifyNativeSelection(node) {
         const handler = window.webkit && window.webkit.messageHandlers ? window.webkit.messageHandlers.webInspectorDomSelection : null;
-        if (!handler || typeof handler.postMessage !== "function")
+        if (!handler || typeof handler.postMessage !== "function") {
             return;
+        }
         const payload = node ? {
             id: typeof node.id === "number" ? node.id : null,
             preview: renderPreview(node),
@@ -704,13 +758,15 @@
         }
         try {
             const result = await sendCommand("DOM.getSelectorPath", {nodeId});
-            if (currentToken !== selectorRequestToken)
+            if (currentToken !== selectorRequestToken) {
                 return;
+            }
             const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
             handler.postMessage({id: nodeId, selectorPath});
         } catch {
-            if (currentToken !== selectorRequestToken)
+            if (currentToken !== selectorRequestToken) {
                 return;
+            }
             handler.postMessage({id: nodeId, selectorPath: ""});
         }
     }
@@ -737,15 +793,17 @@
 
     function setSearchTerm(value) {
         const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-        if (normalized === state.filter)
+        if (normalized === state.filter) {
             return;
+        }
         state.filter = normalized;
         applyFilter();
     }
 
     function applyFilter() {
-        if (!state.snapshot || !state.snapshot.root)
+        if (!state.snapshot || !state.snapshot.root) {
             return;
+        }
         const term = state.filter;
 
         function filterNode(node) {
@@ -761,15 +819,17 @@
             let childMatches = false;
             if (Array.isArray(node.children)) {
                 for (const child of node.children) {
-                    if (filterNode(child))
+                    if (filterNode(child)) {
                         childMatches = true;
+                    }
                 }
             }
 
             const shouldShow = nodeMatches || childMatches || !term;
             const element = state.elements.get(node.id);
-            if (element)
+            if (element) {
                 element.classList.toggle("is-filtered-out", !shouldShow);
+            }
 
             return nodeMatches || childMatches;
         }

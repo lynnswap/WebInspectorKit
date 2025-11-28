@@ -7,21 +7,24 @@
     } = scope.DOMTreeUtilities;
 
     function normalizeNodeDescriptor(descriptor, parentRendered = true) {
-        if (!descriptor || typeof descriptor !== "object")
+        if (!descriptor || typeof descriptor !== "object") {
             return null;
+        }
 
         const resolvedId = typeof descriptor.nodeId === "number"
             ? descriptor.nodeId
             : (typeof descriptor.id === "number" ? descriptor.id : null);
-        if (typeof resolvedId !== "number")
+        if (typeof resolvedId !== "number") {
             return null;
+        }
         const nodeType = typeof descriptor.nodeType === "number" ? descriptor.nodeType : 0;
         const nodeName = descriptor.nodeName || "";
         const displayName = computeDisplayName(nodeType, nodeName, descriptor.localName);
         const attributes = deserializeAttributes(descriptor.attributes);
         const textContent = extractTextContent(nodeType, descriptor.nodeValue);
-        if (shouldOmitTextNode(nodeType, textContent))
+        if (shouldOmitTextNode(nodeType, textContent)) {
             return null;
+        }
         const layoutFlags = normalizeLayoutFlags(descriptor.layoutFlags);
         const renderedSelf = resolveRenderedState(layoutFlags, descriptor.isRendered);
         const isRendered = parentRendered && renderedSelf;
@@ -40,8 +43,9 @@
                 return;
             }
             const normalized = normalizeNodeDescriptor(child, isRendered);
-            if (normalized)
+            if (normalized) {
                 children.push(normalized);
+            }
         });
 
         const visibleChildCount = Math.max(children.length, rawChildCount - filteredChildren);
@@ -67,8 +71,9 @@
     }
 
     function deserializeAttributes(rawAttributes) {
-        if (!Array.isArray(rawAttributes))
+        if (!Array.isArray(rawAttributes)) {
             return [];
+        }
         const attributes = [];
         for (let index = 0; index < rawAttributes.length; index += 2) {
             const name = rawAttributes[index] || "";
@@ -87,26 +92,31 @@
     }
 
     function shouldOmitTextNode(nodeType, textContent) {
-        if (nodeType !== NODE_TYPES.TEXT_NODE && nodeType !== NODE_TYPES.COMMENT_NODE)
+        if (nodeType !== NODE_TYPES.TEXT_NODE && nodeType !== NODE_TYPES.COMMENT_NODE) {
             return false;
+        }
         return !textContent;
     }
 
     function isIgnorableTextDescriptor(descriptor) {
-        if (!descriptor || typeof descriptor !== "object")
+        if (!descriptor || typeof descriptor !== "object") {
             return false;
+        }
         const nodeType = typeof descriptor.nodeType === "number" ? descriptor.nodeType : 0;
         const textContent = extractTextContent(nodeType, descriptor.nodeValue);
         return shouldOmitTextNode(nodeType, textContent);
     }
 
     function computeDisplayName(nodeType, nodeName, localName) {
-        if (nodeType === NODE_TYPES.ELEMENT_NODE)
+        if (nodeType === NODE_TYPES.ELEMENT_NODE) {
             return (localName || nodeName || "").toLowerCase();
-        if (nodeType === NODE_TYPES.TEXT_NODE)
+        }
+        if (nodeType === NODE_TYPES.TEXT_NODE) {
             return "#text";
-        if (nodeType === NODE_TYPES.COMMENT_NODE)
+        }
+        if (nodeType === NODE_TYPES.COMMENT_NODE) {
             return "#comment";
+        }
         return nodeName || "";
     }
 
@@ -128,24 +138,28 @@
     }
 
     function indexNode(node, depth, parentId, childIndex) {
-        if (!node || typeof node.id === "undefined")
+        if (!node || typeof node.id === "undefined") {
             return;
-        if (typeof childIndex !== "number")
+        }
+        if (typeof childIndex !== "number") {
             childIndex = 0;
+        }
         node.depth = depth;
         node.parentId = parentId;
         node.childIndex = childIndex;
         state.nodes.set(node.id, node);
-        if (!Array.isArray(node.children))
+        if (!Array.isArray(node.children)) {
             return;
+        }
         node.children.forEach((child, index) => {
             indexNode(child, depth + 1, node.id, index);
         });
     }
 
     function mergeNodeWithSource(target, source, depth) {
-        if (!target || !source)
+        if (!target || !source) {
             return;
+        }
         target.nodeName = source.nodeName;
         target.displayName = source.displayName;
         target.nodeType = source.nodeType;
@@ -156,15 +170,18 @@
         const parent = typeof target.parentId === "number" ? state.nodes.get(target.parentId) : null;
         const parentRendered = parent ? parent.isRendered !== false : true;
         applyLayoutState(target, source.layoutFlags, typeof source.renderedSelf === "boolean" ? source.renderedSelf : source.isRendered, parentRendered);
-        if (typeof depth === "number")
+        if (typeof depth === "number") {
             target.depth = depth;
+        }
 
         const existingChildren = new Map();
         if (Array.isArray(target.children)) {
-            for (const child of target.children)
+            for (const child of target.children) {
                 existingChildren.set(child.id, child);
-        } else
+            }
+        } else {
             target.children = [];
+        }
 
         const nextChildren = [];
         const childDepth = (target.depth || 0) + 1;
@@ -193,45 +210,54 @@
     }
 
     function removeNodeEntry(node) {
-        if (!node || typeof node.id === "undefined")
+        if (!node || typeof node.id === "undefined") {
             return;
+        }
         if (Array.isArray(node.children)) {
-            for (const child of node.children)
+            for (const child of node.children) {
                 removeNodeEntry(child);
+            }
         }
         const element = state.elements.get(node.id);
-        if (element && element.parentNode)
+        if (element && element.parentNode) {
             element.remove();
+        }
         state.nodes.delete(node.id);
         state.openState.delete(node.id);
         state.elements.delete(node.id);
     }
 
     function reindexChildren(node) {
-        if (!node || !Array.isArray(node.children))
+        if (!node || !Array.isArray(node.children)) {
             return;
+        }
         node.children.forEach((child, index) => {
             child.childIndex = index;
         });
     }
 
     function findInsertionIndex(children, previousNodeId) {
-        if (!Array.isArray(children) || !children.length)
+        if (!Array.isArray(children) || !children.length) {
             return 0;
-        if (!previousNodeId)
+        }
+        if (!previousNodeId) {
             return 0;
+        }
         for (let index = 0; index < children.length; ++index) {
-            if (children[index].id === previousNodeId)
+            if (children[index].id === previousNodeId) {
                 return index + 1;
+            }
         }
         return children.length;
     }
 
     function preserveExpansionState(node, storage = new Map()) {
-        if (!node || typeof node.id === "undefined")
+        if (!node || typeof node.id === "undefined") {
             return storage;
-        if (state.openState.has(node.id))
+        }
+        if (state.openState.has(node.id)) {
             storage.set(node.id, state.openState.get(node.id));
+        }
         if (Array.isArray(node.children)) {
             for (const child of node.children) {
                 preserveExpansionState(child, storage);

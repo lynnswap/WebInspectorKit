@@ -23,8 +23,9 @@
     }
 
     function installWebInspectorKit() {
-        if (window.webInspectorKit && window.webInspectorKit.__installed)
+        if (window.webInspectorKit && window.webInspectorKit.__installed) {
             return;
+        }
 
         registerProtocolHandlers();
 
@@ -45,10 +46,11 @@
             configurable: false
         });
 
-        if (document.readyState === "loading")
+        if (document.readyState === "loading") {
             document.addEventListener("DOMContentLoaded", attachEventListeners, {once: true});
-        else
+        } else {
             attachEventListeners();
+        }
     }
 
     installWebInspectorKit();
