@@ -9,12 +9,15 @@
     }
 
     function updateConfig(partial) {
-        if (typeof partial !== "object" || partial === null)
+        if (typeof partial !== "object" || partial === null) {
             return;
-        if (typeof partial.snapshotDepth === "number")
+        }
+        if (typeof partial.snapshotDepth === "number") {
             protocolState.snapshotDepth = partial.snapshotDepth;
-        if (typeof partial.subtreeDepth === "number")
+        }
+        if (typeof partial.subtreeDepth === "number") {
             protocolState.subtreeDepth = partial.subtreeDepth;
+        }
     }
 
     function sendProtocolMessage(message) {
@@ -38,44 +41,52 @@
 
     function dispatchMessageFromBackend(message) {
         const parsed = safeParseJSON(message);
-        if (!parsed || typeof parsed !== "object")
+        if (!parsed || typeof parsed !== "object") {
             return;
+        }
         if (Object.prototype.hasOwnProperty.call(parsed, "id")) {
             const requestId = parsed.id;
-            if (typeof requestId !== "number")
+            if (typeof requestId !== "number") {
                 return;
+            }
             const pending = protocolState.pending.get(requestId);
-            if (!pending)
+            if (!pending) {
                 return;
+            }
             protocolState.pending.delete(requestId);
-            if (parsed.error)
+            if (parsed.error) {
                 pending.reject(parsed.error);
-            else {
+            } else {
                 const method = pending.method || "";
                 let result = parsed.result;
-                if (typeof result === "string")
+                if (typeof result === "string") {
                     result = safeParseJSON(result) || result;
-                if (method === "DOM.requestChildNodes" && typeof requestChildNodesHandler === "function")
+                }
+                if (method === "DOM.requestChildNodes" && typeof requestChildNodesHandler === "function") {
                     requestChildNodesHandler(result);
+                }
                 pending.resolve(result);
             }
             return;
         }
-        if (typeof parsed.method !== "string")
+        if (typeof parsed.method !== "string") {
             return;
+        }
         emitProtocolEvent(parsed.method, parsed.params || {}, parsed);
     }
 
     function onProtocolEvent(method, handler) {
-        if (!protocolState.eventHandlers.has(method))
+        if (!protocolState.eventHandlers.has(method)) {
             protocolState.eventHandlers.set(method, new Set());
+        }
         protocolState.eventHandlers.get(method).add(handler);
     }
 
     function emitProtocolEvent(method, params, rawMessage) {
         const listeners = protocolState.eventHandlers.get(method);
-        if (!listeners || !listeners.size)
+        if (!listeners || !listeners.size) {
             return;
+        }
         listeners.forEach(listener => {
             try {
                 listener(params, method, rawMessage);

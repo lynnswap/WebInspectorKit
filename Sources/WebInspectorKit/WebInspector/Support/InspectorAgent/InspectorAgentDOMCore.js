@@ -1,12 +1,15 @@
 import {inspector} from "./InspectorAgentState.js";
 
 export function rememberNode(node) {
-    if (!node)
+    if (!node) {
         return 0;
-    if (!inspector.map)
+    }
+    if (!inspector.map) {
         inspector.map = new Map();
-    if (!inspector.nodeMap)
+    }
+    if (!inspector.nodeMap) {
         inspector.nodeMap = new WeakMap();
+    }
     if (inspector.nodeMap.has(node)) {
         var existingId = inspector.nodeMap.get(node);
         inspector.map.set(existingId, node);
@@ -27,8 +30,9 @@ export function layoutInfoForNode(node) {
 }
 
 export function nodeIsRendered(node) {
-    if (!node)
+    if (!node) {
         return false;
+    }
 
     switch (node.nodeType) {
     case Node.ELEMENT_NODE:
@@ -44,8 +48,9 @@ export function nodeIsRendered(node) {
 }
 
 export function elementIsRendered(element) {
-    if (!element || !element.isConnected)
+    if (!element || !element.isConnected) {
         return false;
+    }
 
     var style = null;
     try {
@@ -53,39 +58,45 @@ export function elementIsRendered(element) {
     } catch {
     }
 
-    if (style && style.display === "none")
+    if (style && style.display === "none") {
         return false;
+    }
 
     if (element.getClientRects) {
         var rectList = element.getClientRects();
         if (rectList && rectList.length) {
             for (var i = 0; i < rectList.length; ++i) {
                 var rect = rectList[i];
-                if (rect && (rect.width || rect.height))
+                if (rect && (rect.width || rect.height)) {
                     return true;
+                }
             }
         }
     }
 
     if (element.getBoundingClientRect) {
         var rect = element.getBoundingClientRect();
-        if (rect && (rect.width || rect.height))
+        if (rect && (rect.width || rect.height)) {
             return true;
+        }
     }
 
     if (typeof element.offsetWidth === "number" || typeof element.offsetHeight === "number") {
-        if (element.offsetWidth || element.offsetHeight)
+        if (element.offsetWidth || element.offsetHeight) {
             return true;
+        }
     }
 
-    if (style && (style.position === "fixed" || style.position === "sticky"))
+    if (style && (style.position === "fixed" || style.position === "sticky")) {
         return true;
+    }
 
     if (typeof element.getBBox === "function") {
         try {
             var box = element.getBBox();
-            if (box && (box.width || box.height))
+            if (box && (box.width || box.height)) {
                 return true;
+            }
         } catch {
         }
     }
@@ -94,25 +105,30 @@ export function elementIsRendered(element) {
 }
 
 export function textNodeIsRendered(node) {
-    if (!node || !node.parentNode || !node.nodeValue)
+    if (!node || !node.parentNode || !node.nodeValue) {
         return false;
-    if (!nodeIsRendered(node.parentNode))
+    }
+    if (!nodeIsRendered(node.parentNode)) {
         return false;
+    }
     var range = document.createRange();
     range.selectNodeContents(node);
     var rect = range.getBoundingClientRect();
-    if (range.detach)
+    if (range.detach) {
         range.detach();
+    }
     return rect && (rect.width || rect.height);
 }
 
 export function describe(node, depth, maxDepth, selectionPath, childLimit) {
-    if (!node)
+    if (!node) {
         return null;
+    }
 
     var identifier = rememberNode(node);
-    if (!identifier)
+    if (!identifier) {
         return null;
+    }
 
     var descriptor = {
         nodeId: identifier,
@@ -133,8 +149,9 @@ export function describe(node, depth, maxDepth, selectionPath, childLimit) {
             var attr = node.attributes[i];
             serializedAttributes.push(attr.name, attr.value);
         }
-        if (serializedAttributes.length)
+        if (serializedAttributes.length) {
             descriptor.attributes = serializedAttributes;
+        }
     }
 
     if (node.nodeType === Node.DOCUMENT_NODE) {
@@ -154,11 +171,13 @@ export function describe(node, depth, maxDepth, selectionPath, childLimit) {
         for (var childIndex = 0; childIndex < node.childNodes.length; ++childIndex) {
             var childNode = node.childNodes[childIndex];
             var mustInclude = selectionIndex === childIndex;
-            if (descriptor.children.length >= limit && !mustInclude)
+            if (descriptor.children.length >= limit && !mustInclude) {
                 break;
+            }
             var childDescriptor = describe(childNode, depth + 1, maxDepth, selectionPath, childLimit);
-            if (childDescriptor)
+            if (childDescriptor) {
                 descriptor.children.push(childDescriptor);
+            }
         }
     }
 
@@ -166,72 +185,88 @@ export function describe(node, depth, maxDepth, selectionPath, childLimit) {
 }
 
 export function findNodeByPath(tree, path) {
-    if (!tree || !Array.isArray(path))
+    if (!tree || !Array.isArray(path)) {
         return null;
-    if (!path.length)
+    }
+    if (!path.length) {
         return tree;
+    }
     var current = tree;
     for (var i = 0; i < path.length; ++i) {
-        if (!Array.isArray(current.children))
+        if (!Array.isArray(current.children)) {
             return null;
+        }
         var index = path[i];
-        if (index < 0 || index >= current.children.length)
+        if (index < 0 || index >= current.children.length) {
             return null;
+        }
         current = current.children[index];
     }
     return current;
 }
 
 export function computeNodePath(node) {
-    if (!node)
+    if (!node) {
         return null;
+    }
     var root = document.documentElement || document.body;
-    if (!root)
+    if (!root) {
         return null;
+    }
     var current = node;
     var path = [];
     while (current && current !== root) {
         var parent = current.parentNode;
-        if (!parent)
+        if (!parent) {
             return null;
+        }
         var index = Array.prototype.indexOf.call(parent.childNodes, current);
-        if (index < 0)
+        if (index < 0) {
             return null;
+        }
         path.unshift(index);
         current = parent;
     }
-    if (current !== root)
+    if (current !== root) {
         return null;
+    }
     return path;
 }
 
 export function rectForNode(node) {
-    if (!node)
+    if (!node) {
         return null;
+    }
     if (node.nodeType === Node.TEXT_NODE) {
         var range = document.createRange();
         range.selectNodeContents(node);
         var rect = range.getBoundingClientRect();
-        if (range.detach)
+        if (range.detach) {
             range.detach();
-        if (!rect || (!rect.width && !rect.height))
+        }
+        if (!rect || (!rect.width && !rect.height)) {
             return null;
+        }
         return rect;
     }
-    if (node.getBoundingClientRect)
+    if (node.getBoundingClientRect) {
         return node.getBoundingClientRect();
+    }
     return null;
 }
 
 export function captureDOM(maxDepth) {
     var currentURL = document.URL || "";
     var shouldReset = inspector.documentURL && inspector.documentURL !== currentURL;
-    if (!inspector.map || shouldReset)
+    if (!inspector.map || shouldReset) {
         inspector.map = new Map();
-    if (!inspector.nodeMap || shouldReset)
+    }
+    if (!inspector.nodeMap || shouldReset) {
         inspector.nodeMap = new WeakMap();
-    if (typeof inspector.nextId !== "number" || inspector.nextId < 1 || shouldReset)
+    }
+    if (typeof inspector.nextId !== "number" || inspector.nextId < 1 || shouldReset) {
         inspector.nextId = 1;
+    }
     inspector.documentURL = currentURL;
 
     var selectionPath = inspector.pendingSelectionPath;
@@ -257,11 +292,13 @@ export function captureDOM(maxDepth) {
 
 export function captureDOMSubtree(identifier, maxDepth) {
     var map = inspector.map;
-    if (!map || !map.size)
+    if (!map || !map.size) {
         return "";
+    }
     var node = map.get(identifier);
-    if (!node)
+    if (!node) {
         return "";
+    }
     var tree = describe(node, 0, maxDepth || 4, null, Number.MAX_SAFE_INTEGER);
     return JSON.stringify(tree);
 }

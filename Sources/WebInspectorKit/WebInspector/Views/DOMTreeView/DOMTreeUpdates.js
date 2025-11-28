@@ -37,18 +37,22 @@
     }
 
     function triggerReload(reason) {
-        if (typeof reloadHandler === "function")
+        if (typeof reloadHandler === "function") {
             reloadHandler(reason);
+        }
     }
 
     async function requestNodeRefresh(nodeId, options = {}) {
-        if (typeof nodeId !== "number" || nodeId <= 0)
+        if (typeof nodeId !== "number" || nodeId <= 0) {
             return;
-        if (!state.pendingRefreshRequests)
+        }
+        if (!state.pendingRefreshRequests) {
             state.pendingRefreshRequests = new Set();
+        }
         const targetNodeId = typeof options.parentId === "number" && options.parentId > 0 ? options.parentId : nodeId;
-        if (state.pendingRefreshRequests.has(targetNodeId))
+        if (state.pendingRefreshRequests.has(targetNodeId)) {
             return;
+        }
 
         const attempts = state.refreshAttempts.get(targetNodeId) || {count: 0, lastRequested: 0};
         const now = timeNow();
@@ -70,8 +74,9 @@
     }
 
     function refreshTreeAfterDomUpdates(nodesToRefresh, modifiedAttrsByNode = new Map()) {
-        if (!nodesToRefresh || !nodesToRefresh.size)
+        if (!nodesToRefresh || !nodesToRefresh.size) {
             return;
+        }
         const preservedScrollPosition = captureTreeScrollPosition();
         nodesToRefresh.forEach(entry => {
             if (entry && entry.node) {
@@ -89,8 +94,9 @@
             }
         }
         applyFilter();
-        if (preservedScrollPosition)
+        if (preservedScrollPosition) {
             restoreTreeScrollPosition(preservedScrollPosition);
+        }
     }
 
     class FrameDebouncer {
@@ -100,8 +106,9 @@
         }
 
         schedule() {
-            if (this._frameId !== null)
+            if (this._frameId !== null) {
                 return;
+            }
             this._frameId = requestAnimationFrame(() => {
                 this._frameId = null;
                 this._callback();
@@ -109,8 +116,9 @@
         }
 
         cancel() {
-            if (this._frameId === null)
+            if (this._frameId === null) {
                 return;
+            }
             cancelAnimationFrame(this._frameId);
             this._frameId = null;
         }
@@ -137,8 +145,9 @@
         }
 
         enqueueEvents(events) {
-            if (!Array.isArray(events) || !events.length)
+            if (!Array.isArray(events) || !events.length) {
                 return;
+            }
             if (!state.snapshot || !state.snapshot.root) {
                 triggerReload("missing-snapshot");
                 return;
@@ -149,19 +158,22 @@
         }
 
         _recordEvent(event) {
-            if (!event || typeof event.method !== "string")
+            if (!event || typeof event.method !== "string") {
                 return;
+            }
             const method = event.method.startsWith("DOM.") ? event.method.slice(4) : event.method;
             const params = event.params || {};
             this._pendingEvents.push({method, params});
             switch (method) {
             case "childNodeInserted":
-                if (params.node && typeof params.node.nodeId === "number")
+                if (params.node && typeof params.node.nodeId === "number") {
                     this._recentlyInsertedNodes.set(params.node.nodeId, params);
+                }
                 break;
             case "childNodeRemoved":
-                if (typeof params.nodeId === "number")
+                if (typeof params.nodeId === "number") {
                     this._recentlyDeletedNodes.set(params.nodeId, params);
+                }
                 break;
             case "attributeModified":
             case "attributeRemoved":
@@ -176,10 +188,12 @@
         }
 
         _nodeAttributeModified(nodeId, attribute) {
-            if (typeof nodeId !== "number" || !attribute)
+            if (typeof nodeId !== "number" || !attribute) {
                 return;
-            if (!this._recentlyModifiedAttributes.has(attribute))
+            }
+            if (!this._recentlyModifiedAttributes.has(attribute)) {
                 this._recentlyModifiedAttributes.set(attribute, new Set());
+            }
             this._recentlyModifiedAttributes.get(attribute).add(nodeId);
             this._recentlyModifiedNodes.add(nodeId);
         }
@@ -187,8 +201,9 @@
         _cloneModifiedAttributes() {
             const snapshot = new Map();
             this._recentlyModifiedAttributes.forEach((nodes, attribute) => {
-                if (!nodes || !nodes.size)
+                if (!nodes || !nodes.size) {
                     return;
+                }
                 snapshot.set(attribute, new Set(nodes));
             });
             return snapshot;
@@ -198,10 +213,12 @@
             const nodesToAttributes = new Map();
             attributeToNodes.forEach((nodes, attribute) => {
                 nodes.forEach(nodeId => {
-                    if (typeof nodeId !== "number")
+                    if (typeof nodeId !== "number") {
                         return;
-                    if (!nodesToAttributes.has(nodeId))
+                    }
+                    if (!nodesToAttributes.has(nodeId)) {
                         nodesToAttributes.set(nodeId, new Set());
+                    }
                     nodesToAttributes.get(nodeId).add(attribute);
                 });
             });
@@ -213,8 +230,9 @@
                 this.reset();
                 return;
             }
-            if (!this._pendingEvents.length)
+            if (!this._pendingEvents.length) {
                 return;
+            }
 
             const nodesToRefresh = new Map();
             let requiresReload = false;
@@ -226,16 +244,18 @@
             while (index < pending.length) {
                 const entry = pending[index];
                 index += 1;
-                if (!entry || typeof entry.method !== "string")
+                if (!entry || typeof entry.method !== "string") {
                     continue;
+                }
                 if (!this._handleDomEvent(entry.method, entry.params || {}, nodesToRefresh)) {
                     requiresReload = true;
                     break;
                 }
                 processed += 1;
                 const elapsed = timeNow() - startedAt;
-                if (processed >= DOM_EVENT_BATCH_LIMIT || elapsed >= DOM_EVENT_TIME_BUDGET)
+                if (processed >= DOM_EVENT_BATCH_LIMIT || elapsed >= DOM_EVENT_TIME_BUDGET) {
                     break;
+                }
             }
 
             const modifiedAttributes = this._cloneModifiedAttributes();
@@ -256,8 +276,9 @@
             if (index < pending.length) {
                 this._pendingEvents = pending.slice(index);
                 this._debouncer.schedule();
-            } else
+            } else {
                 this._pendingEvents = [];
+            }
         }
 
         _handleDomEvent(method, params, nodesToRefresh) {
@@ -281,19 +302,22 @@
 
         _handleNodeInserted(entry, nodesToRefresh) {
             const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
-            if (!entry.node || typeof parentId !== "number")
+            if (!entry.node || typeof parentId !== "number") {
                 return true;
+            }
             const parent = state.nodes.get(parentId);
             if (!parent) {
                 requestNodeRefresh(parentId);
                 return true;
             }
-            if (!Array.isArray(parent.children))
+            if (!Array.isArray(parent.children)) {
                 parent.children = [];
+            }
             const children = parent.children;
             const descriptor = normalizeNodeDescriptor(entry.node, parent.isRendered !== false);
-            if (!descriptor || typeof descriptor.id !== "number")
+            if (!descriptor || typeof descriptor.id !== "number") {
                 return true;
+            }
 
             const existingIndex = children.findIndex(child => child.id === descriptor.id);
             const preservedExpansion = state.openState.has(descriptor.id) ? state.openState.get(descriptor.id) : undefined;
@@ -307,8 +331,9 @@
             parent.childCount = Math.max(parent.childCount || children.length, children.length);
             indexNode(descriptor, (parent.depth || 0) + 1, parent.id, insertionIndex);
             reindexChildren(parent);
-            if (preservedExpansion !== undefined)
+            if (preservedExpansion !== undefined) {
                 state.openState.set(descriptor.id, preservedExpansion);
+            }
             this._markNodeForRefresh(nodesToRefresh, parent, {updateChildren: true});
             this._markNodeForRefresh(nodesToRefresh, descriptor, {updateChildren: true});
             return true;
@@ -316,18 +341,21 @@
 
         _handleNodeRemoved(entry, nodesToRefresh) {
             const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
-            if (typeof parentId !== "number" || typeof entry.nodeId !== "number")
+            if (typeof parentId !== "number" || typeof entry.nodeId !== "number") {
                 return true;
+            }
             const parent = state.nodes.get(parentId);
             if (!parent) {
                 requestNodeRefresh(parentId);
                 return true;
             }
-            if (!Array.isArray(parent.children))
+            if (!Array.isArray(parent.children)) {
                 return true;
+            }
             const index = parent.children.findIndex(child => child.id === entry.nodeId);
-            if (index === -1)
+            if (index === -1) {
                 return true;
+            }
             const [removed] = parent.children.splice(index, 1);
             parent.childCount = Math.max(parent.children.length, parent.childCount || 0);
             reindexChildren(parent);
@@ -342,8 +370,9 @@
         }
 
         _handleAttributeUpdated(entry, nodesToRefresh) {
-            if (typeof entry.nodeId !== "number" || typeof entry.name !== "string")
+            if (typeof entry.nodeId !== "number" || typeof entry.name !== "string") {
                 return true;
+            }
             const node = state.nodes.get(entry.nodeId);
             if (!node) {
                 requestNodeRefresh(entry.nodeId);
@@ -352,24 +381,28 @@
             const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
             const parentRendered = parentNode ? parentNode.isRendered !== false : true;
             const layoutChange = applyLayoutEntry(node, entry, parentRendered);
-            if (!Array.isArray(node.attributes))
+            if (!Array.isArray(node.attributes)) {
                 node.attributes = [];
+            }
             const value = typeof entry.value === "string" ? entry.value : String(entry.value ?? "");
             const index = node.attributes.findIndex(attr => attr.name === entry.name);
             const record = {name: entry.name, value};
-            if (index >= 0)
+            if (index >= 0) {
                 node.attributes[index] = record;
-            else
+            } else {
                 node.attributes.push(record);
-            if (layoutChange.changed)
+            }
+            if (layoutChange.changed) {
                 this._propagateRenderedState(node, parentRendered, nodesToRefresh);
+            }
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             return true;
         }
 
         _handleAttributeRemoved(entry, nodesToRefresh) {
-            if (typeof entry.nodeId !== "number" || typeof entry.name !== "string")
+            if (typeof entry.nodeId !== "number" || typeof entry.name !== "string") {
                 return true;
+            }
             const node = state.nodes.get(entry.nodeId);
             if (!node) {
                 requestNodeRefresh(entry.nodeId);
@@ -378,21 +411,24 @@
             const parentNode = typeof node.parentId === "number" ? state.nodes.get(node.parentId) : null;
             const parentRendered = parentNode ? parentNode.isRendered !== false : true;
             const layoutChange = applyLayoutEntry(node, entry, parentRendered);
-            if (!Array.isArray(node.attributes))
+            if (!Array.isArray(node.attributes)) {
                 node.attributes = [];
+            }
             const next = node.attributes.filter(attr => attr.name !== entry.name);
             if (next.length !== node.attributes.length) {
                 node.attributes = next;
-                if (layoutChange.changed)
+                if (layoutChange.changed) {
                     this._propagateRenderedState(node, parentRendered, nodesToRefresh);
+                }
                 this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             }
             return true;
         }
 
         _handleCharacterDataUpdated(entry, nodesToRefresh) {
-            if (typeof entry.nodeId !== "number")
+            if (typeof entry.nodeId !== "number") {
                 return true;
+            }
             const node = state.nodes.get(entry.nodeId);
             if (!node) {
                 requestNodeRefresh(entry.nodeId);
@@ -402,15 +438,17 @@
             const parentRendered = parentNode ? parentNode.isRendered !== false : true;
             const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             node.textContent = entry.characterData || "";
-            if (layoutChange.changed)
+            if (layoutChange.changed) {
                 this._propagateRenderedState(node, parentRendered, nodesToRefresh);
+            }
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
             return true;
         }
 
         _handleChildCountUpdate(entry, nodesToRefresh) {
-            if (typeof entry.nodeId !== "number")
+            if (typeof entry.nodeId !== "number") {
                 return true;
+            }
             const node = state.nodes.get(entry.nodeId);
             if (!node) {
                 requestNodeRefresh(entry.nodeId);
@@ -420,25 +458,29 @@
             const parentRendered = parentNode ? parentNode.isRendered !== false : true;
             const layoutChange = applyLayoutEntry(node, entry, parentRendered);
             const normalizedCount = typeof entry.childNodeCount === "number" ? entry.childNodeCount : entry.childCount;
-            if (typeof normalizedCount === "number")
+            if (typeof normalizedCount === "number") {
                 node.childCount = normalizedCount;
-            if (layoutChange.changed)
+            }
+            if (layoutChange.changed) {
                 this._propagateRenderedState(node, parentRendered, nodesToRefresh);
+            }
             this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: true});
             return true;
         }
 
         _propagateRenderedState(node, parentRendered, nodesToRefresh) {
-            if (!node)
+            if (!node) {
                 return;
+            }
             const renderedSelf = resolveRenderedState(Array.isArray(node.layoutFlags) ? node.layoutFlags : [], typeof node.renderedSelf === "boolean" ? node.renderedSelf : undefined);
             const ancestorRendered = typeof parentRendered === "boolean" ? parentRendered : true;
             const isRendered = ancestorRendered && renderedSelf;
             const changed = node.isRendered !== isRendered;
             node.renderedSelf = renderedSelf;
             node.isRendered = isRendered;
-            if (changed)
+            if (changed) {
                 this._markNodeForRefresh(nodesToRefresh, node, {updateChildren: false});
+            }
             if (Array.isArray(node.children)) {
                 for (const child of node.children)
                     this._propagateRenderedState(child, isRendered, nodesToRefresh);
@@ -446,8 +488,9 @@
         }
 
         _markNodeForRefresh(collection, node, options = {}) {
-            if (!collection || !node || typeof node.id !== "number")
+            if (!collection || !node || typeof node.id !== "number") {
                 return;
+            }
             const updateChildren = options.updateChildren !== false;
             const existing = collection.get(node.id);
             const merged = existing ? (existing.updateChildren || updateChildren) : updateChildren;
@@ -468,8 +511,9 @@
 
     function dispatchDomUpdates(payload) {
         try {
-            if (!payload || !state.snapshot || !state.snapshot.root)
+            if (!payload || !state.snapshot || !state.snapshot.root) {
                 return;
+            }
             let bundle = null;
             try {
                 bundle = typeof payload === "string" ? JSON.parse(payload) : payload;
@@ -479,8 +523,9 @@
                 return;
             }
             const events = Array.isArray(bundle.events) ? bundle.events : (Array.isArray(bundle.messages) ? bundle.messages : []);
-            if (!bundle || !events.length)
+            if (!bundle || !events.length) {
                 return;
+            }
             domTreeUpdater.enqueueEvents(events);
         } catch (error) {
             reportInspectorError("dispatchDomUpdates", error);

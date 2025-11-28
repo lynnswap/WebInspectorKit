@@ -4,46 +4,54 @@ import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpd
 
 function resolveNode(identifier) {
     var map = inspector.map;
-    if (!map || !map.size)
+    if (!map || !map.size) {
         return null;
+    }
     return map.get(identifier) || null;
 }
 
 function classNames(element) {
-    if (!element || !element.classList)
+    if (!element || !element.classList) {
         return [];
+    }
     var names = [];
     element.classList.forEach(function(name) {
-        if (name)
+        if (name) {
             names.push(name);
+        }
     });
     return names;
 }
 
 function escapedClassSelector(element) {
     var names = classNames(element);
-    if (!names.length)
+    if (!names.length) {
         return "";
+    }
     return "." + names.map(function(name) {
-        if (typeof CSS !== "undefined" && typeof CSS.escape === "function")
+        if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
             return CSS.escape(name);
+        }
         return name.replace(/([\\.\\[\\]\\+\\*\\~\\>\\:\\(\\)\\$\\^\\=\\|\\{\\}])/g, "\\$1");
     }).join(".");
 }
 
 function cssPathComponent(node) {
-    if (!node || node.nodeType !== Node.ELEMENT_NODE)
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return null;
+    }
 
     var nodeName = node.tagName ? node.tagName.toLowerCase() : (node.nodeName || "").toLowerCase();
 
     var parent = node.parentElement;
-    if (!parent || parent.nodeType === Node.DOCUMENT_NODE)
+    if (!parent || parent.nodeType === Node.DOCUMENT_NODE) {
         return {value: nodeName, done: true};
+    }
 
     var lowerNodeName = nodeName;
-    if (lowerNodeName === "body" || lowerNodeName === "head" || lowerNodeName === "html")
+    if (lowerNodeName === "body" || lowerNodeName === "head" || lowerNodeName === "html") {
         return {value: nodeName, done: true};
+    }
 
     if (node.id) {
         var escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
@@ -60,8 +68,9 @@ function cssPathComponent(node) {
     var children = parent.children || [];
     for (var i = 0; i < children.length; ++i) {
         var sibling = children[i];
-        if (!sibling || sibling.nodeType !== Node.ELEMENT_NODE)
+        if (!sibling || sibling.nodeType !== Node.ELEMENT_NODE) {
             continue;
+        }
 
         elementIndex++;
         if (sibling === node) {
@@ -69,8 +78,9 @@ function cssPathComponent(node) {
             continue;
         }
 
-        if (sibling.tagName && sibling.tagName.toLowerCase() === nodeName)
+        if (sibling.tagName && sibling.tagName.toLowerCase() === nodeName) {
             hasUniqueTagName = false;
+        }
 
         if (uniqueClasses.size) {
             var siblingClassNames = classNames(sibling);
@@ -79,31 +89,36 @@ function cssPathComponent(node) {
     }
 
     var selector = nodeName;
-    if (nodeName === "input" && node.getAttribute && node.getAttribute("type") && !uniqueClasses.size)
+    if (nodeName === "input" && node.getAttribute && node.getAttribute("type") && !uniqueClasses.size) {
         selector += '[type="' + node.getAttribute("type") + '"]';
+    }
     if (!hasUniqueTagName) {
-        if (uniqueClasses.size)
+        if (uniqueClasses.size) {
             selector += escapedClassSelector(node);
-        else if (nthChildIndex > 0)
+        } else if (nthChildIndex > 0) {
             selector += ":nth-child(" + nthChildIndex + ")";
+        }
     }
 
     return {value: selector, done: false};
 }
 
 function cssPath(node) {
-    if (!node || node.nodeType !== Node.ELEMENT_NODE)
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return "";
+    }
 
     var components = [];
     var current = node;
     while (current) {
         var component = cssPathComponent(current);
-        if (!component)
+        if (!component) {
             break;
+        }
         components.push(component);
-        if (component.done)
+        if (component.done) {
             break;
+        }
         current = current.parentElement;
     }
 
@@ -112,27 +127,33 @@ function cssPath(node) {
 }
 
 function xpathIndex(node) {
-    if (!node || !node.parentNode)
+    if (!node || !node.parentNode) {
         return 0;
+    }
 
     var siblings = node.parentNode.childNodes || [];
-    if (siblings.length <= 1)
+    if (siblings.length <= 1) {
         return 0;
+    }
 
     function isSimilarNode(a, b) {
-        if (a === b)
+        if (a === b) {
             return true;
+        }
 
         var aType = a && a.nodeType;
         var bType = b && b.nodeType;
 
-        if (aType === Node.ELEMENT_NODE && bType === Node.ELEMENT_NODE)
+        if (aType === Node.ELEMENT_NODE && bType === Node.ELEMENT_NODE) {
             return a.localName === b.localName;
+        }
 
-        if (aType === Node.CDATA_SECTION_NODE)
+        if (aType === Node.CDATA_SECTION_NODE) {
             return bType === Node.TEXT_NODE;
-        if (bType === Node.CDATA_SECTION_NODE)
+        }
+        if (bType === Node.CDATA_SECTION_NODE) {
             return aType === Node.TEXT_NODE;
+        }
 
         return aType === bType;
     }
@@ -142,41 +163,48 @@ function xpathIndex(node) {
     var counter = 1;
     for (var i = 0; i < siblings.length; ++i) {
         var sibling = siblings[i];
-        if (!isSimilarNode(node, sibling))
+        if (!isSimilarNode(node, sibling)) {
             continue;
+        }
 
         if (node === sibling) {
             foundIndex = counter;
-            if (!unique)
+            if (!unique) {
                 return foundIndex;
+            }
         } else {
             unique = false;
-            if (foundIndex !== -1)
+            if (foundIndex !== -1) {
                 return foundIndex;
+            }
         }
         counter++;
     }
 
-    if (unique)
+    if (unique) {
         return 0;
+    }
     return foundIndex > 0 ? foundIndex : 0;
 }
 
 function xpathComponent(node) {
-    if (!node)
+    if (!node) {
         return null;
+    }
 
     var index = xpathIndex(node);
-    if (index === -1)
+    if (index === -1) {
         return null;
+    }
 
     var value;
     switch (node.nodeType) {
     case Node.DOCUMENT_NODE:
         return {value: "", done: true};
     case Node.ELEMENT_NODE:
-        if (node.id)
+        if (node.id) {
             return {value: '//*[@id="' + node.id + '"]', done: true};
+        }
         value = node.localName || (node.tagName ? node.tagName.toLowerCase() : "");
         break;
     case Node.ATTRIBUTE_NODE:
@@ -197,28 +225,33 @@ function xpathComponent(node) {
         break;
     }
 
-    if (index > 0)
+    if (index > 0) {
         value += "[" + index + "]";
+    }
 
     return {value: value, done: false};
 }
 
 function xpath(node) {
-    if (!node)
+    if (!node) {
         return "";
+    }
 
-    if (node.nodeType === Node.DOCUMENT_NODE)
+    if (node.nodeType === Node.DOCUMENT_NODE) {
         return "/";
+    }
 
     var components = [];
     var current = node;
     while (current) {
         var component = xpathComponent(current);
-        if (!component)
+        if (!component) {
             break;
+        }
         components.push(component);
-        if (component.done)
+        if (component.done) {
             break;
+        }
         current = current.parentNode;
     }
 
@@ -228,8 +261,9 @@ function xpath(node) {
 }
 
 function serializedDoctype(doctype) {
-    if (!doctype)
+    if (!doctype) {
         return "";
+    }
     var publicId = doctype.publicId ? ' PUBLIC "' + doctype.publicId + '"' : "";
     var systemId = doctype.systemId ? (publicId ? ' "' + doctype.systemId + '"' : ' SYSTEM "' + doctype.systemId + '"') : "";
     return "<!DOCTYPE " + (doctype.name || "html") + publicId + systemId + ">";
@@ -237,8 +271,9 @@ function serializedDoctype(doctype) {
 
 export function outerHTMLForNode(identifier) {
     var node = resolveNode(identifier);
-    if (!node)
+    if (!node) {
         return "";
+    }
 
     switch (node.nodeType) {
     case Node.ELEMENT_NODE:
@@ -266,25 +301,29 @@ export function outerHTMLForNode(identifier) {
 
 export function selectorPathForNode(identifier) {
     var node = resolveNode(identifier);
-    if (!node)
+    if (!node) {
         return "";
+    }
     return cssPath(node);
 }
 
 export function xpathForNode(identifier) {
     var node = resolveNode(identifier);
-    if (!node)
+    if (!node) {
         return "";
+    }
     return xpath(node);
 }
 
 export function removeNode(identifier) {
     var node = resolveNode(identifier);
-    if (!node)
+    if (!node) {
         return false;
+    }
     var parent = node.parentNode;
-    if (!parent)
+    if (!parent) {
         return false;
+    }
 
     var removed = false;
     suppressSnapshotAutoUpdate("remove-node");
@@ -311,8 +350,9 @@ export function removeNode(identifier) {
 
 export function setAttributeForNode(identifier, name, value) {
     var node = resolveNode(identifier);
-    if (!node || node.nodeType !== Node.ELEMENT_NODE)
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;
+    }
     var attributeName = String(name || "");
     var attributeValue = String(value || "");
 
@@ -330,8 +370,9 @@ export function setAttributeForNode(identifier, name, value) {
 
 export function removeAttributeForNode(identifier, name) {
     var node = resolveNode(identifier);
-    if (!node || node.nodeType !== Node.ELEMENT_NODE)
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;
+    }
     var attributeName = String(name || "");
     suppressSnapshotAutoUpdate("remove-attribute");
     try {
