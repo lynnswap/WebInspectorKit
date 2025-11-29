@@ -2,7 +2,7 @@
 
 ![WebInspectorKit preview](Resources/preview.webp)
 
-SwiftUI inspector for WKWebView that captures DOM snapshots, renders a dedicated inspector UI, and lets you inspect and edit nodes.
+iOS-ready Web inspector, SwiftUI-friendly and easy to add.
 
 ## Features
 - DOM tree browsing with selection highlights and node deletion
