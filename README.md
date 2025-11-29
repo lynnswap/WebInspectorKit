@@ -23,29 +23,33 @@ This repository is under active development, and future updates may introduce ma
 ## Installation
 Add WebInspectorKit as a Swift Package dependency in Xcode (Package Dependencies). Use a local path or your repository URL as appropriate.
 
-## Quickstart (default DOM + Detail tabs)
+## Inspect an existing WKWebView
 ```swift
-import SwiftUI
-import WebKit
-import WebInspectorKit
-
 struct ContentView: View {
     @State private var inspector = WebInspectorModel()
-    @State private var pageWebView: WKWebView = {
-        let config = WKWebViewConfiguration()
-        let view = WKWebView(frame: .zero, configuration: config)
-        view.load(URLRequest(url: URL(string: "https://www.example.com")!))
-        return view
-    }()
+    @State private var isInspectorPresented = false
+    let pageWebView: WKWebView // your app's WKWebView that renders the page
 
     var body: some View {
         NavigationStack {
-            WebInspectorView(inspector, webView: pageWebView)
-                .navigationTitle("Inspector")
+            YourPageView(webView: pageWebView) // your page UI that hosts the WKWebView
+                .sheet(isPresented: $isInspectorPresented) {
+                    NavigationStack {
+                        WebInspectorView(inspector, webView: pageWebView)
+                    }
+                    .presentationDetents([.medium, .large])
+                }
+                .toolbar {
+                    Button("Inspect page") {
+                        isInspectorPresented = true
+                    }
+                }
         }
     }
 }
+
 ```
+For a more complete preview setup, see `Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift` (#Preview).
 
 ## Customize tabs
 ```swift
