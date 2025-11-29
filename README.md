@@ -49,7 +49,7 @@ struct ContentView: View {
 }
 
 ```
-For a more complete preview setup, see `Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift` (#Preview).
+For a more complete preview setup, see [`Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift`](Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift) (`#Preview`).
 
 ## Customize tabs
 ```swift
