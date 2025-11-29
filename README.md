@@ -91,5 +91,11 @@ If selection mode requires deeper nodes, the inspector automatically raises `sna
 - For very large DOMs, tune `snapshotDepth` and `autoUpdateDebounce` to balance performance.
 - Network and console features are not implemented.
 
+## Apps Using
+
+<p float="left">
+    <a href="https://apps.apple.com/jp/app/tweetpd/id1671411031"><img src="https://i.imgur.com/AC6eGdx.png" width="65" height="65"></a>
+</p>
+
 ## License
 See [LICENSE](LICENSE).
