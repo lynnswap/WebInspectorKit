@@ -322,7 +322,7 @@
 
     function requestSnapshotReload(reason) {
         const reloadReason = reason || "dom-sync";
-        console.debug("[tweetpd-inspector] request reload:", reloadReason);
+        console.debug("[WebInspectorKit] request reload:", reloadReason);
         void requestDocument({preserveState: true});
     }
 

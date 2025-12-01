@@ -100,7 +100,7 @@
         const details = error && error.stack
             ? error.stack
             : (error && error.message ? error.message : String(error));
-        console.error(`[tweetpd-inspector] ${context}:`, error);
+        console.error(`[WebInspectorKit] ${context}:`, error);
         try {
             window.webkit.messageHandlers.webInspectorLog.postMessage(`${context}: ${details}`);
         } catch {
