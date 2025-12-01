@@ -304,7 +304,12 @@ function buildDomMutationEvents(records, maxDepth) {
 }
 
 function sendAutoSnapshotUpdate() {
-    var handler = mutationUpdateHandler();
+    var mutationHandler = mutationUpdateHandler();
+    if (!mutationHandler) {
+        window?.webInspectorKit?.detach();
+        return;
+    }
+
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
     var mapSize = inspector.map && inspector.map.size ? inspector.map.size : 0;
@@ -312,10 +317,7 @@ function sendAutoSnapshotUpdate() {
         sendFullSnapshot("initial");
         return;
     }
-    if (!handler) {
-        sendFullSnapshot("handler-missing");
-        return;
-    }
+    
     if (!pending.length) {
         sendFullSnapshot("mutation");
         return;
@@ -339,7 +341,7 @@ function sendAutoSnapshotUpdate() {
                 reason: reason,
                 messages: messages.slice(offset, offset + chunkSize)
             };
-            handler.postMessage({
+            mutationHandler.postMessage({
                 bundle: JSON.stringify(payload)
             });
         }
