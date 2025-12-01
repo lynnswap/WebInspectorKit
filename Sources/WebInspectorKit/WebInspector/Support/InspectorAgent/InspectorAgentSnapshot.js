@@ -2,17 +2,11 @@ import {inspector} from "./InspectorAgentState.js";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./InspectorAgentDOMCore.js";
 
 function autoSnapshotHandler() {
-    if (!window.webkit || !window.webkit.messageHandlers) {
-        return null;
-    }
-    return window.webkit.messageHandlers.webInspectorSnapshotUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorSnapshotUpdate || null;
 }
 
 function mutationUpdateHandler() {
-    if (!window.webkit || !window.webkit.messageHandlers) {
-        return null;
-    }
-    return window.webkit.messageHandlers.webInspectorMutationUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorMutationUpdate || null;
 }
 
 export function enableAutoSnapshotIfSupported() {
@@ -312,7 +306,7 @@ function sendAutoSnapshotUpdate() {
 
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
-    var mapSize = inspector.map && inspector.map.size ? inspector.map.size : 0;
+    var mapSize = inspector.map?.size || 0;
     if (!mapSize) {
         sendFullSnapshot("initial");
         return;
