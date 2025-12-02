@@ -1,0 +1,225 @@
+import Foundation
+import Observation
+
+enum WINetworkEventKind: String {
+    case start
+    case response
+    case finish
+    case fail
+    case reset
+}
+
+struct WINetworkEventPayload {
+    let kind: WINetworkEventKind
+    let identifier: String?
+    let url: String?
+    let method: String?
+    let statusCode: Int?
+    let statusText: String?
+    let mimeType: String?
+    let requestHeaders: [String: String]
+    let responseHeaders: [String: String]
+    let startTimeSeconds: TimeInterval?
+    let endTimeSeconds: TimeInterval?
+    let wallTimeSeconds: TimeInterval?
+    let encodedBodyLength: Int?
+    let errorDescription: String?
+    let requestType: String?
+
+    init?(dictionary: [String: Any]) {
+        guard
+            let type = dictionary["type"] as? String,
+            let kind = WINetworkEventKind(rawValue: type)
+        else {
+            return nil
+        }
+        self.kind = kind
+        self.identifier = dictionary["id"] as? String ?? dictionary["requestId"] as? String
+        self.url = dictionary["url"] as? String
+        if let method = dictionary["method"] as? String {
+            self.method = method.uppercased()
+        } else {
+            self.method = nil
+        }
+        self.statusCode = dictionary["status"] as? Int
+        self.statusText = dictionary["statusText"] as? String
+        self.mimeType = dictionary["mimeType"] as? String
+        self.requestHeaders = dictionary["requestHeaders"] as? [String: String] ?? [:]
+        self.responseHeaders = dictionary["responseHeaders"] as? [String: String] ?? [:]
+
+        if let start = dictionary["startTime"] as? Double {
+            self.startTimeSeconds = start / 1000.0
+        } else {
+            self.startTimeSeconds = nil
+        }
+        if let end = dictionary["endTime"] as? Double {
+            self.endTimeSeconds = end / 1000.0
+        } else {
+            self.endTimeSeconds = nil
+        }
+        if let wallTime = dictionary["wallTime"] as? Double {
+            self.wallTimeSeconds = wallTime / 1000.0
+        } else {
+            self.wallTimeSeconds = nil
+        }
+        self.encodedBodyLength = dictionary["encodedBodyLength"] as? Int
+        if let error = dictionary["error"] as? String, !error.isEmpty {
+            self.errorDescription = error
+        } else {
+            self.errorDescription = nil
+        }
+        self.requestType = dictionary["requestType"] as? String
+    }
+}
+
+struct WINetworkEntry: Identifiable, Hashable {
+    enum Phase: String {
+        case pending
+        case completed
+        case failed
+    }
+
+    let id: String
+    var url: String
+    var method: String
+    var statusCode: Int?
+    var statusText: String
+    var mimeType: String?
+    var requestHeaders: [String: String]
+    var responseHeaders: [String: String]
+    var startTimestamp: TimeInterval?
+    var endTimestamp: TimeInterval?
+    var duration: TimeInterval?
+    var encodedBodyLength: Int?
+    var errorDescription: String?
+    var requestType: String?
+    var wallTime: TimeInterval?
+    var phase: Phase
+
+    init(
+        id: String,
+        url: String,
+        method: String,
+        requestHeaders: [String: String],
+        startTimestamp: TimeInterval?,
+        wallTime: TimeInterval?
+    ) {
+        self.id = id
+        self.url = url
+        self.method = method
+        self.requestHeaders = requestHeaders
+        self.responseHeaders = [:]
+        self.startTimestamp = startTimestamp
+        self.wallTime = wallTime
+        self.statusCode = nil
+        self.statusText = ""
+        self.mimeType = nil
+        self.endTimestamp = nil
+        self.duration = nil
+        self.encodedBodyLength = nil
+        self.errorDescription = nil
+        self.requestType = nil
+        self.phase = .pending
+    }
+}
+
+@MainActor
+@Observable final class WINetworkStore {
+    var isRecording = true
+    var entries: [WINetworkEntry] = []
+    var selectedEntryID: String?
+    @ObservationIgnored private var indexByID: [String: Int] = [:]
+
+    func applyEvent(_ event: WINetworkEventPayload) {
+        switch event.kind {
+        case .reset:
+            reset()
+        case .start:
+            handleStart(event)
+        case .response:
+            handleResponse(event)
+        case .finish:
+            handleFinish(event, failed: false)
+        case .fail:
+            handleFinish(event, failed: true)
+        }
+    }
+
+    func reset() {
+        entries.removeAll()
+        indexByID.removeAll()
+        selectedEntryID = nil
+    }
+
+    func clear() {
+        reset()
+    }
+
+    func setRecording(_ enabled: Bool) {
+        isRecording = enabled
+    }
+
+    func entry(for identifier: String?) -> WINetworkEntry? {
+        guard let identifier, let index = indexByID[identifier], entries.indices.contains(index) else {
+            return nil
+        }
+        return entries[index]
+    }
+
+    private func handleStart(_ event: WINetworkEventPayload) {
+        guard let id = event.identifier else { return }
+        let method = event.method ?? "GET"
+        let url = event.url ?? ""
+        var entry = WINetworkEntry(
+            id: id,
+            url: url,
+            method: method,
+            requestHeaders: event.requestHeaders,
+            startTimestamp: event.startTimeSeconds,
+            wallTime: event.wallTimeSeconds
+        )
+        entry.requestType = event.requestType
+        insertOrReplace(entry)
+    }
+
+    private func handleResponse(_ event: WINetworkEventPayload) {
+        guard let id = event.identifier, var entry = entry(for: id) else { return }
+        entry.statusCode = event.statusCode
+        entry.statusText = event.statusText ?? ""
+        entry.mimeType = event.mimeType
+        if !event.responseHeaders.isEmpty {
+            entry.responseHeaders = event.responseHeaders
+        }
+        entry.phase = .pending
+        update(entry)
+    }
+
+    private func handleFinish(_ event: WINetworkEventPayload, failed: Bool) {
+        guard let id = event.identifier, var entry = entry(for: id) else { return }
+        entry.encodedBodyLength = event.encodedBodyLength ?? entry.encodedBodyLength
+        entry.endTimestamp = event.endTimeSeconds ?? entry.endTimestamp
+        if let start = entry.startTimestamp, let end = entry.endTimestamp {
+            entry.duration = max(0, end - start)
+        }
+        entry.errorDescription = event.errorDescription
+        entry.phase = failed ? .failed : .completed
+        if failed && entry.statusCode == nil {
+            entry.statusCode = 0
+        }
+        update(entry)
+    }
+
+    private func insertOrReplace(_ entry: WINetworkEntry) {
+        if let index = indexByID[entry.id], entries.indices.contains(index) {
+            entries[index] = entry
+        } else {
+            entries.append(entry)
+            indexByID[entry.id] = entries.count - 1
+        }
+    }
+
+    private func update(_ entry: WINetworkEntry) {
+        guard let index = indexByID[entry.id], entries.indices.contains(index) else { return }
+        entries[index] = entry
+    }
+}

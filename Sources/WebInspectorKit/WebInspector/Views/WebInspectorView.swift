@@ -26,6 +26,7 @@ public struct WebInspectorView: View {
     ) {
         self.init(viewModel, webView: webView) {
             WITab.dom()
+            WITab.network()
             WITab.detail()
         }
     }

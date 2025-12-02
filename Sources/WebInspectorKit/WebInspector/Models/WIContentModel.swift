@@ -20,6 +20,7 @@ final class WIContentModel: NSObject {
     private enum HandlerName :String, CaseIterable{
         case snapshot = "webInspectorSnapshotUpdate"
         case mutation = "webInspectorMutationUpdate"
+        case network = "webInspectorNetworkUpdate"
     }
 
     weak var bridge: WIBridgeModel?
@@ -120,6 +121,8 @@ extension WIContentModel: WKScriptMessageHandler {
             handleSnapshotMessage(message)
         case .mutation:
             handleMutationMessage(message)
+        case .network:
+            handleNetworkMessage(message)
         }
     }
 
@@ -139,6 +142,14 @@ extension WIContentModel: WKScriptMessageHandler {
         }
         let package = WIDOMUpdatePayload(rawJSON: rawJSON)
         bridge?.handleDomUpdateFromPage(package)
+    }
+
+    private func handleNetworkMessage(_ message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any],
+              let event = WINetworkEventPayload(dictionary: payload) else {
+            return
+        }
+        bridge?.handleNetworkEvent(event)
     }
 }
 
@@ -288,6 +299,32 @@ extension WIContentModel {
         }
     }
 
+    func setNetworkLoggingEnabled(_ enabled: Bool, using targetWebView: WKWebView? = nil) async {
+        guard let webView = targetWebView ?? self.webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.setNetworkLoggingEnabled(enabled)",
+                arguments: ["enabled": enabled],
+                contentWorld: .page
+            )
+        } catch {
+            contentLogger.error("set network logging failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func clearNetworkLogs(on targetWebView: WKWebView? = nil) async {
+        guard let webView = targetWebView ?? self.webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit.clearNetworkRecords()",
+                arguments: [:],
+                contentWorld: .page
+            )
+        } catch {
+            contentLogger.error("clear network logs failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func evaluateStringScript(_ script: String, identifier: Int) async throws -> String {
         guard let webView else {
             throw WIError.scriptUnavailable
@@ -352,6 +389,7 @@ private enum WIScript {
         "InspectorAgent/InspectorAgentSnapshot",
         "InspectorAgent/InspectorAgentSelection",
         "InspectorAgent/InspectorAgentDOMUtils",
+        "InspectorAgent/InspectorAgentNetwork",
         "InspectorAgent"
     ]
 

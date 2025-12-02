@@ -8,6 +8,7 @@ iOS-ready Web inspector, SwiftUI-friendly and easy to add.
 - DOM tree browsing with selection highlights and node deletion
 - Attribute editing/removal plus copying HTML, CSS selector, and XPath
 - Configurable tabs via a SwiftUI-style result builder (DOM and Detail tabs included)
+- Network tab for fetch/XHR requests (status, headers, timing)
 - Automatic DOM snapshot reloads with debounce and adjustable depth
 - Selection mode toggle to start/stop element picking and highlighting
 - Lifecycle handled by `WebInspectorView` (`attach`, `suspend`, `detach`)

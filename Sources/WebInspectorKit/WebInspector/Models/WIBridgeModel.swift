@@ -21,6 +21,7 @@ public final class WIBridgeModel {
     var isLoading = false
     var errorMessage: String?
     var domSelection = WIDOMSelection()
+    let networkStore = WINetworkStore()
     private(set) var configuration: WebInspectorModel.Configuration
     let contentModel = WIContentModel()
     let inspectorModel = WIInspectorModel()
@@ -48,6 +49,7 @@ public final class WIBridgeModel {
     private func handleAttach(webView: WKWebView?) {
         errorMessage = nil
         domSelection.clear()
+        networkStore.reset()
         let previousWebView = lastPageWebView
         guard let webView else {
             errorMessage = "WebView is not available."
@@ -60,6 +62,8 @@ public final class WIBridgeModel {
         contentModel.attachPageWebView(webView)
         lastPageWebView = webView
         Task {
+            await self.contentModel.setNetworkLoggingEnabled(self.networkStore.isRecording, using: webView)
+            await self.contentModel.clearNetworkLogs(on: webView)
             if needsReload {
                 await self.reloadInspector(preserveState: shouldPreserveState)
             }
@@ -68,8 +72,12 @@ public final class WIBridgeModel {
 
     private func handleSuspend() {
         isLoading = false
+        Task {
+            await self.contentModel.setNetworkLoggingEnabled(false, using: self.contentModel.webView)
+        }
         contentModel.detachPageWebView()
         domSelection.clear()
+        networkStore.reset()
     }
 
     func updateSnapshotDepth(_ depth: Int) {
@@ -115,6 +123,24 @@ public final class WIBridgeModel {
         domSelection.removeAttribute(nodeId: nodeId, name: name)
         Task {
             await contentModel.removeAttribute(identifier: nodeId, name: name)
+        }
+    }
+
+    func handleNetworkEvent(_ payload: WINetworkEventPayload) {
+        networkStore.applyEvent(payload)
+    }
+
+    func setNetworkRecording(_ enabled: Bool) {
+        networkStore.setRecording(enabled)
+        Task {
+            await contentModel.setNetworkLoggingEnabled(enabled)
+        }
+    }
+
+    func clearNetworkLogs() {
+        networkStore.clear()
+        Task {
+            await contentModel.clearNetworkLogs()
         }
     }
 }
