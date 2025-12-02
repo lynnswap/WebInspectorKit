@@ -1,10 +1,33 @@
 const networkState = {
     enabled: true,
     installed: false,
-    nextId: 1
+    nextId: 1,
+    resourceObserver: null,
+    resourceSeen: null
 };
 
 const trackedRequests = new Map();
+const trackedResourceTypes = new Set([
+    "img",
+    "image",
+    "media",
+    "video",
+    "audio",
+    "beacon",
+    "font",
+    "script",
+    "link",
+    "style",
+    "css",
+    "preload",
+    "prefetch",
+    "iframe",
+    "frame",
+    "embed",
+    "object",
+    "track",
+    "manifest"
+]);
 
 function now() {
     if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -83,9 +106,9 @@ function parseRawHeaders(raw) {
     return headers;
 }
 
-function recordStart(requestId, url, method, requestHeaders, requestType) {
-    var startTime = now();
-    var wall = wallTime();
+function recordStart(requestId, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) {
+    var startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
+    var wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
     safePostMessage({
         type: "start",
@@ -134,16 +157,28 @@ function recordResponse(requestId, response, requestType) {
     });
 }
 
-function recordFinish(requestId, encodedBodyLength, requestType) {
-    var time = now();
-    var wall = wallTime();
+function recordFinish(
+    requestId,
+    encodedBodyLength,
+    requestType,
+    status,
+    statusText,
+    mimeType,
+    endTimeOverride,
+    wallTimeOverride
+) {
+    var time = typeof endTimeOverride === "number" ? endTimeOverride : now();
+    var wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     safePostMessage({
         type: "finish",
         id: requestId,
         endTime: time,
         wallTime: wall,
         encodedBodyLength: encodedBodyLength,
-        requestType: requestType
+        requestType: requestType,
+        status: status,
+        statusText: statusText,
+        mimeType: mimeType
     });
     trackedRequests.delete(requestId);
 }
@@ -186,6 +221,61 @@ function captureContentLength(response) {
     } catch {
     }
     return undefined;
+}
+
+function shouldTrackResourceEntry(entry) {
+    if (!entry) {
+        return false;
+    }
+    var initiator = String(entry.initiatorType || "").toLowerCase();
+    if (!initiator) {
+        return false;
+    }
+    if (initiator === "fetch" || initiator === "xmlhttprequest") {
+        return false;
+    }
+    if (trackedResourceTypes.has(initiator)) {
+        return true;
+    }
+    if (initiator === "other") {
+        if (typeof entry.name === "string") {
+            var lower = entry.name.toLowerCase();
+            if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function handleResourceEntry(entry) {
+    if (!networkState.enabled) {
+        return;
+    }
+    if (!shouldTrackResourceEntry(entry)) {
+        return;
+    }
+    if (!networkState.resourceSeen) {
+        networkState.resourceSeen = new Set();
+    }
+    var key = String(entry.name || "") + "::" + entry.startTime;
+    if (networkState.resourceSeen.has(key)) {
+        return;
+    }
+    networkState.resourceSeen.add(key);
+
+    var requestId = nextRequestId();
+    var startTime = typeof entry.startTime === "number" ? entry.startTime : now();
+    var requestType = entry.initiatorType || "resource";
+    recordStart(requestId, entry.name || "", "GET", {}, requestType, startTime, wallTime());
+
+    var encoded = entry.transferSize;
+    if (!(Number.isFinite(encoded) && encoded >= 0)) {
+        encoded = entry.encodedBodySize;
+    }
+    var status = encoded && encoded > 0 ? 200 : undefined;
+    var endTime = startTime + (entry.duration || 0);
+    recordFinish(requestId, encoded, requestType, status, "", undefined, endTime, wallTime());
 }
 
 function installFetchPatch() {
@@ -290,12 +380,33 @@ function installXHRPatch() {
     originalOpen.__wiNetworkPatched = true;
 }
 
+function installResourceObserver() {
+    if (networkState.resourceObserver || typeof PerformanceObserver !== "function") {
+        return;
+    }
+    try {
+        var observer = new PerformanceObserver(function(list) {
+            var entries = list.getEntries();
+            for (var i = 0; i < entries.length; ++i) {
+                handleResourceEntry(entries[i]);
+            }
+        });
+        observer.observe({type: "resource", buffered: true});
+        networkState.resourceObserver = observer;
+        if (!networkState.resourceSeen) {
+            networkState.resourceSeen = new Set();
+        }
+    } catch {
+    }
+}
+
 function ensureInstalled() {
     if (networkState.installed) {
         return;
     }
     installFetchPatch();
     installXHRPatch();
+    installResourceObserver();
     networkState.installed = true;
 }
 
@@ -305,6 +416,9 @@ export function setNetworkLoggingEnabled(enabled) {
 
 export function clearNetworkRecords() {
     trackedRequests.clear();
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
     safePostMessage({type: "reset"});
 }
 
