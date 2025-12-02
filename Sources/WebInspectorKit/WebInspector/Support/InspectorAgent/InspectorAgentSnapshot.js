@@ -2,17 +2,11 @@ import {inspector} from "./InspectorAgentState.js";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./InspectorAgentDOMCore.js";
 
 function autoSnapshotHandler() {
-    if (!window.webkit || !window.webkit.messageHandlers) {
-        return null;
-    }
-    return window.webkit.messageHandlers.webInspectorSnapshotUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorSnapshotUpdate || null;
 }
 
 function mutationUpdateHandler() {
-    if (!window.webkit || !window.webkit.messageHandlers) {
-        return null;
-    }
-    return window.webkit.messageHandlers.webInspectorMutationUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorMutationUpdate || null;
 }
 
 export function enableAutoSnapshotIfSupported() {
@@ -304,18 +298,20 @@ function buildDomMutationEvents(records, maxDepth) {
 }
 
 function sendAutoSnapshotUpdate() {
-    var handler = mutationUpdateHandler();
+    var mutationHandler = mutationUpdateHandler();
+    if (!mutationHandler) {
+        window?.webInspectorKit?.detach();
+        return;
+    }
+
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
-    var mapSize = inspector.map && inspector.map.size ? inspector.map.size : 0;
+    var mapSize = inspector.map?.size || 0;
     if (!mapSize) {
         sendFullSnapshot("initial");
         return;
     }
-    if (!handler) {
-        sendFullSnapshot("handler-missing");
-        return;
-    }
+    
     if (!pending.length) {
         sendFullSnapshot("mutation");
         return;
@@ -339,7 +335,7 @@ function sendAutoSnapshotUpdate() {
                 reason: reason,
                 messages: messages.slice(offset, offset + chunkSize)
             };
-            handler.postMessage({
+            mutationHandler.postMessage({
                 bundle: JSON.stringify(payload)
             });
         }

@@ -55,12 +55,13 @@ public final class WIBridgeModel {
             lastPageWebView = nil
             return
         }
+        let shouldPreserveState = contentModel.webView == nil && previousWebView === webView
+        let needsReload = shouldPreserveState || previousWebView !== webView
         contentModel.attachPageWebView(webView)
-        let needsReload = previousWebView == nil || previousWebView != webView
         lastPageWebView = webView
         Task {
             if needsReload {
-                await self.reloadInspector(preserveState: false)
+                await self.reloadInspector(preserveState: shouldPreserveState)
             }
         }
     }
