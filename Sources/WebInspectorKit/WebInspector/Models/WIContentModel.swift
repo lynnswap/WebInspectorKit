@@ -30,7 +30,7 @@ final class WIContentModel: NSObject {
         bridge?.configuration ?? .init()
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    func attachPageWebView(_ newWebView: WKWebView?, networkLoggingEnabled: Bool) {
         guard self.webView !== newWebView else { return }
         guard let newWebView else {
             detachPageWebView()
@@ -44,11 +44,25 @@ final class WIContentModel: NSObject {
         registerMessageHandlers()
         Task {
             await self.setAutoUpdate(for: newWebView, maxDepth: self.configuration.snapshotDepth)
+            await self.configureNetworkLogging(
+                enabled: networkLoggingEnabled,
+                clearExisting: true,
+                on: newWebView
+            )
         }
     }
 
-    func detachPageWebView() {
+    func detachPageWebView(disableNetworkLogging: Bool = false) {
         guard let currentWebView = webView else { return }
+        if disableNetworkLogging {
+            Task {
+                await self.configureNetworkLogging(
+                    enabled: false,
+                    clearExisting: false,
+                    on: currentWebView
+                )
+            }
+        }
         stopAutoUpdate(for:currentWebView)
         detachMessageHandlers(from: currentWebView)
         webView = nil
@@ -313,15 +327,31 @@ extension WIContentModel {
     }
 
     func clearNetworkLogs(on targetWebView: WKWebView? = nil) async {
+        await configureNetworkLogging(enabled: nil, clearExisting: true, on: targetWebView)
+    }
+
+    private func configureNetworkLogging(
+        enabled: Bool?,
+        clearExisting: Bool,
+        on targetWebView: WKWebView? = nil
+    ) async {
         guard let webView = targetWebView ?? self.webView else { return }
+        var script = ""
+        if enabled != nil {
+            script += "window.webInspectorKit.setNetworkLoggingEnabled(enabled);"
+        }
+        if clearExisting {
+            script += "window.webInspectorKit.clearNetworkRecords();"
+        }
+        guard !script.isEmpty else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.clearNetworkRecords()",
-                arguments: [:],
+                script,
+                arguments: ["enabled": enabled as Any, "clearExisting": clearExisting],
                 contentWorld: .page
             )
         } catch {
-            contentLogger.error("clear network logs failed: \(error.localizedDescription, privacy: .public)")
+            contentLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -59,11 +59,9 @@ public final class WIBridgeModel {
         }
         let shouldPreserveState = contentModel.webView == nil && previousWebView === webView
         let needsReload = shouldPreserveState || previousWebView !== webView
-        contentModel.attachPageWebView(webView)
+        contentModel.attachPageWebView(webView, networkLoggingEnabled: networkStore.isRecording)
         lastPageWebView = webView
         Task {
-            await self.contentModel.setNetworkLoggingEnabled(self.networkStore.isRecording, using: webView)
-            await self.contentModel.clearNetworkLogs(on: webView)
             if needsReload {
                 await self.reloadInspector(preserveState: shouldPreserveState)
             }
@@ -72,10 +70,7 @@ public final class WIBridgeModel {
 
     private func handleSuspend() {
         isLoading = false
-        Task {
-            await self.contentModel.setNetworkLoggingEnabled(false, using: self.contentModel.webView)
-        }
-        contentModel.detachPageWebView()
+        contentModel.detachPageWebView(disableNetworkLogging: true)
         domSelection.clear()
         networkStore.reset()
     }
