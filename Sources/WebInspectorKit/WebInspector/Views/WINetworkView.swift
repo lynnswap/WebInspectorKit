@@ -314,3 +314,129 @@ private extension WINetworkEntry {
         return formatter.string(fromByteCount: Int64(length))
     }
 }
+
+#if DEBUG
+@MainActor
+private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WebInspectorModel {
+    let model = WebInspectorModel()
+    let store = model.networkAgent.store
+    WINetworkPreviewData.events
+        .compactMap(WINetworkEventPayload.init(dictionary:))
+        .forEach { store.applyEvent($0) }
+    if let selectedID, store.entry(for: selectedID) != nil {
+        store.selectedEntryID = selectedID
+    } else {
+        store.selectedEntryID = store.entries.first?.id
+    }
+    return model
+}
+
+@MainActor
+private enum WINetworkPreviewData {
+    static let primaryID = "net_1"
+    static let events: [[String: Any]] = [
+        [
+            "type": "start",
+            "id": "net_1",
+            "url": "https://api.example.com/posts/42",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "application/json",
+                "user-agent": "WebInspectorKit/Preview"
+            ],
+            "startTime": 1_200.0,
+            "wallTime": 1_708_000_000_000.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "id": "net_1",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": "max-age=60"
+            ],
+            "endTime": 1_520.0,
+            "wallTime": 1_708_000_000_320.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "finish",
+            "id": "net_1",
+            "endTime": 1_640.0,
+            "wallTime": 1_708_000_000_440.0,
+            "encodedBodyLength": 14_592,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "start",
+            "id": "net_2",
+            "url": "https://cdn.example.com/assets/app.js",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "text/javascript",
+                "pragma": "no-cache"
+            ],
+            "startTime": 2_100.0,
+            "wallTime": 1_708_000_001_100.0,
+            "requestType": "script"
+        ],
+        [
+            "type": "response",
+            "id": "net_2",
+            "status": 304,
+            "statusText": "Not Modified",
+            "mimeType": "application/javascript",
+            "responseHeaders": [
+                "content-type": "application/javascript",
+                "etag": "\"wi-preview-etag\""
+            ],
+            "endTime": 2_330.0,
+            "wallTime": 1_708_000_001_330.0,
+            "requestType": "script"
+        ],
+        [
+            "type": "finish",
+            "id": "net_2",
+            "endTime": 2_420.0,
+            "wallTime": 1_708_000_001_420.0,
+            "encodedBodyLength": 0,
+            "status": 304,
+            "statusText": "Not Modified",
+            "mimeType": "application/javascript",
+            "requestType": "script"
+        ],
+        [
+            "type": "start",
+            "id": "net_3",
+            "url": "https://api.example.com/upload",
+            "method": "POST",
+            "requestHeaders": [
+                "content-type": "application/json",
+                "accept": "application/json"
+            ],
+            "startTime": 3_100.0,
+            "wallTime": 1_708_000_002_100.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "fail",
+            "id": "net_3",
+            "error": "Network connection was lost",
+            "endTime": 3_280.0,
+            "wallTime": 1_708_000_002_280.0,
+            "requestType": "fetch"
+        ]
+    ]
+}
+
+#Preview("Network Logs") {
+    WINetworkView()
+        .environment(makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
+#if os(macOS)
+        .frame(height: 420)
+#endif
+}
+#endif
