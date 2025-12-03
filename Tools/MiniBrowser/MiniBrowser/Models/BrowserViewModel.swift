@@ -20,6 +20,9 @@ private let logger = Logger(
     var isLoading = false
     var currentURL :URL?
     var underPageBackgroundColor: Color?
+#if os(iOS)
+    private var refreshControl: UIRefreshControl?
+#endif
     
     @ObservationIgnored private var cancellables = Set<AnyCancellable>()
     
@@ -40,14 +43,18 @@ private let logger = Logger(
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isInspectable = true
 #if os(iOS)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
         webView.scrollView.clipsToBounds = false
         webView.customUserAgent =  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1"
 #else
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15"
 #endif
         webView.allowsBackForwardNavigationGestures = true
-        
+
         super.init()
+#if os(iOS)
+        configureRefreshControl()
+#endif
         
         webView.navigationDelegate = self
         
@@ -103,6 +110,25 @@ private let logger = Logger(
             webView.goForward()
         }
     }
+#if os(iOS)
+    private func configureRefreshControl() {
+        let control = UIRefreshControl()
+        control.addTarget(self, action: #selector(handleRefreshControl), for: .valueChanged)
+        webView.scrollView.refreshControl = control
+        refreshControl = control
+    }
+    
+    @objc private func handleRefreshControl() {
+        webView.reload()
+    }
+    
+    private func endRefreshingIfNeeded() {
+        guard let refreshControl, refreshControl.isRefreshing else {
+            return
+        }
+        refreshControl.endRefreshing()
+    }
+#endif
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
@@ -127,9 +153,18 @@ extension BrowserViewModel: WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError: Error) {
         logger.debug("\(#function) 読み込み失敗検知")
+        isLoading = false
+        estimatedProgress = .zero
+#if os(iOS)
+        endRefreshingIfNeeded()
+#endif
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError: Error) {
         logger.debug("\(#function) 読み込み失敗")
+        isLoading = false
+#if os(iOS)
+        endRefreshingIfNeeded()
+#endif
     }
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation:WKNavigation!) {
         logger.debug("\(#function) リダイレクト")
@@ -137,5 +172,8 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
         estimatedProgress = .zero
+#if os(iOS)
+        endRefreshingIfNeeded()
+#endif
     }
 }

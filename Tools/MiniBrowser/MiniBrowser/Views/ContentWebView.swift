@@ -3,6 +3,11 @@ import Observation
 
 struct ContentWebView: View {
     var model: BrowserViewModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    
+    private var visibleGoForward:Bool{
+        horizontalSizeClass == .regular || model.canGoForward
+    }
     
     var body: some View {
         PreviewWebViewRepresentable(webView: model.webView)
@@ -16,16 +21,17 @@ struct ContentWebView: View {
                     }
                     .disabled(!model.canGoBack)
                     
-                    if model.canGoForward{
+                    if visibleGoForward{
                         Button {
                             model.goForward()
                         } label: {
                             Image(systemName: "chevron.right")
                         }
+                        .disabled(!model.canGoForward)
                     }
                 }
             }
-            .animation(.default,value:model.canGoForward)
+            .animation(.default,value:visibleGoForward)
             .navigationTitle(model.currentURL?.host() ?? "")
 #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
