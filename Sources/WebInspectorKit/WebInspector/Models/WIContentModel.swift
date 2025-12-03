@@ -14,6 +14,9 @@ private let contentLogger = Logger(subsystem: "WebInspectorKit", category: "WICo
 private let inspectorPresenceProbeScript: String = """
 (function() { })();
 """
+private let networkPresenceProbeScript: String = """
+(function() { /* webInspectorNetwork */ })();
+"""
 @MainActor
 @Observable
 final class WIContentModel: NSObject {
@@ -30,7 +33,7 @@ final class WIContentModel: NSObject {
         bridge?.configuration ?? .init()
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?, networkLoggingEnabled: Bool) {
+    func attachPageWebView(_ newWebView: WKWebView?, networkLoggingEnabled: Bool = false) {
         guard self.webView !== newWebView else { return }
         guard let newWebView else {
             detachPageWebView()
@@ -95,7 +98,7 @@ final class WIContentModel: NSObject {
         
         let scriptSource: String
         do {
-            scriptSource = try WIScript.bootstrap()
+            scriptSource = try WIScript.bootstrapAgent()
         } catch {
             contentLogger.error("failed to prepare inspector script: \(error.localizedDescription, privacy: .public)")
             return
@@ -117,6 +120,41 @@ final class WIContentModel: NSObject {
             _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         }
         contentLogger.debug("installed inspector agent user script")
+    }
+
+    private func installNetworkAgentScriptIfNeeded(on webView: WKWebView) async {
+        let controller = webView.configuration.userContentController
+        if controller.userScripts.contains(where: { $0.source == networkPresenceProbeScript }) {
+            return
+        }
+
+        let scriptSource: String
+        do {
+            scriptSource = try WIScript.bootstrapNetworkAgent()
+        } catch {
+            contentLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        let userScript = WKUserScript(
+            source: scriptSource,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        let checkScript = WKUserScript(
+            source: networkPresenceProbeScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        controller.addUserScript(userScript)
+        controller.addUserScript(checkScript)
+
+        do {
+            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+        } catch {
+            contentLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
+        }
+        contentLogger.debug("installed network agent user script")
     }
 
     @MainActor deinit {
@@ -314,16 +352,7 @@ extension WIContentModel {
     }
 
     func setNetworkLoggingEnabled(_ enabled: Bool, using targetWebView: WKWebView? = nil) async {
-        guard let webView = targetWebView ?? self.webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.setNetworkLoggingEnabled(enabled)",
-                arguments: ["enabled": enabled],
-                contentWorld: .page
-            )
-        } catch {
-            contentLogger.error("set network logging failed: \(error.localizedDescription, privacy: .public)")
-        }
+        await configureNetworkLogging(enabled: enabled, clearExisting: false, on: targetWebView)
     }
 
     func clearNetworkLogs(on targetWebView: WKWebView? = nil) async {
@@ -336,14 +365,24 @@ extension WIContentModel {
         on targetWebView: WKWebView? = nil
     ) async {
         guard let webView = targetWebView ?? self.webView else { return }
+        let controller = webView.configuration.userContentController
+        let networkInstalled = controller.userScripts.contains { $0.source == networkPresenceProbeScript }
+        let shouldInstallNetworkAgent = (enabled == true) || (networkInstalled && (enabled != nil || clearExisting))
+
+        if shouldInstallNetworkAgent {
+            await installNetworkAgentScriptIfNeeded(on: webView)
+        }
+
+        let networkReady = webView.configuration.userContentController.userScripts.contains { $0.source == networkPresenceProbeScript }
         var script = ""
         if enabled != nil {
-            script += "window.webInspectorKit.setNetworkLoggingEnabled(enabled);"
+            script += "window.webInspectorNetwork.setLoggingEnabled(enabled);"
         }
         if clearExisting {
-            script += "window.webInspectorKit.clearNetworkRecords();"
+            script += "window.webInspectorNetwork.clearRecords();"
         }
-        guard !script.isEmpty else { return }
+        guard !script.isEmpty, networkReady else { return }
+
         do {
             try await webView.callAsyncVoidJavaScript(
                 script,
@@ -410,23 +449,42 @@ extension WIContentModel {
 }
 
 private enum WIScript {
-    @MainActor private static var cachedScript: String?
+    @MainActor private static var cachedAgentScript: String?
+    @MainActor private static var cachedNetworkScript: String?
     // Inline module sources to avoid CSP blocking external script loads in inspected pages.
-    private static let moduleNames = [
+    private static let agentModuleNames = [
         "InspectorAgent/InspectorAgentState",
         "InspectorAgent/InspectorAgentDOMCore",
         "InspectorAgent/InspectorAgentOverlay",
         "InspectorAgent/InspectorAgentSnapshot",
         "InspectorAgent/InspectorAgentSelection",
         "InspectorAgent/InspectorAgentDOMUtils",
-        "InspectorAgent/InspectorAgentNetwork",
         "InspectorAgent"
     ]
+    private static let networkModuleNames = [
+        "InspectorAgent/InspectorAgentNetwork",
+        "InspectorNetworkAgent"
+    ]
 
-    @MainActor static func bootstrap() throws -> String {
-        if let cachedScript {
-            return cachedScript
+    @MainActor static func bootstrapAgent() throws -> String {
+        if let cachedAgentScript {
+            return cachedAgentScript
         }
+        let script = try buildScript(from: agentModuleNames)
+        cachedAgentScript = script
+        return script
+    }
+
+    @MainActor static func bootstrapNetworkAgent() throws -> String {
+        if let cachedNetworkScript {
+            return cachedNetworkScript
+        }
+        let script = try buildScript(from: networkModuleNames)
+        cachedNetworkScript = script
+        return script
+    }
+
+    @MainActor private static func buildScript(from moduleNames: [String]) throws -> String {
         let body = try moduleNames
             .map { try loadModule(named: $0) }
             .joined(separator: "\n\n")
@@ -437,7 +495,6 @@ private enum WIScript {
         \(body)
         })();
         """
-        cachedScript = script
         return script
     }
 

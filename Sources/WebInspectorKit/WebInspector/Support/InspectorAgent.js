@@ -17,12 +17,6 @@ import {
     setAttributeForNode,
     xpathForNode
 } from "./InspectorAgent/InspectorAgentDOMUtils.js";
-import {
-    clearNetworkRecords,
-    installNetworkObserver,
-    setNetworkLoggingEnabled
-} from "./InspectorAgent/InspectorAgentNetwork.js";
-
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();
@@ -30,8 +24,6 @@ function detachInspector() {
 }
 
 if (!(window.webInspectorKit && window.webInspectorKit.__installed)) {
-    installNetworkObserver();
-
     var webInspectorKit = {
         captureDOM: captureDOM,
         captureDOMSubtree: captureDOMSubtree,
@@ -51,8 +43,6 @@ if (!(window.webInspectorKit && window.webInspectorKit.__installed)) {
         setAttributeForNode: setAttributeForNode,
         removeAttributeForNode: removeAttributeForNode,
         debugStatus: debugStatus,
-        setNetworkLoggingEnabled: setNetworkLoggingEnabled,
-        clearNetworkRecords: clearNetworkRecords,
         __installed: true
     };
     Object.defineProperty(window, "webInspectorKit", {

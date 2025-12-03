@@ -26,6 +26,7 @@ let package = Package(
                 .process("Localizable.xcstrings"),
                 .process("WebInspector/Views/DOMTreeView"),
                 .process("WebInspector/Support/InspectorAgent.js"),
+                .process("WebInspector/Support/InspectorNetworkAgent.js"),
                 .process("WebInspector/Support/InspectorAgent")
             ]
         ),
