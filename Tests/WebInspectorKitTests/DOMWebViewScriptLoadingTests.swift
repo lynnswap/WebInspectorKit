@@ -7,9 +7,9 @@ struct DOMWebViewScriptLoadingTests {
     @Test
     func installsInspectorAgentIntoPageContentWorld() async throws {
         let webView = makeTestWebView()
-        let contentModel = WIContentModel()
-        contentModel.attachPageWebView(webView)
-        defer { contentModel.detachPageWebView() }
+        let domAgent = WIDOMAgentModel(configuration: .init())
+        domAgent.attachPageWebView(webView)
+        defer { domAgent.detachPageWebView() }
 
         try await loadHTML(
             """
@@ -30,9 +30,10 @@ struct DOMWebViewScriptLoadingTests {
     @Test
     func installsNetworkAgentOnDemand() async throws {
         let webView = makeTestWebView()
-        let contentModel = WIContentModel()
-        contentModel.attachPageWebView(webView)
-        defer { contentModel.detachPageWebView() }
+        let networkAgent = WINetworkAgentModel()
+        networkAgent.setRecording(false)
+        networkAgent.attachPageWebView(webView)
+        defer { networkAgent.detachPageWebView() }
 
         try await loadHTML(
             """
@@ -48,7 +49,7 @@ struct DOMWebViewScriptLoadingTests {
         let installedBefore = try await networkAgentIsInstalled(in: webView)
         #expect(installedBefore == false, "Network agent should not be installed until enabled")
 
-        await contentModel.setNetworkLoggingEnabled(true)
+        networkAgent.setRecording(true)
         try await waitForNetworkAgent(in: webView)
 
         let installedAfter = try await networkAgentIsInstalled(in: webView)

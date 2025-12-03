@@ -34,14 +34,18 @@ final class WIInspectorModel: NSObject {
         let preserveState: Bool
     }
 
-    weak var bridge: WIBridgeModel?
+    weak var domAgent: WIDOMAgentModel?
     private(set) var webView: WIWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
-    private var configuration: WebInspectorModel.Configuration {
-        bridge?.configuration ?? .init()
+    private var configuration: WebInspectorModel.Configuration
+
+    var onReady: (() -> Void)?
+
+    init(configuration: WebInspectorModel.Configuration) {
+        self.configuration = configuration
     }
 
     func makeInspectorWebView() -> WIWebView {
@@ -90,6 +94,10 @@ final class WIInspectorModel: NSObject {
                 await requestDocumentNow(depth: depth, preserveState: preserveState)
             }
         }
+    }
+
+    func updateConfiguration(_ configuration: WebInspectorModel.Configuration) {
+        self.configuration = configuration
     }
 
     private func applyConfigurationToInspector() async {
@@ -197,7 +205,7 @@ final class WIInspectorModel: NSObject {
                 switch request.method {
                 case "DOM.getDocument":
                     let depth = (request.params["depth"] as? Int) ?? configuration.snapshotDepth
-                    guard let content = self.bridge?.contentModel else {
+                    guard let content = self.domAgent else {
                         throw WIError.scriptUnavailable
                     }
                     let payload = try await content.captureSnapshot(maxDepth: depth)
@@ -205,22 +213,22 @@ final class WIInspectorModel: NSObject {
                 case "DOM.requestChildNodes":
                     let depth = (request.params["depth"] as? Int) ?? configuration.subtreeDepth
                     let identifier = request.params["nodeId"] as? Int ?? 0
-                    guard let content = self.bridge?.contentModel else {
+                    guard let content = self.domAgent else {
                         throw WIError.scriptUnavailable
                     }
                     let subtree = try await content.captureSubtree(identifier: identifier, maxDepth: depth)
                     await self.sendResponse(id: request.id, result: subtree.rawJSON)
                 case "DOM.highlightNode":
                     if let identifier = request.params["nodeId"] as? Int {
-                        await self.bridge?.contentModel.highlightDOMNode(id: identifier)
+                        await self.domAgent?.highlightDOMNode(id: identifier)
                     }
                     await self.sendResponse(id: request.id, result: [:])
                 case "Overlay.hideHighlight", "DOM.hideHighlight":
-                    self.bridge?.contentModel.clearWebInspectorHighlight()
+                    self.domAgent?.clearWebInspectorHighlight()
                     await self.sendResponse(id: request.id, result: [:])
                 case "DOM.getSelectorPath":
                     let identifier = request.params["nodeId"] as? Int ?? 0
-                    guard let content = self.bridge?.contentModel else {
+                    guard let content = self.domAgent else {
                         throw WIError.scriptUnavailable
                     }
                     let selectorPath = try await content.selectionCopyText(for: identifier, kind: .selectorPath)
@@ -339,10 +347,10 @@ extension WIInspectorModel: WKScriptMessageHandler {
             handleProtocolPayload(message.body)
         case .ready:
             isReady = true
-            Task{
+            Task {
                 await applyConfigurationToInspector()
                 await flushPendingWork()
-                bridge?.isLoading = false
+                onReady?()
             }
         case .log:
             if let dictionary = message.body as? [String: Any],
@@ -353,16 +361,16 @@ extension WIInspectorModel: WKScriptMessageHandler {
             }
         case .domSelection:
             if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                bridge?.domSelection.applySnapshot(from: dictionary)
+                domAgent?.selection.applySnapshot(from: dictionary)
             } else {
-                bridge?.domSelection.clear()
+                domAgent?.selection.clear()
             }
         case .domSelector:
             if let dictionary = message.body as? [String: Any] {
                 let nodeId = dictionary["id"] as? Int
                 let selectorPath = dictionary["selectorPath"] as? String ?? ""
-                if let nodeId, bridge?.domSelection.nodeId == nodeId {
-                    bridge?.domSelection.selectorPath = selectorPath
+                if let nodeId, domAgent?.selection.nodeId == nodeId {
+                    domAgent?.selection.selectorPath = selectorPath
                 }
             }
         }

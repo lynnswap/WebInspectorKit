@@ -44,51 +44,48 @@ public final class WebInspectorModel {
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
 #endif
 
-    public let webBridge: WIBridgeModel
-    public var configuration:Configuration{
-        webBridge.configuration
-    }
+    public private(set) var configuration: Configuration
+    public var errorMessage: String?
     public private(set) var isSelectingElement = false
     public var selectedTab: WITab? = nil
 
+    let domAgent: WIDOMAgentModel
+    let networkAgent: WINetworkAgentModel
+    let inspectorModel: WIInspectorModel
+
+    @ObservationIgnored private weak var lastPageWebView: WKWebView?
+
     public var hasPageWebView: Bool {
-        webBridge.contentModel.webView != nil
+        domAgent.webView != nil
     }
 
     public init(configuration: Configuration = .init()) {
-        self.webBridge = WIBridgeModel(configuration: configuration)
+        self.configuration = configuration
+        let domAgent = WIDOMAgentModel(configuration: configuration)
+        let networkAgent = WINetworkAgentModel()
+        let inspectorModel = WIInspectorModel(configuration: configuration)
+
+        self.domAgent = domAgent
+        self.networkAgent = networkAgent
+        self.inspectorModel = inspectorModel
+
+        domAgent.inspector = inspectorModel
+        domAgent.owner = self
+        inspectorModel.domAgent = domAgent
     }
 
     public func attach(webView: WKWebView?) {
-        updateLifecycle(.attach(webView))
+        handleAttach(webView: webView)
     }
 
     public func suspend() {
-        updateLifecycle(.suspend)
+        handleSuspend(detachInspector: false)
     }
 
     public func detach() {
-        updateLifecycle(.detach)
-    }
-    
-    public func updateLifecycle(_ state: WILifecycleState) {
-        switch state {
-        case .attach(let webView):
-            webBridge.setLifecycle(.attach(webView))
-        case .suspend:
-            resetInteractionState()
-            webBridge.setLifecycle(.suspend)
-        case .detach:
-            resetInteractionState()
-            webBridge.setLifecycle(.detach)
-        }
-    }
-
-    private func resetInteractionState() {
-        cancelSelectionMode()
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
+        handleSuspend(detachInspector: true)
+        inspectorModel.detachInspectorWebView()
+        lastPageWebView = nil
     }
 
     public func copySelection(_ kind: WISelectionCopyKind) {
@@ -96,19 +93,35 @@ public final class WebInspectorModel {
     }
 
     public func deleteSelectedNode() {
-        guard let nodeId = webBridge.domSelection.nodeId else { return }
+        guard let nodeId = domAgent.selection.nodeId else { return }
         Task {
-            await webBridge.contentModel.removeNode(identifier: nodeId)
+            await domAgent.removeNode(identifier: nodeId)
+        }
+    }
+
+    public func updateAttributeValue(name: String, value: String) {
+        guard let nodeId = domAgent.selection.nodeId else { return }
+        domAgent.selection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
+        Task {
+            await domAgent.updateAttributeValue(identifier: nodeId, name: name, value: value)
+        }
+    }
+
+    public func removeAttribute(name: String) {
+        guard let nodeId = domAgent.selection.nodeId else { return }
+        domAgent.selection.removeAttribute(nodeId: nodeId, name: name)
+        Task {
+            await domAgent.removeAttribute(identifier: nodeId, name: name)
         }
     }
 
     public func reload() async {
         guard hasPageWebView else {
-            webBridge.errorMessage = "WebView is not available."
+            errorMessage = "WebView is not available."
             return
         }
 
-        await webBridge.reloadInspector(preserveState: false)
+        await reloadInspector(preserveState: false)
     }
 
     public func toggleSelectionMode() {
@@ -127,9 +140,25 @@ public final class WebInspectorModel {
         restorePageScrollingState()
 #endif
         Task {
-            await webBridge.contentModel.cancelSelectionMode()
+            await domAgent.cancelSelectionMode()
         }
         isSelectingElement = false
+    }
+
+    public func updateSnapshotDepth(_ depth: Int) {
+        let clamped = max(1, depth)
+        configuration.snapshotDepth = clamped
+        domAgent.updateConfiguration(configuration)
+        inspectorModel.updateConfiguration(configuration)
+        inspectorModel.setPreferredDepth(clamped)
+    }
+
+    public func setNetworkRecording(_ enabled: Bool) {
+        networkAgent.setRecording(enabled)
+    }
+
+    public func clearNetworkLogs() {
+        networkAgent.clearNetworkLogs()
     }
 
     private func startSelectionMode() {
@@ -138,7 +167,7 @@ public final class WebInspectorModel {
         disablePageScrollingForSelection()
 #endif
         isSelectingElement = true
-        webBridge.contentModel.clearWebInspectorHighlight()
+        domAgent.clearWebInspectorHighlight()
         selectionTask?.cancel()
         selectionTask = Task {
             defer {
@@ -149,32 +178,88 @@ public final class WebInspectorModel {
 #endif
             }
             do {
-                let result = try await self.webBridge.contentModel.beginSelectionMode()
+                let result = try await self.domAgent.beginSelectionMode()
                 guard !result.cancelled else { return }
                 if Task.isCancelled { return }
                 let requestedDepth = max(self.configuration.snapshotDepth, result.requiredDepth + 1)
-                self.webBridge.updateSnapshotDepth(requestedDepth)
-                await self.webBridge.reloadInspector(preserveState: true)
+                self.updateSnapshotDepth(requestedDepth)
+                await self.reloadInspector(preserveState: true)
             } catch is CancellationError {
-                await self.webBridge.contentModel.cancelSelectionMode()
+                await self.domAgent.cancelSelectionMode()
             } catch {
                 logger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-                webBridge.errorMessage = error.localizedDescription
+                errorMessage = error.localizedDescription
             }
         }
     }
 
     private func performCopy(_ kind: WISelectionCopyKind) {
-        guard let nodeId = webBridge.domSelection.nodeId else { return }
+        guard let nodeId = domAgent.selection.nodeId else { return }
         Task { @MainActor in
             do {
-                let text = try await webBridge.contentModel.selectionCopyText(for: nodeId, kind: kind)
+                let text = try await domAgent.selectionCopyText(for: nodeId, kind: kind)
                 guard !text.isEmpty else { return }
                 copyToPasteboard(text)
             } catch {
                 logger.error("copy \(kind.logLabel, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    private func reloadInspector(preserveState: Bool) async {
+        guard domAgent.webView != nil else {
+            errorMessage = "WebView is not available."
+            return
+        }
+        errorMessage = nil
+
+        let depth = configuration.snapshotDepth
+        inspectorModel.updateConfiguration(configuration)
+        inspectorModel.setPreferredDepth(depth)
+        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+    }
+
+    private func handleAttach(webView: WKWebView?) {
+        resetInteractionState()
+        errorMessage = nil
+        domAgent.selection.clear()
+        networkAgent.store.reset()
+
+        let previousWebView = lastPageWebView
+        guard let webView else {
+            errorMessage = "WebView is not available."
+            domAgent.detachPageWebView()
+            networkAgent.detachPageWebView(disableNetworkLogging: true)
+            lastPageWebView = nil
+            return
+        }
+        let shouldPreserveState = domAgent.webView == nil && previousWebView === webView
+        let needsReload = shouldPreserveState || previousWebView !== webView
+        domAgent.attachPageWebView(webView)
+        networkAgent.attachPageWebView(webView)
+        lastPageWebView = webView
+        Task {
+            if needsReload {
+                await self.reloadInspector(preserveState: shouldPreserveState)
+            }
+        }
+    }
+
+    private func handleSuspend(detachInspector: Bool) {
+        domAgent.detachPageWebView()
+        networkAgent.store.reset()
+        networkAgent.detachPageWebView(disableNetworkLogging: true)
+        domAgent.selection.clear()
+        if detachInspector {
+            inspectorModel.detachInspectorWebView()
+        }
+    }
+
+    private func resetInteractionState() {
+        cancelSelectionMode()
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
     }
 
     private func copyToPasteboard(_ text: String) {
@@ -189,7 +274,7 @@ public final class WebInspectorModel {
 
 #if canImport(UIKit)
     private func disablePageScrollingForSelection() {
-        guard let scrollView = webBridge.contentModel.webView?.scrollView else { return }
+        guard let scrollView = domAgent.webView?.scrollView else { return }
         if scrollBackup == nil {
             scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
         }
@@ -198,7 +283,7 @@ public final class WebInspectorModel {
     }
 
     private func restorePageScrollingState() {
-        guard let scrollView = webBridge.contentModel.webView?.scrollView else {
+        guard let scrollView = domAgent.webView?.scrollView else {
             scrollBackup = nil
             return
         }

@@ -15,7 +15,7 @@ public struct WIDetailView: View {
     
     public var body: some View {
 #if canImport(UIKit)
-        let selection = model.webBridge.domSelection
+        let selection = model.domAgent.selection
         Group{
             if selection.nodeId != nil {
                 List{
@@ -59,7 +59,7 @@ public struct WIDetailView: View {
                                         textColor: .label,
                                         isEditable: true,
                                         onChange: { newValue in
-                                            model.webBridge.updateAttributeValue(name: element.name, value: newValue)
+                                            model.updateAttributeValue(name: element.name, value: newValue)
                                         }
                                     )
                                 }
@@ -97,7 +97,7 @@ public struct WIDetailView: View {
    
     private func deleteButton(_ element:WIDOMAttribute) -> some View{
         Button(role:.destructive){
-            model.webBridge.removeAttribute(name: element.name)
+            model.removeAttribute(name: element.name)
         }label:{
             Label{
                 Text("delete")
@@ -281,9 +281,9 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
 private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WebInspectorModel {
     let model = WebInspectorModel()
     if let selection {
-        model.webBridge.domSelection = selection
+        model.domAgent.selection = selection
     } else {
-        model.webBridge.domSelection.clear()
+        model.domAgent.selection.clear()
     }
     return model
 }

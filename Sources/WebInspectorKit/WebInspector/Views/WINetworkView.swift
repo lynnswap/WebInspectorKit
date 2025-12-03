@@ -6,7 +6,7 @@ public struct WINetworkView: View {
     public init() {}
 
     public var body: some View {
-        @Bindable var store = model.webBridge.networkStore
+        @Bindable var store = model.networkAgent.store
 
         VStack(spacing: 0) {
             controlBar(
@@ -43,7 +43,7 @@ public struct WINetworkView: View {
     private func controlBar(isRecording: Bool, requestCount: Int, isClearDisabled: Bool) -> some View {
         HStack(spacing: 12) {
             Button {
-                model.webBridge.setNetworkRecording(!isRecording)
+                model.setNetworkRecording(!isRecording)
             } label: {
                 Label {
                     Text(isRecording ? "network.controls.pause" : "network.controls.record", bundle: .module)
@@ -54,7 +54,7 @@ public struct WINetworkView: View {
             .buttonStyle(.bordered)
 
             Button {
-                model.webBridge.clearNetworkLogs()
+                model.clearNetworkLogs()
             } label: {
                 Label {
                     Text("network.controls.clear", bundle: .module)

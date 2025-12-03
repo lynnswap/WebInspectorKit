@@ -43,7 +43,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                 Image(systemName: "document.on.document")
                             }
                         }
-                        .disabled(model.webBridge.domSelection.nodeId == nil)
+                        .disabled(model.domAgent.selection.nodeId == nil)
                         
                    
                         Menu{
@@ -52,9 +52,8 @@ struct WebInspectorToolbarModifier: ViewModifier {
                             } label: {
                                 Text("reload.target.inspector")
                             }
-                            .disabled(model.webBridge.isLoading)
                             Button {
-                                model.webBridge.contentModel.webView?.reload()
+                                model.domAgent.webView?.reload()
                             } label: {
                                 Text("reload.target.page")
                             }
@@ -76,7 +75,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                     Image(systemName: "trash")
                                 }
                             }
-                            .disabled(model.webBridge.domSelection.nodeId == nil)
+                            .disabled(model.domAgent.selection.nodeId == nil)
                         }
                     }
                 }
