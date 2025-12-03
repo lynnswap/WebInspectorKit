@@ -1,21 +1,55 @@
-//
-//  ContentView.swift
-//  MiniBrowser
-//
-//  Created by lynnswap on 2025/12/03.
-//
-
 import SwiftUI
+import WebInspectorKit
 
 struct ContentView: View {
+    @State private var model: BrowserViewModel?
+    @State private var inspectorModel: WebInspectorModel?
+    @State private var isShowingInspector = false
+   
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        if let model ,let inspectorModel{
+#if os(macOS)
+            HSplitView {
+                NavigationStack{
+                    ContentWebView(model: model)
+                }
+                NavigationStack{
+                    WebInspectorView(inspectorModel, webView: model.webView)
+                }
+            }
+#else
+            NavigationStack {
+                ContentWebView(model: model)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button {
+                                isShowingInspector.toggle()
+                            } label: {
+                                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            }
+                        }
+                    }
+                    .sheet(isPresented: $isShowingInspector) {
+                        NavigationStack {
+                            InspectorSheetView(
+                                model:model,
+                                inspectorModel: inspectorModel
+                            )
+                        }
+                        .presentationBackgroundInteraction(.enabled)
+                        .presentationDetents([.medium, .large])
+                        .presentationContentInteraction(.scrolls)
+                    }
+            }
+#endif
+        } else {
+            Color.clear
+                .onAppear {
+                    model = BrowserViewModel(url: URL(string: "https://www.google.com")!)
+                    inspectorModel = WebInspectorModel()
+                }
         }
-        .padding()
     }
 }
 
