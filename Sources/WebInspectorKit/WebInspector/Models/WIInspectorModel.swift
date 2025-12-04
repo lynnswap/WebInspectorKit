@@ -60,10 +60,6 @@ final class WIInspectorModel: NSObject {
         return newWebView
     }
 
-    func teardownInspectorWebView(_ webView: WIWebView) {
-        detachInspectorWebView(ifMatches: webView)
-    }
-
     func detachInspectorWebView() {
         guard let webView else { return }
         detachInspectorWebView(ifMatches: webView)
