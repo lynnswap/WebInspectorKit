@@ -42,8 +42,6 @@ final class WIInspectorModel: NSObject {
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
     private var configuration: WebInspectorModel.Configuration
 
-    var onReady: (() -> Void)?
-
     init(configuration: WebInspectorModel.Configuration) {
         self.configuration = configuration
     }
@@ -350,7 +348,6 @@ extension WIInspectorModel: WKScriptMessageHandler {
             Task {
                 await applyConfigurationToInspector()
                 await flushPendingWork()
-                onReady?()
             }
         case .log:
             if let dictionary = message.body as? [String: Any],
