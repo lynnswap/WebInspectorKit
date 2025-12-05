@@ -12,11 +12,12 @@ import Observation
 @Observable
 public final class WINetworkViewModel {
     public let session: WINetworkSession
-    let store: WINetworkStore
+    var store: WINetworkStore {
+        session.store
+    }
 
     public init(session: WINetworkSession = WINetworkSession()) {
         self.session = session
-        self.store = session.store
     }
 
     public func attach(to webView: WKWebView) {
