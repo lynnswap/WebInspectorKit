@@ -6,10 +6,11 @@ public struct WINetworkView: View {
     public init(viewModel: WINetworkViewModel) {
         self.viewModel = viewModel
     }
+    private var store:WINetworkStore{
+        viewModel.store
+    }
 
     public var body: some View {
-        @Bindable var store = viewModel.store
-
         VStack(spacing: 0) {
             controlBar(
                 isRecording: store.isRecording,
@@ -20,7 +21,7 @@ public struct WINetworkView: View {
             if store.entries.isEmpty {
                 emptyState
             } else {
-                List(selection: $store.selectedEntryID) {
+                List(selection: Bindable(store).selectedEntryID) {
                     ForEach(store.entries) { entry in
                         WINetworkRow(entry: entry)
                             .contentShape(Rectangle())
