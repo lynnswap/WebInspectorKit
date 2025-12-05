@@ -49,8 +49,8 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.dom.systemImage,
             value: WIDefaultTab.dom.identifier,
             role: .inspector,
-            content: {
-                WIDOMView()
+            content: { model in
+                WIDOMView(viewModel: model.dom)
             }
         )
     }
@@ -64,8 +64,8 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
             value: WIDefaultTab.detail.identifier,
             role: .inspector,
-            content: {
-                WIDetailView()
+            content: { model in
+                WIDetailView(viewModel: model.dom)
             }
         )
     }
@@ -79,8 +79,8 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.network.systemImage,
             value: WIDefaultTab.network.identifier,
             role: .inspector,
-            content: {
-                WINetworkView()
+            content: { model in
+                WINetworkView(viewModel: model.network)
             }
         )
     }

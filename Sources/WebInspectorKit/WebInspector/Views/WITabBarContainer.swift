@@ -3,8 +3,8 @@ import SwiftUI
 
 @available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
+    var model: WebInspectorModel
     var tabs: [WITab]
-    @Environment(WebInspectorModel.self) private var model
     
     func makeCoordinator() -> Coordinator {
         Coordinator(model:model,tabs: tabs)
