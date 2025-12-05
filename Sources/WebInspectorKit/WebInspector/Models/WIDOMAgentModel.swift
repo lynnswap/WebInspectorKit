@@ -17,7 +17,7 @@ private let inspectorPresenceProbeScript: String = """
 
 @MainActor
 @Observable
-final class WIDOMAgentModel: NSObject {
+final class WIDOMAgentModel: NSObject, WIPageAgent {
     struct SnapshotPackage {
         let rawJSON: String
     }
@@ -42,7 +42,7 @@ final class WIDOMAgentModel: NSObject {
 
     weak var inspector: WIInspectorModel?
     var selection = WIDOMSelection()
-    private(set) weak var webView: WKWebView?
+    weak var webView: WKWebView?
     private var configuration: WebInspectorConfiguration
 
     init(configuration: WebInspectorConfiguration) {
@@ -55,31 +55,6 @@ final class WIDOMAgentModel: NSObject {
 
     func updateConfiguration(_ configuration: WebInspectorConfiguration) {
         self.configuration = configuration
-    }
-
-    func attachPageWebView(_ newWebView: WKWebView?) {
-        guard self.webView !== newWebView else { return }
-        guard let newWebView else {
-            detachPageWebView()
-            return
-        }
-        if let previousWebView = self.webView {
-            stopAutoUpdate(for: previousWebView)
-            detachMessageHandlers(from: previousWebView)
-        }
-        self.webView = newWebView
-        registerMessageHandlers()
-        Task {
-            await self.setAutoUpdate(for: newWebView, maxDepth: self.configuration.snapshotDepth)
-        }
-    }
-
-    func detachPageWebView() {
-        guard let currentWebView = webView else { return }
-        stopAutoUpdate(for: currentWebView)
-        detachMessageHandlers(from: currentWebView)
-        webView = nil
-        selection.clear()
     }
 
     func cancelSelectionMode(using targetWebView: WKWebView? = nil) async {
@@ -242,6 +217,26 @@ extension WIDOMAgentModel {
         try await evaluateStringScript("""
         return window.webInspectorKit?.\(kind.jsFunction)(identifier) ?? \"\"
         """, identifier: identifier)
+    }
+}
+
+// MARK: - WIPageAgent
+
+extension WIDOMAgentModel {
+    func willDetachPageWebView(_ webView: WKWebView) {
+        stopAutoUpdate(for: webView)
+        detachMessageHandlers(from: webView)
+    }
+
+    func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
+        registerMessageHandlers()
+        Task {
+            await self.setAutoUpdate(for: webView, maxDepth: self.configuration.snapshotDepth)
+        }
+    }
+
+    func didClearPageWebView() {
+        selection.clear()
     }
 }
 

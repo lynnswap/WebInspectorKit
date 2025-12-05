@@ -16,7 +16,7 @@ public final class WINetworkViewModel {
 
     public init(session: WINetworkSession = WINetworkSession()) {
         self.session = session
-        self.store = session.networkAgent.store
+        self.store = session.store
     }
 
     public func attach(to webView: WKWebView) {
@@ -24,11 +24,11 @@ public final class WINetworkViewModel {
     }
 
     public func setRecording(_ enabled: Bool) {
-        session.networkAgent.setRecording(enabled)
+        session.setRecording(enabled)
     }
 
     public func clearNetworkLogs() {
-        session.networkAgent.clearNetworkLogs()
+        session.clearNetworkLogs()
     }
 
     public func suspend() {

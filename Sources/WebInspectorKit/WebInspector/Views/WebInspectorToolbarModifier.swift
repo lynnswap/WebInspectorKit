@@ -55,7 +55,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                 Text("reload.target.inspector")
                             }
                             Button {
-                                model.session.domAgent.webView?.reload()
+                                model.session.reloadPage()
                             } label: {
                                 Text("reload.target.page")
                             }

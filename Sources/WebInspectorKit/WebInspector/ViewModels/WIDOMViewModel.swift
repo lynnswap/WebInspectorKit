@@ -29,11 +29,8 @@ public final class WIDOMViewModel {
 
     public init(session: WIDOMSession = WIDOMSession()) {
         self.session = session
-        self.selection = session.domAgent.selection
-        let inspectorModel = WIInspectorModel(configuration: session.configuration)
-        self.inspectorModel = inspectorModel
-        session.domAgent.inspector = inspectorModel
-        inspectorModel.domAgent = session.domAgent
+        self.selection = session.selection
+        self.inspectorModel = session.inspectorModel
     }
 
     public var hasPageWebView: Bool {
@@ -100,7 +97,7 @@ public final class WIDOMViewModel {
         restorePageScrollingState()
 #endif
         Task {
-            await session.domAgent.cancelSelectionMode()
+            await session.cancelSelectionMode()
         }
         isSelectingElement = false
     }
@@ -109,7 +106,7 @@ public final class WIDOMViewModel {
         guard let nodeId = selection.nodeId else { return }
         Task {
             do {
-                let text = try await session.domAgent.selectionCopyText(
+                let text = try await session.selectionCopyText(
                     for: nodeId,
                     kind: kind
                 )
@@ -124,7 +121,7 @@ public final class WIDOMViewModel {
     public func deleteSelectedNode() {
         guard let nodeId = selection.nodeId else { return }
         Task {
-            await session.domAgent.removeNode(identifier: nodeId)
+            await session.removeNode(identifier: nodeId)
         }
     }
 
@@ -132,7 +129,7 @@ public final class WIDOMViewModel {
         guard let nodeId = selection.nodeId else { return }
         selection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
         Task {
-            await session.domAgent.updateAttributeValue(identifier: nodeId, name: name, value: value)
+            await session.updateAttributeValue(identifier: nodeId, name: name, value: value)
         }
     }
 
@@ -140,7 +137,7 @@ public final class WIDOMViewModel {
         guard let nodeId = selection.nodeId else { return }
         selection.removeAttribute(nodeId: nodeId, name: name)
         Task {
-            await session.domAgent.removeAttribute(identifier: nodeId, name: name)
+            await session.removeAttribute(identifier: nodeId, name: name)
         }
     }
 }
@@ -152,7 +149,7 @@ private extension WIDOMViewModel {
         disablePageScrollingForSelection()
 #endif
         isSelectingElement = true
-        session.domAgent.clearWebInspectorHighlight()
+        session.clearHighlight()
         selectionTask?.cancel()
         selectionTask = Task {
             defer {
@@ -163,14 +160,14 @@ private extension WIDOMViewModel {
 #endif
             }
             do {
-                let result = try await self.session.domAgent.beginSelectionMode()
+                let result = try await self.session.beginSelectionMode()
                 guard !result.cancelled else { return }
                 if Task.isCancelled { return }
                 let requestedDepth = max(self.session.configuration.snapshotDepth, result.requiredDepth + 1)
                 self.updateSnapshotDepth(requestedDepth)
                 await self.reloadInspector(preserveState: true)
             } catch is CancellationError {
-                await self.session.domAgent.cancelSelectionMode()
+                await self.session.cancelSelectionMode()
             } catch {
                 domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
                 errorMessage = error.localizedDescription
@@ -197,7 +194,7 @@ private extension WIDOMViewModel {
 
 #if canImport(UIKit)
     func disablePageScrollingForSelection() {
-        guard let scrollView = session.domAgent.webView?.scrollView else { return }
+        guard let scrollView = session.pageWebView?.scrollView else { return }
         if scrollBackup == nil {
             scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
         }
@@ -206,7 +203,7 @@ private extension WIDOMViewModel {
     }
 
     func restorePageScrollingState() {
-        guard let scrollView = session.domAgent.webView?.scrollView else {
+        guard let scrollView = session.pageWebView?.scrollView else {
             scrollBackup = nil
             return
         }

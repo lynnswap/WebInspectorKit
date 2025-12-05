@@ -17,51 +17,16 @@ private let networkPresenceProbeScript: String = """
 
 @MainActor
 @Observable
-final class WINetworkAgentModel: NSObject {
+final class WINetworkAgentModel: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
         case network = "webInspectorNetworkUpdate"
     }
 
-    private(set) weak var webView: WKWebView?
+    weak var webView: WKWebView?
     let store = WINetworkStore()
 
     @MainActor deinit {
         detachPageWebView()
-    }
-
-    func attachPageWebView(_ newWebView: WKWebView?) {
-        guard self.webView !== newWebView else { return }
-        guard let newWebView else {
-            detachPageWebView()
-            return
-        }
-        if let previousWebView = self.webView {
-            detachMessageHandlers(from: previousWebView)
-        }
-        self.webView = newWebView
-        registerMessageHandlers()
-        Task {
-            await self.configureNetworkLogging(
-                enabled: self.store.isRecording,
-                clearExisting: true,
-                on: newWebView
-            )
-        }
-    }
-
-    func detachPageWebView(disableNetworkLogging: Bool = false) {
-        guard let currentWebView = webView else { return }
-        if disableNetworkLogging {
-            Task {
-                await self.configureNetworkLogging(
-                    enabled: false,
-                    clearExisting: false,
-                    on: currentWebView
-                )
-            }
-        }
-        detachMessageHandlers(from: currentWebView)
-        webView = nil
     }
 
     func setRecording(_ enabled: Bool) {
@@ -84,6 +49,49 @@ final class WINetworkAgentModel: NSObject {
                 on: self.webView
             )
         }
+    }
+}
+
+// MARK: - WIPageAgent
+
+extension WINetworkAgentModel {
+    func attachPageWebView(_ newWebView: WKWebView?) {
+        replacePageWebView(with: newWebView)
+    }
+
+    func detachPageWebView(disableNetworkLogging: Bool = false) {
+        if disableNetworkLogging, let webView {
+            Task {
+                await self.configureNetworkLogging(
+                    enabled: false,
+                    clearExisting: false,
+                    on: webView
+                )
+            }
+        }
+        replacePageWebView(with: nil)
+    }
+
+    func willDetachPageWebView(_ webView: WKWebView) {
+        detachMessageHandlers(from: webView)
+    }
+
+    func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
+        if previousWebView !== webView {
+            store.reset()
+        }
+        registerMessageHandlers()
+        Task {
+            await self.configureNetworkLogging(
+                enabled: self.store.isRecording,
+                clearExisting: true,
+                on: webView
+            )
+        }
+    }
+
+    func didClearPageWebView() {
+        store.reset()
     }
 }
 
