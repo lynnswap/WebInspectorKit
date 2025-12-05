@@ -53,7 +53,7 @@ public struct WebInspectorView: View {
             .onDisappear {
                 model.suspend()
             }
-            .webInspectorToolbar(model, isVisible: model.selectedTab?.role == .inspector)
+            .webInspectorToolbar(model.dom, isVisible: model.selectedTab?.role == .inspector)
     }
 
     @ViewBuilder

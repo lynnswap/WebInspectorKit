@@ -1,14 +1,14 @@
 import SwiftUI
 
 struct WebInspectorToolbarModifier: ViewModifier {
-    @Bindable var model: WIDOMViewModel
+    var model: WIDOMViewModel
     private var isShowingToolbar: Bool
-
-    init(model: WIDOMViewModel, isVisible: Bool = true) {
-        self._model = Bindable(model)
+    
+    init(model: WIDOMViewModel, isVisible: Bool) {
+        self.model = model
         self.isShowingToolbar = isVisible
     }
-
+    
     func body(content: Content) -> some View {
         content
             .toolbar {
@@ -47,7 +47,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                         }
                         .disabled(model.selection.nodeId == nil)
                         
-                   
+                        
                         Menu{
                             Button {
                                 Task { await model.reloadInspector() }
@@ -73,22 +73,21 @@ struct WebInspectorToolbarModifier: ViewModifier {
                             } label: {
                                 Label {
                                     Text("inspector.delete_node")
-                            } icon: {
-                                Image(systemName: "trash")
+                                } icon: {
+                                    Image(systemName: "trash")
+                                }
                             }
+                            .disabled(model.selection.nodeId == nil)
                         }
-                        .disabled(model.selection.nodeId == nil)
                     }
                 }
-            }
             }
             .animation(.default,value:isShowingToolbar)
     }
 }
 
 public extension View {
-    func webInspectorToolbar(_ model: WebInspectorModel, isVisible: Bool? = nil) -> some View {
-        let visible = isVisible ?? (model.selectedTab?.role == .inspector)
-        return modifier(WebInspectorToolbarModifier(model: model.dom, isVisible: visible))
+    func webInspectorToolbar(_ model: WIDOMViewModel, isVisible:Bool = true) -> some View {
+        return modifier(WebInspectorToolbarModifier(model: model, isVisible: isVisible))
     }
 }
