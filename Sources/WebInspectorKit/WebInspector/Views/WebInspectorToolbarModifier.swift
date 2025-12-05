@@ -1,12 +1,14 @@
 import SwiftUI
 
 struct WebInspectorToolbarModifier: ViewModifier {
-    @Environment(WebInspectorModel.self) private var model
-    
-    private var isShowingToolbar: Bool {
-        model.selectedTab?.role == .inspector
+    @Bindable var model: WIDOMViewModel
+    private var isShowingToolbar: Bool
+
+    init(model: WIDOMViewModel, isVisible: Bool = true) {
+        self._model = Bindable(model)
+        self.isShowingToolbar = isVisible
     }
-    
+
     func body(content: Content) -> some View {
         content
             .toolbar {
@@ -43,17 +45,17 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                 Image(systemName: "document.on.document")
                             }
                         }
-                        .disabled(model.domAgent.selection.nodeId == nil)
+                        .disabled(model.selection.nodeId == nil)
                         
                    
                         Menu{
                             Button {
-                                Task { await model.reload() }
+                                Task { await model.reloadInspector() }
                             } label: {
                                 Text("reload.target.inspector")
                             }
                             Button {
-                                model.domAgent.webView?.reload()
+                                model.session.domAgent.webView?.reload()
                             } label: {
                                 Text("reload.target.page")
                             }
@@ -71,21 +73,22 @@ struct WebInspectorToolbarModifier: ViewModifier {
                             } label: {
                                 Label {
                                     Text("inspector.delete_node")
-                                } icon: {
-                                    Image(systemName: "trash")
-                                }
+                            } icon: {
+                                Image(systemName: "trash")
                             }
-                            .disabled(model.domAgent.selection.nodeId == nil)
                         }
+                        .disabled(model.selection.nodeId == nil)
                     }
                 }
+            }
             }
             .animation(.default,value:isShowingToolbar)
     }
 }
 
 public extension View {
-    func webInspectorToolbar() -> some View {
-        modifier(WebInspectorToolbarModifier())
+    func webInspectorToolbar(_ model: WebInspectorModel, isVisible: Bool? = nil) -> some View {
+        let visible = isVisible ?? (model.selectedTab?.role == .inspector)
+        return modifier(WebInspectorToolbarModifier(model: model.dom, isVisible: visible))
     }
 }

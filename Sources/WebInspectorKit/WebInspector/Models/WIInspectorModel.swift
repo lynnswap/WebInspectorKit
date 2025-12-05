@@ -40,9 +40,9 @@ final class WIInspectorModel: NSObject {
     private var pendingBundles: [PendingBundle] = []
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
-    private var configuration: WebInspectorModel.Configuration
+    private var configuration: WebInspectorConfiguration
 
-    init(configuration: WebInspectorModel.Configuration) {
+    init(configuration: WebInspectorConfiguration) {
         self.configuration = configuration
     }
 
@@ -90,7 +90,7 @@ final class WIInspectorModel: NSObject {
         }
     }
 
-    func updateConfiguration(_ configuration: WebInspectorModel.Configuration) {
+    func updateConfiguration(_ configuration: WebInspectorConfiguration) {
         self.configuration = configuration
     }
 

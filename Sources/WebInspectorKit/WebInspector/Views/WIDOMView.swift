@@ -2,15 +2,17 @@ import SwiftUI
 import WebKit
 
 public struct WIDOMView: View {
-    @Environment(WebInspectorModel.self) private var model
+    private var viewModel: WIDOMViewModel
 
-    public init() {}
+    public init(viewModel: WIDOMViewModel ) {
+        self.viewModel = viewModel
+    }
     
     public var body: some View {
-        WIDOMViewRepresentable(inspectorModel: model.inspectorModel)
+        WIDOMViewRepresentable(inspectorModel: viewModel.inspectorModel)
             .ignoresSafeArea()
             .overlay{
-                if let errorMessage = model.errorMessage {
+                if let errorMessage = viewModel.errorMessage {
                     ContentUnavailableView {
                         Image(systemName:"exclamationmark.triangle")
                             .foregroundStyle(.yellow)

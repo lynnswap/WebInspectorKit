@@ -8,6 +8,7 @@ iOS-ready Web inspector, SwiftUI-friendly and easy to add.
 - DOM tree browsing with selection highlights and node deletion
 - Attribute editing/removal plus copying HTML, CSS selector, and XPath
 - Configurable tabs via a SwiftUI-style result builder (DOM and Detail tabs included)
+- Dedicated view models for DOM / Detail / Network views so each view can run standalone
 - Network tab for fetch/XHR requests (status, headers, timing)
 - Automatic DOM snapshot reloads with debounce and adjustable depth
 - Selection mode toggle to start/stop element picking and highlighting
@@ -57,15 +58,17 @@ For a more complete preview setup, see [`Sources/WebInspectorKit/WebInspector/Vi
 WebInspectorView(inspector, webView: pageWebView) {
     WITab.dom()
     WITab.detail()
-    WITab("Network", systemImage: "wave.3.right.circle") {
-        NetworkInspectorView()  // your custom tab content
+    WITab("Custom", systemImage: "folder") { _ in
+        List{
+            Text("Custom tab content")
+        }
     }
 }
 ```
 
 ## Configuration (snapshot depth, subtree depth, debounce)
 ```swift
-let config = WebInspectorModel.Configuration(
+let config = WebInspectorConfiguration(
     snapshotDepth: 6,       // max depth for initial/full snapshots
     subtreeDepth: 4,        // depth for child subtree requests
     autoUpdateDebounce: 0.8 // seconds for automatic snapshot debounce
@@ -76,11 +79,12 @@ If selection mode requires deeper nodes, the inspector automatically raises `sna
 
 ## Key APIs and behavior
 - Lifecycle is handled inside `WebInspectorView` (`attach`, `suspend`, `detach` on appear/disappear).
-- `toggleSelectionMode()` starts/stops element selection with page highlighting.
-- `reload()` refreshes the DOM snapshot using the current `snapshotDepth`.
-- `copySelection(_:)` copies HTML, selectorPath, or XPath for the selected node.
-- `deleteSelectedNode()` removes the selected DOM node.
-- Attribute editing uses `updateAttributeValue` / `removeAttribute`.
+- `dom.toggleSelectionMode()` starts/stops element selection with page highlighting.
+- `dom.reloadInspector()` refreshes the DOM snapshot using the current `snapshotDepth`.
+- `dom.copySelection(_:)` copies HTML, selectorPath, or XPath for the selected node.
+- `dom.deleteSelectedNode()` removes the selected DOM node.
+- Attribute editing uses `dom.updateAttributeValue` / `dom.removeAttribute`.
+- Network capture uses `network.setRecording(_:)` and `network.clearNetworkLogs()`.
 - Auto-updates are managed internally using `autoUpdateDebounce`.
 
 ## How it works

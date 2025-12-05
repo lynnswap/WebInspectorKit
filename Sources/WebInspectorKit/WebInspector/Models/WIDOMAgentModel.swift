@@ -18,18 +18,34 @@ private let inspectorPresenceProbeScript: String = """
 @MainActor
 @Observable
 final class WIDOMAgentModel: NSObject {
+    struct SnapshotPackage {
+        let rawJSON: String
+    }
+
+    struct SubtreePayload: Equatable {
+        let rawJSON: String
+    }
+
+    struct DOMUpdatePayload: Equatable {
+        let rawJSON: String
+    }
+
+    struct SelectionResult: Decodable {
+        let cancelled: Bool
+        let requiredDepth: Int
+    }
+
     private enum HandlerName: String, CaseIterable {
         case snapshot = "webInspectorSnapshotUpdate"
         case mutation = "webInspectorMutationUpdate"
     }
 
     weak var inspector: WIInspectorModel?
-    weak var owner: WebInspectorModel?
     var selection = WIDOMSelection()
     private(set) weak var webView: WKWebView?
-    private var configuration: WebInspectorModel.Configuration
+    private var configuration: WebInspectorConfiguration
 
-    init(configuration: WebInspectorModel.Configuration) {
+    init(configuration: WebInspectorConfiguration) {
         self.configuration = configuration
     }
 
@@ -37,7 +53,7 @@ final class WIDOMAgentModel: NSObject {
         detachPageWebView()
     }
 
-    func updateConfiguration(_ configuration: WebInspectorModel.Configuration) {
+    func updateConfiguration(_ configuration: WebInspectorConfiguration) {
         self.configuration = configuration
     }
 
@@ -45,7 +61,6 @@ final class WIDOMAgentModel: NSObject {
         guard self.webView !== newWebView else { return }
         guard let newWebView else {
             detachPageWebView()
-            owner?.errorMessage = "WebView is not available."
             return
         }
         if let previousWebView = self.webView {
@@ -53,7 +68,6 @@ final class WIDOMAgentModel: NSObject {
             detachMessageHandlers(from: previousWebView)
         }
         self.webView = newWebView
-        owner?.errorMessage = nil
         registerMessageHandlers()
         Task {
             await self.setAutoUpdate(for: newWebView, maxDepth: self.configuration.snapshotDepth)
@@ -103,7 +117,7 @@ extension WIDOMAgentModel: WKScriptMessageHandler {
               let inspector else {
             return
         }
-        let package = WISnapshotPackage(rawJSON: rawJSON)
+        let package = SnapshotPackage(rawJSON: rawJSON)
         inspector.enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 
@@ -113,7 +127,7 @@ extension WIDOMAgentModel: WKScriptMessageHandler {
               let inspector else {
             return
         }
-        let package = WIDOMUpdatePayload(rawJSON: rawJSON)
+        let package = DOMUpdatePayload(rawJSON: rawJSON)
         inspector.enqueueMutationBundle(package.rawJSON, preserveState: true)
     }
 }
@@ -122,7 +136,7 @@ extension WIDOMAgentModel: WKScriptMessageHandler {
 
 @MainActor
 extension WIDOMAgentModel {
-    func captureSnapshot(maxDepth: Int? = nil) async throws -> WISnapshotPackage {
+    func captureSnapshot(maxDepth: Int? = nil) async throws -> SnapshotPackage {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
@@ -134,10 +148,10 @@ extension WIDOMAgentModel {
             contentWorld: .page
         )
         let data = try serializePayload(rawResult)
-        return WISnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
+        return SnapshotPackage(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
-    func captureSubtree(identifier: Int, maxDepth: Int? = nil) async throws -> WISubtreePayload {
+    func captureSubtree(identifier: Int, maxDepth: Int? = nil) async throws -> SubtreePayload {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
@@ -152,10 +166,10 @@ extension WIDOMAgentModel {
         guard !data.isEmpty else {
             throw WIError.subtreeUnavailable
         }
-        return WISubtreePayload(rawJSON: String(decoding: data, as: UTF8.self))
+        return SubtreePayload(rawJSON: String(decoding: data, as: UTF8.self))
     }
 
-    func beginSelectionMode() async throws -> WISelectionResult {
+    func beginSelectionMode() async throws -> SelectionResult {
         guard let webView else {
             throw WIError.scriptUnavailable
         }
@@ -166,7 +180,7 @@ extension WIDOMAgentModel {
             contentWorld: .page
         )
         let data = try serializePayload(rawResult)
-        return try JSONDecoder().decode(WISelectionResult.self, from: data)
+        return try JSONDecoder().decode(SelectionResult.self, from: data)
     }
 
     func highlightDOMNode(id: Int) async {

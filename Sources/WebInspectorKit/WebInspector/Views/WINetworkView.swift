@@ -1,12 +1,14 @@
 import SwiftUI
 
 public struct WINetworkView: View {
-    @Environment(WebInspectorModel.self) private var model
+    private var viewModel: WINetworkViewModel
 
-    public init() {}
+    public init(viewModel: WINetworkViewModel) {
+        self.viewModel = viewModel
+    }
 
     public var body: some View {
-        @Bindable var store = model.networkAgent.store
+        @Bindable var store = viewModel.store
 
         VStack(spacing: 0) {
             controlBar(
@@ -43,7 +45,7 @@ public struct WINetworkView: View {
     private func controlBar(isRecording: Bool, requestCount: Int, isClearDisabled: Bool) -> some View {
         HStack(spacing: 12) {
             Button {
-                model.setNetworkRecording(!isRecording)
+                viewModel.setRecording(!isRecording)
             } label: {
                 Label {
                     Text(isRecording ? "network.controls.pause" : "network.controls.record", bundle: .module)
@@ -54,7 +56,7 @@ public struct WINetworkView: View {
             .buttonStyle(.bordered)
 
             Button {
-                model.clearNetworkLogs()
+                viewModel.clearNetworkLogs()
             } label: {
                 Label {
                     Text("network.controls.clear", bundle: .module)
@@ -317,9 +319,9 @@ private extension WINetworkEntry {
 
 #if DEBUG
 @MainActor
-private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WebInspectorModel {
-    let model = WebInspectorModel()
-    let store = model.networkAgent.store
+private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkViewModel {
+    let viewModel = WINetworkViewModel()
+    let store = viewModel.store
     WINetworkPreviewData.events
         .compactMap(WINetworkEventPayload.init(dictionary:))
         .forEach { store.applyEvent($0) }
@@ -328,7 +330,7 @@ private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WebInspecto
     } else {
         store.selectedEntryID = store.entries.first?.id
     }
-    return model
+    return viewModel
 }
 
 @MainActor
@@ -433,8 +435,7 @@ private enum WINetworkPreviewData {
 }
 
 #Preview("Network Logs") {
-    WINetworkView()
-        .environment(makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
+    WINetworkView(viewModel: makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
 #if os(macOS)
         .frame(height: 420)
 #endif

@@ -23,7 +23,7 @@ public struct WITab: Identifiable,Hashable{
         systemImage: String,
         value: String? = nil,
         role: WITabRole = .other,
-        @ViewBuilder content: @escaping () -> some View
+        @ViewBuilder content: @escaping (WebInspectorModel) -> some View
     ) {
         if let value {
             self.id = value
@@ -34,7 +34,7 @@ public struct WITab: Identifiable,Hashable{
         self.systemImage = systemImage
         self.role = role
         self.makeViewController = { model in
-            let host = WITabHostingController(rootView: content().environment(model))
+            let host = WITabHostingController(rootView: content(model))
 #if canImport(UIKit)
             host.view.backgroundColor = .clear
 #endif
