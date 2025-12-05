@@ -17,8 +17,8 @@ struct WINetworkEventPayload {
     let statusCode: Int?
     let statusText: String?
     let mimeType: String?
-    let requestHeaders: [String: String]
-    let responseHeaders: [String: String]
+    let requestHeaders: WINetworkHeaders
+    let responseHeaders: WINetworkHeaders
     let startTimeSeconds: TimeInterval?
     let endTimeSeconds: TimeInterval?
     let wallTimeSeconds: TimeInterval?
@@ -44,8 +44,8 @@ struct WINetworkEventPayload {
         self.statusCode = dictionary["status"] as? Int
         self.statusText = dictionary["statusText"] as? String
         self.mimeType = dictionary["mimeType"] as? String
-        self.requestHeaders = dictionary["requestHeaders"] as? [String: String] ?? [:]
-        self.responseHeaders = dictionary["responseHeaders"] as? [String: String] ?? [:]
+        self.requestHeaders = WINetworkHeaders(dictionary: dictionary["requestHeaders"] as? [String: String] ?? [:])
+        self.responseHeaders = WINetworkHeaders(dictionary: dictionary["responseHeaders"] as? [String: String] ?? [:])
 
         if let start = dictionary["startTime"] as? Double {
             self.startTimeSeconds = start / 1000.0
@@ -85,8 +85,8 @@ public struct WINetworkEntry: Identifiable, Hashable {
     public internal(set) var statusCode: Int?
     public internal(set) var statusText: String
     public internal(set) var mimeType: String?
-    public internal(set) var requestHeaders: [String: String]
-    public internal(set) var responseHeaders: [String: String]
+    public internal(set) var requestHeaders: WINetworkHeaders
+    public internal(set) var responseHeaders: WINetworkHeaders
     public internal(set) var startTimestamp: TimeInterval?
     public internal(set) var endTimestamp: TimeInterval?
     public internal(set) var duration: TimeInterval?
@@ -100,7 +100,7 @@ public struct WINetworkEntry: Identifiable, Hashable {
         id: String,
         url: String,
         method: String,
-        requestHeaders: [String: String],
+        requestHeaders: WINetworkHeaders,
         startTimestamp: TimeInterval?,
         wallTime: TimeInterval?
     ) {
@@ -108,7 +108,7 @@ public struct WINetworkEntry: Identifiable, Hashable {
         self.url = url
         self.method = method
         self.requestHeaders = requestHeaders
-        self.responseHeaders = [:]
+        self.responseHeaders = WINetworkHeaders()
         self.startTimestamp = startTimestamp
         self.wallTime = wallTime
         self.statusCode = nil

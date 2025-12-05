@@ -26,7 +26,7 @@ public struct WINetworkView: View {
             if store.entries.isEmpty {
                 emptyState
             } else {
-                List {
+                List(selection:Bindable(viewModel).selectedEntryID) {
                     ForEach(store.entries) { entry in
                         WINetworkRow(entry: entry)
                             .contentShape(.rect)
@@ -45,12 +45,14 @@ public struct WINetworkView: View {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = store.entry(for:isSelectedEntryID) {
                     WINetworkDetailView(entry: entry)
+                        .scrollContentBackground(.hidden)
                 }
             }
 #if os(iOS)
             .presentationDetents([.medium, .large])
             .presentationBackgroundInteraction(.enabled)
             .presentationContentInteraction(.scrolls)
+            .presentationDragIndicator(.hidden)
 #endif
         }
         .toolbar {
@@ -91,95 +93,83 @@ private struct WINetworkDetailView: View {
     let entry: WINetworkEntry
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    statusBadge(for: entry)
-                    if let duration = entry.duration {
-                        Label {
-                            Text(formatDuration(duration))
-                        } icon: {
-                            Image(systemName: "clock")
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    }
-                    if let size = entry.encodedBodyLength {
-                        Label {
-                            Text(formatBytes(size))
-                        } icon: {
-                            Image(systemName: "arrow.down.to.line")
-                        }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                Text(entry.url)
-                    .font(.footnote)
-                    .textSelection(.enabled)
-                    .lineLimit(4)
-
-                headerGroup(
-                    title: "network.section.request",
-                    headers: entry.requestHeaders
-                )
-                headerGroup(
-                    title: "network.section.response",
-                    headers: entry.responseHeaders
-                )
-
-                if let error = entry.errorDescription, !error.isEmpty {
-                    Label {
-                        Text(error)
-                            .textSelection(.enabled)
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
+        List {
+            Section {
+                summaryRow
+            } header: {
+                Text("network.detail.section.overview", bundle: .module)
+            }
+            Section {
+                WINetworkHeaderSection(headers: entry.requestHeaders)
+            }header:{
+                Text("network.section.request", bundle: .module)
+            }
+            Section{
+                WINetworkHeaderSection(headers: entry.responseHeaders)
+            }header:{
+                Text("network.section.response", bundle: .module)
+            }
+            if let error = entry.errorDescription, !error.isEmpty {
+                Section {
+                    errorRow(error)
+                } header: {
+                    Text("network.section.error", bundle: .module)
                 }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .listSectionSeparator(.hidden)
+        .listStyle(.plain)
+#if os(iOS)
+        .listRowSpacing(8)
+        .listSectionSpacing(12)
+#endif
+        .contentMargins(.bottom, 24, for: .scrollContent)
     }
 
-    private func headerGroup(title: LocalizedStringKey, headers: [String: String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title, bundle: .module)
-                .font(.subheadline.weight(.semibold))
-            if headers.isEmpty {
-                Text("network.headers.empty", bundle: .module)
+    private var summaryRow: some View {
+        VStack(alignment: .leading) {
+            HStack {
+                statusBadge(for: entry)
+                if let duration = entry.duration {
+                    HStack(spacing:8){
+                        Image(systemName: "clock")
+                        Text(formatDuration(duration))
+                    }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(headers.keys.sorted(), id: \.self) { key in
-                        if let value = headers[key] {
-                            headerRow(name: key, value: value)
-                        }
+                }
+                if let size = entry.encodedBodyLength {
+                    HStack(spacing:8){
+                        Image(systemName: "arrow.down.to.line")
+                        Text(formatBytes(size))
                     }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 }
             }
-        }
-    }
-
-    private func headerRow(name: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(name)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.monospaced())
+            Text(entry.url)
+                .font(.footnote)
                 .textSelection(.enabled)
-                .foregroundStyle(.primary)
+                .lineLimit(4)
         }
+        .networkListRowStyle()
+    }
+    private func errorRow(_ message: String) -> some View {
+        Label {
+            Text(message)
+                .textSelection(.enabled)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+        }
+        .font(.footnote)
+        .foregroundStyle(.orange)
+        .networkListRowStyle()
     }
 
+    @ViewBuilder
     private func statusBadge(for entry: WINetworkEntry) -> some View {
         let tint = entry.statusTint
-        return Text(entry.statusLabel)
+        Text(entry.statusLabel)
             .font(.caption.weight(.semibold))
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
@@ -199,6 +189,60 @@ private struct WINetworkDetailView: View {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
+    }
+}
+
+private struct WINetworkHeaderSection: View {
+    let headers: WINetworkHeaders
+
+    var body: some View {
+        if headers.isEmpty {
+            Text("network.headers.empty", bundle: .module)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .networkListRowStyle()
+        } else {
+            ForEach(headers.fields.indices, id: \.self) { index in
+                let header = headers.fields[index]
+                headerRow(name: header.name, value: header.value)
+            }
+        }
+    }
+
+    private func headerRow(name: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .foregroundStyle(.primary)
+        }
+        .networkListRowStyle()
+    }
+}
+
+private extension View {
+    func networkListRowStyle() -> some View {
+        padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(networkListRowBackground)
+            .scenePadding(.horizontal)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(.init())
+    }
+
+    @ViewBuilder
+    private var networkListRowBackground: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.secondary.opacity(0.12))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.15))
+        }
     }
 }
 
