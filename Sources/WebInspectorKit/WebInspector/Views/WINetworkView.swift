@@ -6,76 +6,71 @@ public struct WINetworkView: View {
     public init(viewModel: WINetworkViewModel) {
         self.viewModel = viewModel
     }
-    private var store:WINetworkStore{
+    private var store: WINetworkStore {
         viewModel.store
     }
 
+    @State private var isSelectedEntryID: String?
+
+    private var isShowingDetail: Binding<Bool> {
+        Binding(
+            get: { isSelectedEntryID != nil },
+            set: { newValue in
+                if !newValue {
+                    isSelectedEntryID = nil
+                }
+            }
+        )
+    }
+
     public var body: some View {
-        VStack(spacing: 0) {
-            controlBar(
-                isRecording: store.isRecording,
-                requestCount: store.entries.count,
-                isClearDisabled: store.entries.isEmpty
-            )
-            Divider()
+        Group {
             if store.entries.isEmpty {
                 emptyState
             } else {
-                List(selection: Bindable(store).selectedEntryID) {
+                List {
                     ForEach(store.entries) { entry in
                         WINetworkRow(entry: entry)
-                            .contentShape(Rectangle())
-                            .tag(entry.id)
+                            .contentShape(.rect)
                             .onTapGesture {
-                                store.selectedEntryID = entry.id
+                                isSelectedEntryID = entry.id
                             }
                     }
                 }
+                .scrollContentBackground(.hidden)
                 .listStyle(.plain)
-            }
-            if let selected = store.entry(for: store.selectedEntryID) {
-                Divider()
-                detailView(selected)
-                    .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.16), value: store.entries.count)
-        .animation(.easeInOut(duration: 0.16), value: store.selectedEntryID)
-    }
-
-    private func controlBar(isRecording: Bool, requestCount: Int, isClearDisabled: Bool) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                viewModel.setRecording(!isRecording)
-            } label: {
-                Label {
-                    Text(isRecording ? "network.controls.pause" : "network.controls.record", bundle: .module)
-                } icon: {
-                    Image(systemName: isRecording ? "pause.circle" : "record.circle")
+        .sheet(isPresented: isShowingDetail) {
+            NavigationStack {
+                if let isSelectedEntryID,
+                   let entry = store.entry(for:isSelectedEntryID) {
+                    WINetworkDetailView(entry: entry)
                 }
             }
-            .buttonStyle(.bordered)
-
-            Button {
-                viewModel.clearNetworkLogs()
-            } label: {
-                Label {
-                    Text("network.controls.clear", bundle: .module)
-                } icon: {
-                    Image(systemName: "trash")
-                }
-            }
-            .buttonStyle(.bordered)
-            .disabled(isClearDisabled)
-
-            Spacer()
-
-            Text(requestCount, format: .number)
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
+#if os(iOS)
+            .presentationDetents([.medium, .large])
+            .presentationBackgroundInteraction(.enabled)
+            .presentationContentInteraction(.scrolls)
+#endif
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .toolbar {
+            ToolbarItem(placement: .secondaryAction) {
+                Section {
+                    Button(role: .destructive) {
+                        viewModel.clearNetworkLogs()
+                    } label: {
+                        Label {
+                            Text("network.controls.clear", bundle: .module)
+                        } icon: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                    .disabled(store.entries.isEmpty)
+                }
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -92,8 +87,12 @@ public struct WINetworkView: View {
         }
         .padding()
     }
+}
 
-    private func detailView(_ entry: WINetworkEntry) -> some View {
+private struct WINetworkDetailView: View {
+    let entry: WINetworkEntry
+
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -146,7 +145,6 @@ public struct WINetworkView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: 260)
     }
 
     private func headerGroup(title: LocalizedStringKey, headers: [String: String]) -> some View {
@@ -326,11 +324,6 @@ private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkVi
     WINetworkPreviewData.events
         .compactMap(WINetworkEventPayload.init(dictionary:))
         .forEach { store.applyEvent($0) }
-    if let selectedID, store.entry(for: selectedID) != nil {
-        store.selectedEntryID = selectedID
-    } else {
-        store.selectedEntryID = store.entries.first?.id
-    }
     return viewModel
 }
 
@@ -436,9 +429,11 @@ private enum WINetworkPreviewData {
 }
 
 #Preview("Network Logs") {
-    WINetworkView(viewModel: makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
+    NavigationStack {
+        WINetworkView(viewModel: makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
+    }
 #if os(macOS)
-        .frame(height: 420)
+    .frame(height: 420)
 #endif
 }
 #endif

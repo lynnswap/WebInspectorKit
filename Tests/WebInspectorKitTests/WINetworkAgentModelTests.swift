@@ -29,13 +29,11 @@ struct WINetworkAgentModelTests {
             ])
         )
         store.applyEvent(payload)
-        store.selectedEntryID = "req_1"
         #expect(store.entries.isEmpty == false)
 
         agent.clearNetworkLogs()
 
         #expect(store.entries.isEmpty)
-        #expect(store.selectedEntryID == nil)
     }
 
     @Test
@@ -56,7 +54,6 @@ struct WINetworkAgentModelTests {
         agent.didClearPageWebView()
 
         #expect(store.entries.isEmpty)
-        #expect(store.selectedEntryID == nil)
     }
 
     @Test

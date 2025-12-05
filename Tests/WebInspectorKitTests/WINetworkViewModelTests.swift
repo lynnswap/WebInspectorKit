@@ -36,15 +36,12 @@ struct WINetworkViewModelTests {
             ])
         )
         store.applyEvent(payload)
-        store.selectedEntryID = "req_1"
 
         #expect(store.entries.count == 1)
-        #expect(store.selectedEntryID == "req_1")
 
         viewModel.clearNetworkLogs()
 
         #expect(store.entries.isEmpty)
-        #expect(store.selectedEntryID == nil)
     }
 
     @Test

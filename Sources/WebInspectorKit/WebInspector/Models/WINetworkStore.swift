@@ -127,7 +127,6 @@ public struct WINetworkEntry: Identifiable, Hashable {
 @Observable public final class WINetworkStore {
     public private(set) var isRecording = true
     public private(set) var entries: [WINetworkEntry] = []
-    public var selectedEntryID: String?
     @ObservationIgnored private var indexByID: [String: Int] = [:]
 
     func applyEvent(_ event: WINetworkEventPayload) {
@@ -148,7 +147,6 @@ public struct WINetworkEntry: Identifiable, Hashable {
     func reset() {
         entries.removeAll()
         indexByID.removeAll()
-        selectedEntryID = nil
     }
 
     func clear() {
