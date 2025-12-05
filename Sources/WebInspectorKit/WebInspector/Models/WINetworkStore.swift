@@ -72,29 +72,29 @@ struct WINetworkEventPayload {
     }
 }
 
-struct WINetworkEntry: Identifiable, Hashable {
-    enum Phase: String {
+public struct WINetworkEntry: Identifiable, Hashable {
+    public enum Phase: String {
         case pending
         case completed
         case failed
     }
 
-    let id: String
-    var url: String
-    var method: String
-    var statusCode: Int?
-    var statusText: String
-    var mimeType: String?
-    var requestHeaders: [String: String]
-    var responseHeaders: [String: String]
-    var startTimestamp: TimeInterval?
-    var endTimestamp: TimeInterval?
-    var duration: TimeInterval?
-    var encodedBodyLength: Int?
-    var errorDescription: String?
-    var requestType: String?
-    var wallTime: TimeInterval?
-    var phase: Phase
+    public let id: String
+    public internal(set) var url: String
+    public internal(set) var method: String
+    public internal(set) var statusCode: Int?
+    public internal(set) var statusText: String
+    public internal(set) var mimeType: String?
+    public internal(set) var requestHeaders: [String: String]
+    public internal(set) var responseHeaders: [String: String]
+    public internal(set) var startTimestamp: TimeInterval?
+    public internal(set) var endTimestamp: TimeInterval?
+    public internal(set) var duration: TimeInterval?
+    public internal(set) var encodedBodyLength: Int?
+    public internal(set) var errorDescription: String?
+    public internal(set) var requestType: String?
+    public internal(set) var wallTime: TimeInterval?
+    public internal(set) var phase: Phase
 
     init(
         id: String,
@@ -124,10 +124,10 @@ struct WINetworkEntry: Identifiable, Hashable {
 }
 
 @MainActor
-@Observable final class WINetworkStore {
-    var isRecording = true
-    var entries: [WINetworkEntry] = []
-    var selectedEntryID: String?
+@Observable public final class WINetworkStore {
+    public private(set) var isRecording = true
+    public private(set) var entries: [WINetworkEntry] = []
+    public var selectedEntryID: String?
     @ObservationIgnored private var indexByID: [String: Int] = [:]
 
     func applyEvent(_ event: WINetworkEventPayload) {
@@ -159,7 +159,7 @@ struct WINetworkEntry: Identifiable, Hashable {
         isRecording = enabled
     }
 
-    func entry(for identifier: String?) -> WINetworkEntry? {
+    public func entry(for identifier: String?) -> WINetworkEntry? {
         guard let identifier, let index = indexByID[identifier], entries.indices.contains(index) else {
             return nil
         }

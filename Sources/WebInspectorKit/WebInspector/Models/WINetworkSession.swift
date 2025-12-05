@@ -11,7 +11,7 @@ import WebKit
 public final class WINetworkSession: WIPageSession {
     public typealias AttachmentResult = Void
 
-    let store: WINetworkStore
+    public let store: WINetworkStore
     public private(set) weak var lastPageWebView: WKWebView?
     private let networkAgent: WINetworkAgentModel
 

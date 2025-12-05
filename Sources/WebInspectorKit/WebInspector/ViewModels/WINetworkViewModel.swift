@@ -12,7 +12,7 @@ import Observation
 @Observable
 public final class WINetworkViewModel {
     public let session: WINetworkSession
-    var store: WINetworkStore {
+    public var store: WINetworkStore {
         session.store
     }
 
