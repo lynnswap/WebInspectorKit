@@ -10,14 +10,12 @@ public struct WINetworkView: View {
         viewModel.store
     }
 
-    @State private var isSelectedEntryID: String?
-
     private var isShowingDetail: Binding<Bool> {
         Binding(
-            get: { isSelectedEntryID != nil },
+            get: { viewModel.selectedEntryID != nil },
             set: { newValue in
                 if !newValue {
-                    isSelectedEntryID = nil
+                    viewModel.selectedEntryID = nil
                 }
             }
         )
@@ -33,7 +31,7 @@ public struct WINetworkView: View {
                         WINetworkRow(entry: entry)
                             .contentShape(.rect)
                             .onTapGesture {
-                                isSelectedEntryID = entry.id
+                                viewModel.selectedEntryID = entry.id
                             }
                     }
                 }
@@ -44,7 +42,7 @@ public struct WINetworkView: View {
         .animation(.easeInOut(duration: 0.16), value: store.entries.count)
         .sheet(isPresented: isShowingDetail) {
             NavigationStack {
-                if let isSelectedEntryID,
+                if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = store.entry(for:isSelectedEntryID) {
                     WINetworkDetailView(entry: entry)
                 }
@@ -324,6 +322,11 @@ private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkVi
     WINetworkPreviewData.events
         .compactMap(WINetworkEventPayload.init(dictionary:))
         .forEach { store.applyEvent($0) }
+    if let selectedID, store.entry(for: selectedID) != nil {
+        viewModel.selectedEntryID = selectedID
+    } else if let firstID = store.entries.first?.id {
+        viewModel.selectedEntryID = firstID
+    }
     return viewModel
 }
 
