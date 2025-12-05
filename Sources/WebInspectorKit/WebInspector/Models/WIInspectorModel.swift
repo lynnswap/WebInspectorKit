@@ -174,6 +174,130 @@ final class WIInspectorModel: NSObject {
         }
     }
 
+    private func applyBundlesNow(_ bundles: [PendingBundle]) async {
+        guard let webView, !bundles.isEmpty else { return }
+        do {
+            let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.applyMutationBundles?.(bundles)",
+                arguments: ["bundles": payloads],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func applyBundleNow(_ payload: PendingBundle) async {
+        guard let webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.applyMutationBundle?.(bundle)",
+                arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func applyPreferredDepthNow(_ depth: Int) async {
+        guard let webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.setPreferredDepth?.(depth)",
+                arguments: ["depth": depth],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("send preferred depth failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func requestDocumentNow(depth: Int, preserveState: Bool) async {
+        guard let webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorKit?.requestDocument?.(options)",
+                arguments: ["options": ["depth": depth, "preserveState": preserveState]],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+}
+
+extension WIInspectorModel: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let handlerName = HandlerName(rawValue: message.name) else { return }
+
+        switch handlerName {
+        case .protocolMessage:
+            handleProtocolPayload(message.body)
+        case .ready:
+            handleReadyMessage()
+        case .log:
+            handleLogMessage(message.body)
+        case .domSelection:
+            handleDOMSelectionMessage(message.body)
+        case .domSelector:
+            handleDOMSelectorMessage(message.body)
+        }
+    }
+}
+
+private extension WIInspectorModel {
+    private func handleReadyMessage() {
+        isReady = true
+        Task {
+            await applyConfigurationToInspector()
+            await flushPendingWork()
+        }
+    }
+
+    private func handleLogMessage(_ payload: Any) {
+        if let dictionary = payload as? [String: Any],
+           let logMessage = dictionary["message"] as? String {
+            inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+        } else if let logMessage = payload as? String {
+            inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+        }
+    }
+
+    private func handleDOMSelectionMessage(_ payload: Any) {
+        if let dictionary = payload as? [String: Any], !dictionary.isEmpty {
+            domAgent?.selection.applySnapshot(from: dictionary)
+        } else {
+            domAgent?.selection.clear()
+        }
+    }
+
+    private func handleDOMSelectorMessage(_ payload: Any) {
+        if let dictionary = payload as? [String: Any] {
+            let nodeId = dictionary["id"] as? Int
+            let selectorPath = dictionary["selectorPath"] as? String ?? ""
+            if let nodeId, domAgent?.selection.nodeId == nodeId {
+                domAgent?.selection.selectorPath = selectorPath
+            }
+        }
+    }
+
+    private func flushPendingWork() async {
+        if let preferredDepth = pendingPreferredDepth {
+            await applyPreferredDepthNow(preferredDepth)
+            pendingPreferredDepth = nil
+        }
+        if let request = pendingDocumentRequest {
+            await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
+            pendingDocumentRequest = nil
+        }
+        if !pendingBundles.isEmpty {
+            await applyBundlesNow(pendingBundles)
+            pendingBundles.removeAll()
+        }
+    }
+
     private func handleProtocolPayload(_ payload: Any?) {
         var object: [String: Any]?
         if let messageString = payload as? String, let data = messageString.data(using: .utf8) {
@@ -261,112 +385,6 @@ final class WIInspectorModel: NSObject {
             "error": ["message": message]
         ]
         await dispatchToFrontend(payload)
-    }
-
-    private func flushPendingWork() async {
-        if let preferredDepth = pendingPreferredDepth {
-            await applyPreferredDepthNow(preferredDepth)
-            pendingPreferredDepth = nil
-        }
-        if let request = pendingDocumentRequest {
-            await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
-            pendingDocumentRequest = nil
-        }
-        if !pendingBundles.isEmpty {
-            await applyBundlesNow(pendingBundles)
-            pendingBundles.removeAll()
-        }
-    }
-
-    private func applyBundlesNow(_ bundles: [PendingBundle]) async {
-        guard let webView, !bundles.isEmpty else { return }
-        do {
-            let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.applyMutationBundles?.(bundles)",
-                arguments: ["bundles": payloads],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applyBundleNow(_ payload: PendingBundle) async {
-        guard let webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.applyMutationBundle?.(bundle)",
-                arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applyPreferredDepthNow(_ depth: Int) async {
-        guard let webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.setPreferredDepth?.(depth)",
-                arguments: ["depth": depth],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send preferred depth failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func requestDocumentNow(depth: Int, preserveState: Bool) async {
-        guard let webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.requestDocument?.(options)",
-                arguments: ["options": ["depth": depth, "preserveState": preserveState]],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-}
-
-extension WIInspectorModel: WKScriptMessageHandler {
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let handlerName = HandlerName(rawValue: message.name) else { return }
-
-        switch handlerName {
-        case .protocolMessage:
-            handleProtocolPayload(message.body)
-        case .ready:
-            isReady = true
-            Task {
-                await applyConfigurationToInspector()
-                await flushPendingWork()
-            }
-        case .log:
-            if let dictionary = message.body as? [String: Any],
-               let logMessage = dictionary["message"] as? String {
-                inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
-            } else if let logMessage = message.body as? String {
-                inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
-            }
-        case .domSelection:
-            if let dictionary = message.body as? [String: Any], !dictionary.isEmpty {
-                domAgent?.selection.applySnapshot(from: dictionary)
-            } else {
-                domAgent?.selection.clear()
-            }
-        case .domSelector:
-            if let dictionary = message.body as? [String: Any] {
-                let nodeId = dictionary["id"] as? Int
-                let selectorPath = dictionary["selectorPath"] as? String ?? ""
-                if let nodeId, domAgent?.selection.nodeId == nodeId {
-                    domAgent?.selection.selectorPath = selectorPath
-                }
-            }
-        }
     }
 }
 
