@@ -75,7 +75,7 @@ public struct WINetworkView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Image(systemName: "waveform.path")
+            Image(systemName: "waveform.path.ecg.rectangle")
                 .foregroundStyle(.secondary)
         } description: {
             VStack(spacing: 4) {

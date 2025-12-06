@@ -23,7 +23,7 @@ enum WIDefaultTab: Int, CaseIterable {
         case .detail:
             "info.circle"
         case .network:
-            "waveform.path"
+            "waveform.path.ecg.rectangle"
         }
     }
 
