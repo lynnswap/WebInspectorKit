@@ -376,101 +376,258 @@ private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkVi
 
 @MainActor
 private enum WINetworkPreviewData {
-    static let primaryID = "net_1"
+    static let primaryID = "net_home"
     static let events: [[String: Any]] = [
         [
             "type": "start",
-            "id": "net_1",
-            "url": "https://api.example.com/posts/42",
+            "id": "net_home",
+            "url": "https://x.com/home",
             "method": "GET",
             "requestHeaders": [
-                "accept": "application/json",
+                "accept": "text/html,application/xhtml+xml",
                 "user-agent": "WebInspectorKit/Preview"
             ],
-            "startTime": 1_200.0,
+            "startTime": 1_000.0,
             "wallTime": 1_708_000_000_000.0,
-            "requestType": "fetch"
+            "requestType": "document"
         ],
         [
             "type": "response",
-            "id": "net_1",
+            "id": "net_home",
             "status": 200,
             "statusText": "OK",
-            "mimeType": "application/json",
+            "mimeType": "text/html",
             "responseHeaders": [
-                "content-type": "application/json; charset=utf-8",
-                "cache-control": "max-age=60"
+                "content-type": "text/html; charset=utf-8",
+                "cache-control": "no-cache"
             ],
-            "endTime": 1_520.0,
-            "wallTime": 1_708_000_000_320.0,
-            "requestType": "fetch"
+            "endTime": 1_140.0,
+            "wallTime": 1_708_000_000_140.0,
+            "requestType": "document"
         ],
         [
             "type": "finish",
-            "id": "net_1",
-            "endTime": 1_640.0,
-            "wallTime": 1_708_000_000_440.0,
-            "encodedBodyLength": 14_592,
-            "requestType": "fetch"
+            "id": "net_home",
+            "endTime": 1_170.0,
+            "wallTime": 1_708_000_000_170.0,
+            "encodedBodyLength": 252_779,
+            "requestType": "document"
         ],
         [
             "type": "start",
-            "id": "net_2",
-            "url": "https://cdn.example.com/assets/app.js",
+            "id": "net_avatar_1",
+            "url": "https://cdn.example.com/images/9AxiduZ7_x96.png",
             "method": "GET",
             "requestHeaders": [
-                "accept": "text/javascript",
-                "pragma": "no-cache"
+                "accept": "image/avif,image/webp,image/png,*/*"
             ],
-            "startTime": 2_100.0,
-            "wallTime": 1_708_000_001_100.0,
-            "requestType": "script"
+            "startTime": 1_300.0,
+            "wallTime": 1_708_000_000_300.0,
+            "requestType": "image"
         ],
         [
             "type": "response",
-            "id": "net_2",
-            "status": 304,
-            "statusText": "Not Modified",
-            "mimeType": "application/javascript",
+            "id": "net_avatar_1",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "image/png",
             "responseHeaders": [
-                "content-type": "application/javascript",
-                "etag": "\"wi-preview-etag\""
+                "content-type": "image/png",
+                "cache-control": "public, max-age=31536000"
             ],
-            "endTime": 2_330.0,
-            "wallTime": 1_708_000_001_330.0,
-            "requestType": "script"
+            "endTime": 1_326.0,
+            "wallTime": 1_708_000_000_326.0,
+            "requestType": "image"
         ],
         [
             "type": "finish",
-            "id": "net_2",
-            "endTime": 2_420.0,
-            "wallTime": 1_708_000_001_420.0,
-            "encodedBodyLength": 0,
-            "status": 304,
-            "statusText": "Not Modified",
-            "mimeType": "application/javascript",
-            "requestType": "script"
+            "id": "net_avatar_1",
+            "endTime": 1_326.0,
+            "wallTime": 1_708_000_000_326.0,
+            "encodedBodyLength": 1_657,
+            "requestType": "image"
         ],
         [
             "type": "start",
-            "id": "net_3",
-            "url": "https://api.example.com/upload",
+            "id": "net_avatar_2",
+            "url": "https://cdn.example.com/images/j7ETageC_x96.jpg",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "image/avif,image/webp,image/jpeg,*/*"
+            ],
+            "startTime": 1_360.0,
+            "wallTime": 1_708_000_000_360.0,
+            "requestType": "image"
+        ],
+        [
+            "type": "response",
+            "id": "net_avatar_2",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "image/jpeg",
+            "responseHeaders": [
+                "content-type": "image/jpeg"
+            ],
+            "endTime": 1_535.0,
+            "wallTime": 1_708_000_000_535.0,
+            "requestType": "image"
+        ],
+        [
+            "type": "finish",
+            "id": "net_avatar_2",
+            "endTime": 1_535.0,
+            "wallTime": 1_708_000_000_535.0,
+            "encodedBodyLength": 3_550,
+            "requestType": "image"
+        ],
+        [
+            "type": "start",
+            "id": "net_avatar_3",
+            "url": "https://cdn.example.com/images/J0iMVfNY_normal.png",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "image/avif,image/webp,image/png,*/*"
+            ],
+            "startTime": 1_600.0,
+            "wallTime": 1_708_000_000_600.0,
+            "requestType": "image"
+        ],
+        [
+            "type": "response",
+            "id": "net_avatar_3",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "image/png",
+            "responseHeaders": [
+                "content-type": "image/png"
+            ],
+            "endTime": 1_622.0,
+            "wallTime": 1_708_000_000_622.0,
+            "requestType": "image"
+        ],
+        [
+            "type": "finish",
+            "id": "net_avatar_3",
+            "endTime": 1_622.0,
+            "wallTime": 1_708_000_000_622.0,
+            "encodedBodyLength": 1_959,
+            "requestType": "image"
+        ],
+        [
+            "type": "start",
+            "id": "net_flow",
+            "url": "https://api.example.com/user_flow.json",
             "method": "POST",
             "requestHeaders": [
                 "content-type": "application/json",
                 "accept": "application/json"
             ],
-            "startTime": 3_100.0,
-            "wallTime": 1_708_000_002_100.0,
+            "startTime": 1_750.0,
+            "wallTime": 1_708_000_000_750.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "id": "net_flow",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8"
+            ],
+            "endTime": 1_978.0,
+            "wallTime": 1_708_000_000_978.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "finish",
+            "id": "net_flow",
+            "endTime": 1_978.0,
+            "wallTime": 1_708_000_000_978.0,
+            "encodedBodyLength": 0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "start",
+            "id": "net_update",
+            "url": "https://api.example.com/update_subscriptions",
+            "method": "POST",
+            "requestHeaders": [
+                "content-type": "application/json",
+                "accept": "application/json"
+            ],
+            "startTime": 1_900.0,
+            "wallTime": 1_708_000_000_900.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "id": "net_update",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8"
+            ],
+            "endTime": 2_042.0,
+            "wallTime": 1_708_000_001_042.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "finish",
+            "id": "net_update",
+            "endTime": 2_042.0,
+            "wallTime": 1_708_000_001_042.0,
+            "encodedBodyLength": 35,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "start",
+            "id": "net_upload_fail",
+            "url": "https://upload.example.com/media",
+            "method": "POST",
+            "requestHeaders": [
+                "content-type": "application/json",
+                "accept": "application/json"
+            ],
+            "startTime": 2_120.0,
+            "wallTime": 1_708_000_001_120.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "id": "net_upload_fail",
+            "status": 500,
+            "statusText": "Internal Server Error",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8",
+                "retry-after": "30"
+            ],
+            "endTime": 2_210.0,
+            "wallTime": 1_708_000_001_210.0,
             "requestType": "fetch"
         ],
         [
             "type": "fail",
-            "id": "net_3",
-            "error": "Network connection was lost",
-            "endTime": 3_280.0,
-            "wallTime": 1_708_000_002_280.0,
+            "id": "net_upload_fail",
+            "error": "Request timed out",
+            "endTime": 2_400.0,
+            "wallTime": 1_708_000_001_400.0,
             "requestType": "fetch"
+        ],
+        [
+            "type": "start",
+            "id": "net_stream",
+            "url": "https://stream.example.com/live",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "text/event-stream",
+                "cache-control": "no-cache"
+            ],
+            "startTime": 2_320.0,
+            "wallTime": 1_708_000_001_320.0,
+            "requestType": "event-stream"
         ]
     ]
 }
