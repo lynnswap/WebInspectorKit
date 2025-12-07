@@ -24,22 +24,6 @@ public struct WINetworkView: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.16), value: store.entries.count)
-        .sheet(isPresented: viewModel.isShowingDetail) {
-            NavigationStack {
-                if let isSelectedEntryID = viewModel.selectedEntryID,
-                   let entry = store.entry(for:isSelectedEntryID) {
-                    WINetworkDetailView(entry: entry)
-                        .scrollContentBackground(.hidden)
-                }
-            }
-#if os(iOS)
-            .presentationDetents([.medium, .large])
-            .presentationBackgroundInteraction(.enabled)
-            .presentationContentInteraction(.scrolls)
-            .presentationDragIndicator(.hidden)
-#endif
-        }
         .toolbar {
             ToolbarItem(placement: .secondaryAction) {
                 Section {
@@ -78,50 +62,71 @@ private struct WINetworkTableView: View {
     var viewModel: WINetworkViewModel
 
     var body: some View {
-        Table(viewModel.store.entries.reversed(), selection: viewModel.tableSelection) {
-            TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
-                Text(entry.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-            }
-            .width(min: 220)
-            TableColumn(Text("network.table.column.status", bundle: .module)) { entry in
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(entry.statusTint)
-                        .frame(width: 8, height: 8)
-                    Text(entry.statusLabel)
+        GeometryReader{ proxy in
+            Table(viewModel.store.entries.reversed(), selection: viewModel.tableSelection) {
+                TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
+                    Text(entry.displayName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                 }
-                .font(.footnote)
-                .foregroundStyle(entry.statusTint)
-            }
-            .width(min: 80, ideal: 100)
-            TableColumn(Text("network.table.column.method", bundle: .module)) { entry in
-                Text(entry.method)
-                    .font(.footnote.monospaced())
-            }
-            .width(min: 72, ideal: 90)
-            TableColumn(Text("network.table.column.type", bundle: .module)) { entry in
-                Text(entry.fileTypeLabel)
-                    .font(.footnote.monospaced())
-            }
-            .width(min: 80, ideal: 120)
-            TableColumn(Text("network.table.column.duration", bundle: .module)) { entry in
-                Text(entry.duration.map(entry.durationText(for:)) ?? "-")
+                .width(min: 220)
+                TableColumn(Text("network.table.column.status", bundle: .module)) { entry in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(entry.statusTint)
+                            .frame(width: 8, height: 8)
+                        Text(entry.statusLabel)
+                    }
                     .font(.footnote)
+                    .foregroundStyle(entry.statusTint)
+                }
+                .width(min: 80, ideal: 100)
+                TableColumn(Text("network.table.column.method", bundle: .module)) { entry in
+                    Text(entry.method)
+                        .font(.footnote.monospaced())
+                }
+                .width(min: 72, ideal: 90)
+                TableColumn(Text("network.table.column.type", bundle: .module)) { entry in
+                    Text(entry.fileTypeLabel)
+                        .font(.footnote.monospaced())
+                }
+                .width(min: 80, ideal: 120)
+                TableColumn(Text("network.table.column.duration", bundle: .module)) { entry in
+                    Text(entry.duration.map(entry.durationText(for:)) ?? "-")
+                        .font(.footnote)
+                }
+                .width(min: 90, ideal: 110)
+                TableColumn(Text("network.table.column.size", bundle: .module)) { entry in
+                    Group {
+                        if let length = entry.encodedBodyLength {
+                            Text(entry.sizeText(for: length))
+                        } else {
+                            Text("-")
+                        }
+                    }
+                    .font(.footnote.monospaced())
+                }
+                .width(min: 90, ideal: 110)
             }
-            .width(min: 90, ideal: 110)
-            TableColumn(Text("network.table.column.size", bundle: .module)) { entry in
-                Group {
-                    if let length = entry.encodedBodyLength {
-                        Text(entry.sizeText(for: length))
-                    } else {
-                        Text("-")
+            .animation(.easeInOut(duration: 0.16), value: viewModel.store.entries.count)
+            .inspector(isPresented: viewModel.isShowingDetail) {
+                NavigationStack {
+                    if let isSelectedEntryID = viewModel.selectedEntryID,
+                       let entry = viewModel.store.entry(for:isSelectedEntryID) {
+                        WINetworkDetailView(entry: entry)
+                            .toolbar{
+                                ToolbarItem(placement:.cancellationAction){
+                                    Button{
+                                        viewModel.selectedEntryID = nil
+                                    }label:{
+                                        Image(systemName:"sidebar.trailing")
+                                    }
+                                }
+                            }
                     }
                 }
-                .font(.footnote.monospaced())
+                .inspectorColumnWidth(ideal: proxy.size.width * 0.5,max:proxy.size.width * 0.8)
             }
-            .width(min: 90, ideal: 110)
         }
     }
 }
@@ -137,8 +142,24 @@ private struct WINetworkListView: View {
                     }
             }
         }
+        .animation(.easeInOut(duration: 0.16), value: viewModel.store.entries.count)
         .scrollContentBackground(.hidden)
         .listStyle(.plain)
+        .sheet(isPresented: viewModel.isShowingDetail) {
+            NavigationStack {
+                if let isSelectedEntryID = viewModel.selectedEntryID,
+                   let entry = viewModel.store.entry(for:isSelectedEntryID) {
+                    WINetworkDetailView(entry: entry)
+                        .scrollContentBackground(.hidden)
+                }
+            }
+#if os(iOS)
+            .presentationDetents([.medium, .large])
+            .presentationBackgroundInteraction(.enabled)
+            .presentationContentInteraction(.scrolls)
+            .presentationDragIndicator(.hidden)
+#endif
+        }
     }
 }
 private struct WINetworkRow: View {
