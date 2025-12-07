@@ -2,7 +2,9 @@ import SwiftUI
 
 public struct WINetworkView: View {
     private var viewModel: WINetworkViewModel
-
+    
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    
     public init(viewModel: WINetworkViewModel) {
         self.viewModel = viewModel
     }
@@ -10,37 +12,20 @@ public struct WINetworkView: View {
         viewModel.store
     }
 
-    private var isShowingDetail: Binding<Bool> {
-        Binding(
-            get: { viewModel.selectedEntryID != nil },
-            set: { newValue in
-                if !newValue {
-                    viewModel.selectedEntryID = nil
-                }
-            }
-        )
-    }
-
     public var body: some View {
         Group {
             if store.entries.isEmpty {
                 emptyState
             } else {
-                List(selection:Bindable(viewModel).selectedEntryID) {
-                    ForEach(store.entries) { entry in
-                        WINetworkRow(entry: entry)
-                            .contentShape(.rect)
-                            .onTapGesture {
-                                viewModel.selectedEntryID = entry.id
-                            }
-                    }
+                if horizontalSizeClass == .compact{
+                    WINetworkListView(viewModel: viewModel)
+                }else{
+                    WINetworkTableView(viewModel: viewModel)
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.plain)
             }
         }
         .animation(.easeInOut(duration: 0.16), value: store.entries.count)
-        .sheet(isPresented: isShowingDetail) {
+        .sheet(isPresented: viewModel.isShowingDetail) {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = store.entry(for:isSelectedEntryID) {
@@ -88,6 +73,96 @@ public struct WINetworkView: View {
         .padding()
     }
 }
+
+private struct WINetworkTableView: View {
+    var viewModel: WINetworkViewModel
+
+    var body: some View {
+        Table(viewModel.store.entries.reversed(), selection: viewModel.tableSelection) {
+            TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
+                Text(entry.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .width(min: 220)
+            TableColumn(Text("network.table.column.status", bundle: .module)) { entry in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(entry.statusTint)
+                        .frame(width: 8, height: 8)
+                    Text(entry.statusLabel)
+                }
+                .font(.footnote)
+                .foregroundStyle(entry.statusTint)
+            }
+            .width(min: 80, ideal: 100)
+            TableColumn(Text("network.table.column.method", bundle: .module)) { entry in
+                Text(entry.method)
+                    .font(.footnote.monospaced())
+            }
+            .width(min: 72, ideal: 90)
+            TableColumn(Text("network.table.column.type", bundle: .module)) { entry in
+                Text(entry.fileTypeLabel)
+                    .font(.footnote.monospaced())
+            }
+            .width(min: 80, ideal: 120)
+            TableColumn(Text("network.table.column.duration", bundle: .module)) { entry in
+                Text(entry.duration.map(entry.durationText(for:)) ?? "-")
+                    .font(.footnote)
+            }
+            .width(min: 90, ideal: 110)
+            TableColumn(Text("network.table.column.size", bundle: .module)) { entry in
+                Group {
+                    if let length = entry.encodedBodyLength {
+                        Text(entry.sizeText(for: length))
+                    } else {
+                        Text("-")
+                    }
+                }
+                .font(.footnote.monospaced())
+            }
+            .width(min: 90, ideal: 110)
+        }
+    }
+}
+private struct WINetworkListView: View {
+    @Bindable var viewModel:WINetworkViewModel
+    var body:some View{
+        List(selection:$viewModel.selectedEntryID) {
+            ForEach(viewModel.store.entries.reversed()) { entry in
+                WINetworkRow(entry: entry)
+                    .contentShape(.rect)
+                    .onTapGesture {
+                        viewModel.selectedEntryID = entry.id
+                    }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .listStyle(.plain)
+    }
+}
+private struct WINetworkRow: View {
+    let entry: WINetworkEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack{
+                Circle()
+                    .fill(entry.statusTint)
+                    .frame(width: 8, height: 8)
+                Text(entry.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Text(entry.method)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 
 private struct WINetworkDetailView: View {
     let entry: WINetworkEntry
@@ -246,54 +321,6 @@ private extension View {
     }
 }
 
-private struct WINetworkRow: View {
-    let entry: WINetworkEntry
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(entry.method)
-                .font(.caption.weight(.semibold))
-                .padding(.vertical, 6)
-                .padding(.horizontal, 8)
-                .background(.quaternary)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(.primary)
-                if let host = entry.host {
-                    Text(host)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(entry.statusLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(entry.statusTint)
-                HStack(spacing: 8) {
-                    if let duration = entry.duration {
-                        Text(entry.durationText(for: duration))
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if let size = entry.encodedBodyLength {
-                        Text(entry.sizeText(for: size))
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 6)
-    }
-}
 
 private extension WINetworkEntry {
     var displayName: String {
@@ -307,6 +334,22 @@ private extension WINetworkEntry {
             }
         }
         return url
+    }
+
+    var fileTypeLabel: String {
+        if let mimeType {
+            let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
+            if let subtype = trimmed.split(separator: "/").last, !subtype.isEmpty {
+                return subtype.lowercased()
+            }
+        }
+        if let pathExtension = URL(string: url)?.pathExtension, !pathExtension.isEmpty {
+            return pathExtension.lowercased()
+        }
+        if let requestType, !requestType.isEmpty {
+            return requestType
+        }
+        return "-"
     }
 
     var host: String? {
@@ -368,8 +411,8 @@ private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkVi
         .forEach { store.applyEvent($0) }
     if let selectedID, store.entry(for: selectedID) != nil {
         viewModel.selectedEntryID = selectedID
-    } else if let firstID = store.entries.first?.id {
-        viewModel.selectedEntryID = firstID
+    } else if let newestID = store.entries.last?.id {
+        viewModel.selectedEntryID = newestID
     }
     return viewModel
 }

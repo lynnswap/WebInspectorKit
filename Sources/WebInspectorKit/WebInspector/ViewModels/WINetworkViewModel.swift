@@ -6,6 +6,7 @@
 //
 
 import WebKit
+import SwiftUI
 import Observation
 
 @MainActor
@@ -40,5 +41,30 @@ public final class WINetworkViewModel {
 
     public func detach() {
         session.detach()
+    }
+
+    public var isShowingDetail: Binding<Bool> {
+        Binding(
+            get: { self.selectedEntryID != nil },
+            set: { newValue in
+                if !newValue {
+                    self.selectedEntryID = nil
+                }
+            }
+        )
+    }
+
+    public var tableSelection: Binding<Set<WINetworkEntry.ID>> {
+        Binding(
+            get: {
+                guard let selectedEntryID = self.selectedEntryID else {
+                    return Set()
+                }
+                return Set([selectedEntryID])
+            },
+            set: { newSelection in
+                self.selectedEntryID = newSelection.first
+            }
+        )
     }
 }
