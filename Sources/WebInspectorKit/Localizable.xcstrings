@@ -2716,287 +2716,287 @@
       }
     },
     "network.section.request" : {
-      "comment" : "Section title for request headers.",
+      "comment" : "Section title for request details.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "طلب"
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Anfrage"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Request Headers"
+            "value" : "Request"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Request Headers"
+            "value" : "Request"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Request Headers"
+            "value" : "Request"
           }
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Solicitud"
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Solicitud"
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Requête"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Requête"
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "अनुरोध"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Permintaan"
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Richiesta"
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "リクエスト"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "요청"
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Aanvraag"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Solicitação"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Pedido"
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Solicitare"
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "Запрос"
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "คำขอ"
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "İstek"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "请求"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Request Headers"
+            "state" : "translated",
+            "value" : "請求"
           }
         }
       }
     },
     "network.section.response" : {
-      "comment" : "Section title for response headers.",
+      "comment" : "Section title for response details.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "استجابة"
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Antwort"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response Headers"
+            "value" : "Response"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response Headers"
+            "value" : "Response"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response Headers"
+            "value" : "Response"
           }
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Respuesta"
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Respuesta"
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Réponse"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Réponse"
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "प्रतिक्रिया"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Respons"
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Risposta"
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "レスポンス"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "응답"
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Respons"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Resposta"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Resposta"
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Răspuns"
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Ответ"
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "การตอบกลับ"
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "Yanıt"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "响应"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response Headers"
+            "state" : "translated",
+            "value" : "回應"
           }
         }
       }
