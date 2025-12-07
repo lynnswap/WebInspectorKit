@@ -1,10 +1,3 @@
-//
-//  WIScript.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/02/26.
-//
-
 import Foundation
 import OSLog
 import WebKit

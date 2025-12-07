@@ -1,10 +1,3 @@
-//
-//  WebInspectorModel.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/06.
-//
-
 import SwiftUI
 import WebKit
 import Observation

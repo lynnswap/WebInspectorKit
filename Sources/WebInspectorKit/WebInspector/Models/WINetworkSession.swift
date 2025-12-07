@@ -1,10 +1,3 @@
-//
-//  WINetworkSession.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/06.
-//
-
 import WebKit
 
 @MainActor
@@ -13,10 +6,10 @@ public final class WINetworkSession: WIPageSession {
 
     public let store: WINetworkStore
     public private(set) weak var lastPageWebView: WKWebView?
-    private let networkAgent: WINetworkAgentModel
+    private let networkAgent: WINetworkPageAgent
 
     public init() {
-        let networkAgent = WINetworkAgentModel()
+        let networkAgent = WINetworkPageAgent()
         self.networkAgent = networkAgent
         self.store = networkAgent.store
     }

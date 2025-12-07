@@ -1,10 +1,3 @@
-//
-//  WIDOMViewModel.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/06.
-//
-
 import SwiftUI
 import OSLog
 import WebKit
@@ -17,7 +10,7 @@ private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDO
 public final class WIDOMViewModel {
     public let session: WIDOMSession
     public let selection: WIDOMSelection
-    let inspectorModel: WIInspectorModel
+    let domStore: WIDOMStore
 
     public private(set) var errorMessage: String?
     public private(set) var isSelectingElement = false
@@ -30,7 +23,7 @@ public final class WIDOMViewModel {
     public init(session: WIDOMSession = WIDOMSession()) {
         self.session = session
         self.selection = session.selection
-        self.inspectorModel = session.inspectorModel
+        self.domStore = session.domStore
     }
 
     public var hasPageWebView: Bool {
@@ -55,7 +48,7 @@ public final class WIDOMViewModel {
     public func detach() {
         resetInteractionState()
         session.detach()
-        inspectorModel.detachInspectorWebView()
+        domStore.detachInspectorWebView()
         errorMessage = nil
     }
 
@@ -67,9 +60,9 @@ public final class WIDOMViewModel {
         errorMessage = nil
 
         let depth = session.configuration.snapshotDepth
-        inspectorModel.updateConfiguration(session.configuration)
-        inspectorModel.setPreferredDepth(depth)
-        inspectorModel.requestDocument(depth: depth, preserveState: preserveState)
+        domStore.updateConfiguration(session.configuration)
+        domStore.setPreferredDepth(depth)
+        domStore.requestDocument(depth: depth, preserveState: preserveState)
     }
 
     public func updateSnapshotDepth(_ depth: Int) {
@@ -77,8 +70,8 @@ public final class WIDOMViewModel {
         var configuration = session.configuration
         configuration.snapshotDepth = clamped
         session.updateConfiguration(configuration)
-        inspectorModel.updateConfiguration(configuration)
-        inspectorModel.setPreferredDepth(clamped)
+        domStore.updateConfiguration(configuration)
+        domStore.setPreferredDepth(clamped)
     }
 
     public func toggleSelectionMode() {

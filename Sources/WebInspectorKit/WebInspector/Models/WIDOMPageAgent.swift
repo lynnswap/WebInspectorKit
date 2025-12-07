@@ -1,23 +1,16 @@
-//
-//  WIDOMAgentModel.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/02/26.
-//
-
 import SwiftUI
 import OSLog
 import WebKit
 import Observation
 
-private let domLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMAgentModel")
+private let domLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMPageAgent")
 private let inspectorPresenceProbeScript: String = """
 (function() { })();
 """
 
 @MainActor
 @Observable
-final class WIDOMAgentModel: NSObject, WIPageAgent {
+final class WIDOMPageAgent: NSObject, WIPageAgent {
     struct SnapshotPackage {
         let rawJSON: String
     }
@@ -40,7 +33,7 @@ final class WIDOMAgentModel: NSObject, WIPageAgent {
         case mutation = "webInspectorMutationUpdate"
     }
 
-    weak var inspector: WIInspectorModel?
+    weak var inspector: WIDOMStore?
     var selection = WIDOMSelection()
     weak var webView: WKWebView?
     private var configuration: WebInspectorConfiguration
@@ -72,7 +65,7 @@ final class WIDOMAgentModel: NSObject, WIPageAgent {
 
 // MARK: - WKScriptMessageHandler
 
-extension WIDOMAgentModel: WKScriptMessageHandler {
+extension WIDOMPageAgent: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame else {
             return
@@ -110,7 +103,7 @@ extension WIDOMAgentModel: WKScriptMessageHandler {
 // MARK: - Page WebView helpers
 
 @MainActor
-extension WIDOMAgentModel {
+extension WIDOMPageAgent {
     func captureSnapshot(maxDepth: Int? = nil) async throws -> SnapshotPackage {
         guard let webView else {
             throw WIError.scriptUnavailable
@@ -222,7 +215,7 @@ extension WIDOMAgentModel {
 
 // MARK: - WIPageAgent
 
-extension WIDOMAgentModel {
+extension WIDOMPageAgent {
     func willDetachPageWebView(_ webView: WKWebView) {
         stopAutoUpdate(for: webView)
         detachMessageHandlers(from: webView)
@@ -242,7 +235,7 @@ extension WIDOMAgentModel {
 
 // MARK: - Private helpers
 
-private extension WIDOMAgentModel {
+private extension WIDOMPageAgent {
     func registerMessageHandlers() {
         guard let webView else { return }
         let controller = webView.configuration.userContentController

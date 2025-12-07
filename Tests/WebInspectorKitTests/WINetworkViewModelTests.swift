@@ -28,7 +28,7 @@ struct WINetworkViewModelTests {
         let store = viewModel.store
 
         let payload = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 1,
                 "url": "https://example.com",
@@ -62,7 +62,7 @@ struct WINetworkViewModelTests {
         let store = viewModel.store
 
         let startEvent = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 2,
                 "url": "https://example.com/api",
@@ -73,7 +73,7 @@ struct WINetworkViewModelTests {
             ])
         )
         let responseEvent = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "response",
                 "requestId": 2,
                 "status": 201,
@@ -83,7 +83,7 @@ struct WINetworkViewModelTests {
             ])
         )
         let finishEvent = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "finish",
                 "requestId": 2,
                 "endTime": 1_400.0,

@@ -9,7 +9,7 @@ public struct WIDOMView: View {
     }
     
     public var body: some View {
-        WIDOMViewRepresentable(inspectorModel: viewModel.inspectorModel)
+        WIDOMViewRepresentable(domStore: viewModel.domStore)
             .ignoresSafeArea()
             .overlay{
                 if let errorMessage = viewModel.errorMessage {
@@ -29,35 +29,35 @@ public struct WIDOMView: View {
 
 @MainActor
 struct WIDOMViewRepresentable {
-    var inspectorModel: WIInspectorModel
+    var domStore: WIDOMStore
 }
 
 #if os(macOS)
 extension WIDOMViewRepresentable: NSViewRepresentable {
-    typealias Coordinator = WIInspectorModel
+    typealias Coordinator = WIDOMStore
 
     func makeNSView(context: Context) -> WIWebView {
-        inspectorModel.makeInspectorWebView()
+        domStore.makeInspectorWebView()
     }
 
     func updateNSView(_ nsView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        inspectorModel
+        domStore
     }
 }
 #else
 extension WIDOMViewRepresentable: UIViewRepresentable {
-    typealias Coordinator = WIInspectorModel
+    typealias Coordinator = WIDOMStore
 
     func makeUIView(context: Context) -> WIWebView {
-        inspectorModel.makeInspectorWebView()
+        domStore.makeInspectorWebView()
     }
 
     func updateUIView(_ uiView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        inspectorModel
+        domStore
     }
 }
 #endif

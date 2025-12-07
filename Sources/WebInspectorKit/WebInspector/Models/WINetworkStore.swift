@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-enum WINetworkEventKind: String {
+enum NetworkEventKind: String {
     case start
     case response
     case finish
@@ -9,8 +9,8 @@ enum WINetworkEventKind: String {
     case fail
 }
 
-struct WINetworkEventPayload {
-    let kind: WINetworkEventKind
+struct NetworkEvent {
+    let kind: NetworkEventKind
     let sessionID: String
     let requestID: Int
     let url: String?
@@ -30,7 +30,7 @@ struct WINetworkEventPayload {
     init?(dictionary: [String: Any]) {
         guard
             let type = dictionary["type"] as? String,
-            let kind = WINetworkEventKind(rawValue: type),
+            let kind = NetworkEventKind(rawValue: type),
             let requestID = Self.normalizedRequestIdentifier(from: dictionary["requestId"])
         else {
             return nil
@@ -92,17 +92,17 @@ struct WINetworkEventPayload {
     }
 }
 
-struct WINetworkBatchEventPayload {
+struct NetworkEventBatch {
     let sessionID: String
-    let events: [WINetworkEventPayload]
+    let events: [NetworkEvent]
 
     init?(dictionary: [String: Any]) {
         guard let sessionID = dictionary["session"] as? String, !sessionID.isEmpty else {
-            assertionFailure("WINetworkBatchEventPayload requires session ID")
+            assertionFailure("NetworkEventBatch requires session ID")
             return nil
         }
         let eventsArray = dictionary["events"] as? [[String: Any]] ?? []
-        let parsed = eventsArray.compactMap(WINetworkEventPayload.init(dictionary:))
+        let parsed = eventsArray.compactMap(NetworkEvent.init(dictionary:))
         guard !parsed.isEmpty else { return nil }
         self.events = parsed
         self.sessionID = sessionID
@@ -176,7 +176,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.phase = .pending
     }
 
-    convenience init(startPayload payload: WINetworkEventPayload) {
+    convenience init(startPayload payload: NetworkEvent) {
         let method = payload.method ?? "GET"
         let url = payload.url ?? ""
         self.init(
@@ -191,7 +191,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         requestType = payload.requestType
     }
 
-    func applyResponsePayload(_ payload: WINetworkEventPayload) {
+    func applyResponsePayload(_ payload: NetworkEvent) {
         statusCode = payload.statusCode
         statusText = payload.statusText ?? ""
         mimeType = payload.mimeType
@@ -204,7 +204,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         phase = .pending
     }
 
-    func applyCompletionPayload(_ payload: WINetworkEventPayload, failed: Bool) {
+    func applyCompletionPayload(_ payload: NetworkEvent, failed: Bool) {
         if let statusCode = payload.statusCode {
             self.statusCode = statusCode
         }
@@ -239,7 +239,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
     @ObservationIgnored private var indexByEntryID: [UUID: Int] = [:]
 
-    func applyBatchedInsertions(_ batch: WINetworkBatchEventPayload) {
+    func applyBatchedInsertions(_ batch: NetworkEventBatch) {
         let events = batch.events
         guard !events.isEmpty else { return }
 
@@ -279,7 +279,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
-    func applyEvent(_ event: WINetworkEventPayload) {
+    func applyEvent(_ event: NetworkEvent) {
         switch event.kind {
         case .start:
             handleStart(event)
@@ -326,7 +326,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         return entries[index]
     }
 
-    private func handleStart(_ event: WINetworkEventPayload) {
+    private func handleStart(_ event: NetworkEvent) {
         let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
         if bucket.entry(for: requestID) != nil {
@@ -335,19 +335,19 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         appendEntry(WINetworkEntry(startPayload: event), requestID: requestID, in: bucket)
     }
 
-    private func handleResponse(_ event: WINetworkEventPayload) {
+    private func handleResponse(_ event: NetworkEvent) {
         let requestID = event.requestID
         guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
         entry.applyResponsePayload(event)
     }
 
-    private func handleFinish(_ event: WINetworkEventPayload, failed: Bool) {
+    private func handleFinish(_ event: NetworkEvent, failed: Bool) {
         let requestID = event.requestID
         guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
         entry.applyCompletionPayload(event, failed: failed)
     }
 
-    private func handleResourceTiming(_ event: WINetworkEventPayload) {
+    private func handleResourceTiming(_ event: NetworkEvent) {
         let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
         if bucket.entry(for: requestID) != nil {

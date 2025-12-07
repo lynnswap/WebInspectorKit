@@ -436,7 +436,7 @@ private func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> 
     let viewModel = WINetworkViewModel()
     let store = viewModel.store
     WINetworkPreviewData.events
-        .compactMap(WINetworkEventPayload.init(dictionary:))
+        .compactMap(NetworkEvent.init(dictionary:))
         .forEach { store.applyEvent($0) }
     
     viewModel.selectedEntryID = selectedID ?? store.entries.last?.id

@@ -3,10 +3,10 @@ import WebKit
 @testable import WebInspectorKit
 
 @MainActor
-struct WIDOMAgentModelTests {
+struct WIDOMPageAgentTests {
     @Test
     func didClearPageWebViewClearsSelection() {
-        let agent = WIDOMAgentModel(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
+        let agent = WIDOMPageAgent(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
         agent.selection.nodeId = 42
         agent.selection.preview = "<div>"
         agent.selection.attributes = [WIDOMAttribute(nodeId: 42, name: "class", value: "title")]
@@ -24,7 +24,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func beginSelectionModeWithoutWebViewThrows() async {
-        let agent = WIDOMAgentModel(configuration: .init())
+        let agent = WIDOMPageAgent(configuration: .init())
         await #expect(throws: WIError.scriptUnavailable) {
             _ = try await agent.beginSelectionMode()
         }
@@ -32,7 +32,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func captureSnapshotWithoutWebViewThrows() async {
-        let agent = WIDOMAgentModel(configuration: .init(snapshotDepth: 2))
+        let agent = WIDOMPageAgent(configuration: .init(snapshotDepth: 2))
         await #expect(throws: WIError.scriptUnavailable) {
             _ = try await agent.captureSnapshot()
         }
@@ -40,7 +40,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func selectionCopyTextWithoutWebViewThrows() async {
-        let agent = WIDOMAgentModel(configuration: .init())
+        let agent = WIDOMPageAgent(configuration: .init())
         await #expect(throws: WIError.scriptUnavailable) {
             _ = try await agent.selectionCopyText(for: 1, kind: .html)
         }
@@ -48,7 +48,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func attachRegistersHandlersAndInstallsUserScripts() {
-        let agent = WIDOMAgentModel(configuration: .init())
+        let agent = WIDOMPageAgent(configuration: .init())
         let (webView, controller) = makeTestWebView()
 
         agent.attachPageWebView(webView)
@@ -62,7 +62,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func detachRemovesHandlersAndClearsWebView() {
-        let agent = WIDOMAgentModel(configuration: .init())
+        let agent = WIDOMPageAgent(configuration: .init())
         let (webView, controller) = makeTestWebView()
 
         agent.attachPageWebView(webView)
@@ -76,7 +76,7 @@ struct WIDOMAgentModelTests {
 
     @Test
     func attachInstallsInspectorScriptIntoPage() async throws {
-        let agent = WIDOMAgentModel(configuration: .init())
+        let agent = WIDOMPageAgent(configuration: .init())
         let (webView, _) = makeTestWebView()
 
         agent.attachPageWebView(webView)

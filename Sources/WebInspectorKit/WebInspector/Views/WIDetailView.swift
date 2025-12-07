@@ -1,10 +1,3 @@
-//
-//  WIDetailView.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2024/12/08.
-//
-
 import SwiftUI
 import Observation
 

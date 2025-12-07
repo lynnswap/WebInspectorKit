@@ -1,10 +1,3 @@
-//
-//  WebInspectorConfiguration.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/06.
-//
-
 import Foundation
 
 public struct WebInspectorConfiguration: Sendable {

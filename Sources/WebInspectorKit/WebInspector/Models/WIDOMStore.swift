@@ -1,20 +1,13 @@
-//
-//  WebInspectorInspectorModel.swift
-//  WebInspectorKit
-//
-//  Created by Kazuki Nakashima on 2025/11/20.
-//
-
 import SwiftUI
 import WebKit
 import OSLog
 import Observation
 
-private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WIInspectorModel")
+private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMStore")
 
 @MainActor
 @Observable
-final class WIInspectorModel: NSObject {
+final class WIDOMStore: NSObject {
     private enum HandlerName: String, CaseIterable {
         case protocolMessage = "webInspectorProtocol"
         case ready = "webInspectorReady"
@@ -34,7 +27,7 @@ final class WIInspectorModel: NSObject {
         let preserveState: Bool
     }
 
-    weak var domAgent: WIDOMAgentModel?
+    weak var domAgent: WIDOMPageAgent?
     private(set) var webView: WIWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
@@ -228,7 +221,7 @@ final class WIInspectorModel: NSObject {
     }
 }
 
-extension WIInspectorModel: WKScriptMessageHandler {
+extension WIDOMStore: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
 
@@ -247,7 +240,7 @@ extension WIInspectorModel: WKScriptMessageHandler {
     }
 }
 
-private extension WIInspectorModel {
+private extension WIDOMStore {
     private func handleReadyMessage() {
         isReady = true
         Task {
@@ -388,7 +381,7 @@ private extension WIInspectorModel {
     }
 }
 
-extension WIInspectorModel: WKNavigationDelegate {
+extension WIDOMStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         inspectorLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
     }

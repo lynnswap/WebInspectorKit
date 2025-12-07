@@ -1,23 +1,16 @@
-//
-//  WINetworkAgentModel.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/02/26.
-//
-
 import SwiftUI
 import OSLog
 import WebKit
 import Observation
 
-private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "WINetworkAgentModel")
+private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "WINetworkPageAgent")
 private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetwork */ })();
 """
 
 @MainActor
 @Observable
-final class WINetworkAgentModel: NSObject, WIPageAgent {
+final class WINetworkPageAgent: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
         case network = "webInspectorNetworkUpdate"
         case networkBatch = "webInspectorNetworkBatchUpdate"
@@ -56,7 +49,7 @@ final class WINetworkAgentModel: NSObject, WIPageAgent {
 
 // MARK: - WIPageAgent
 
-extension WINetworkAgentModel {
+extension WINetworkPageAgent {
     func attachPageWebView(_ newWebView: WKWebView?) {
         replacePageWebView(with: newWebView)
     }
@@ -97,7 +90,7 @@ extension WINetworkAgentModel {
     }
 }
 
-extension WINetworkAgentModel: WKScriptMessageHandler {
+extension WINetworkPageAgent: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame else {
             return
@@ -115,7 +108,7 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
 
     private func handleNetworkMessage(_ message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any],
-              let event = WINetworkEventPayload(dictionary: payload) else {
+              let event = NetworkEvent(dictionary: payload) else {
             return
         }
         store.applyEvent(event)
@@ -127,14 +120,14 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
 
     private func handleNetworkBatchMessage(_ message: WKScriptMessage) {
         if let dictionary = message.body as? [String: Any],
-           let batch = WINetworkBatchEventPayload(dictionary: dictionary) {
+           let batch = NetworkEventBatch(dictionary: dictionary) {
             store.applyBatchedInsertions(batch)
             return
         }
     }
 }
 
-private extension WINetworkAgentModel {
+private extension WINetworkPageAgent {
     func registerMessageHandlers() {
         guard let webView else { return }
         let controller = webView.configuration.userContentController

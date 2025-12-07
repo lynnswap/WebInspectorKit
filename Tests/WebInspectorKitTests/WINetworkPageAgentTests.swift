@@ -3,10 +3,10 @@ import WebKit
 @testable import WebInspectorKit
 
 @MainActor
-struct WINetworkAgentModelTests {
+struct WINetworkPageAgentTests {
     @Test
     func setRecordingUpdatesStoreFlag() {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
 
         #expect(agent.store.isRecording == true)
         agent.setRecording(false)
@@ -17,11 +17,11 @@ struct WINetworkAgentModelTests {
 
     @Test
     func clearNetworkLogsResetsEntriesAndSelection() throws {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let store = agent.store
 
         let payload = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 1,
                 "url": "https://example.com",
@@ -38,10 +38,10 @@ struct WINetworkAgentModelTests {
 
     @Test
     func didClearPageWebViewResetsStore() throws {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let store = agent.store
         let payload = try #require(
-            WINetworkEventPayload(dictionary: [
+            NetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 2,
                 "url": "https://example.com",
@@ -58,7 +58,7 @@ struct WINetworkAgentModelTests {
 
     @Test
     func attachRegistersHandlersAndInstallsScripts() async {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let (webView, controller) = makeTestWebView()
 
         agent.attachPageWebView(webView)
@@ -74,7 +74,7 @@ struct WINetworkAgentModelTests {
 
     @Test
     func detachRemovesHandlersAndClearsWebView() async {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let (webView, controller) = makeTestWebView()
 
         agent.attachPageWebView(webView)
@@ -90,7 +90,7 @@ struct WINetworkAgentModelTests {
 
     @Test
     func attachInstallsNetworkAgentIntoPage() async throws {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let (webView, controller) = makeTestWebView()
 
         agent.attachPageWebView(webView)
@@ -108,7 +108,7 @@ struct WINetworkAgentModelTests {
 
     @Test
     func applyNetworkPayloadHandlesBatchedResourceTiming() throws {
-        let agent = WINetworkAgentModel()
+        let agent = WINetworkPageAgent()
         let start: Double = 1_200
         let end: Double = 2_200
         let payloads: [[String: Any]] = [[
@@ -127,7 +127,7 @@ struct WINetworkAgentModelTests {
             "session": "session-1",
             "events": payloads
         ]
-        let batch = try #require(WINetworkBatchEventPayload(dictionary: batchPayload))
+        let batch = try #require(NetworkEventBatch(dictionary: batchPayload))
         agent.store.applyBatchedInsertions(batch)
 
         let entry = try #require(agent.store.entry(forRequestID: 99, sessionID: "session-1"))

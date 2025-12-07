@@ -1,10 +1,3 @@
-//
-//  WIDOMSession.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/06.
-//
-
 import WebKit
 
 @MainActor
@@ -12,7 +5,7 @@ public final class WIDOMSession: WIPageSession {
     public typealias AttachmentResult = (shouldReload: Bool, preserveState: Bool)
     public private(set) var configuration: WebInspectorConfiguration
 
-    let inspectorModel: WIInspectorModel
+    let domStore: WIDOMStore
     public var selection: WIDOMSelection {
         domAgent.selection
     }
@@ -27,23 +20,23 @@ public final class WIDOMSession: WIPageSession {
 
     public private(set) weak var lastPageWebView: WKWebView?
 
-    private let domAgent: WIDOMAgentModel
+    private let domAgent: WIDOMPageAgent
 
 
     public init(configuration: WebInspectorConfiguration = .init()) {
         self.configuration = configuration
-        let domAgent = WIDOMAgentModel(configuration: configuration)
+        let domAgent = WIDOMPageAgent(configuration: configuration)
         self.domAgent = domAgent
-        let inspectorModel = WIInspectorModel(configuration: configuration)
-        self.inspectorModel = inspectorModel
-        domAgent.inspector = inspectorModel
-        inspectorModel.domAgent = domAgent
+        let domStore = WIDOMStore(configuration: configuration)
+        self.domStore = domStore
+        domAgent.inspector = domStore
+        domStore.domAgent = domAgent
     }
 
     public func updateConfiguration(_ configuration: WebInspectorConfiguration) {
         self.configuration = configuration
         domAgent.updateConfiguration(configuration)
-        inspectorModel.updateConfiguration(configuration)
+        domStore.updateConfiguration(configuration)
     }
 
     @discardableResult
@@ -72,7 +65,7 @@ public final class WIDOMSession: WIPageSession {
         domAgent.webView?.reload()
     }
 
-    func beginSelectionMode() async throws -> WIDOMAgentModel.SelectionResult {
+    func beginSelectionMode() async throws -> WIDOMPageAgent.SelectionResult {
         try await domAgent.beginSelectionMode()
     }
 
