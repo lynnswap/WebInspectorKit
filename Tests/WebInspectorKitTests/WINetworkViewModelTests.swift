@@ -30,7 +30,7 @@ struct WINetworkViewModelTests {
         let payload = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "start",
-                "id": "req_1",
+                "requestId": 1,
                 "url": "https://example.com",
                 "method": "GET"
             ])
@@ -64,7 +64,7 @@ struct WINetworkViewModelTests {
         let startEvent = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "start",
-                "id": "req_2",
+                "requestId": 2,
                 "url": "https://example.com/api",
                 "method": "POST",
                 "requestHeaders": ["accept": "application/json"],
@@ -75,7 +75,7 @@ struct WINetworkViewModelTests {
         let responseEvent = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "response",
-                "id": "req_2",
+                "requestId": 2,
                 "status": 201,
                 "statusText": "Created",
                 "mimeType": "application/json",
@@ -85,7 +85,7 @@ struct WINetworkViewModelTests {
         let finishEvent = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "finish",
-                "id": "req_2",
+                "requestId": 2,
                 "endTime": 1_400.0,
                 "encodedBodyLength": 512
             ])
@@ -95,7 +95,7 @@ struct WINetworkViewModelTests {
         store.applyEvent(responseEvent)
         store.applyEvent(finishEvent)
 
-        let entry = try #require(store.entry(for: "req_2"))
+        let entry = try #require(store.entry(forRequestID: 2, sessionID: nil))
         #expect(entry.method == "POST")
         #expect(entry.url == "https://example.com/api")
         #expect(entry.statusCode == 201)

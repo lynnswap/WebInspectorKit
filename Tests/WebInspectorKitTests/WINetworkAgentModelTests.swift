@@ -23,7 +23,7 @@ struct WINetworkAgentModelTests {
         let payload = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "start",
-                "id": "req_1",
+                "requestId": 1,
                 "url": "https://example.com",
                 "method": "GET"
             ])
@@ -43,7 +43,7 @@ struct WINetworkAgentModelTests {
         let payload = try #require(
             WINetworkEventPayload(dictionary: [
                 "type": "start",
-                "id": "req_2",
+                "requestId": 2,
                 "url": "https://example.com",
                 "method": "GET"
             ])

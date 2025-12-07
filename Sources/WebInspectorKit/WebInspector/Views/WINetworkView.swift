@@ -63,7 +63,10 @@ private struct WINetworkTableView: View {
 
     var body: some View {
         GeometryReader{ proxy in
-            Table(viewModel.store.entries.reversed(), selection: viewModel.tableSelection) {
+            Table(
+                viewModel.store.entries.sorted(using: SortDescriptor(\.createdAt, order: .reverse)),
+                selection: viewModel.tableSelection
+            ) {
                 TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
                     Text(entry.displayName)
                         .font(.subheadline.weight(.semibold))
@@ -108,11 +111,10 @@ private struct WINetworkTableView: View {
                 }
                 .width(min: 90, ideal: 110)
             }
-            .animation(.easeInOut(duration: 0.16), value: viewModel.store.entries.count)
             .inspector(isPresented: viewModel.isShowingDetail) {
                 NavigationStack {
                     if let isSelectedEntryID = viewModel.selectedEntryID,
-                       let entry = viewModel.store.entry(for:isSelectedEntryID) {
+                       let entry = viewModel.store.entry(forEntryID: isSelectedEntryID) {
                         WINetworkDetailView(entry: entry)
                             .toolbar{
                                 ToolbarItem(placement:.primaryAction){
@@ -133,8 +135,10 @@ private struct WINetworkTableView: View {
 private struct WINetworkListView: View {
     @Bindable var viewModel:WINetworkViewModel
     var body:some View{
-        List(selection:$viewModel.selectedEntryID) {
-            ForEach(viewModel.store.entries.reversed()) { entry in
+        List(selection: viewModel.tableSelection) {
+            ForEach(
+                viewModel.store.entries.sorted(using: SortDescriptor(\.createdAt, order: .reverse)),
+            ) { entry in
                 WINetworkRow(entry: entry)
                     .contentShape(.rect)
                     .onTapGesture {
@@ -142,13 +146,12 @@ private struct WINetworkListView: View {
                     }
             }
         }
-        .animation(.easeInOut(duration: 0.16), value: viewModel.store.entries.count)
         .scrollContentBackground(.hidden)
         .listStyle(.plain)
         .sheet(isPresented: viewModel.isShowingDetail) {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
-                   let entry = viewModel.store.entry(for:isSelectedEntryID) {
+                   let entry = viewModel.store.entry(forEntryID:isSelectedEntryID) {
                     WINetworkDetailView(entry: entry)
                         .scrollContentBackground(.hidden)
                 }
@@ -429,27 +432,24 @@ private extension WINetworkEntry {
 
 #if DEBUG
 @MainActor
-private func makeWINetworkPreviewModel(selectedID: String? = nil) -> WINetworkViewModel {
+private func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> WINetworkViewModel {
     let viewModel = WINetworkViewModel()
     let store = viewModel.store
     WINetworkPreviewData.events
         .compactMap(WINetworkEventPayload.init(dictionary:))
         .forEach { store.applyEvent($0) }
-    if let selectedID, store.entry(for: selectedID) != nil {
-        viewModel.selectedEntryID = selectedID
-    } else if let newestID = store.entries.last?.id {
-        viewModel.selectedEntryID = newestID
-    }
+    
+    viewModel.selectedEntryID = selectedID ?? store.entries.last?.id
     return viewModel
 }
 
 @MainActor
 private enum WINetworkPreviewData {
-    static let primaryID = "net_home"
     static let events: [[String: Any]] = [
         [
             "type": "start",
-            "id": "net_home",
+            "requestId": 1,
+            "session": "preview",
             "url": "https://x.com/home",
             "method": "GET",
             "requestHeaders": [
@@ -462,7 +462,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_home",
+            "requestId": 1,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "text/html",
@@ -476,7 +477,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_home",
+            "requestId": 1,
+            "session": "preview",
             "endTime": 1_170.0,
             "wallTime": 1_708_000_000_170.0,
             "encodedBodyLength": 252_779,
@@ -484,7 +486,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_avatar_1",
+            "requestId": 2,
+            "session": "preview",
             "url": "https://cdn.example.com/images/9AxiduZ7_x96.png",
             "method": "GET",
             "requestHeaders": [
@@ -496,7 +499,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_avatar_1",
+            "requestId": 2,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "image/png",
@@ -510,7 +514,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_avatar_1",
+            "requestId": 2,
+            "session": "preview",
             "endTime": 1_326.0,
             "wallTime": 1_708_000_000_326.0,
             "encodedBodyLength": 1_657,
@@ -518,7 +523,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_avatar_2",
+            "requestId": 3,
+            "session": "preview",
             "url": "https://cdn.example.com/images/j7ETageC_x96.jpg",
             "method": "GET",
             "requestHeaders": [
@@ -530,7 +536,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_avatar_2",
+            "requestId": 3,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "image/jpeg",
@@ -543,7 +550,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_avatar_2",
+            "requestId": 3,
+            "session": "preview",
             "endTime": 1_535.0,
             "wallTime": 1_708_000_000_535.0,
             "encodedBodyLength": 3_550,
@@ -551,7 +559,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_avatar_3",
+            "requestId": 4,
+            "session": "preview",
             "url": "https://cdn.example.com/images/J0iMVfNY_normal.png",
             "method": "GET",
             "requestHeaders": [
@@ -563,7 +572,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_avatar_3",
+            "requestId": 4,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "image/png",
@@ -576,7 +586,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_avatar_3",
+            "requestId": 4,
+            "session": "preview",
             "endTime": 1_622.0,
             "wallTime": 1_708_000_000_622.0,
             "encodedBodyLength": 1_959,
@@ -584,7 +595,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_flow",
+            "requestId": 5,
+            "session": "preview",
             "url": "https://api.example.com/user_flow.json",
             "method": "POST",
             "requestHeaders": [
@@ -597,7 +609,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_flow",
+            "requestId": 5,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "application/json",
@@ -610,7 +623,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_flow",
+            "requestId": 5,
+            "session": "preview",
             "endTime": 1_978.0,
             "wallTime": 1_708_000_000_978.0,
             "encodedBodyLength": 0,
@@ -618,7 +632,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_update",
+            "requestId": 6,
+            "session": "preview",
             "url": "https://api.example.com/update_subscriptions",
             "method": "POST",
             "requestHeaders": [
@@ -631,7 +646,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_update",
+            "requestId": 6,
+            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "application/json",
@@ -644,7 +660,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "finish",
-            "id": "net_update",
+            "requestId": 6,
+            "session": "preview",
             "endTime": 2_042.0,
             "wallTime": 1_708_000_001_042.0,
             "encodedBodyLength": 35,
@@ -652,7 +669,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_upload_fail",
+            "requestId": 7,
+            "session": "preview",
             "url": "https://upload.example.com/media",
             "method": "POST",
             "requestHeaders": [
@@ -665,7 +683,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "response",
-            "id": "net_upload_fail",
+            "requestId": 7,
+            "session": "preview",
             "status": 500,
             "statusText": "Internal Server Error",
             "mimeType": "application/json",
@@ -679,7 +698,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "fail",
-            "id": "net_upload_fail",
+            "requestId": 7,
+            "session": "preview",
             "error": "Request timed out",
             "endTime": 2_400.0,
             "wallTime": 1_708_000_001_400.0,
@@ -687,7 +707,8 @@ private enum WINetworkPreviewData {
         ],
         [
             "type": "start",
-            "id": "net_stream",
+            "requestId": 8,
+            "session": "preview",
             "url": "https://stream.example.com/live",
             "method": "GET",
             "requestHeaders": [
@@ -703,7 +724,7 @@ private enum WINetworkPreviewData {
 
 #Preview("Network Logs") {
     NavigationStack {
-        WINetworkView(viewModel: makeWINetworkPreviewModel(selectedID: WINetworkPreviewData.primaryID))
+        WINetworkView(viewModel: makeWINetworkPreviewModel())
     }
 #if os(macOS)
     .frame(height: 420)

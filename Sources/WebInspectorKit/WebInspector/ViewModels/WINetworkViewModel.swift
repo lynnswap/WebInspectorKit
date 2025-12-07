@@ -13,7 +13,7 @@ import Observation
 @Observable
 public final class WINetworkViewModel {
     public let session: WINetworkSession
-    public var selectedEntryID: String?
+    public var selectedEntryID: UUID?
     public var store: WINetworkStore {
         session.store
     }

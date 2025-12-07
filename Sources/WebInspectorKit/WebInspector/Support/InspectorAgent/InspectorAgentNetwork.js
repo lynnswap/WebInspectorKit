@@ -51,9 +51,24 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
-const nextRequestId = () => {
-    const id = networkState.nextId++;
-    return networkState.sessionPrefix + "-net_" + id.toString(36);
+const nextRequestIdentity = () => {
+    const requestId = networkState.nextId;
+    networkState.nextId += 1;
+    return {
+        requestId: requestId,
+        session: networkState.sessionPrefix
+    };
+};
+
+const trackingKey = identity => {
+    if (!identity) {
+        return null;
+    }
+    const idPart = typeof identity.requestId === "number" ? identity.requestId : identity.id;
+    if (identity.session && idPart != null) {
+        return identity.session + "::" + idPart;
+    }
+    return idPart != null ? String(idPart) : null;
 };
 
 const safePostMessage = payload => {
@@ -117,13 +132,20 @@ const parseRawHeaders = raw => {
     return headers;
 };
 
-const recordStart = (requestId, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) => {
+const recordStart = (identity, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) => {
+    if (!identity) {
+        return;
+    }
     const startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
+    const key = trackingKey(identity);
+    if (key) {
+        trackedRequests.set(key, {startTime: startTime, wallTime: wall});
+    }
     safePostMessage({
         type: "start",
-        id: requestId,
+        session: identity.session,
+        requestId: identity.requestId,
         url: url,
         method: method,
         requestHeaders: requestHeaders || {},
@@ -133,7 +155,10 @@ const recordStart = (requestId, url, method, requestHeaders, requestType, startT
     });
 };
 
-const recordResponse = (requestId, response, requestType) => {
+const recordResponse = (identity, response, requestType) => {
+    if (!identity) {
+        return;
+    }
     let mimeType = "";
     let headers = {};
     try {
@@ -157,7 +182,8 @@ const recordResponse = (requestId, response, requestType) => {
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
     safePostMessage({
         type: "response",
-        id: requestId,
+        session: identity.session,
+        requestId: identity.requestId,
         status: status,
         statusText: statusText,
         mimeType: mimeType,
@@ -169,7 +195,7 @@ const recordResponse = (requestId, response, requestType) => {
 };
 
 const recordFinish = (
-    requestId,
+    identity,
     encodedBodyLength,
     requestType,
     status,
@@ -178,11 +204,15 @@ const recordFinish = (
     endTimeOverride,
     wallTimeOverride
 ) => {
+    if (!identity) {
+        return;
+    }
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     safePostMessage({
         type: "finish",
-        id: requestId,
+        session: identity.session,
+        requestId: identity.requestId,
         endTime: time,
         wallTime: wall,
         encodedBodyLength: encodedBodyLength,
@@ -191,10 +221,16 @@ const recordFinish = (
         statusText: statusText,
         mimeType: mimeType
     });
-    trackedRequests.delete(requestId);
+    const key = trackingKey(identity);
+    if (key) {
+        trackedRequests.delete(key);
+    }
 };
 
-const recordFailure = (requestId, error, requestType) => {
+const recordFailure = (identity, error, requestType) => {
+    if (!identity) {
+        return;
+    }
     const time = now();
     const wall = wallTime();
     let description = "";
@@ -205,13 +241,17 @@ const recordFailure = (requestId, error, requestType) => {
     }
     safePostMessage({
         type: "fail",
-        id: requestId,
+        session: identity.session,
+        requestId: identity.requestId,
         endTime: time,
         wallTime: wall,
         error: description,
         requestType: requestType
     });
-    trackedRequests.delete(requestId);
+    const key = trackingKey(identity);
+    if (key) {
+        trackedRequests.delete(key);
+    }
 };
 
 const captureContentLength = response => {
@@ -275,10 +315,10 @@ const handleResourceEntry = entry => {
     }
     networkState.resourceSeen.add(key);
 
-    const requestId = nextRequestId();
+    const identity = nextRequestIdentity();
     const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
     const requestType = entry.initiatorType || "resource";
-    recordStart(requestId, entry.name || "", "GET", {}, requestType, startTime, wallTime());
+    recordStart(identity, entry.name || "", "GET", {}, requestType, startTime, wallTime());
 
     let encoded = entry.transferSize;
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
@@ -286,7 +326,7 @@ const handleResourceEntry = entry => {
     }
     const status = encoded && encoded > 0 ? 200 : undefined;
     const endTime = startTime + (entry.duration || 0);
-    recordFinish(requestId, encoded, requestType, status, "", undefined, endTime, wallTime());
+    recordFinish(identity, encoded, requestType, status, "", undefined, endTime, wallTime());
 };
 
 const installFetchPatch = () => {
@@ -302,25 +342,25 @@ const installFetchPatch = () => {
         const args = Array.from(arguments);
         const [input, init = {}] = args;
         const method = init.method || (input && input.method) || "GET";
-        const requestId = shouldTrack ? nextRequestId() : null;
+        const identity = shouldTrack ? nextRequestIdentity() : null;
         const url = typeof input === "string" ? input : (input && input.url) || "";
         const headers = normalizeHeaders(init.headers || (input && input.headers));
 
-        if (shouldTrack && requestId) {
-            recordStart(requestId, url, String(method).toUpperCase(), headers, "fetch");
+        if (shouldTrack && identity) {
+            recordStart(identity, url, String(method).toUpperCase(), headers, "fetch");
         }
 
         try {
             const response = await nativeFetch.apply(window, args);
-            if (shouldTrack && requestId) {
-                recordResponse(requestId, response, "fetch");
+            if (shouldTrack && identity) {
+                recordResponse(identity, response, "fetch");
                 const encodedLength = captureContentLength(response);
-                recordFinish(requestId, encodedLength, "fetch");
+                recordFinish(identity, encodedLength, "fetch");
             }
             return response;
         } catch (error) {
-            if (shouldTrack && requestId) {
-                recordFailure(requestId, error, "fetch");
+            if (shouldTrack && identity) {
+                recordFailure(identity, error, "fetch");
             }
             throw error;
         }
@@ -359,29 +399,29 @@ const installXHRPatch = () => {
 
     XMLHttpRequest.prototype.send = function() {
         const shouldTrack = networkState.enabled && !!this.__wiNetwork;
-        const requestId = shouldTrack ? nextRequestId() : null;
+        const identity = shouldTrack ? nextRequestIdentity() : null;
         const info = this.__wiNetwork;
-        if (shouldTrack && requestId && info) {
-            recordStart(requestId, info.url, info.method, info.headers || {}, "xhr");
+        if (shouldTrack && identity && info) {
+            recordStart(identity, info.url, info.method, info.headers || {}, "xhr");
             this.addEventListener("readystatechange", function() {
-                if (this.readyState === 2 && requestId) {
-                    recordResponse(requestId, this, "xhr");
+                if (this.readyState === 2 && identity) {
+                    recordResponse(identity, this, "xhr");
                 }
             }, false);
             this.addEventListener("load", function() {
-                if (requestId) {
+                if (identity) {
                     const length = captureContentLength(this);
-                    recordFinish(requestId, length, "xhr");
+                    recordFinish(identity, length, "xhr");
                 }
             }, false);
             this.addEventListener("error", function(event) {
-                if (requestId) {
-                    recordFailure(requestId, event && event.error ? event.error : "Network error", "xhr");
+                if (identity) {
+                    recordFailure(identity, event && event.error ? event.error : "Network error", "xhr");
                 }
             }, false);
             this.addEventListener("abort", function() {
-                if (requestId) {
-                    recordFailure(requestId, "Request aborted", "xhr");
+                if (identity) {
+                    recordFailure(identity, "Request aborted", "xhr");
                 }
             }, false);
         }
