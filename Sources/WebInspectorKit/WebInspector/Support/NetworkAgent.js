@@ -2,7 +2,7 @@ import {
     clearNetworkRecords,
     installNetworkObserver,
     setNetworkLoggingEnabled
-} from "./InspectorAgent/InspectorAgentNetwork.js";
+} from "./NetworkAgent/NetworkAgentCore.js";
 
 if (!(window.webInspectorNetwork && window.webInspectorNetwork.__installed)) {
     installNetworkObserver();

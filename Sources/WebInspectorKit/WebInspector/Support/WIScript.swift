@@ -5,29 +5,29 @@ import WebKit
 private let scriptLogger = Logger(subsystem: "WebInspectorKit", category: "WIScript")
 
 enum WIScript {
-    @MainActor private static var cachedAgentScript: String?
+    @MainActor private static var cachedDOMAgentScript: String?
     @MainActor private static var cachedNetworkScript: String?
     // Inline module sources to avoid CSP blocking external script loads in inspected pages.
-    private static let agentModuleNames = [
-        "InspectorAgent/InspectorAgentState",
-        "InspectorAgent/InspectorAgentDOMCore",
-        "InspectorAgent/InspectorAgentOverlay",
-        "InspectorAgent/InspectorAgentSnapshot",
-        "InspectorAgent/InspectorAgentSelection",
-        "InspectorAgent/InspectorAgentDOMUtils",
-        "InspectorAgent"
+    private static let domAgentModuleNames = [
+        "DOMAgent/DOMAgentState",
+        "DOMAgent/DOMAgentDOMCore",
+        "DOMAgent/DOMAgentOverlay",
+        "DOMAgent/DOMAgentSnapshot",
+        "DOMAgent/DOMAgentSelection",
+        "DOMAgent/DOMAgentDOMUtils",
+        "DOMAgent"
     ]
     private static let networkModuleNames = [
-        "InspectorAgent/InspectorAgentNetwork",
-        "InspectorNetworkAgent"
+        "NetworkAgent/NetworkAgentCore",
+        "NetworkAgent"
     ]
 
-    @MainActor static func bootstrapAgent() throws -> String {
-        if let cachedAgentScript {
-            return cachedAgentScript
+    @MainActor static func bootstrapDOMAgent() throws -> String {
+        if let cachedDOMAgentScript {
+            return cachedDOMAgentScript
         }
-        let script = try buildScript(from: agentModuleNames)
-        cachedAgentScript = script
+        let script = try buildScript(from: domAgentModuleNames)
+        cachedDOMAgentScript = script
         return script
     }
 

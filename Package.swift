@@ -25,9 +25,10 @@ let package = Package(
             resources: [
                 .process("Localizable.xcstrings"),
                 .process("WebInspector/Views/DOMTreeView"),
-                .process("WebInspector/Support/InspectorAgent.js"),
-                .process("WebInspector/Support/InspectorNetworkAgent.js"),
-                .process("WebInspector/Support/InspectorAgent")
+                .process("WebInspector/Support/DOMAgent.js"),
+                .process("WebInspector/Support/NetworkAgent.js"),
+                .process("WebInspector/Support/DOMAgent"),
+                .process("WebInspector/Support/NetworkAgent")
             ]
         ),
         .testTarget(

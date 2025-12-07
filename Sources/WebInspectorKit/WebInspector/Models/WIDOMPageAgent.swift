@@ -4,7 +4,7 @@ import WebKit
 import Observation
 
 private let domLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMPageAgent")
-private let inspectorPresenceProbeScript: String = """
+private let domAgentPresenceProbeScript: String = """
 (function() { })();
 """
 
@@ -243,7 +243,7 @@ private extension WIDOMPageAgent {
             controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
             controller.add(self, contentWorld: .page, name: $0.rawValue)
         }
-        installInspectorAgentScriptIfNeeded(on: webView)
+        installDOMAgentScriptIfNeeded(on: webView)
     }
 
     func detachMessageHandlers(from webView: WKWebView?) {
@@ -255,17 +255,17 @@ private extension WIDOMPageAgent {
         domLogger.debug("detached DOM message handlers")
     }
 
-    func installInspectorAgentScriptIfNeeded(on webView: WKWebView) {
+    func installDOMAgentScriptIfNeeded(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
-        if controller.userScripts.contains(where: { $0.source == inspectorPresenceProbeScript }) {
+        if controller.userScripts.contains(where: { $0.source == domAgentPresenceProbeScript }) {
             return
         }
 
         let scriptSource: String
         do {
-            scriptSource = try WIScript.bootstrapAgent()
+            scriptSource = try WIScript.bootstrapDOMAgent()
         } catch {
-            domLogger.error("failed to prepare inspector script: \(error.localizedDescription, privacy: .public)")
+            domLogger.error("failed to prepare DOM agent script: \(error.localizedDescription, privacy: .public)")
             return
         }
 
@@ -275,7 +275,7 @@ private extension WIDOMPageAgent {
             forMainFrameOnly: true
         )
         let checkScript = WKUserScript(
-            source: inspectorPresenceProbeScript,
+            source: domAgentPresenceProbeScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         )
@@ -284,7 +284,7 @@ private extension WIDOMPageAgent {
         Task {
             _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         }
-        domLogger.debug("installed inspector agent user script")
+        domLogger.debug("installed DOM agent user script")
     }
 
     func stopAutoUpdate(for webView: WKWebView) {

@@ -88,7 +88,8 @@ If selection mode requires deeper nodes, the inspector automatically raises `sna
 - Auto-updates are managed internally using `autoUpdateDebounce`.
 
 ## How it works
-- `InspectorAgent.js` is injected into the page WKWebView to stream DOM snapshots and mutation bundles.
+- `DOMAgent.js` is injected into the page WKWebView to stream DOM snapshots and mutation bundles.
+- `NetworkAgent.js` observes network activity in the inspected page when recording is enabled.
 - The inspector UI uses bundled HTML/CSS/JS assets resolved via `WIAssets` and rendered in a dedicated inspector WebView.
 
 ## Limitations
