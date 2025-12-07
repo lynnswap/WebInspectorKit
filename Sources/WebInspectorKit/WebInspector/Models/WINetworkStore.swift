@@ -194,12 +194,16 @@ public struct WINetworkEntry: Identifiable, Hashable {
 
     private func handleFinish(_ event: WINetworkEventPayload, failed: Bool) {
         guard let id = event.identifier, var entry = entry(for: id) else { return }
+        entry.statusCode = event.statusCode ?? entry.statusCode
+        entry.statusText = event.statusText ?? entry.statusText
+        entry.mimeType = event.mimeType ?? entry.mimeType
         entry.encodedBodyLength = event.encodedBodyLength ?? entry.encodedBodyLength
         entry.endTimestamp = event.endTimeSeconds ?? entry.endTimestamp
         if let start = entry.startTimestamp, let end = entry.endTimestamp {
             entry.duration = max(0, end - start)
         }
         entry.errorDescription = event.errorDescription
+        entry.requestType = event.requestType ?? entry.requestType
         entry.phase = failed ? .failed : .completed
         if failed && entry.statusCode == nil {
             entry.statusCode = 0

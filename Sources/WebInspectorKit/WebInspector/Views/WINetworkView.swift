@@ -363,8 +363,10 @@ private extension WINetworkEntry {
         switch phase {
         case .failed:
             return String(localized: "network.status.failed", bundle: .module)
-        case .pending, .completed:
+        case .pending:
             return String(localized: "network.status.pending", bundle: .module)
+        case .completed:
+            return String(localized: "network.status.completed", bundle: .module)
         }
     }
 
@@ -382,6 +384,9 @@ private extension WINetworkEntry {
             if statusCode >= 300 {
                 return .yellow
             }
+            return .green
+        }
+        if phase == .completed {
             return .green
         }
         return .secondary
