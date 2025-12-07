@@ -1,3 +1,24 @@
+const now = () => {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+        return performance.now();
+    }
+    return Date.now();
+};
+
+const wallTime = () => Date.now();
+
+const generateSessionPrefix = () => {
+    try {
+        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+        }
+    } catch {
+    }
+    const time = Date.now().toString(36);
+    const random = Math.random().toString(36).slice(2, 10);
+    return time + "-" + random;
+};
+
 const networkState = {
     enabled: true,
     installed: false,
@@ -30,35 +51,12 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
-function now() {
-    if (typeof performance !== "undefined" && typeof performance.now === "function") {
-        return performance.now();
-    }
-    return Date.now();
-}
-
-function wallTime() {
-    return Date.now();
-}
-
-function generateSessionPrefix() {
-    try {
-        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-            return crypto.randomUUID();
-        }
-    } catch {
-    }
-    var time = Date.now().toString(36);
-    var random = Math.random().toString(36).slice(2, 10);
-    return time + "-" + random;
-}
-
-function nextRequestId() {
-    var id = networkState.nextId++;
+const nextRequestId = () => {
+    const id = networkState.nextId++;
     return networkState.sessionPrefix + "-net_" + id.toString(36);
-}
+};
 
-function safePostMessage(payload) {
+const safePostMessage = payload => {
     if (!networkState.enabled && payload.type !== "reset") {
         return;
     }
@@ -66,62 +64,62 @@ function safePostMessage(payload) {
         window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
     } catch {
     }
-}
+};
 
-function normalizeHeaders(headers) {
-    var result = {};
+const normalizeHeaders = headers => {
+    const result = {};
     if (!headers) {
         return result;
     }
     try {
         if (typeof Headers !== "undefined" && headers instanceof Headers && headers.forEach) {
-            headers.forEach(function(value, key) {
+            headers.forEach((value, key) => {
                 result[String(key).toLowerCase()] = String(value);
             });
             return result;
         }
         if (Array.isArray(headers)) {
-            headers.forEach(function(entry) {
+            headers.forEach(entry => {
                 if (Array.isArray(entry) && entry.length >= 2) {
-                    var name = String(entry[0] || "").toLowerCase();
-                    var value = String(entry[1] || "");
+                    const name = String(entry[0] || "").toLowerCase();
+                    const value = String(entry[1] || "");
                     result[name] = value;
                 }
             });
             return result;
         }
         if (typeof headers === "object") {
-            Object.keys(headers).forEach(function(key) {
+            Object.keys(headers).forEach(key => {
                 result[String(key).toLowerCase()] = String(headers[key]);
             });
         }
     } catch {
     }
     return result;
-}
+};
 
-function parseRawHeaders(raw) {
-    var headers = {};
+const parseRawHeaders = raw => {
+    const headers = {};
     if (!raw || typeof raw !== "string") {
         return headers;
     }
-    raw.split(/\r?\n/).forEach(function(line) {
-        var index = line.indexOf(":");
+    raw.split(/\r?\n/).forEach(line => {
+        const index = line.indexOf(":");
         if (index <= 0) {
             return;
         }
-        var name = line.slice(0, index).trim().toLowerCase();
-        var value = line.slice(index + 1).trim();
+        const name = line.slice(0, index).trim().toLowerCase();
+        const value = line.slice(index + 1).trim();
         if (name) {
             headers[name] = value;
         }
     });
     return headers;
-}
+};
 
-function recordStart(requestId, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) {
-    var startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
-    var wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
+const recordStart = (requestId, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) => {
+    const startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
+    const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
     safePostMessage({
         type: "start",
@@ -133,11 +131,11 @@ function recordStart(requestId, url, method, requestHeaders, requestType, startT
         wallTime: wall,
         requestType: requestType
     });
-}
+};
 
-function recordResponse(requestId, response, requestType) {
-    var mimeType = "";
-    var headers = {};
+const recordResponse = (requestId, response, requestType) => {
+    let mimeType = "";
+    let headers = {};
     try {
         if (response && response.headers) {
             mimeType = response.headers.get("content-type") || "";
@@ -153,10 +151,10 @@ function recordResponse(requestId, response, requestType) {
         mimeType = "";
         headers = {};
     }
-    var time = now();
-    var wall = wallTime();
-    var status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
-    var statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
+    const time = now();
+    const wall = wallTime();
+    const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
+    const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
     safePostMessage({
         type: "response",
         id: requestId,
@@ -168,9 +166,9 @@ function recordResponse(requestId, response, requestType) {
         wallTime: wall,
         requestType: requestType
     });
-}
+};
 
-function recordFinish(
+const recordFinish = (
     requestId,
     encodedBodyLength,
     requestType,
@@ -179,9 +177,9 @@ function recordFinish(
     mimeType,
     endTimeOverride,
     wallTimeOverride
-) {
-    var time = typeof endTimeOverride === "number" ? endTimeOverride : now();
-    var wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
+) => {
+    const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
+    const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     safePostMessage({
         type: "finish",
         id: requestId,
@@ -194,12 +192,12 @@ function recordFinish(
         mimeType: mimeType
     });
     trackedRequests.delete(requestId);
-}
+};
 
-function recordFailure(requestId, error, requestType) {
-    var time = now();
-    var wall = wallTime();
-    var description = "";
+const recordFailure = (requestId, error, requestType) => {
+    const time = now();
+    const wall = wallTime();
+    let description = "";
     if (error && typeof error.message === "string" && error.message) {
         description = error.message;
     } else if (error) {
@@ -214,11 +212,11 @@ function recordFailure(requestId, error, requestType) {
         requestType: requestType
     });
     trackedRequests.delete(requestId);
-}
+};
 
-function captureContentLength(response) {
+const captureContentLength = response => {
     try {
-        var value = null;
+        let value = null;
         if (response && response.headers && typeof response.headers.get === "function") {
             value = response.headers.get("content-length");
         } else if (response && typeof response.getResponseHeader === "function") {
@@ -227,20 +225,20 @@ function captureContentLength(response) {
         if (!value) {
             return undefined;
         }
-        var length = parseInt(value, 10);
+        const length = parseInt(value, 10);
         if (Number.isFinite(length) && length >= 0) {
             return length;
         }
     } catch {
     }
     return undefined;
-}
+};
 
-function shouldTrackResourceEntry(entry) {
+const shouldTrackResourceEntry = entry => {
     if (!entry) {
         return false;
     }
-    var initiator = String(entry.initiatorType || "").toLowerCase();
+    const initiator = String(entry.initiatorType || "").toLowerCase();
     if (!initiator) {
         return false;
     }
@@ -252,16 +250,16 @@ function shouldTrackResourceEntry(entry) {
     }
     if (initiator === "other") {
         if (typeof entry.name === "string") {
-            var lower = entry.name.toLowerCase();
+            const lower = entry.name.toLowerCase();
             if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
                 return true;
             }
         }
     }
     return false;
-}
+};
 
-function handleResourceEntry(entry) {
+const handleResourceEntry = entry => {
     if (!networkState.enabled) {
         return;
     }
@@ -271,73 +269,73 @@ function handleResourceEntry(entry) {
     if (!networkState.resourceSeen) {
         networkState.resourceSeen = new Set();
     }
-    var key = String(entry.name || "") + "::" + entry.startTime;
+    const key = String(entry.name || "") + "::" + entry.startTime;
     if (networkState.resourceSeen.has(key)) {
         return;
     }
     networkState.resourceSeen.add(key);
 
-    var requestId = nextRequestId();
-    var startTime = typeof entry.startTime === "number" ? entry.startTime : now();
-    var requestType = entry.initiatorType || "resource";
+    const requestId = nextRequestId();
+    const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
+    const requestType = entry.initiatorType || "resource";
     recordStart(requestId, entry.name || "", "GET", {}, requestType, startTime, wallTime());
 
-    var encoded = entry.transferSize;
+    let encoded = entry.transferSize;
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
         encoded = entry.encodedBodySize;
     }
-    var status = encoded && encoded > 0 ? 200 : undefined;
-    var endTime = startTime + (entry.duration || 0);
+    const status = encoded && encoded > 0 ? 200 : undefined;
+    const endTime = startTime + (entry.duration || 0);
     recordFinish(requestId, encoded, requestType, status, "", undefined, endTime, wallTime());
-}
+};
 
-function installFetchPatch() {
+const installFetchPatch = () => {
     if (typeof window.fetch !== "function") {
         return;
     }
-    var nativeFetch = window.fetch;
+    const nativeFetch = window.fetch;
     if (nativeFetch.__wiNetworkPatched) {
         return;
     }
-    var patched = function() {
-        var shouldTrack = networkState.enabled;
-        var args = Array.prototype.slice.call(arguments);
-        var input = args[0];
-        var init = args[1] || {};
-        var method = init.method || (input && input.method) || "GET";
-        var requestId = shouldTrack ? nextRequestId() : null;
-        var url = typeof input === "string" ? input : (input && input.url) || "";
-        var headers = normalizeHeaders(init.headers || (input && input.headers));
+    const patched = async function() {
+        const shouldTrack = networkState.enabled;
+        const args = Array.from(arguments);
+        const [input, init = {}] = args;
+        const method = init.method || (input && input.method) || "GET";
+        const requestId = shouldTrack ? nextRequestId() : null;
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        const headers = normalizeHeaders(init.headers || (input && input.headers));
 
         if (shouldTrack && requestId) {
             recordStart(requestId, url, String(method).toUpperCase(), headers, "fetch");
         }
 
-        return nativeFetch.apply(window, args).then(function(response) {
+        try {
+            const response = await nativeFetch.apply(window, args);
             if (shouldTrack && requestId) {
                 recordResponse(requestId, response, "fetch");
-                var encodedLength = captureContentLength(response);
+                const encodedLength = captureContentLength(response);
                 recordFinish(requestId, encodedLength, "fetch");
             }
             return response;
-        }).catch(function(error) {
+        } catch (error) {
             if (shouldTrack && requestId) {
                 recordFailure(requestId, error, "fetch");
             }
             throw error;
-        });
+        }
     };
     patched.__wiNetworkPatched = true;
     window.fetch = patched;
-}
+};
 
-function installXHRPatch() {
+const installXHRPatch = () => {
     if (typeof XMLHttpRequest !== "function") {
         return;
     }
-    var originalOpen = XMLHttpRequest.prototype.open;
-    var originalSend = XMLHttpRequest.prototype.send;
-    var originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
 
     if (originalOpen.__wiNetworkPatched) {
         return;
@@ -360,9 +358,9 @@ function installXHRPatch() {
     };
 
     XMLHttpRequest.prototype.send = function() {
-        var shouldTrack = networkState.enabled && !!this.__wiNetwork;
-        var requestId = shouldTrack ? nextRequestId() : null;
-        var info = this.__wiNetwork;
+        const shouldTrack = networkState.enabled && !!this.__wiNetwork;
+        const requestId = shouldTrack ? nextRequestId() : null;
+        const info = this.__wiNetwork;
         if (shouldTrack && requestId && info) {
             recordStart(requestId, info.url, info.method, info.headers || {}, "xhr");
             this.addEventListener("readystatechange", function() {
@@ -372,7 +370,7 @@ function installXHRPatch() {
             }, false);
             this.addEventListener("load", function() {
                 if (requestId) {
-                    var length = captureContentLength(this);
+                    const length = captureContentLength(this);
                     recordFinish(requestId, length, "xhr");
                 }
             }, false);
@@ -391,16 +389,16 @@ function installXHRPatch() {
     };
 
     originalOpen.__wiNetworkPatched = true;
-}
+};
 
-function installResourceObserver() {
+const installResourceObserver = () => {
     if (networkState.resourceObserver || typeof PerformanceObserver !== "function") {
         return;
     }
     try {
-        var observer = new PerformanceObserver(function(list) {
-            var entries = list.getEntries();
-            for (var i = 0; i < entries.length; ++i) {
+        const observer = new PerformanceObserver(list => {
+            const entries = list.getEntries();
+            for (let i = 0; i < entries.length; ++i) {
                 handleResourceEntry(entries[i]);
             }
         });
@@ -411,9 +409,9 @@ function installResourceObserver() {
         }
     } catch {
     }
-}
+};
 
-function ensureInstalled() {
+const ensureInstalled = () => {
     if (networkState.installed) {
         return;
     }
@@ -421,20 +419,20 @@ function ensureInstalled() {
     installXHRPatch();
     installResourceObserver();
     networkState.installed = true;
-}
+};
 
-export function setNetworkLoggingEnabled(enabled) {
+export const setNetworkLoggingEnabled = enabled => {
     networkState.enabled = !!enabled;
-}
+};
 
-export function clearNetworkRecords() {
+export const clearNetworkRecords = () => {
     trackedRequests.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
     safePostMessage({type: "reset"});
-}
+};
 
-export function installNetworkObserver() {
+export const installNetworkObserver = () => {
     ensureInstalled();
-}
+};
