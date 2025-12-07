@@ -61,7 +61,7 @@ public final class WIDOMViewModel {
 
     public func reloadInspector(preserveState: Bool = false) async {
         guard session.hasPageWebView else {
-            errorMessage = "WebView is not available."
+            errorMessage = String(localized: "dom.error.webview_unavailable", bundle: .module)
             return
         }
         errorMessage = nil

@@ -31,7 +31,7 @@ public struct WINetworkView: View {
                         viewModel.clearNetworkLogs()
                     } label: {
                         Label {
-                            Text("network.controls.clear", bundle: .module)
+                            Text("network.controls.clear")
                         } icon: {
                             Image(systemName: "trash")
                         }
@@ -48,8 +48,8 @@ public struct WINetworkView: View {
                 .foregroundStyle(.secondary)
         } description: {
             VStack(spacing: 4) {
-                Text("network.empty.title", bundle: .module)
-                Text("network.empty.description", bundle: .module)
+                Text("network.empty.title")
+                Text("network.empty.description")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -67,13 +67,13 @@ private struct WINetworkTableView: View {
                 viewModel.displayEntries,
                 selection: viewModel.tableSelection
             ) {
-                TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.request")) { entry in
                     Text(entry.displayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                 }
                 .width(min: 220)
-                TableColumn(Text("network.table.column.status", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.status")) { entry in
                     HStack(spacing: 6) {
                         Circle()
                             .fill(entry.statusTint)
@@ -84,27 +84,27 @@ private struct WINetworkTableView: View {
                     .foregroundStyle(entry.statusTint)
                 }
                 .width(min: 80, ideal: 100)
-                TableColumn(Text("network.table.column.method", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.method")) { entry in
                     Text(entry.method)
                         .font(.footnote.monospaced())
                 }
                 .width(min: 72, ideal: 90)
-                TableColumn(Text("network.table.column.type", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.type")) { entry in
                     Text(entry.fileTypeLabel)
                         .font(.footnote.monospaced())
                 }
                 .width(min: 80, ideal: 120)
-                TableColumn(Text("network.table.column.duration", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.duration")) { entry in
                     Text(entry.duration.map(entry.durationText(for:)) ?? "-")
                         .font(.footnote)
                 }
                 .width(min: 90, ideal: 110)
-                TableColumn(Text("network.table.column.size", bundle: .module)) { entry in
+                TableColumn(Text("network.table.column.size")) { entry in
                     Group {
                         if let length = entry.encodedBodyLength {
                             Text(entry.sizeText(for: length))
                         } else {
-                            Text("-")
+                            Text("-" as String)
                         }
                     }
                     .font(.footnote.monospaced())
@@ -196,23 +196,23 @@ private struct WINetworkDetailView: View {
             Section {
                 summaryRow
             } header: {
-                Text("network.detail.section.overview", bundle: .module)
+                Text("network.detail.section.overview")
             }
             Section {
                 WINetworkHeaderSection(headers: entry.requestHeaders)
             }header:{
-                Text("network.section.request", bundle: .module)
+                Text("network.section.request")
             }
             Section{
                 WINetworkHeaderSection(headers: entry.responseHeaders)
             }header:{
-                Text("network.section.response", bundle: .module)
+                Text("network.section.response")
             }
             if let error = entry.errorDescription, !error.isEmpty {
                 Section {
                     errorRow(error)
                 } header: {
-                    Text("network.section.error", bundle: .module)
+                    Text("network.section.error")
                 }
             }
         }
@@ -296,7 +296,7 @@ private struct WINetworkHeaderSection: View {
 
     var body: some View {
         if headers.isEmpty {
-            Text("network.headers.empty", bundle: .module)
+            Text("network.headers.empty")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .networkListRowStyle()
@@ -386,11 +386,11 @@ private extension WINetworkEntry {
         }
         switch phase {
         case .failed:
-            return String(localized: "network.status.failed", bundle: .module)
+            return "Failed"
         case .pending:
-            return String(localized: "network.status.pending", bundle: .module)
+            return "Pending"
         case .completed:
-            return String(localized: "network.status.completed", bundle: .module)
+            return "Finished"
         }
     }
 

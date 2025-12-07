@@ -33,7 +33,7 @@ struct WIDOMViewModelTests {
 
         await viewModel.reloadInspector()
 
-        #expect(viewModel.errorMessage == "WebView is not available.")
+        #expect(viewModel.errorMessage == String(localized: "dom.error.webview_unavailable", bundle: .module))
     }
 
     @Test
