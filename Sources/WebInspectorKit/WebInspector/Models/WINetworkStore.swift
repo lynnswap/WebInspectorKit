@@ -19,7 +19,7 @@ struct WINetworkEventPayload {
     let mimeType: String?
     let requestHeaders: WINetworkHeaders
     let responseHeaders: WINetworkHeaders
-    let startTimeSeconds: TimeInterval?
+    let startTimeSeconds: TimeInterval
     let endTimeSeconds: TimeInterval?
     let wallTimeSeconds: TimeInterval?
     let encodedBodyLength: Int?
@@ -50,7 +50,7 @@ struct WINetworkEventPayload {
         if let start = dictionary["startTime"] as? Double {
             self.startTimeSeconds = start / 1000.0
         } else {
-            self.startTimeSeconds = nil
+            self.startTimeSeconds = Date().timeIntervalSince1970
         }
         if let end = dictionary["endTime"] as? Double {
             self.endTimeSeconds = end / 1000.0
@@ -87,7 +87,7 @@ public struct WINetworkEntry: Identifiable, Hashable {
     public internal(set) var mimeType: String?
     public internal(set) var requestHeaders: WINetworkHeaders
     public internal(set) var responseHeaders: WINetworkHeaders
-    public internal(set) var startTimestamp: TimeInterval?
+    public internal(set) var startTimestamp: TimeInterval
     public internal(set) var endTimestamp: TimeInterval?
     public internal(set) var duration: TimeInterval?
     public internal(set) var encodedBodyLength: Int?
@@ -101,7 +101,7 @@ public struct WINetworkEntry: Identifiable, Hashable {
         url: String,
         method: String,
         requestHeaders: WINetworkHeaders,
-        startTimestamp: TimeInterval?,
+        startTimestamp: TimeInterval,
         wallTime: TimeInterval?
     ) {
         self.id = id
@@ -199,8 +199,8 @@ public struct WINetworkEntry: Identifiable, Hashable {
         entry.mimeType = event.mimeType ?? entry.mimeType
         entry.encodedBodyLength = event.encodedBodyLength ?? entry.encodedBodyLength
         entry.endTimestamp = event.endTimeSeconds ?? entry.endTimestamp
-        if let start = entry.startTimestamp, let end = entry.endTimestamp {
-            entry.duration = max(0, end - start)
+        if let end = entry.endTimestamp {
+            entry.duration = max(0, end - entry.startTimestamp)
         }
         entry.errorDescription = event.errorDescription
         entry.requestType = event.requestType ?? entry.requestType
