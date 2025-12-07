@@ -57,6 +57,7 @@ private let logger = Logger(
 #endif
         
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         
         setObservers()
         webView.load(URLRequest(url: url))
@@ -133,11 +134,11 @@ private let logger = Logger(
 
 extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy{
-        logger.debug("\(#function) 読み込み設定（リクエスト前）")
+        logger.debug("\(#function) decide navigation policy (action)")
         return .allow
     }
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        logger.debug("\(#function) 読み込み準備開始")
+        logger.debug("\(#function) provisional navigation started")
         isLoading = true
         estimatedProgress = .zero
     }
@@ -145,14 +146,14 @@ extension BrowserViewModel: WKNavigationDelegate {
         return .allow
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        logger.debug("\(#function) 読み込み開始")
+        logger.debug("\(#function) navigation committed")
     }
     func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?){
-        logger.debug("\(#function) ユーザ認証")
+        logger.debug("\(#function) authentication challenge")
         return(.useCredential, nil)
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError: Error) {
-        logger.debug("\(#function) 読み込み失敗検知")
+        logger.debug("\(#function) provisional navigation failed")
         isLoading = false
         estimatedProgress = .zero
 #if os(iOS)
@@ -160,14 +161,18 @@ extension BrowserViewModel: WKNavigationDelegate {
 #endif
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError: Error) {
-        logger.debug("\(#function) 読み込み失敗")
+        logger.debug("\(#function) navigation failed")
         isLoading = false
 #if os(iOS)
         endRefreshingIfNeeded()
 #endif
     }
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation:WKNavigation!) {
-        logger.debug("\(#function) リダイレクト")
+        logger.debug("\(#function) server redirect for provisional navigation")
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        logger.debug("\(#function) web content process terminated")
+        isLoading = false
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
@@ -176,4 +181,159 @@ extension BrowserViewModel: WKNavigationDelegate {
         endRefreshingIfNeeded()
 #endif
     }
+}
+
+extension BrowserViewModel: WKUIDelegate {
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil, let url = navigationAction.request.url else {
+            return nil
+        }
+        logger.debug("\(#function) handle new window in existing webView: \(url.absoluteString, privacy: .public)")
+        webView.load(URLRequest(url: url))
+        return nil
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        logger.debug("\(#function) WebView closed")
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
+        logger.debug("\(#function) JavaScript alert: \(message, privacy: .public)")
+        await presentJavaScriptAlert(message: message, webView: webView)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        logger.debug("\(#function) JavaScript confirm: \(message, privacy: .public)")
+        return await presentJavaScriptConfirm(message: message, webView: webView)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
+        logger.debug("\(#function) JavaScript prompt: \(prompt, privacy: .public)")
+        return await presentJavaScriptPrompt(prompt: prompt, defaultText: defaultText, webView: webView)
+    }
+}
+
+private extension BrowserViewModel {
+#if os(iOS)
+    @MainActor
+    func presentJavaScriptAlert(message: String, webView: WKWebView) async {
+        guard let presenter = findPresenter(for: webView) else {
+            logger.error("alert presenter not found; ignoring alert")
+            return
+        }
+        await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                continuation.resume()
+            })
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    @MainActor
+    func presentJavaScriptConfirm(message: String, webView: WKWebView) async -> Bool {
+        guard let presenter = findPresenter(for: webView) else {
+            logger.error("confirm presenter not found; denying")
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                continuation.resume(returning: false)
+            })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                continuation.resume(returning: true)
+            })
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    @MainActor
+    func presentJavaScriptPrompt(prompt: String, defaultText: String?, webView: WKWebView) async -> String? {
+        guard let presenter = findPresenter(for: webView) else {
+            logger.error("prompt presenter not found; denying")
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+            alert.addTextField { textField in
+                textField.text = defaultText
+            }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                continuation.resume(returning: nil)
+            })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                continuation.resume(returning: alert.textFields?.first?.text)
+            })
+            presenter.present(alert, animated: true)
+        }
+    }
+
+    func findPresenter(for webView: WKWebView) -> UIViewController? {
+        var responder: UIResponder? = webView
+        while let nextResponder = responder?.next {
+            if let viewController = nextResponder as? UIViewController {
+                return viewController
+            }
+            responder = nextResponder
+        }
+        return webView.window?.rootViewController
+    }
+#else
+    @MainActor
+    func presentJavaScriptAlert(message: String, webView: WKWebView) async {
+        guard let window = webView.window else {
+            logger.error("alert window not found; ignoring alert")
+            return
+        }
+        await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window) { _ in
+                continuation.resume()
+            }
+        }
+    }
+
+    @MainActor
+    func presentJavaScriptConfirm(message: String, webView: WKWebView) async -> Bool {
+        guard let window = webView.window else {
+            logger.error("confirm window not found; denying")
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    @MainActor
+    func presentJavaScriptPrompt(prompt: String, defaultText: String?, webView: WKWebView) async -> String? {
+        guard let window = webView.window else {
+            logger.error("prompt window not found; denying")
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = prompt
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            let textField = NSTextField(string: defaultText ?? "")
+            alert.accessoryView = textField
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: textField.stringValue)
+            }
+        }
+    }
+#endif
 }
