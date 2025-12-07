@@ -11,7 +11,7 @@ enum WINetworkEventKind: String {
 
 struct WINetworkEventPayload {
     let kind: WINetworkEventKind
-    let identifier: String?
+    let identifier: String
     let url: String?
     let method: String?
     let statusCode: Int?
@@ -34,7 +34,7 @@ struct WINetworkEventPayload {
             return nil
         }
         self.kind = kind
-        self.identifier = dictionary["id"] as? String ?? dictionary["requestId"] as? String
+        self.identifier = dictionary["id"] as? String ?? dictionary["requestId"] as? String ?? UUID().uuidString
         self.url = dictionary["url"] as? String
         if let method = dictionary["method"] as? String {
             self.method = method.uppercased()
@@ -72,13 +72,19 @@ struct WINetworkEventPayload {
     }
 }
 
-public struct WINetworkEntry: Identifiable, Hashable {
+@Observable
+public class WINetworkEntry: Identifiable, Equatable, Hashable {
+    
+    // Equatable / Hashable
+    public static func == (lhs: WINetworkEntry, rhs: WINetworkEntry) -> Bool { lhs.id == rhs.id }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    
     public enum Phase: String {
         case pending
         case completed
         case failed
     }
-
+    
     public let id: String
     public internal(set) var url: String
     public internal(set) var method: String
@@ -95,7 +101,7 @@ public struct WINetworkEntry: Identifiable, Hashable {
     public internal(set) var requestType: String?
     public internal(set) var wallTime: TimeInterval?
     public internal(set) var phase: Phase
-
+    
     init(
         id: String,
         url: String,
@@ -120,6 +126,60 @@ public struct WINetworkEntry: Identifiable, Hashable {
         self.errorDescription = nil
         self.requestType = nil
         self.phase = .pending
+    }
+
+    convenience init(startPayload payload: WINetworkEventPayload) {
+        let method = payload.method ?? "GET"
+        let url = payload.url ?? ""
+        self.init(
+            id: payload.identifier,
+            url: url,
+            method: method,
+            requestHeaders: payload.requestHeaders,
+            startTimestamp: payload.startTimeSeconds,
+            wallTime: payload.wallTimeSeconds
+        )
+        requestType = payload.requestType
+    }
+
+    func applyResponsePayload(_ payload: WINetworkEventPayload) {
+        statusCode = payload.statusCode
+        statusText = payload.statusText ?? ""
+        mimeType = payload.mimeType
+        if !payload.responseHeaders.isEmpty {
+            responseHeaders = payload.responseHeaders
+        }
+        if let requestType = payload.requestType {
+            self.requestType = requestType
+        }
+        phase = .pending
+    }
+
+    func applyCompletionPayload(_ payload: WINetworkEventPayload, failed: Bool) {
+        if let statusCode = payload.statusCode {
+            self.statusCode = statusCode
+        }
+        if let statusText = payload.statusText {
+            self.statusText = statusText
+        }
+        if let mimeType = payload.mimeType {
+            self.mimeType = mimeType
+        }
+        if let encodedBodyLength = payload.encodedBodyLength {
+            self.encodedBodyLength = encodedBodyLength
+        }
+        if let endTime = payload.endTimeSeconds {
+            endTimestamp = endTime
+            duration = max(0, endTime - startTimestamp)
+        }
+        if let requestType = payload.requestType {
+            self.requestType = requestType
+        }
+        errorDescription = payload.errorDescription
+        phase = failed ? .failed : .completed
+        if failed && statusCode == nil {
+            statusCode = 0
+        }
     }
 }
 
@@ -165,50 +225,17 @@ public struct WINetworkEntry: Identifiable, Hashable {
     }
 
     private func handleStart(_ event: WINetworkEventPayload) {
-        guard let id = event.identifier else { return }
-        let method = event.method ?? "GET"
-        let url = event.url ?? ""
-        var entry = WINetworkEntry(
-            id: id,
-            url: url,
-            method: method,
-            requestHeaders: event.requestHeaders,
-            startTimestamp: event.startTimeSeconds,
-            wallTime: event.wallTimeSeconds
-        )
-        entry.requestType = event.requestType
-        insertOrReplace(entry)
+        insertOrReplace(WINetworkEntry(startPayload: event))
     }
 
     private func handleResponse(_ event: WINetworkEventPayload) {
-        guard let id = event.identifier, var entry = entry(for: id) else { return }
-        entry.statusCode = event.statusCode
-        entry.statusText = event.statusText ?? ""
-        entry.mimeType = event.mimeType
-        if !event.responseHeaders.isEmpty {
-            entry.responseHeaders = event.responseHeaders
-        }
-        entry.phase = .pending
-        update(entry)
+        guard let entry = entry(for: event.identifier) else { return }
+        entry.applyResponsePayload(event)
     }
 
     private func handleFinish(_ event: WINetworkEventPayload, failed: Bool) {
-        guard let id = event.identifier, var entry = entry(for: id) else { return }
-        entry.statusCode = event.statusCode ?? entry.statusCode
-        entry.statusText = event.statusText ?? entry.statusText
-        entry.mimeType = event.mimeType ?? entry.mimeType
-        entry.encodedBodyLength = event.encodedBodyLength ?? entry.encodedBodyLength
-        entry.endTimestamp = event.endTimeSeconds ?? entry.endTimestamp
-        if let end = entry.endTimestamp {
-            entry.duration = max(0, end - entry.startTimestamp)
-        }
-        entry.errorDescription = event.errorDescription
-        entry.requestType = event.requestType ?? entry.requestType
-        entry.phase = failed ? .failed : .completed
-        if failed && entry.statusCode == nil {
-            entry.statusCode = 0
-        }
-        update(entry)
+        guard let entry = entry(for: event.identifier) else { return }
+        entry.applyCompletionPayload(event, failed: failed)
     }
 
     private func insertOrReplace(_ entry: WINetworkEntry) {
@@ -220,8 +247,4 @@ public struct WINetworkEntry: Identifiable, Hashable {
         }
     }
 
-    private func update(_ entry: WINetworkEntry) {
-        guard let index = indexByID[entry.id], entries.indices.contains(index) else { return }
-        entries[index] = entry
-    }
 }
