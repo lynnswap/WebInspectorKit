@@ -115,8 +115,8 @@ private struct WINetworkTableView: View {
                        let entry = viewModel.store.entry(for:isSelectedEntryID) {
                         WINetworkDetailView(entry: entry)
                             .toolbar{
-                                ToolbarItem(placement:.cancellationAction){
-                                    Button{
+                                ToolbarItem(placement:.primaryAction){
+                                    Button(role:.closeRole){
                                         viewModel.selectedEntryID = nil
                                     }label:{
                                         Image(systemName:"sidebar.trailing")
