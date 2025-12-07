@@ -66,6 +66,7 @@ struct WINetworkAgentModelTests {
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorNetworkUpdate"))
+        #expect(addedHandlerNames.contains("webInspectorNetworkBatchUpdate"))
         #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(controller.userScripts.count == 2)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetwork") })
@@ -82,6 +83,7 @@ struct WINetworkAgentModelTests {
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
         #expect(removedHandlerNames.contains("webInspectorNetworkUpdate"))
+        #expect(removedHandlerNames.contains("webInspectorNetworkBatchUpdate"))
         #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(agent.webView == nil)
     }
@@ -102,6 +104,39 @@ struct WINetworkAgentModelTests {
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+    }
+
+    @Test
+    func applyNetworkPayloadHandlesBatchedResourceTiming() throws {
+        let agent = WINetworkAgentModel()
+        let start: Double = 1_200
+        let end: Double = 2_200
+        let payloads: [[String: Any]] = [[
+            "type": "resourceTiming",
+            "session": "session-1",
+            "requestId": 99,
+            "url": "https://example.com/image.png",
+            "method": "GET",
+            "startTime": start,
+            "endTime": end,
+            "encodedBodyLength": 512,
+            "requestType": "img"
+        ]]
+
+        let batchPayload: [String: Any] = [
+            "session": "session-1",
+            "events": payloads
+        ]
+        let batch = try #require(WINetworkBatchEventPayload(dictionary: batchPayload))
+        agent.store.applyBatchedInsertions(batch)
+
+        let entry = try #require(agent.store.entry(forRequestID: 99, sessionID: "session-1"))
+        #expect(entry.phase == .completed)
+        let expectedDuration = (end - start) / 1000.0
+        let duration = try #require(entry.duration)
+        #expect(abs(duration - expectedDuration) < 0.0001)
+        #expect(entry.encodedBodyLength == 512)
+        #expect(entry.requestType == "img")
     }
 
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {

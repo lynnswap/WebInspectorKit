@@ -5,6 +5,7 @@ enum WINetworkEventKind: String {
     case start
     case response
     case finish
+    case resourceTiming
     case fail
 }
 
@@ -88,6 +89,23 @@ struct WINetworkEventPayload {
             }
         }
         return nil
+    }
+}
+
+struct WINetworkBatchEventPayload {
+    let sessionID: String
+    let events: [WINetworkEventPayload]
+
+    init?(dictionary: [String: Any]) {
+        guard let sessionID = dictionary["session"] as? String, !sessionID.isEmpty else {
+            assertionFailure("WINetworkBatchEventPayload requires session ID")
+            return nil
+        }
+        let eventsArray = dictionary["events"] as? [[String: Any]] ?? []
+        let parsed = eventsArray.compactMap(WINetworkEventPayload.init(dictionary:))
+        guard !parsed.isEmpty else { return nil }
+        self.events = parsed
+        self.sessionID = sessionID
     }
 }
 
@@ -221,6 +239,46 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
     @ObservationIgnored private var indexByEntryID: [UUID: Int] = [:]
 
+    func applyBatchedInsertions(_ batch: WINetworkBatchEventPayload) {
+        let events = batch.events
+        guard !events.isEmpty else { return }
+
+        let bucket = bucket(for: batch.sessionID)
+        var staged: [(requestID: Int, entry: WINetworkEntry)] = []
+        var seenRequestIDs = Set<Int>()
+
+        for event in events {
+            guard event.kind == .resourceTiming else { continue }
+            let requestID = event.requestID
+            // Prevent duplicates within the same batch.
+            if seenRequestIDs.contains(requestID) {
+                continue
+            }
+            // Skip if an entry already exists from a non-batch path.
+            if bucket.entry(for: requestID) != nil {
+                continue
+            }
+
+            let entry = WINetworkEntry(startPayload: event)
+            entry.applyCompletionPayload(event, failed: false)
+            staged.append((requestID, entry))
+            seenRequestIDs.insert(requestID)
+        }
+
+        if staged.isEmpty {
+            return
+        }
+
+        let startIndex = entries.count
+        entries.append(contentsOf: staged.map(\.entry))
+
+        for (offset, stagedEntry) in staged.enumerated() {
+            let newIndex = startIndex + offset
+            bucket.set(stagedEntry.entry, requestID: stagedEntry.requestID)
+            indexByEntryID[stagedEntry.entry.id] = newIndex
+        }
+    }
+
     func applyEvent(_ event: WINetworkEventPayload) {
         switch event.kind {
         case .start:
@@ -229,6 +287,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             handleResponse(event)
         case .finish:
             handleFinish(event, failed: false)
+        case .resourceTiming:
+            handleResourceTiming(event)
         case .fail:
             handleFinish(event, failed: true)
         }
@@ -285,6 +345,17 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         let requestID = event.requestID
         guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
         entry.applyCompletionPayload(event, failed: failed)
+    }
+
+    private func handleResourceTiming(_ event: WINetworkEventPayload) {
+        let requestID = event.requestID
+        let bucket = bucket(for: event.sessionID)
+        if bucket.entry(for: requestID) != nil {
+            return
+        }
+        let entry = WINetworkEntry(startPayload: event)
+        appendEntry(entry, requestID: requestID, in: bucket)
+        entry.applyCompletionPayload(event, failed: false)
     }
 
     private func appendEntry(_ entry: WINetworkEntry, requestID: Int, in bucket: SessionBucket) {

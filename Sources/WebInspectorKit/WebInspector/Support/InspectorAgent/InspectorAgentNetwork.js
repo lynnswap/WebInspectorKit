@@ -81,6 +81,23 @@ const postNetworkEvent = payload => {
     }
 };
 
+const postNetworkBatchEvents = payloads => {
+    if (!networkState.enabled) {
+        return;
+    }
+    if (!Array.isArray(payloads) || !payloads.length) {
+        return;
+    }
+    const batchPayload = {
+        session: networkState.sessionPrefix,
+        events: payloads
+    };
+    try {
+        window.webkit.messageHandlers.webInspectorNetworkBatchUpdate.postMessage(batchPayload);
+    } catch {
+    }
+};
+
 const postNetworkReset = () => {
     try {
         window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
@@ -308,32 +325,47 @@ const shouldTrackResourceEntry = entry => {
 
 const handleResourceEntry = entry => {
     if (!networkState.enabled) {
-        return;
+        return null;
     }
     if (!shouldTrackResourceEntry(entry)) {
-        return;
+        return null;
     }
     if (!networkState.resourceSeen) {
         networkState.resourceSeen = new Set();
     }
     const key = String(entry.name || "") + "::" + entry.startTime;
     if (networkState.resourceSeen.has(key)) {
-        return;
+        return null;
     }
     networkState.resourceSeen.add(key);
 
     const identity = nextRequestIdentity();
     const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
+    const duration = typeof entry.duration === "number" && entry.duration >= 0 ? entry.duration : 0;
+    const endTime = startTime + duration;
     const requestType = entry.initiatorType || "resource";
-    recordStart(identity, entry.name || "", "GET", {}, requestType, startTime, wallTime());
 
     let encoded = entry.transferSize;
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
         encoded = entry.encodedBodySize;
     }
     const status = encoded && encoded > 0 ? 200 : undefined;
-    const endTime = startTime + (entry.duration || 0);
-    recordFinish(identity, encoded, requestType, status, "", undefined, endTime, wallTime());
+    return {
+        type: "resourceTiming",
+        session: identity.session,
+        requestId: identity.requestId,
+        url: entry.name || "",
+        method: "GET",
+        requestHeaders: {},
+        startTime: startTime,
+        endTime: endTime,
+        wallTime: wallTime(),
+        encodedBodyLength: encoded,
+        requestType: requestType,
+        status: status,
+        statusText: "",
+        mimeType: ""
+    };
 };
 
 const installFetchPatch = () => {
@@ -445,8 +477,15 @@ const installResourceObserver = () => {
     try {
         const observer = new PerformanceObserver(list => {
             const entries = list.getEntries();
+            const payloads = [];
             for (let i = 0; i < entries.length; ++i) {
-                handleResourceEntry(entries[i]);
+                const payload = handleResourceEntry(entries[i]);
+                if (payload) {
+                    payloads.push(payload);
+                }
+            }
+            if (payloads.length) {
+                postNetworkBatchEvents(payloads);
             }
         });
         observer.observe({type: "resource", buffered: true});

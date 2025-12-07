@@ -20,6 +20,7 @@ private let networkPresenceProbeScript: String = """
 final class WINetworkAgentModel: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
         case network = "webInspectorNetworkUpdate"
+        case networkBatch = "webInspectorNetworkBatchUpdate"
         case networkReset = "webInspectorNetworkReset"
     }
 
@@ -105,6 +106,8 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
         switch handlerName {
         case .network:
             handleNetworkMessage(message)
+        case .networkBatch:
+            handleNetworkBatchMessage(message)
         case .networkReset:
             handleNetworkReset()
         }
@@ -120,6 +123,14 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
 
     private func handleNetworkReset() {
         store.reset()
+    }
+
+    private func handleNetworkBatchMessage(_ message: WKScriptMessage) {
+        if let dictionary = message.body as? [String: Any],
+           let batch = WINetworkBatchEventPayload(dictionary: dictionary) {
+            store.applyBatchedInsertions(batch)
+            return
+        }
     }
 }
 
