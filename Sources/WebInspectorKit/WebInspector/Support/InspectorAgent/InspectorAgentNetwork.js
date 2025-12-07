@@ -71,12 +71,19 @@ const trackingKey = identity => {
     return idPart != null ? String(idPart) : null;
 };
 
-const safePostMessage = payload => {
-    if (!networkState.enabled && payload.type !== "reset") {
+const postNetworkEvent = payload => {
+    if (!networkState.enabled) {
         return;
     }
     try {
         window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
+    } catch {
+    }
+};
+
+const postNetworkReset = () => {
+    try {
+        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
     } catch {
     }
 };
@@ -142,7 +149,7 @@ const recordStart = (identity, url, method, requestHeaders, requestType, startTi
     if (key) {
         trackedRequests.set(key, {startTime: startTime, wallTime: wall});
     }
-    safePostMessage({
+    postNetworkEvent({
         type: "start",
         session: identity.session,
         requestId: identity.requestId,
@@ -180,7 +187,7 @@ const recordResponse = (identity, response, requestType) => {
     const wall = wallTime();
     const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
-    safePostMessage({
+    postNetworkEvent({
         type: "response",
         session: identity.session,
         requestId: identity.requestId,
@@ -209,7 +216,7 @@ const recordFinish = (
     }
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    safePostMessage({
+    postNetworkEvent({
         type: "finish",
         session: identity.session,
         requestId: identity.requestId,
@@ -239,7 +246,7 @@ const recordFailure = (identity, error, requestType) => {
     } else if (error) {
         description = String(error);
     }
-    safePostMessage({
+    postNetworkEvent({
         type: "fail",
         session: identity.session,
         requestId: identity.requestId,
@@ -470,7 +477,7 @@ export const clearNetworkRecords = () => {
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
-    safePostMessage({type: "reset"});
+    postNetworkReset();
 };
 
 export const installNetworkObserver = () => {

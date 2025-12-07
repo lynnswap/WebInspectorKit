@@ -6,13 +6,12 @@ enum WINetworkEventKind: String {
     case response
     case finish
     case fail
-    case reset
 }
 
 struct WINetworkEventPayload {
     let kind: WINetworkEventKind
-    let sessionID: String?
-    let requestID: Int?
+    let sessionID: String
+    let requestID: Int
     let url: String?
     let method: String?
     let statusCode: Int?
@@ -30,19 +29,14 @@ struct WINetworkEventPayload {
     init?(dictionary: [String: Any]) {
         guard
             let type = dictionary["type"] as? String,
-            let kind = WINetworkEventKind(rawValue: type)
+            let kind = WINetworkEventKind(rawValue: type),
+            let requestID = Self.normalizedRequestIdentifier(from: dictionary["requestId"])
         else {
             return nil
         }
         self.kind = kind
-        let sessionID = dictionary["session"] as? String
-        self.sessionID = sessionID
-        self.requestID = Self.normalizedRequestIdentifier(from: dictionary["requestId"])
-
-        if kind != .reset && requestID == nil {
-            assertionFailure("Network event \(kind.rawValue) missing requestID")
-            return nil
-        }
+        self.sessionID = dictionary["session"] as? String ?? ""
+        self.requestID = requestID
 
         self.url = dictionary["url"] as? String
         if let method = dictionary["method"] as? String {
@@ -112,9 +106,9 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     
     nonisolated public let id: UUID
     
-    public let sessionID: String?
-    public let requestID: Int?
-    public let createdAt:Date
+    public let sessionID: String
+    public let requestID: Int
+    public let createdAt: Date
     
     
     public internal(set) var url: String
@@ -134,8 +128,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var phase: Phase
     
     init(
-        sessionID: String?,
-        requestID: Int?,
+        sessionID: String,
+        requestID: Int,
         url: String,
         method: String,
         requestHeaders: WINetworkHeaders,
@@ -229,8 +223,6 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
 
     func applyEvent(_ event: WINetworkEventPayload) {
         switch event.kind {
-        case .reset:
-            reset()
         case .start:
             handleStart(event)
         case .response:
@@ -256,8 +248,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         isRecording = enabled
     }
 
-    public func entry(forRequestID requestID: Int?, sessionID: String?) -> WINetworkEntry? {
-        guard let requestID else { return nil }
+    public func entry(forRequestID requestID: Int, sessionID: String?) -> WINetworkEntry? {
         let bucketKey = sessionKey(for: sessionID)
         guard let bucket = sessionBuckets[bucketKey],
               let entry = bucket.entry(for: requestID) else {
@@ -276,7 +267,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     private func handleStart(_ event: WINetworkEventPayload) {
-        guard let requestID = event.requestID else { return }
+        let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
         if bucket.entry(for: requestID) != nil {
             return
@@ -285,13 +276,13 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     private func handleResponse(_ event: WINetworkEventPayload) {
-        guard let requestID = event.requestID else { return }
+        let requestID = event.requestID
         guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
         entry.applyResponsePayload(event)
     }
 
     private func handleFinish(_ event: WINetworkEventPayload, failed: Bool) {
-        guard let requestID = event.requestID else { return }
+        let requestID = event.requestID
         guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
         entry.applyCompletionPayload(event, failed: failed)
     }

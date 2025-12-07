@@ -20,6 +20,7 @@ private let networkPresenceProbeScript: String = """
 final class WINetworkAgentModel: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
         case network = "webInspectorNetworkUpdate"
+        case networkReset = "webInspectorNetworkReset"
     }
 
     weak var webView: WKWebView?
@@ -104,6 +105,8 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
         switch handlerName {
         case .network:
             handleNetworkMessage(message)
+        case .networkReset:
+            handleNetworkReset()
         }
     }
 
@@ -113,6 +116,10 @@ extension WINetworkAgentModel: WKScriptMessageHandler {
             return
         }
         store.applyEvent(event)
+    }
+
+    private func handleNetworkReset() {
+        store.reset()
     }
 }
 
