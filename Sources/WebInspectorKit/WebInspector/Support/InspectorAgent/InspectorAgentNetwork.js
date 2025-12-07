@@ -2,6 +2,7 @@ const networkState = {
     enabled: true,
     installed: false,
     nextId: 1,
+    sessionPrefix: generateSessionPrefix(),
     resourceObserver: null,
     resourceSeen: null
 };
@@ -40,9 +41,21 @@ function wallTime() {
     return Date.now();
 }
 
+function generateSessionPrefix() {
+    try {
+        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+        }
+    } catch {
+    }
+    var time = Date.now().toString(36);
+    var random = Math.random().toString(36).slice(2, 10);
+    return time + "-" + random;
+}
+
 function nextRequestId() {
     var id = networkState.nextId++;
-    return "net_" + id.toString(36);
+    return networkState.sessionPrefix + "-net_" + id.toString(36);
 }
 
 function safePostMessage(payload) {
