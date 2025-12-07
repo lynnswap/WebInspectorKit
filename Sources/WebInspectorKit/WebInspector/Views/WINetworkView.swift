@@ -64,7 +64,7 @@ private struct WINetworkTableView: View {
     var body: some View {
         GeometryReader{ proxy in
             Table(
-                viewModel.store.entries.sorted(using: SortDescriptor(\.createdAt, order: .reverse)),
+                viewModel.displayEntries,
                 selection: viewModel.tableSelection
             ) {
                 TableColumn(Text("network.table.column.request", bundle: .module)) { entry in
@@ -137,7 +137,7 @@ private struct WINetworkListView: View {
     var body:some View{
         List(selection: viewModel.tableSelection) {
             ForEach(
-                viewModel.store.entries.sorted(using: SortDescriptor(\.createdAt, order: .reverse)),
+                viewModel.displayEntries,
             ) { entry in
                 WINetworkRow(entry: entry)
                     .contentShape(.rect)

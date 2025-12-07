@@ -17,6 +17,13 @@ public final class WINetworkViewModel {
     public var store: WINetworkStore {
         session.store
     }
+    public var sortDescriptors: [SortDescriptor<WINetworkEntry>] = [
+        SortDescriptor<WINetworkEntry>(\.createdAt, order: .reverse),
+        SortDescriptor<WINetworkEntry>(\.requestID, order: .reverse)
+    ]
+    public var displayEntries: [WINetworkEntry] {
+        store.entries.sorted(using: sortDescriptors)
+    }
 
     public init(session: WINetworkSession = WINetworkSession()) {
         self.session = session
