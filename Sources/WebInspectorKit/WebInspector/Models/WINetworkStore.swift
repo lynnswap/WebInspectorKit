@@ -27,6 +27,12 @@ protocol NetworkEventProtocol {
     var wallTimeSeconds: TimeInterval? { get }
 }
 
+public struct WINetworkBody: Sendable {
+    public let body: String
+    public let isBase64Encoded: Bool
+    public let isTruncated: Bool
+}
+
 struct HTTPNetworkEvent: NetworkEventProtocol {
     let kind: HTTPNetworkEventKind
     let sessionID: String
@@ -42,12 +48,14 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     let endTimeSeconds: TimeInterval?
     let wallTimeSeconds: TimeInterval?
     let encodedBodyLength: Int?
+    let decodedBodySize: Int?
     let errorDescription: String?
     let requestType: String?
     let requestBody: String?
     let requestBodyIsBase64: Bool
     let requestBodyTruncated: Bool
     let requestBodySize: Int?
+    let requestBodyBytesSent: Int?
     let responseBody: String?
     let responseBodyIsBase64: Bool
     let responseBodyTruncated: Bool
@@ -107,12 +115,18 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
             self.wallTimeSeconds = nil
         }
         self.encodedBodyLength = dictionary["encodedBodyLength"] as? Int
+        self.decodedBodySize = dictionary["decodedBodySize"] as? Int
         if let error = dictionary["error"] as? String, !error.isEmpty {
             self.errorDescription = error
         } else {
             self.errorDescription = nil
         }
         self.requestType = dictionary["requestType"] as? String
+        if let bytesSent = dictionary["requestBodyBytesSent"] as? Int {
+            self.requestBodyBytesSent = bytesSent
+        } else {
+            self.requestBodyBytesSent = dictionary["requestBodySize"] as? Int
+        }
     }
 
     static func normalizedRequestIdentifier(from value: Any?) -> Int? {
@@ -255,8 +269,10 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var endTimestamp: TimeInterval?
     public internal(set) var duration: TimeInterval?
     public internal(set) var encodedBodyLength: Int?
+    public internal(set) var decodedBodyLength: Int?
     public internal(set) var errorDescription: String?
     public internal(set) var requestType: String?
+    public internal(set) var requestBodyBytesSent: Int?
     public internal(set) var wallTime: TimeInterval?
     public internal(set) var phase: Phase
     public internal(set) var requestBody: String?
@@ -295,8 +311,10 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.endTimestamp = nil
         self.duration = nil
         self.encodedBodyLength = nil
+        self.decodedBodyLength = nil
         self.errorDescription = nil
         self.requestType = nil
+        self.requestBodyBytesSent = nil
         self.phase = .pending
         self.requestBody = nil
         self.requestBodyIsBase64 = false
@@ -326,6 +344,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         requestBodyIsBase64 = payload.requestBodyIsBase64
         requestBodyTruncated = payload.requestBodyTruncated
         requestBodySize = payload.requestBodySize
+        requestBodyBytesSent = payload.requestBodyBytesSent
     }
 
     func applyResponsePayload(_ payload: HTTPNetworkEvent) {
@@ -361,6 +380,9 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
         if let encodedBodyLength = payload.encodedBodyLength {
             self.encodedBodyLength = encodedBodyLength
+        }
+        if let decodedBodySize = payload.decodedBodySize {
+            self.decodedBodyLength = decodedBodySize
         }
         if let endTime = payload.endTimeSeconds {
             endTimestamp = endTime
@@ -534,6 +556,14 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
             return nil
         }
         return entries[index]
+    }
+
+    func updateResponseBody(sessionID: String?, requestID: Int, body: WINetworkBody) {
+        guard let entry = entry(forRequestID: requestID, sessionID: sessionID) else { return }
+        entry.responseBody = body.body
+        entry.responseBodyIsBase64 = body.isBase64Encoded
+        entry.responseBodyTruncated = body.isTruncated
+        entry.responseBodySize = body.body.count
     }
 
     private func handleStart(_ event: HTTPNetworkEvent) {

@@ -33,7 +33,8 @@ const recordStart = (
         requestBody: requestBody ? requestBody.body : undefined,
         requestBodyBase64: requestBody ? requestBody.base64Encoded : undefined,
         requestBodySize: requestBody ? requestBody.size : undefined,
-        requestBodyTruncated: requestBody ? requestBody.truncated : undefined
+        requestBodyTruncated: requestBody ? requestBody.truncated : undefined,
+        requestBodyBytesSent: requestBody ? requestBody.size : undefined
     });
 };
 
@@ -104,6 +105,7 @@ const recordFinish = (
         status: status,
         statusText: statusText,
         mimeType: mimeType,
+        decodedBodySize: responseBody ? responseBody.size : undefined,
         responseBody: responseBody ? responseBody.body : undefined,
         responseBodyBase64: responseBody ? responseBody.base64Encoded : undefined,
         responseBodySize: responseBody ? responseBody.size : undefined,
@@ -117,7 +119,8 @@ const recordFinish = (
     if (bodyKey && responseBody && typeof responseBody.body === "string") {
         responseBodies.set(bodyKey, {
             base64Encoded: !!responseBody.base64Encoded,
-            body: responseBody.body
+            body: typeof responseBody.storageBody === "string" ? responseBody.storageBody : responseBody.body,
+            truncated: !!responseBody.storageTruncated
         });
     }
 };

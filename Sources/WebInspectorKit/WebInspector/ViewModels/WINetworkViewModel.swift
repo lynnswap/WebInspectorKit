@@ -30,6 +30,10 @@ public final class WINetworkViewModel {
         session.setRecording(enabled)
     }
 
+    public func fetchResponseBody(for entry: WINetworkEntry) async {
+        await session.fetchResponseBody(for: entry)
+    }
+
     public func clearNetworkLogs() {
         selectedEntryID = nil
         session.clearNetworkLogs()

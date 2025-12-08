@@ -4426,6 +4426,578 @@
           }
         }
       }
+    },
+    "network.section.body": {
+      "comment": "Section title for response body.",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Body"
+          }
+        },
+        "en-GB": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Body"
+          }
+        },
+        "en-IN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Body"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "es-419": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "fr-CA": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "ro": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Body"
+          }
+        }
+      }
+    },
+    "network.body.fetch": {
+      "comment": "Action to fetch full response body.",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fetch body"
+          }
+        },
+        "en-GB": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fetch body"
+          }
+        },
+        "en-IN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fetch body"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "es-419": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "fr-CA": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "ro": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Fetch body"
+          }
+        }
+      }
+    },
+    "network.body.truncated": {
+      "comment": "Notice shown when response body is truncated.",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "en-GB": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "en-IN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "es-419": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "fr-CA": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "ro": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body is truncated. Fetch to load more."
+          }
+        }
+      }
+    },
+    "network.body.unavailable": {
+      "comment": "Placeholder when no response body is captured.",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body not captured."
+          }
+        },
+        "en-GB": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body not captured."
+          }
+        },
+        "en-IN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Response body not captured."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "es-419": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "fr-CA": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "pt-PT": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "ro": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Response body not captured."
+          }
+        }
+      }
     }
   },
   "version": "1.1"

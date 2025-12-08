@@ -103,6 +103,7 @@ struct WINetworkStoreTests {
         let entry = try #require(store.entry(forRequestID: 10, sessionID: nil))
         #expect(entry.requestBody == #"{"hello":"world"}"#)
         #expect(entry.requestBodyIsBase64 == false)
+        #expect(entry.requestBodyBytesSent == 17)
         #expect(entry.responseBody == "ok")
         #expect(entry.responseBodyIsBase64 == false)
         #expect(entry.responseBodyTruncated == false)

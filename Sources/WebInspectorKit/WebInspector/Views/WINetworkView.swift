@@ -115,7 +115,7 @@ private struct WINetworkTableView: View {
                 NavigationStack {
                     if let isSelectedEntryID = viewModel.selectedEntryID,
                        let entry = viewModel.store.entry(forEntryID: isSelectedEntryID) {
-                        WINetworkDetailView(entry: entry)
+                        WINetworkDetailView(entry: entry, viewModel: viewModel)
                             .toolbar{
                                 ToolbarItem(placement:.primaryAction){
                                     Button(role:.closeRole){
@@ -152,7 +152,7 @@ private struct WINetworkListView: View {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = viewModel.store.entry(forEntryID:isSelectedEntryID) {
-                    WINetworkDetailView(entry: entry)
+                    WINetworkDetailView(entry: entry, viewModel: viewModel)
                         .scrollContentBackground(.hidden)
                 }
             }
@@ -190,6 +190,8 @@ private struct WINetworkRow: View {
 
 private struct WINetworkDetailView: View {
     let entry: WINetworkEntry
+    let viewModel: WINetworkViewModel
+    @State private var isFetchingBody = false
 
     var body: some View {
         List {
@@ -207,6 +209,13 @@ private struct WINetworkDetailView: View {
                 WINetworkHeaderSection(headers: entry.responseHeaders)
             }header:{
                 Text("network.section.response")
+            }
+            if shouldShowResponseBody {
+                Section {
+                    responseBodyContent
+                } header: {
+                    Text("network.section.body")
+                }
             }
             if let error = entry.errorDescription, !error.isEmpty {
                 Section {
@@ -288,6 +297,61 @@ private struct WINetworkDetailView: View {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
+    }
+
+    private var shouldShowResponseBody: Bool {
+        entry.responseBody != nil || entry.responseBodyTruncated || entry.responseBodySize != nil
+    }
+
+    @ViewBuilder
+    private var responseBodyContent: some View {
+        if let body = entry.responseBody {
+            Text(body)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(12)
+                .networkListRowStyle()
+        } else {
+            Text("network.body.unavailable")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .networkListRowStyle()
+        }
+        if entry.responseBodyTruncated || (entry.responseBody == nil && entry.responseBodySize != nil) {
+            Button {
+                fetchFullBody()
+            } label: {
+                if isFetchingBody {
+                    ProgressView()
+                } else {
+                    Label {
+                        Text("network.body.fetch")
+                    } icon: {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isFetchingBody)
+            .networkListRowStyle()
+            if entry.responseBodyTruncated {
+                Text("network.body.truncated")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .networkListRowStyle()
+            }
+        }
+    }
+
+    private func fetchFullBody() {
+        guard !isFetchingBody else { return }
+        isFetchingBody = true
+        Task {
+            await viewModel.fetchResponseBody(for: entry)
+            await MainActor.run {
+                isFetchingBody = false
+            }
+        }
     }
 }
 

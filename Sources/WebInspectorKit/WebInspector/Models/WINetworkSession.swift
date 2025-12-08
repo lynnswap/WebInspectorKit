@@ -35,4 +35,11 @@ public final class WINetworkSession: WIPageSession {
     public func clearNetworkLogs() {
         networkAgent.clearNetworkLogs()
     }
+
+    public func fetchResponseBody(for entry: WINetworkEntry) async {
+        guard let body = await networkAgent.fetchResponseBody(requestID: entry.requestID, sessionID: entry.sessionID) else {
+            return
+        }
+        store.updateResponseBody(sessionID: entry.sessionID, requestID: entry.requestID, body: body)
+    }
 }

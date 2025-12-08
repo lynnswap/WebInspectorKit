@@ -129,7 +129,7 @@ const installWebSocketPatch = () => {
 };
 const postWebSocketEvent = payload => {
     if (!networkState.enabled) {
-        queuedEvents.push({kind: "websocket", payload});
+        enqueueEvent({kind: "websocket", payload});
         return;
     }
     try {

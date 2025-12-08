@@ -89,6 +89,39 @@ extension WINetworkPageAgent {
     func didClearPageWebView() {
         store.reset()
     }
+
+    func fetchResponseBody(requestID: Int, sessionID: String?) async -> WINetworkBody? {
+        guard let webView else { return nil }
+        let sessionArgument: Any = sessionID ?? NSNull()
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return (function(requestId, session) {
+                    if (!window.webInspectorNetwork || typeof window.webInspectorNetwork.getResponseBody !== "function") {
+                        return null;
+                    }
+                    return window.webInspectorNetwork.getResponseBody(requestId, session);
+                })(requestId, session);
+                """,
+                arguments: [
+                    "requestId": requestID,
+                    "session": sessionArgument
+                ],
+                in: nil,
+                contentWorld: .page
+            )
+            guard let dictionary = result as? [String: Any],
+                  let body = dictionary["body"] as? String else {
+                return nil
+            }
+            let base64 = dictionary["base64Encoded"] as? Bool ?? dictionary["base64encoded"] as? Bool ?? false
+            let truncated = dictionary["truncated"] as? Bool ?? false
+            return WINetworkBody(body: body, isBase64Encoded: base64, isTruncated: truncated)
+        } catch {
+            networkLogger.error("getResponseBody failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
 }
 
 extension WINetworkPageAgent: WKScriptMessageHandler {

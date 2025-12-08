@@ -53,11 +53,20 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
-const MAX_BODY_LENGTH = 64 * 1024;
+const MAX_INLINE_BODY_LENGTH = 64 * 1024;
+const MAX_STORED_BODY_LENGTH = 512 * 1024;
+const MAX_QUEUED_EVENTS = 500;
+
+const enqueueEvent = event => {
+    if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
+        queuedEvents.shift();
+    }
+    queuedEvents.push(event);
+};
 
 const postHTTPEvent = payload => {
     if (!networkState.enabled) {
-        queuedEvents.push({kind: "http", payload});
+        enqueueEvent({kind: "http", payload});
         return;
     }
     try {
@@ -68,7 +77,7 @@ const postHTTPEvent = payload => {
 
 const postHTTPBatchEvents = payloads => {
     if (!networkState.enabled) {
-        queuedEvents.push({kind: "httpBatch", payloads});
+        enqueueEvent({kind: "httpBatch", payloads});
         return;
     }
     if (!Array.isArray(payloads) || !payloads.length) {
@@ -155,15 +164,19 @@ const parseRawHeaders = raw => {
     return headers;
 };
 
-const serializeTextBody = text => {
+const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, storedLimit = MAX_STORED_BODY_LENGTH) => {
     const stringified = typeof text === "string" ? text : String(text ?? "");
-    const truncated = stringified.length > MAX_BODY_LENGTH;
-    const body = truncated ? stringified.slice(0, MAX_BODY_LENGTH) : stringified;
+    const inlineTruncated = stringified.length > inlineLimit;
+    const body = inlineTruncated ? stringified.slice(0, inlineLimit) : stringified;
+    const storedTruncated = stringified.length > storedLimit;
+    const storageBody = storedTruncated ? stringified.slice(0, storedLimit) : stringified;
     return {
         body: body,
         base64Encoded: false,
-        truncated: truncated,
-        size: stringified.length
+        truncated: inlineTruncated,
+        size: stringified.length,
+        storageBody: storageBody,
+        storageTruncated: storedTruncated
     };
 };
 
