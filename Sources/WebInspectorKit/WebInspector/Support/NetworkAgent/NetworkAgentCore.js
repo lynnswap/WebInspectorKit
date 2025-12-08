@@ -1,162 +1,14 @@
-const now = () => {
-    if (typeof performance !== "undefined" && typeof performance.now === "function") {
-        return performance.now();
-    }
-    return Date.now();
-};
-
-const wallTime = () => Date.now();
-
-const generateSessionPrefix = () => {
-    try {
-        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-            return crypto.randomUUID();
-        }
-    } catch {
-    }
-    const time = Date.now().toString(36);
-    const random = Math.random().toString(36).slice(2, 10);
-    return time + "-" + random;
-};
-
-const networkState = {
-    enabled: true,
-    installed: false,
-    nextId: 1,
-    sessionPrefix: generateSessionPrefix(),
-    resourceObserver: null,
-    resourceSeen: null
-};
-
-const trackedRequests = new Map();
-const trackedResourceTypes = new Set([
-    "img",
-    "image",
-    "media",
-    "video",
-    "audio",
-    "beacon",
-    "font",
-    "script",
-    "link",
-    "style",
-    "css",
-    "preload",
-    "prefetch",
-    "iframe",
-    "frame",
-    "embed",
-    "object",
-    "track",
-    "manifest"
-]);
-
-const nextRequestIdentity = () => {
-    const requestId = networkState.nextId;
-    networkState.nextId += 1;
-    return {
-        requestId: requestId,
-        session: networkState.sessionPrefix
-    };
-};
-
-const trackingKey = identity => {
-    if (!identity) {
-        return null;
-    }
-    const idPart = typeof identity.requestId === "number" ? identity.requestId : identity.id;
-    if (identity.session && idPart != null) {
-        return identity.session + "::" + idPart;
-    }
-    return idPart != null ? String(idPart) : null;
-};
-
-const postNetworkEvent = payload => {
-    if (!networkState.enabled) {
-        return;
-    }
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
-    } catch {
-    }
-};
-
-const postNetworkBatchEvents = payloads => {
-    if (!networkState.enabled) {
-        return;
-    }
-    if (!Array.isArray(payloads) || !payloads.length) {
-        return;
-    }
-    const batchPayload = {
-        session: networkState.sessionPrefix,
-        events: payloads
-    };
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkBatchUpdate.postMessage(batchPayload);
-    } catch {
-    }
-};
-
-const postNetworkReset = () => {
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
-    } catch {
-    }
-};
-
-const normalizeHeaders = headers => {
-    const result = {};
-    if (!headers) {
-        return result;
-    }
-    try {
-        if (typeof Headers !== "undefined" && headers instanceof Headers && headers.forEach) {
-            headers.forEach((value, key) => {
-                result[String(key).toLowerCase()] = String(value);
-            });
-            return result;
-        }
-        if (Array.isArray(headers)) {
-            headers.forEach(entry => {
-                if (Array.isArray(entry) && entry.length >= 2) {
-                    const name = String(entry[0] || "").toLowerCase();
-                    const value = String(entry[1] || "");
-                    result[name] = value;
-                }
-            });
-            return result;
-        }
-        if (typeof headers === "object") {
-            Object.keys(headers).forEach(key => {
-                result[String(key).toLowerCase()] = String(headers[key]);
-            });
-        }
-    } catch {
-    }
-    return result;
-};
-
-const parseRawHeaders = raw => {
-    const headers = {};
-    if (!raw || typeof raw !== "string") {
-        return headers;
-    }
-    raw.split(/\r?\n/).forEach(line => {
-        const index = line.indexOf(":");
-        if (index <= 0) {
-            return;
-        }
-        const name = line.slice(0, index).trim().toLowerCase();
-        const value = line.slice(index + 1).trim();
-        if (name) {
-            headers[name] = value;
-        }
-    });
-    return headers;
-};
-
-const recordStart = (identity, url, method, requestHeaders, requestType, startTimeOverride, wallTimeOverride) => {
+// Network agent core logic
+const recordStart = (
+    identity,
+    url,
+    method,
+    requestHeaders,
+    requestType,
+    startTimeOverride,
+    wallTimeOverride,
+    requestBody
+) => {
     if (!identity) {
         return;
     }
@@ -175,7 +27,11 @@ const recordStart = (identity, url, method, requestHeaders, requestType, startTi
         requestHeaders: requestHeaders || {},
         startTime: startTime,
         wallTime: wall,
-        requestType: requestType
+        requestType: requestType,
+        requestBody: requestBody ? requestBody.body : undefined,
+        requestBodyBase64: requestBody ? requestBody.base64Encoded : undefined,
+        requestBodySize: requestBody ? requestBody.size : undefined,
+        requestBodyTruncated: requestBody ? requestBody.truncated : undefined
     });
 };
 
@@ -216,6 +72,7 @@ const recordResponse = (identity, response, requestType) => {
         wallTime: wall,
         requestType: requestType
     });
+    return mimeType;
 };
 
 const recordFinish = (
@@ -226,7 +83,8 @@ const recordFinish = (
     statusText,
     mimeType,
     endTimeOverride,
-    wallTimeOverride
+    wallTimeOverride,
+    responseBody
 ) => {
     if (!identity) {
         return;
@@ -243,11 +101,22 @@ const recordFinish = (
         requestType: requestType,
         status: status,
         statusText: statusText,
-        mimeType: mimeType
+        mimeType: mimeType,
+        responseBody: responseBody ? responseBody.body : undefined,
+        responseBodyBase64: responseBody ? responseBody.base64Encoded : undefined,
+        responseBodySize: responseBody ? responseBody.size : undefined,
+        responseBodyTruncated: responseBody ? responseBody.truncated : undefined
     });
     const key = trackingKey(identity);
     if (key) {
         trackedRequests.delete(key);
+    }
+    const bodyKey = trackingKey(identity);
+    if (bodyKey && responseBody && typeof responseBody.body === "string") {
+        responseBodies.set(bodyKey, {
+            base64Encoded: !!responseBody.base64Encoded,
+            body: responseBody.body
+        });
     }
 };
 
@@ -278,95 +147,6 @@ const recordFailure = (identity, error, requestType) => {
     }
 };
 
-const captureContentLength = response => {
-    try {
-        let value = null;
-        if (response && response.headers && typeof response.headers.get === "function") {
-            value = response.headers.get("content-length");
-        } else if (response && typeof response.getResponseHeader === "function") {
-            value = response.getResponseHeader("content-length");
-        }
-        if (!value) {
-            return undefined;
-        }
-        const length = parseInt(value, 10);
-        if (Number.isFinite(length) && length >= 0) {
-            return length;
-        }
-    } catch {
-    }
-    return undefined;
-};
-
-const shouldTrackResourceEntry = entry => {
-    if (!entry) {
-        return false;
-    }
-    const initiator = String(entry.initiatorType || "").toLowerCase();
-    if (!initiator) {
-        return false;
-    }
-    if (initiator === "fetch" || initiator === "xmlhttprequest") {
-        return false;
-    }
-    if (trackedResourceTypes.has(initiator)) {
-        return true;
-    }
-    if (initiator === "other") {
-        if (typeof entry.name === "string") {
-            const lower = entry.name.toLowerCase();
-            if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
-                return true;
-            }
-        }
-    }
-    return false;
-};
-
-const handleResourceEntry = entry => {
-    if (!networkState.enabled) {
-        return null;
-    }
-    if (!shouldTrackResourceEntry(entry)) {
-        return null;
-    }
-    if (!networkState.resourceSeen) {
-        networkState.resourceSeen = new Set();
-    }
-    const key = String(entry.name || "") + "::" + entry.startTime;
-    if (networkState.resourceSeen.has(key)) {
-        return null;
-    }
-    networkState.resourceSeen.add(key);
-
-    const identity = nextRequestIdentity();
-    const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
-    const duration = typeof entry.duration === "number" && entry.duration >= 0 ? entry.duration : 0;
-    const endTime = startTime + duration;
-    const requestType = entry.initiatorType || "resource";
-
-    let encoded = entry.transferSize;
-    if (!(Number.isFinite(encoded) && encoded >= 0)) {
-        encoded = entry.encodedBodySize;
-    }
-    const status = encoded && encoded > 0 ? 200 : undefined;
-    return {
-        type: "resourceTiming",
-        session: identity.session,
-        requestId: identity.requestId,
-        url: entry.name || "",
-        method: "GET",
-        requestHeaders: {},
-        startTime: startTime,
-        endTime: endTime,
-        wallTime: wallTime(),
-        encodedBodyLength: encoded,
-        requestType: requestType,
-        status: status,
-        statusText: "",
-        mimeType: ""
-    };
-};
 
 const installFetchPatch = () => {
     if (typeof window.fetch !== "function") {
@@ -377,24 +157,57 @@ const installFetchPatch = () => {
         return;
     }
     const patched = async function() {
-        const shouldTrack = networkState.enabled;
+        const shouldTrack = true;
         const args = Array.from(arguments);
         const [input, init = {}] = args;
         const method = init.method || (input && input.method) || "GET";
         const identity = shouldTrack ? nextRequestIdentity() : null;
         const url = typeof input === "string" ? input : (input && input.url) || "";
+        if (shouldIgnoreUrl(url)) {
+            return nativeFetch.apply(window, args);
+        }
         const headers = normalizeHeaders(init.headers || (input && input.headers));
+        const requestBodyInfo = serializeRequestBody(init.body);
 
         if (shouldTrack && identity) {
-            recordStart(identity, url, String(method).toUpperCase(), headers, "fetch");
+            recordStart(
+                identity,
+                url,
+                String(method).toUpperCase(),
+                headers,
+                "fetch",
+                undefined,
+                undefined,
+                requestBodyInfo
+            );
         }
 
         try {
             const response = await nativeFetch.apply(window, args);
+            let mimeType;
+            let responseBodyInfo = null;
             if (shouldTrack && identity) {
-                recordResponse(identity, response, "fetch");
-                const encodedLength = captureContentLength(response);
-                recordFinish(identity, encodedLength, "fetch");
+                mimeType = recordResponse(identity, response, "fetch");
+                try {
+                    responseBodyInfo = await captureResponseBody(response, mimeType);
+                } catch {
+                    responseBodyInfo = null;
+                }
+                const encodedLength = estimatedEncodedLength(
+                    captureContentLength(response),
+                    responseBodyInfo
+                );
+                recordFinish(
+                    identity,
+                    encodedLength,
+                    "fetch",
+                    response && typeof response.status === "number" ? response.status : undefined,
+                    response && typeof response.statusText === "string" ? response.statusText : undefined,
+                    mimeType,
+                    undefined,
+                    undefined,
+                    responseBodyInfo
+                );
             }
             return response;
         } catch (error) {
@@ -437,11 +250,24 @@ const installXHRPatch = () => {
     };
 
     XMLHttpRequest.prototype.send = function() {
-        const shouldTrack = networkState.enabled && !!this.__wiNetwork;
+        const shouldTrack = !!this.__wiNetwork;
         const identity = shouldTrack ? nextRequestIdentity() : null;
         const info = this.__wiNetwork;
         if (shouldTrack && identity && info) {
-            recordStart(identity, info.url, info.method, info.headers || {}, "xhr");
+            if (shouldIgnoreUrl(info.url)) {
+                return originalSend.apply(this, arguments);
+            }
+            info.requestBody = serializeRequestBody(arguments[0]);
+            recordStart(
+                identity,
+                info.url,
+                info.method,
+                info.headers || {},
+                "xhr",
+                undefined,
+                undefined,
+                info.requestBody
+            );
             this.addEventListener("readystatechange", function() {
                 if (this.readyState === 2 && identity) {
                     recordResponse(identity, this, "xhr");
@@ -449,8 +275,22 @@ const installXHRPatch = () => {
             }, false);
             this.addEventListener("load", function() {
                 if (identity) {
-                    const length = captureContentLength(this);
-                    recordFinish(identity, length, "xhr");
+                    const responseBody = captureXHRResponseBody(this);
+                    const length = estimatedEncodedLength(
+                        captureContentLength(this),
+                        responseBody
+                    );
+                    recordFinish(
+                        identity,
+                        length,
+                        "xhr",
+                        this.status,
+                        this.statusText,
+                        this.getResponseHeader ? this.getResponseHeader("content-type") : undefined,
+                        undefined,
+                        undefined,
+                        responseBody
+                    );
                 }
             }, false);
             this.addEventListener("error", function(event) {
@@ -508,7 +348,11 @@ const ensureInstalled = () => {
 };
 
 export const setNetworkLoggingEnabled = enabled => {
+    const wasEnabled = networkState.enabled;
     networkState.enabled = !!enabled;
+    if (networkState.enabled && !wasEnabled) {
+        flushQueuedEvents();
+    }
 };
 
 export const clearNetworkRecords = () => {
@@ -516,9 +360,19 @@ export const clearNetworkRecords = () => {
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
+    responseBodies.clear();
+    queuedEvents.splice(0, queuedEvents.length);
     postNetworkReset();
 };
 
 export const installNetworkObserver = () => {
     ensureInstalled();
+};
+
+export const getResponseBody = (requestId, session) => {
+    const key = (session || networkState.sessionPrefix) + "::" + String(requestId);
+    if (!responseBodies.has(key)) {
+        return null;
+    }
+    return responseBodies.get(key);
 };

@@ -69,4 +69,42 @@ struct WINetworkStoreTests {
         #expect(payload.sessionID == "wi_session_123")
         #expect(payload.requestID == 42)
     }
+
+    @Test
+    func storesRequestAndResponseBodies() throws {
+        let store = WINetworkStore()
+
+        let start = try #require(
+            NetworkEvent(dictionary: [
+                "type": "start",
+                "requestId": 10,
+                "url": "https://example.com/api",
+                "method": "POST",
+                "requestBody": #"{"hello":"world"}"#,
+                "requestBodyBase64": false,
+                "requestBodyTruncated": false,
+                "requestBodySize": 17
+            ])
+        )
+        store.applyEvent(start)
+
+        let finish = try #require(
+            NetworkEvent(dictionary: [
+                "type": "finish",
+                "requestId": 10,
+                "responseBody": "ok",
+                "responseBodyBase64": false,
+                "responseBodyTruncated": false,
+                "responseBodySize": 2
+            ])
+        )
+        store.applyEvent(finish)
+
+        let entry = try #require(store.entry(forRequestID: 10, sessionID: nil))
+        #expect(entry.requestBody == #"{"hello":"world"}"#)
+        #expect(entry.requestBodyIsBase64 == false)
+        #expect(entry.responseBody == "ok")
+        #expect(entry.responseBodyIsBase64 == false)
+        #expect(entry.responseBodyTruncated == false)
+    }
 }

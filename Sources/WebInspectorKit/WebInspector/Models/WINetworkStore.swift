@@ -26,6 +26,14 @@ struct NetworkEvent {
     let encodedBodyLength: Int?
     let errorDescription: String?
     let requestType: String?
+    let requestBody: String?
+    let requestBodyIsBase64: Bool
+    let requestBodyTruncated: Bool
+    let requestBodySize: Int?
+    let responseBody: String?
+    let responseBodyIsBase64: Bool
+    let responseBodyTruncated: Bool
+    let responseBodySize: Int?
 
     init?(dictionary: [String: Any]) {
         guard
@@ -50,6 +58,14 @@ struct NetworkEvent {
         self.mimeType = dictionary["mimeType"] as? String
         self.requestHeaders = WINetworkHeaders(dictionary: dictionary["requestHeaders"] as? [String: String] ?? [:])
         self.responseHeaders = WINetworkHeaders(dictionary: dictionary["responseHeaders"] as? [String: String] ?? [:])
+        self.requestBody = dictionary["requestBody"] as? String
+        self.requestBodyIsBase64 = dictionary["requestBodyBase64"] as? Bool ?? false
+        self.requestBodyTruncated = dictionary["requestBodyTruncated"] as? Bool ?? false
+        self.requestBodySize = dictionary["requestBodySize"] as? Int
+        self.responseBody = dictionary["responseBody"] as? String
+        self.responseBodyIsBase64 = dictionary["responseBodyBase64"] as? Bool ?? false
+        self.responseBodyTruncated = dictionary["responseBodyTruncated"] as? Bool ?? false
+        self.responseBodySize = dictionary["responseBodySize"] as? Int
 
         if let start = dictionary["startTime"] as? Double {
             self.startTimeSeconds = start / 1000.0
@@ -144,6 +160,14 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var requestType: String?
     public internal(set) var wallTime: TimeInterval?
     public internal(set) var phase: Phase
+    public internal(set) var requestBody: String?
+    public internal(set) var requestBodyIsBase64: Bool
+    public internal(set) var requestBodyTruncated: Bool
+    public internal(set) var requestBodySize: Int?
+    public internal(set) var responseBody: String?
+    public internal(set) var responseBodyIsBase64: Bool
+    public internal(set) var responseBodyTruncated: Bool
+    public internal(set) var responseBodySize: Int?
     
     init(
         sessionID: String,
@@ -174,6 +198,14 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.errorDescription = nil
         self.requestType = nil
         self.phase = .pending
+        self.requestBody = nil
+        self.requestBodyIsBase64 = false
+        self.requestBodyTruncated = false
+        self.requestBodySize = nil
+        self.responseBody = nil
+        self.responseBodyIsBase64 = false
+        self.responseBodyTruncated = false
+        self.responseBodySize = nil
     }
 
     convenience init(startPayload payload: NetworkEvent) {
@@ -189,6 +221,10 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             wallTime: payload.wallTimeSeconds
         )
         requestType = payload.requestType
+        requestBody = payload.requestBody
+        requestBodyIsBase64 = payload.requestBodyIsBase64
+        requestBodyTruncated = payload.requestBodyTruncated
+        requestBodySize = payload.requestBodySize
     }
 
     func applyResponsePayload(_ payload: NetworkEvent) {
@@ -224,6 +260,14 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         if let requestType = payload.requestType {
             self.requestType = requestType
         }
+        if let responseBody = payload.responseBody {
+            self.responseBody = responseBody
+        }
+        if payload.responseBodySize != nil {
+            responseBodySize = payload.responseBodySize
+        }
+        responseBodyIsBase64 = payload.responseBodyIsBase64
+        responseBodyTruncated = payload.responseBodyTruncated
         errorDescription = payload.errorDescription
         phase = failed ? .failed : .completed
         if failed && statusCode == nil {
