@@ -4,9 +4,16 @@ import Observation
 enum NetworkEventKind: String {
     case start
     case response
+    case responseExtra
     case finish
     case resourceTiming
     case fail
+    case webSocketCreated
+    case webSocketHandshake
+    case webSocketFrameSent
+    case webSocketFrameReceived
+    case webSocketClosed
+    case webSocketError
 }
 
 struct NetworkEvent {
@@ -34,6 +41,12 @@ struct NetworkEvent {
     let responseBodyIsBase64: Bool
     let responseBodyTruncated: Bool
     let responseBodySize: Int?
+    let framePayload: String?
+    let framePayloadIsBase64: Bool
+    let framePayloadSize: Int?
+    let frameDirection: WINetworkWebSocketFrame.Direction?
+    let frameOpcode: Int?
+    let blockedCookies: [String]
 
     init?(dictionary: [String: Any]) {
         guard
@@ -66,6 +79,20 @@ struct NetworkEvent {
         self.responseBodyIsBase64 = dictionary["responseBodyBase64"] as? Bool ?? false
         self.responseBodyTruncated = dictionary["responseBodyTruncated"] as? Bool ?? false
         self.responseBodySize = dictionary["responseBodySize"] as? Int
+        if let payload = dictionary["framePayload"] as? String {
+            self.framePayload = payload
+        } else {
+            self.framePayload = nil
+        }
+        self.framePayloadIsBase64 = dictionary["framePayloadBase64"] as? Bool ?? false
+        self.framePayloadSize = dictionary["framePayloadSize"] as? Int
+        if let rawDirection = dictionary["frameDirection"] as? String {
+            self.frameDirection = WINetworkWebSocketFrame.Direction(rawValue: rawDirection)
+        } else {
+            self.frameDirection = nil
+        }
+        self.frameOpcode = dictionary["frameOpcode"] as? Int
+        self.blockedCookies = dictionary["blockedCookies"] as? [String] ?? []
 
         if let start = dictionary["startTime"] as? Double {
             self.startTimeSeconds = start / 1000.0
@@ -168,6 +195,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var responseBodyIsBase64: Bool
     public internal(set) var responseBodyTruncated: Bool
     public internal(set) var responseBodySize: Int?
+    public internal(set) var webSocketFrames: [WINetworkWebSocketFrame]
     
     init(
         sessionID: String,
@@ -206,6 +234,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.responseBodyIsBase64 = false
         self.responseBodyTruncated = false
         self.responseBodySize = nil
+        self.webSocketFrames = []
     }
 
     convenience init(startPayload payload: NetworkEvent) {
@@ -233,6 +262,14 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         mimeType = payload.mimeType
         if !payload.responseHeaders.isEmpty {
             responseHeaders = payload.responseHeaders
+        }
+        if !payload.blockedCookies.isEmpty {
+            responseHeaders.append(
+                WINetworkHeaderField(
+                    name: "blocked-cookies",
+                    value: payload.blockedCookies.joined(separator: ",")
+                )
+            )
         }
         if let requestType = payload.requestType {
             self.requestType = requestType
@@ -274,6 +311,36 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             statusCode = 0
         }
     }
+
+    func appendWebSocketFrame(_ payload: NetworkEvent) {
+        let direction = payload.frameDirection ?? .incoming
+        let opcode = payload.frameOpcode ?? 1
+        let size = payload.framePayloadSize
+        let frame = WINetworkWebSocketFrame(
+            direction: direction,
+            opcode: opcode,
+            payload: payload.framePayload,
+            payloadIsBase64: payload.framePayloadIsBase64,
+            payloadSize: size,
+            timestamp: payload.endTimeSeconds ?? payload.startTimeSeconds
+        )
+        webSocketFrames.append(frame)
+        phase = .completed
+    }
+}
+
+public struct WINetworkWebSocketFrame: Hashable, Sendable {
+    public enum Direction: String, Sendable {
+        case incoming
+        case outgoing
+    }
+
+    public let direction: Direction
+    public let opcode: Int
+    public let payload: String?
+    public let payloadIsBase64: Bool
+    public let payloadSize: Int?
+    public let timestamp: TimeInterval
 }
 
 @MainActor
@@ -329,11 +396,23 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             handleStart(event)
         case .response:
             handleResponse(event)
+        case .responseExtra:
+            handleResponse(event)
         case .finish:
             handleFinish(event, failed: false)
         case .resourceTiming:
             handleResourceTiming(event)
         case .fail:
+            handleFinish(event, failed: true)
+        case .webSocketCreated:
+            handleWebSocketCreated(event)
+        case .webSocketHandshake:
+            handleResponse(event)
+        case .webSocketFrameSent, .webSocketFrameReceived:
+            handleWebSocketFrame(event)
+        case .webSocketClosed:
+            handleFinish(event, failed: false)
+        case .webSocketError:
             handleFinish(event, failed: true)
         }
     }
@@ -400,6 +479,31 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         let entry = WINetworkEntry(startPayload: event)
         appendEntry(entry, requestID: requestID, in: bucket)
         entry.applyCompletionPayload(event, failed: false)
+    }
+
+    private func handleWebSocketCreated(_ event: NetworkEvent) {
+        let bucket = bucket(for: event.sessionID)
+        if bucket.entry(for: event.requestID) != nil {
+            return
+        }
+        let entry = WINetworkEntry(
+            sessionID: event.sessionID,
+            requestID: event.requestID,
+            url: event.url ?? "",
+            method: "GET",
+            requestHeaders: event.requestHeaders,
+            startTimestamp: event.startTimeSeconds,
+            wallTime: event.wallTimeSeconds
+        )
+        entry.requestType = "websocket"
+        appendEntry(entry, requestID: event.requestID, in: bucket)
+    }
+
+    private func handleWebSocketFrame(_ event: NetworkEvent) {
+        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
+            return
+        }
+        entry.appendWebSocketFrame(event)
     }
 
     private func appendEntry(_ entry: WINetworkEntry, requestID: Int, in bucket: SessionBucket) {

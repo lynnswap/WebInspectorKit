@@ -1,4 +1,6 @@
-// Network agent core logic
+// Core orchestrator: shared helpers live in NetworkAgentShared.js
+// This file keeps recording logic and wires sub-patches.
+
 const recordStart = (
     identity,
     url,
@@ -147,196 +149,6 @@ const recordFailure = (identity, error, requestType) => {
     }
 };
 
-
-const installFetchPatch = () => {
-    if (typeof window.fetch !== "function") {
-        return;
-    }
-    const nativeFetch = window.fetch;
-    if (nativeFetch.__wiNetworkPatched) {
-        return;
-    }
-    const patched = async function() {
-        const shouldTrack = true;
-        const args = Array.from(arguments);
-        const [input, init = {}] = args;
-        const method = init.method || (input && input.method) || "GET";
-        const identity = shouldTrack ? nextRequestIdentity() : null;
-        const url = typeof input === "string" ? input : (input && input.url) || "";
-        if (shouldIgnoreUrl(url)) {
-            return nativeFetch.apply(window, args);
-        }
-        const headers = normalizeHeaders(init.headers || (input && input.headers));
-        const requestBodyInfo = serializeRequestBody(init.body);
-
-        if (shouldTrack && identity) {
-            recordStart(
-                identity,
-                url,
-                String(method).toUpperCase(),
-                headers,
-                "fetch",
-                undefined,
-                undefined,
-                requestBodyInfo
-            );
-        }
-
-        try {
-            const response = await nativeFetch.apply(window, args);
-            let mimeType;
-            let responseBodyInfo = null;
-            if (shouldTrack && identity) {
-                mimeType = recordResponse(identity, response, "fetch");
-                try {
-                    responseBodyInfo = await captureResponseBody(response, mimeType);
-                } catch {
-                    responseBodyInfo = null;
-                }
-                const encodedLength = estimatedEncodedLength(
-                    captureContentLength(response),
-                    responseBodyInfo
-                );
-                recordFinish(
-                    identity,
-                    encodedLength,
-                    "fetch",
-                    response && typeof response.status === "number" ? response.status : undefined,
-                    response && typeof response.statusText === "string" ? response.statusText : undefined,
-                    mimeType,
-                    undefined,
-                    undefined,
-                    responseBodyInfo
-                );
-            }
-            return response;
-        } catch (error) {
-            if (shouldTrack && identity) {
-                recordFailure(identity, error, "fetch");
-            }
-            throw error;
-        }
-    };
-    patched.__wiNetworkPatched = true;
-    window.fetch = patched;
-};
-
-const installXHRPatch = () => {
-    if (typeof XMLHttpRequest !== "function") {
-        return;
-    }
-    const originalOpen = XMLHttpRequest.prototype.open;
-    const originalSend = XMLHttpRequest.prototype.send;
-    const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
-
-    if (originalOpen.__wiNetworkPatched) {
-        return;
-    }
-
-    XMLHttpRequest.prototype.open = function(method, url) {
-        this.__wiNetwork = {
-            method: String(method || "GET").toUpperCase(),
-            url: String(url || ""),
-            headers: {}
-        };
-        return originalOpen.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-        if (this.__wiNetwork) {
-            this.__wiNetwork.headers[String(name || "").toLowerCase()] = String(value || "");
-        }
-        return originalSetRequestHeader.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.send = function() {
-        const shouldTrack = !!this.__wiNetwork;
-        const identity = shouldTrack ? nextRequestIdentity() : null;
-        const info = this.__wiNetwork;
-        if (shouldTrack && identity && info) {
-            if (shouldIgnoreUrl(info.url)) {
-                return originalSend.apply(this, arguments);
-            }
-            info.requestBody = serializeRequestBody(arguments[0]);
-            recordStart(
-                identity,
-                info.url,
-                info.method,
-                info.headers || {},
-                "xhr",
-                undefined,
-                undefined,
-                info.requestBody
-            );
-            this.addEventListener("readystatechange", function() {
-                if (this.readyState === 2 && identity) {
-                    recordResponse(identity, this, "xhr");
-                }
-            }, false);
-            this.addEventListener("load", function() {
-                if (identity) {
-                    const responseBody = captureXHRResponseBody(this);
-                    const length = estimatedEncodedLength(
-                        captureContentLength(this),
-                        responseBody
-                    );
-                    recordFinish(
-                        identity,
-                        length,
-                        "xhr",
-                        this.status,
-                        this.statusText,
-                        this.getResponseHeader ? this.getResponseHeader("content-type") : undefined,
-                        undefined,
-                        undefined,
-                        responseBody
-                    );
-                }
-            }, false);
-            this.addEventListener("error", function(event) {
-                if (identity) {
-                    recordFailure(identity, event && event.error ? event.error : "Network error", "xhr");
-                }
-            }, false);
-            this.addEventListener("abort", function() {
-                if (identity) {
-                    recordFailure(identity, "Request aborted", "xhr");
-                }
-            }, false);
-        }
-        return originalSend.apply(this, arguments);
-    };
-
-    originalOpen.__wiNetworkPatched = true;
-};
-
-const installResourceObserver = () => {
-    if (networkState.resourceObserver || typeof PerformanceObserver !== "function") {
-        return;
-    }
-    try {
-        const observer = new PerformanceObserver(list => {
-            const entries = list.getEntries();
-            const payloads = [];
-            for (let i = 0; i < entries.length; ++i) {
-                const payload = handleResourceEntry(entries[i]);
-                if (payload) {
-                    payloads.push(payload);
-                }
-            }
-            if (payloads.length) {
-                postNetworkBatchEvents(payloads);
-            }
-        });
-        observer.observe({type: "resource", buffered: true});
-        networkState.resourceObserver = observer;
-        if (!networkState.resourceSeen) {
-            networkState.resourceSeen = new Set();
-        }
-    } catch {
-    }
-};
-
 const ensureInstalled = () => {
     if (networkState.installed) {
         return;
@@ -344,6 +156,7 @@ const ensureInstalled = () => {
     installFetchPatch();
     installXHRPatch();
     installResourceObserver();
+    installWebSocketPatch();
     networkState.installed = true;
 };
 
