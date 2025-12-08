@@ -1,4 +1,4 @@
-// Core orchestrator: shared helpers live in NetworkAgentShared.js
+// Core orchestrator: shared helpers live in NetworkAgentUtils.js
 // This file keeps recording logic and wires sub-patches.
 
 const recordStart = (
