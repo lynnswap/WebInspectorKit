@@ -47,6 +47,7 @@ const installWebSocketPatch = () => {
                 type: "wsHandshakeRequest",
                 session: identity.session,
                 requestId: identity.requestId,
+                // Browser APIs do not expose handshake request headers to JS for security.
                 requestHeaders: {},
                 startTime: now(),
                 wallTime: wallTime()

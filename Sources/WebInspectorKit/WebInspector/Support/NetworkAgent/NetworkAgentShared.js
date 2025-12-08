@@ -233,6 +233,17 @@ const captureResponseBody = async (response, mimeType) => {
     if (!shouldCapture) {
         return null;
     }
+    const contentLength = captureContentLength(response);
+    if (Number.isFinite(contentLength) && contentLength > MAX_STORED_BODY_LENGTH) {
+        return {
+            body: "",
+            base64Encoded: false,
+            truncated: true,
+            size: contentLength,
+            storageBody: "",
+            storageTruncated: true
+        };
+    }
     try {
         if (typeof response.clone !== "function") {
             return null;
