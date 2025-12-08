@@ -44,6 +44,14 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("open", () => {
             postWebSocketEvent({
+                type: "wsHandshakeRequest",
+                session: identity.session,
+                requestId: identity.requestId,
+                requestHeaders: {},
+                startTime: now(),
+                wallTime: wallTime()
+            });
+            postWebSocketEvent({
                 type: "wsHandshake",
                 session: identity.session,
                 requestId: identity.requestId,
@@ -101,7 +109,7 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("error", () => {
             postWebSocketEvent({
-                type: "wsError",
+                type: "wsFrameError",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),

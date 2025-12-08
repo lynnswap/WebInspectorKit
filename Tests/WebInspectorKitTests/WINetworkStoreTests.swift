@@ -107,4 +107,43 @@ struct WINetworkStoreTests {
         #expect(entry.responseBodyIsBase64 == false)
         #expect(entry.responseBodyTruncated == false)
     }
+
+    @Test
+    func websocketHandshakeAndErrorEventsAreApplied() throws {
+        let store = WINetworkStore()
+        let created = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsCreated",
+                "requestId": 1,
+                "url": "wss://example.com/socket",
+                "startTime": 1_000.0,
+                "wallTime": 2_000.0
+            ])
+        )
+        store.applyWSEvent(created)
+
+        let handshakeRequest = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsHandshakeRequest",
+                "requestId": 1,
+                "requestHeaders": ["sec-websocket-protocol": "chat"]
+            ])
+        )
+        store.applyWSEvent(handshakeRequest)
+
+        let frameError = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsFrameError",
+                "requestId": 1,
+                "error": "WebSocket error",
+                "endTime": 2_000.0
+            ])
+        )
+        store.applyWSEvent(frameError)
+
+        let entry = try #require(store.entry(forRequestID: 1, sessionID: nil))
+        #expect(entry.phase == .failed)
+        #expect(entry.errorDescription == "WebSocket error")
+        #expect(entry.requestHeaders["sec-websocket-protocol"] == "chat")
+    }
 }

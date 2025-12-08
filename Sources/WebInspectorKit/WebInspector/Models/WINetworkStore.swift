@@ -12,10 +12,11 @@ enum HTTPNetworkEventKind: String {
 
 enum WSNetworkEventKind: String {
     case created = "wsCreated"
+    case handshakeRequest = "wsHandshakeRequest"
     case handshake = "wsHandshake"
     case frame = "wsFrame"
     case closed = "wsClosed"
-    case error = "wsError"
+    case frameError = "wsFrameError"
 }
 
 protocol NetworkEventProtocol {
@@ -147,6 +148,7 @@ struct WSNetworkEvent: NetworkEventProtocol {
     let statusCode: Int?
     let statusText: String?
     let errorDescription: String?
+    let requestHeaders: WINetworkHeaders
 
     init?(dictionary: [String: Any]) {
         guard let type = dictionary["type"] as? String,
@@ -181,6 +183,7 @@ struct WSNetworkEvent: NetworkEventProtocol {
         } else {
             self.wallTimeSeconds = nil
         }
+        self.requestHeaders = WINetworkHeaders(dictionary: dictionary["requestHeaders"] as? [String: String] ?? [:])
         self.framePayload = dictionary["framePayload"] as? String
         self.framePayloadIsBase64 = dictionary["framePayloadBase64"] as? Bool ?? false
         self.framePayloadSize = dictionary["framePayloadSize"] as? Int
@@ -490,11 +493,13 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
             handleWebSocketCreated(event)
         case .handshake:
             handleWebSocketHandshake(event)
+        case .handshakeRequest:
+            handleWebSocketHandshakeRequest(event)
         case .frame:
             handleWebSocketFrame(event)
         case .closed:
             handleWebSocketCompletion(event, failed: false)
-        case .error:
+        case .frameError:
             handleWebSocketCompletion(event, failed: true)
         }
     }
@@ -581,6 +586,16 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
         appendEntry(entry, requestID: event.requestID, in: bucket)
     }
 
+    private func handleWebSocketHandshakeRequest(_ event: WSNetworkEvent) {
+        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
+            return
+        }
+        if !event.requestHeaders.isEmpty {
+            entry.requestHeaders = event.requestHeaders
+        }
+        entry.phase = .pending
+    }
+
     private func handleWebSocketHandshake(_ event: WSNetworkEvent) {
         guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
             return
@@ -614,6 +629,9 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
         if let end = event.endTimeSeconds {
             entry.endTimestamp = end
             entry.duration = max(0, end - entry.startTimestamp)
+        }
+        if let errorDescription = event.errorDescription {
+            entry.errorDescription = errorDescription
         }
         entry.phase = failed ? .failed : .completed
         if failed && entry.statusCode == nil {
