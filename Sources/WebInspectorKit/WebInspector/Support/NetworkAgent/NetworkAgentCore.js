@@ -157,33 +157,14 @@ const flushQueuedEvents = () => {
         return;
     }
     const pending = queuedEvents.splice(0, queuedEvents.length);
-    pending.forEach(item => {
-        switch (item.kind) {
-        case "http":
-            try {
-                window.webkit.messageHandlers.webInspectorHTTPUpdate.postMessage(item.payload);
-            } catch {
-            }
-            break;
-        case "httpBatch":
-            try {
-                window.webkit.messageHandlers.webInspectorHTTPBatchUpdate.postMessage({
-                    session: networkState.sessionPrefix,
-                    events: item.payloads || []
-                });
-            } catch {
-            }
-            break;
-        case "websocket":
-            try {
-                window.webkit.messageHandlers.webInspectorWSUpdate.postMessage(item.payload);
-            } catch {
-            }
-            break;
-        default:
-            break;
-        }
-    });
+    const batchPayload = {
+        session: networkState.sessionPrefix,
+        events: pending
+    };
+    try {
+        window.webkit.messageHandlers.webInspectorNetworkQueuedUpdate.postMessage(batchPayload);
+    } catch {
+    }
 };
 
 const postNetworkReset = () => {

@@ -14,8 +14,11 @@ final class WINetworkPageAgent: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
         case http = "webInspectorHTTPUpdate"
         case httpBatch = "webInspectorHTTPBatchUpdate"
+        
         case webSocket = "webInspectorWSUpdate"
         case networkReset = "webInspectorNetworkReset"
+        
+        case queuedBatch = "webInspectorNetworkQueuedUpdate"
     }
 
     weak var webView: WKWebView?
@@ -139,6 +142,8 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
             handleWebSocketMessage(message)
         case .networkReset:
             handleNetworkReset()
+        case .queuedBatch:
+            handleQueuedBatchMessage(message)
         }
     }
 
@@ -167,6 +172,38 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
            let batch = NetworkEventBatch(dictionary: dictionary) {
             store.applyBatchedInsertions(batch)
             return
+        }
+    }
+
+    private func handleQueuedBatchMessage(_ message: WKScriptMessage) {
+        guard let dictionary = message.body as? [String: Any],
+              let events = dictionary["events"] as? [[String: Any]] else {
+            return
+        }
+        for event in events {
+            guard let kind = event["kind"] as? String else { continue }
+            switch kind {
+            case "http":
+                guard let payload = event["payload"] as? [String: Any],
+                      let parsed = HTTPNetworkEvent(dictionary: payload) else {
+                    continue
+                }
+                store.applyHTTPEvent(parsed)
+            case "httpBatch":
+                let payloads = event["payloads"] as? [[String: Any]] ?? []
+                for payload in payloads {
+                    guard let parsed = HTTPNetworkEvent(dictionary: payload) else { continue }
+                    store.applyHTTPEvent(parsed)
+                }
+            case "websocket":
+                guard let payload = event["payload"] as? [String: Any],
+                      let parsed = WSNetworkEvent(dictionary: payload) else {
+                    continue
+                }
+                store.applyWSEvent(parsed)
+            default:
+                continue
+            }
         }
     }
 }
