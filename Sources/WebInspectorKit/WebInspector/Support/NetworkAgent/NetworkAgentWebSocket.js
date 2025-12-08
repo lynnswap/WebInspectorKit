@@ -1,28 +1,33 @@
+const MAX_WS_FRAME_BODY_LENGTH = typeof MAX_INLINE_BODY_LENGTH === "number" ? MAX_INLINE_BODY_LENGTH : 64 * 1024;
+
 const serializeFramePayload = async data => {
     if (data == null) {
-        return {payload: "", base64: false, size: 0};
+        return {payload: "", base64: false, size: 0, truncated: false};
     }
     if (typeof data === "string") {
-        const truncated = data.length > MAX_BODY_LENGTH;
-        const body = truncated ? data.slice(0, MAX_BODY_LENGTH) : data;
-        return {payload: body, base64: false, size: data.length};
+        const truncated = data.length > MAX_WS_FRAME_BODY_LENGTH;
+        const body = truncated ? data.slice(0, MAX_WS_FRAME_BODY_LENGTH) : data;
+        return {payload: body, base64: false, size: data.length, truncated: truncated};
     }
     try {
+        let bytes = null;
         if (typeof Blob !== "undefined" && data instanceof Blob) {
-            const buffer = await data.arrayBuffer();
-            return serializeFramePayload(new Uint8Array(buffer));
+            bytes = new Uint8Array(await data.arrayBuffer());
+        } else if (data instanceof ArrayBuffer) {
+            bytes = new Uint8Array(data);
+        } else if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
+            bytes = data;
         }
-        if (data instanceof ArrayBuffer) {
-            return serializeFramePayload(new Uint8Array(data));
-        }
-        if (typeof Uint8Array !== "undefined" && data instanceof Uint8Array) {
-            const binary = Array.from(data, byte => String.fromCharCode(byte)).join("");
+        if (bytes) {
+            const truncated = bytes.byteLength > MAX_WS_FRAME_BODY_LENGTH;
+            const slice = truncated ? bytes.slice(0, MAX_WS_FRAME_BODY_LENGTH) : bytes;
+            const binary = Array.from(slice, byte => String.fromCharCode(byte)).join("");
             const base64 = btoa(binary);
-            return {payload: base64, base64: true, size: data.byteLength};
+            return {payload: base64, base64: true, size: bytes.byteLength, truncated: truncated};
         }
     } catch {
     }
-    return {payload: "", base64: false, size: 0};
+    return {payload: "", base64: false, size: 0, truncated: false};
 };
 
 const installWebSocketPatch = () => {
@@ -76,7 +81,8 @@ const installWebSocketPatch = () => {
                 frameOpcode: opcode,
                 framePayload: serialized.payload,
                 framePayloadBase64: serialized.base64,
-                framePayloadSize: serialized.size
+                framePayloadSize: serialized.size,
+                framePayloadTruncated: serialized.truncated
             });
         });
 
@@ -93,29 +99,33 @@ const installWebSocketPatch = () => {
                 frameOpcode: typeof data === "string" ? 1 : 2,
                 framePayload: serialized.payload,
                 framePayloadBase64: serialized.base64,
-                framePayloadSize: serialized.size
+                framePayloadSize: serialized.size,
+                framePayloadTruncated: serialized.truncated
             });
             return originalSend.apply(this, arguments);
         };
 
-        socket.addEventListener("close", () => {
+        socket.addEventListener("close", event => {
             postWebSocketEvent({
                 type: "wsClosed",
                 session: identity.session,
                 requestId: identity.requestId,
+                closeCode: event && typeof event.code === "number" ? event.code : undefined,
+                closeReason: event && typeof event.reason === "string" ? event.reason : undefined,
+                closeWasClean: event && typeof event.wasClean === "boolean" ? event.wasClean : undefined,
                 endTime: now(),
                 wallTime: wallTime()
             });
         });
 
-        socket.addEventListener("error", () => {
+        socket.addEventListener("error", event => {
             postWebSocketEvent({
                 type: "wsFrameError",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),
                 wallTime: wallTime(),
-                error: "WebSocket error"
+                error: event && typeof event.message === "string" && event.message ? event.message : "WebSocket error"
             });
         });
 

@@ -159,10 +159,14 @@ struct WSNetworkEvent: NetworkEventProtocol {
     let framePayloadSize: Int?
     let frameDirection: WINetworkWebSocketFrame.Direction?
     let frameOpcode: Int?
+    let framePayloadTruncated: Bool
     let statusCode: Int?
     let statusText: String?
+    let closeCode: Int?
+    let closeReason: String?
     let errorDescription: String?
     let requestHeaders: WINetworkHeaders
+    let closeWasClean: Bool?
 
     init?(dictionary: [String: Any]) {
         guard let type = dictionary["type"] as? String,
@@ -201,6 +205,7 @@ struct WSNetworkEvent: NetworkEventProtocol {
         self.framePayload = dictionary["framePayload"] as? String
         self.framePayloadIsBase64 = dictionary["framePayloadBase64"] as? Bool ?? false
         self.framePayloadSize = dictionary["framePayloadSize"] as? Int
+        self.framePayloadTruncated = dictionary["framePayloadTruncated"] as? Bool ?? false
         if let rawDirection = dictionary["frameDirection"] as? String {
             self.frameDirection = WINetworkWebSocketFrame.Direction(rawValue: rawDirection)
         } else {
@@ -209,6 +214,13 @@ struct WSNetworkEvent: NetworkEventProtocol {
         self.frameOpcode = dictionary["frameOpcode"] as? Int
         self.statusCode = dictionary["status"] as? Int
         self.statusText = dictionary["statusText"] as? String
+        self.closeCode = dictionary["closeCode"] as? Int
+        self.closeReason = dictionary["closeReason"] as? String
+        if let wasClean = dictionary["closeWasClean"] as? Bool {
+            self.closeWasClean = wasClean
+        } else {
+            self.closeWasClean = nil
+        }
         if let error = dictionary["error"] as? String, !error.isEmpty {
             self.errorDescription = error
         } else {
@@ -283,7 +295,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var responseBodyIsBase64: Bool
     public internal(set) var responseBodyTruncated: Bool
     public internal(set) var responseBodySize: Int?
-    public internal(set) var webSocketFrames: [WINetworkWebSocketFrame]
+    public internal(set) var webSocket: WINetworkWebSocketInfo?
     
     init(
         sessionID: String,
@@ -324,7 +336,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.responseBodyIsBase64 = false
         self.responseBodyTruncated = false
         self.responseBodySize = nil
-        self.webSocketFrames = []
+        self.webSocket = nil
     }
 
     convenience init(startPayload payload: HTTPNetworkEvent) {
@@ -416,9 +428,12 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             payload: payload.framePayload,
             payloadIsBase64: payload.framePayloadIsBase64,
             payloadSize: size,
+            payloadTruncated: payload.framePayloadTruncated,
             timestamp: payload.endTimeSeconds ?? payload.startTimeSeconds
         )
-        webSocketFrames.append(frame)
+        let info = webSocket ?? WINetworkWebSocketInfo()
+        info.appendFrame(frame)
+        webSocket = info
         phase = .completed
     }
 }
@@ -434,7 +449,52 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
     public let payload: String?
     public let payloadIsBase64: Bool
     public let payloadSize: Int?
+    public let payloadTruncated: Bool
     public let timestamp: TimeInterval
+}
+
+@Observable
+public final class WINetworkWebSocketInfo: Identifiable, Equatable, Hashable{
+    
+    // Equatable / Hashable
+    public static nonisolated func == (lhs: WINetworkWebSocketInfo, rhs: WINetworkWebSocketInfo) -> Bool { lhs.id == rhs.id }
+    public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    
+    nonisolated public let id: UUID
+    
+    public internal(set) var frames: [WINetworkWebSocketFrame]
+    public internal(set) var closeCode: Int?
+    public internal(set) var closeReason: String?
+    public internal(set) var closeWasClean: Bool?
+
+    public init(
+        frames: [WINetworkWebSocketFrame] = [],
+        closeCode: Int? = nil,
+        closeReason: String? = nil,
+        closeWasClean: Bool? = nil
+    ) {
+        self.id = UUID()
+        self.frames = frames
+        self.closeCode = closeCode
+        self.closeReason = closeReason
+        self.closeWasClean = closeWasClean
+    }
+
+    func appendFrame(_ frame: WINetworkWebSocketFrame) {
+        frames.append(frame)
+    }
+
+    func applyClose(code: Int?, reason: String?, wasClean: Bool?) {
+        if let code {
+            closeCode = code
+        }
+        if let reason {
+            closeReason = reason
+        }
+        if let wasClean {
+            closeWasClean = wasClean
+        }
+    }
 }
 
 @MainActor
@@ -613,6 +673,7 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
             wallTime: event.wallTimeSeconds
         )
         entry.requestType = "websocket"
+        entry.webSocket = WINetworkWebSocketInfo()
         appendEntry(entry, requestID: event.requestID, in: bucket)
     }
 
@@ -650,12 +711,19 @@ public struct WINetworkWebSocketFrame: Hashable, Sendable {
         guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
             return
         }
-        if let status = event.statusCode {
+        if let status = event.statusCode, entry.statusCode == nil {
             entry.statusCode = status
         }
-        if let statusText = event.statusText {
+        if let statusText = event.statusText, entry.statusText.isEmpty {
             entry.statusText = statusText
         }
+        let info = entry.webSocket ?? WINetworkWebSocketInfo()
+        info.applyClose(
+            code: event.closeCode,
+            reason: event.closeReason,
+            wasClean: event.closeWasClean
+        )
+        entry.webSocket = info
         if let end = event.endTimeSeconds {
             entry.endTimestamp = end
             entry.duration = max(0, end - entry.startTimestamp)
