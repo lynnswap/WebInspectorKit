@@ -7,7 +7,7 @@ const now = () => {
 
 const wallTime = () => Date.now();
 
-const generateSessionPrefix = () => {
+const generateSessionID = () => {
     try {
         if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
             return crypto.randomUUID();
@@ -23,12 +23,13 @@ const networkState = {
     enabled: true,
     installed: false,
     nextId: 1,
-    sessionPrefix: generateSessionPrefix(),
+    sessionID: generateSessionID(),
     resourceObserver: null,
     resourceSeen: null
 };
 
 const trackedRequests = new Map();
+const requestBodies = new Map();
 const responseBodies = new Map();
 const queuedEvents = [];
 const trackedResourceTypes = new Set([
@@ -53,8 +54,20 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
+const inlineBodyPayload = body => {
+    if (!body) {
+        return undefined;
+    }
+    const clone = {...body};
+    if (Object.prototype.hasOwnProperty.call(clone, "storageBody")) {
+        delete clone.storageBody;
+    }
+    return clone;
+};
+
 // Keep inline payloads small to avoid OOL IPC; full body is cached separately with only a count cap.
 const MAX_INLINE_BODY_LENGTH = 512;
+const MAX_STORED_REQUEST_BODIES = 50;
 const MAX_STORED_RESPONSE_BODIES = 50;
 const MAX_QUEUED_EVENTS = 500;
 
@@ -85,6 +98,21 @@ const pruneStoredResponseBodies = () => {
     }
 };
 
+const pruneStoredRequestBodies = () => {
+    if (requestBodies.size <= MAX_STORED_REQUEST_BODIES) {
+        return;
+    }
+    const overLimit = requestBodies.size - MAX_STORED_REQUEST_BODIES;
+    for (let i = 0; i < overLimit; ++i) {
+        const iterator = requestBodies.keys();
+        const next = iterator.next();
+        if (next.done) {
+            break;
+        }
+        requestBodies.delete(next.value);
+    }
+};
+
 const enqueueEvent = event => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
         queuedEvents.shift();
@@ -112,7 +140,7 @@ const postHTTPBatchEvents = payloads => {
         return;
     }
     const batchPayload = {
-        session: networkState.sessionPrefix,
+        session: networkState.sessionID,
         events: payloads
     };
     try {
@@ -121,24 +149,10 @@ const postHTTPBatchEvents = payloads => {
     }
 };
 
-const nextRequestIdentity = () => {
+const nextRequestID = () => {
     const requestId = networkState.nextId;
     networkState.nextId += 1;
-    return {
-        requestId: requestId,
-        session: networkState.sessionPrefix
-    };
-};
-
-const trackingKey = identity => {
-    if (!identity) {
-        return null;
-    }
-    const idPart = typeof identity.requestId === "number" ? identity.requestId : identity.id;
-    if (identity.session && idPart != null) {
-        return identity.session + "::" + idPart;
-    }
-    return idPart != null ? String(idPart) : null;
+    return requestId;
 };
 
 const normalizeHeaders = headers => {
@@ -538,7 +552,7 @@ const handleResourceEntry = entry => {
     }
     networkState.resourceSeen.add(key);
 
-    const identity = nextRequestIdentity();
+    const requestId = nextRequestID();
     const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
     const duration = typeof entry.duration === "number" && entry.duration >= 0 ? entry.duration : 0;
     const endTime = startTime + duration;
@@ -554,8 +568,8 @@ const handleResourceEntry = entry => {
     }
     return {
         type: "resourceTiming",
-        session: identity.session,
-        requestId: identity.requestId,
+        session: networkState.sessionID,
+        requestId: requestId,
         url: entry.name || "",
         method: "GET",
         requestHeaders: {},

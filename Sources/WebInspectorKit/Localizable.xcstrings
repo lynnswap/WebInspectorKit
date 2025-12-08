@@ -2140,145 +2140,431 @@
         }
       }
     },
-    "network.body.truncated" : {
-      "comment" : "Notice shown when response body is truncated.",
+    "network.body.fetch.error.decode_failed" : {
+      "comment" : "Shown when decoding the fetched response body fails.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "fr-CA" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response body is truncated. Fetch to load more."
+            "value" : "Failed to decode response body."
+          }
+        }
+      }
+    },
+    "network.body.fetch.error.unavailable" : {
+      "comment" : "Shown when fetching full response body returns nothing.",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response body unavailable."
+          }
+        },
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response body unavailable."
+          }
+        },
+        "en-IN" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response body unavailable."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Response body unavailable."
+          }
+        }
+      }
+    },
+    "network.body.fetch.error.unknown" : {
+      "comment" : "Shown when fetching full response body fails for unknown reasons.",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "en-IN" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Failed to fetch response body."
           }
         }
       }
@@ -3141,145 +3427,288 @@
         }
       }
     },
-    "network.section.body" : {
-      "comment" : "Section title for response body.",
+"network.section.body.request" : {
+      "comment" : "Header for request body section in network detail.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "محتوى الطلب"
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Request-Body"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Body"
+            "value" : "Request Body"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Body"
+            "value" : "Request Body"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Body"
+            "value" : "Request Body"
           }
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Cuerpo de la solicitud"
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Cuerpo de la solicitud"
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corps de la requête"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corps de la requête"
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "अनुरोध बॉडी"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Isi permintaan"
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corpo della richiesta"
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "リクエストボディ"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "요청 본문"
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Aanvraagbody"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corpo da requisição"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corpo da requisição"
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Corp cerere"
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "Тело запроса"
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "เนื้อหาคำขอ"
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "İstek gövdesi"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "请求体"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Body"
+            "state" : "translated",
+            "value" : "請求本文"
+          }
+        }
+      }
+    },
+"network.section.body.response" : {
+      "comment" : "Header for response body section in network detail.",
+      "localizations" : {
+        "ar" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "محتوى الاستجابة"
+          }
+        },
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response-Body"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response Body"
+          }
+        },
+        "en-GB" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response Body"
+          }
+        },
+        "en-IN" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Response Body"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuerpo de la respuesta"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuerpo de la respuesta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corps de la réponse"
+          }
+        },
+        "fr-CA" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corps de la réponse"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी"
+          }
+        },
+        "id" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isi respons"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corpo della risposta"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "レスポンスボディ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "응답 본문"
+          }
+        },
+        "nl" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antwoordbody"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corpo da resposta"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corpo da resposta"
+          }
+        },
+        "ro" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corp răspuns"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Тело ответа"
+          }
+        },
+        "th" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "เนื้อหาตอบกลับ"
+          }
+        },
+        "tr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Yanıt gövdesi"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "响应体"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回應本文"
           }
         }
       }

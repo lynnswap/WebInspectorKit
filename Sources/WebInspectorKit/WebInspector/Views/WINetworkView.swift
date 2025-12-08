@@ -511,14 +511,17 @@ enum WINetworkPreviewData {
             "status": 206,
             "statusText": "Partial Content",
             "mimeType": "application/json",
-            "responseBody": """
+            "responseBody": [
+                "kind": "text",
+                "body": """
             {
               "data": ["alpha", "beta", "gamma"],
               "next_page": "/report?page=2"
             }
             """,
-            "responseBodyTruncated": true,
-            "responseBodySize": 20_480,
+                "truncated": true,
+                "size": 20_480
+            ],
             "encodedBodyLength": 1_024,
             "endTime": 2_740.0,
             "wallTime": 1_708_000_001_740.0,

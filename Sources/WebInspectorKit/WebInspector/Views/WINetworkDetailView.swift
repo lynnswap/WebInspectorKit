@@ -3,7 +3,6 @@ import SwiftUI
 struct WINetworkDetailView: View {
     let entry: WINetworkEntry
     let viewModel: WINetworkViewModel
-    @State private var isFetchingBody = false
 
     var body: some View {
         List {
@@ -17,16 +16,34 @@ struct WINetworkDetailView: View {
             } header: {
                 Text("network.section.request")
             }
+            
+            if let requestBody = entry.requestBody {
+                Section {
+                    WINetworkBodySection(
+                        entry: entry,
+                        viewModel: viewModel,
+                        bodyState: requestBody
+                    )
+                } header: {
+                    Text("network.section.body.request")
+                }
+            }
+            
             Section {
                 WINetworkHeaderSection(headers: entry.responseHeaders)
             } header: {
                 Text("network.section.response")
             }
-            if shouldShowResponseBody {
+            
+            if let bodyState = entry.responseBody{
                 Section {
-                    responseBodyContent
+                    WINetworkBodySection(
+                        entry: entry,
+                        viewModel: viewModel,
+                        bodyState: bodyState
+                    )
                 } header: {
-                    Text("network.section.body")
+                    Text("network.section.body.response")
                 }
             }
             if let error = entry.errorDescription, !error.isEmpty {
@@ -111,59 +128,85 @@ struct WINetworkDetailView: View {
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: Int64(length))
     }
+}
 
-    private var shouldShowResponseBody: Bool {
-        entry.responseBody != nil || entry.responseBodyTruncated || entry.responseBodySize != nil
-    }
 
-    @ViewBuilder
-    private var responseBodyContent: some View {
-        if let body = entry.responseBody {
-            Text(body)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .lineLimit(12)
-                .networkListRowStyle()
-        } else {
-            Text("network.body.unavailable")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .networkListRowStyle()
+private extension WINetworkBody.FetchError {
+    var localizedResource: LocalizedStringResource {
+        switch self {
+        case .unavailable:
+            return LocalizedStringResource("network.body.fetch.error.unavailable", bundle: .module)
+        case .decodeFailed:
+            return LocalizedStringResource("network.body.fetch.error.decode_failed", bundle: .module)
+        case .unknown:
+            return LocalizedStringResource("network.body.fetch.error.unknown", bundle: .module)
         }
-        if entry.responseBodyTruncated || (entry.responseBody == nil && entry.responseBodySize != nil) {
-            Button {
-                fetchFullBody()
-            } label: {
-                if isFetchingBody {
-                    ProgressView()
-                } else {
-                    Label {
-                        Text("network.body.fetch")
-                    } icon: {
-                        Image(systemName: "arrow.down.circle")
-                    }
+    }
+}
+
+private struct WINetworkBodySection: View {
+    let entry: WINetworkEntry
+    let viewModel: WINetworkViewModel
+    let bodyState: WINetworkBody
+
+    var body: some View {
+        VStack(alignment:.leading) {
+            if let text = bodyState.displayText {
+                Text(text)
+                    .frame(maxWidth:.infinity,alignment:.leading)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .lineLimit(12)
+                 
+            } else {
+                Text("network.body.unavailable")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            if bodyState.fetchState == .inline {
+                fetchButton
+                if case let .failed(error) = bodyState.fetchState {
+                    Text(error.localizedResource)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .networkListRowStyle()
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isFetchingBody)
-            .networkListRowStyle()
-            if entry.responseBodyTruncated {
-                Text("network.body.truncated")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .networkListRowStyle()
+        }
+        .networkListRowStyle()
+        .animation(.easeInOut(duration:0.16),value:bodyState.fetchState)
+    }
+    private var fetchButton: some View {
+        Button {
+            Task {
+                switch bodyState.role{
+                case .request: await viewModel.fetchRequestBody(for: entry)
+                case .response: await viewModel.fetchResponseBody(for: entry)
+                }
+            }
+        } label: {
+            if bodyState.fetchState == .fetching {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Text("network.body.fetch")
+                    .padding(.horizontal)
             }
         }
+        .fetchButtonStyle()
+        .font(.footnote)
     }
-
-    private func fetchFullBody() {
-        guard !isFetchingBody else { return }
-        isFetchingBody = true
-        Task {
-            await viewModel.fetchResponseBody(for: entry)
-            await MainActor.run {
-                isFetchingBody = false
-            }
+}
+private extension View{
+    @ViewBuilder
+    func fetchButtonStyle() -> some View{
+        if #available(iOS 26.0,macOS 26.0, *) {
+            self
+                .buttonStyle(.glassProminent)
+                .buttonSizing(.fitted)
+        }else{
+            self
+                .buttonStyle(.borderedProminent)
         }
     }
 }

@@ -27,10 +27,175 @@ protocol NetworkEventProtocol {
     var wallTimeSeconds: TimeInterval? { get }
 }
 
-public struct WINetworkBody: Sendable {
-    public let body: String
-    public let isBase64Encoded: Bool
-    public let isTruncated: Bool
+@Observable
+public final class WINetworkBody {
+    public enum Kind: String, Sendable {
+        case text
+        case form
+        case binary
+        case other
+    }
+
+    public enum FetchError: Equatable, Sendable {
+        case unavailable
+        case decodeFailed
+        case unknown
+    }
+
+    public enum FetchState: Equatable {
+        case inline
+        case fetching
+        case full
+        case failed(FetchError)
+    }
+
+    public enum Role:CaseIterable {
+        case request
+        case response
+    }
+
+    public struct FormEntry: Sendable {
+        public let name: String
+        public let value: String
+        public let isFile: Bool
+        public let fileName: String?
+
+        init(name: String, value: String, isFile: Bool, fileName: String?) {
+            self.name = name
+            self.value = value
+            self.isFile = isFile
+            self.fileName = fileName
+        }
+
+        init?(dictionary: [String: Any]) {
+            let name = dictionary["name"] as? String ?? ""
+            let value = dictionary["value"] as? String ?? ""
+            if name.isEmpty && value.isEmpty {
+                return nil
+            }
+            let isFile = dictionary["isFile"] as? Bool ?? false
+            let fileName = dictionary["fileName"] as? String
+            self.init(name: name, value: value, isFile: isFile, fileName: fileName)
+        }
+    }
+
+    public var kind: Kind
+    public var preview: String?
+    public var full: String?
+    public var size: Int?
+    public var isBase64Encoded: Bool
+    public var isTruncated: Bool
+    public var summary: String?
+    public var formEntries: [FormEntry]
+    public var fetchState: FetchState
+    public var role: Role
+
+    public init(
+        kind: Kind = .text,
+        preview: String?,
+        full: String? = nil,
+        size: Int? = nil,
+        isBase64Encoded: Bool = false,
+        isTruncated: Bool = false,
+        summary: String? = nil,
+        formEntries: [FormEntry] = [],
+        fetchState: FetchState? = nil,
+        role: Role = .response
+    ) {
+        let resolvedFull = full ?? (isTruncated ? nil : preview)
+        let resolvedSize = size ?? (resolvedFull?.count ?? preview?.count)
+        self.kind = kind
+        self.preview = preview
+        self.full = resolvedFull
+        self.size = resolvedSize
+        self.isBase64Encoded = isBase64Encoded
+        self.isTruncated = isTruncated
+        self.summary = summary
+        self.formEntries = formEntries
+        self.role = role
+        if let fetchState {
+            self.fetchState = fetchState
+        } else if isTruncated && resolvedFull == nil {
+            self.fetchState = .inline
+        } else {
+            self.fetchState = .full
+        }
+    }
+
+    convenience init?(dictionary: [String: Any]) {
+        let rawKind = (dictionary["kind"] as? String)?.lowercased() ?? ""
+        let kind = Kind(rawValue: rawKind) ?? .other
+        let preview = dictionary["body"] as? String
+            ?? dictionary["preview"] as? String
+            ?? dictionary["inlineBody"] as? String
+        let storedBody = dictionary["storageBody"] as? String
+            ?? dictionary["fullBody"] as? String
+        let base64 = dictionary["base64Encoded"] as? Bool
+            ?? dictionary["base64encoded"] as? Bool
+            ?? false
+        let truncated = dictionary["truncated"] as? Bool ?? false
+        let rawSize = dictionary["size"]
+        let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
+        let summary = dictionary["summary"] as? String
+        let formEntries = (dictionary["formEntries"] as? [[String: Any]] ?? [])
+            .compactMap(FormEntry.init(dictionary:))
+
+        self.init(
+            kind: kind,
+            preview: preview,
+            full: storedBody,
+            size: size,
+            isBase64Encoded: base64,
+            isTruncated: truncated,
+            summary: summary,
+            formEntries: formEntries
+        )
+    }
+
+    static func decode(from value: Any?) -> WINetworkBody? {
+        if let dictionary = value as? [String: Any] {
+            return WINetworkBody(dictionary: dictionary)
+        }
+        if let string = value as? String {
+            return WINetworkBody(
+                kind: .text,
+                preview: string,
+                full: string,
+                size: string.count,
+                isBase64Encoded: false,
+                isTruncated: false
+            )
+        }
+        return nil
+    }
+
+    public var displayText: String? {
+        full ?? preview ?? summary
+    }
+
+    public var isFetching: Bool {
+        if case .fetching = fetchState {
+            return true
+        }
+        return false
+    }
+
+    public func markFetching() {
+        fetchState = .fetching
+    }
+
+    public func markFailed(_ error: FetchError) {
+        fetchState = .failed(error)
+    }
+
+    public func applyFullBody(_ fullBody: String, isBase64Encoded: Bool, size: Int?) {
+        full = fullBody
+        preview = preview ?? fullBody
+        self.isBase64Encoded = isBase64Encoded
+        isTruncated = false
+        self.size = size ?? fullBody.count
+        fetchState = .full
+    }
 }
 
 struct HTTPNetworkEvent: NetworkEventProtocol {
@@ -51,15 +216,9 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     let decodedBodySize: Int?
     let errorDescription: String?
     let requestType: String?
-    let requestBody: String?
-    let requestBodyIsBase64: Bool
-    let requestBodyTruncated: Bool
-    let requestBodySize: Int?
+    let requestBody: WINetworkBody?
     let requestBodyBytesSent: Int?
-    let responseBody: String?
-    let responseBodyIsBase64: Bool
-    let responseBodyTruncated: Bool
-    let responseBodySize: Int?
+    let responseBody: WINetworkBody?
     let blockedCookies: [String]
 
     init?(dictionary: [String: Any]) {
@@ -89,14 +248,8 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
         self.mimeType = dictionary["mimeType"] as? String
         self.requestHeaders = WINetworkHeaders(dictionary: dictionary["requestHeaders"] as? [String: String] ?? [:])
         self.responseHeaders = WINetworkHeaders(dictionary: dictionary["responseHeaders"] as? [String: String] ?? [:])
-        self.requestBody = dictionary["requestBody"] as? String
-        self.requestBodyIsBase64 = dictionary["requestBodyBase64"] as? Bool ?? false
-        self.requestBodyTruncated = dictionary["requestBodyTruncated"] as? Bool ?? false
-        self.requestBodySize = dictionary["requestBodySize"] as? Int
-        self.responseBody = dictionary["responseBody"] as? String
-        self.responseBodyIsBase64 = dictionary["responseBodyBase64"] as? Bool ?? false
-        self.responseBodyTruncated = dictionary["responseBodyTruncated"] as? Bool ?? false
-        self.responseBodySize = dictionary["responseBodySize"] as? Int
+        self.requestBody = WINetworkBody.decode(from: dictionary["requestBody"])
+        self.responseBody = WINetworkBody.decode(from: dictionary["responseBody"])
         self.blockedCookies = dictionary["blockedCookies"] as? [String] ?? []
 
         if let start = dictionary["startTime"] as? Double {
@@ -115,17 +268,21 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
             self.wallTimeSeconds = nil
         }
         self.encodedBodyLength = dictionary["encodedBodyLength"] as? Int
-        self.decodedBodySize = dictionary["decodedBodySize"] as? Int
+        self.decodedBodySize = dictionary["decodedBodySize"] as? Int ?? self.responseBody?.size
         if let error = dictionary["error"] as? String, !error.isEmpty {
             self.errorDescription = error
         } else {
             self.errorDescription = nil
         }
         self.requestType = dictionary["requestType"] as? String
-        if let bytesSent = dictionary["requestBodyBytesSent"] as? Int {
+        let rawBytesSent = dictionary["requestBodyBytesSent"]
+        if let bytesSent = rawBytesSent as? Int ?? (rawBytesSent as? NSNumber)?.intValue {
             self.requestBodyBytesSent = bytesSent
+        } else if let requestBody {
+            self.requestBodyBytesSent = requestBody.size
         } else {
-            self.requestBodyBytesSent = dictionary["requestBodySize"] as? Int
+            let rawRequestBodySize = dictionary["requestBodySize"]
+            self.requestBodyBytesSent = rawRequestBodySize as? Int ?? (rawRequestBodySize as? NSNumber)?.intValue
         }
     }
 
@@ -287,14 +444,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var requestBodyBytesSent: Int?
     public internal(set) var wallTime: TimeInterval?
     public internal(set) var phase: Phase
-    public internal(set) var requestBody: String?
-    public internal(set) var requestBodyIsBase64: Bool
-    public internal(set) var requestBodyTruncated: Bool
-    public internal(set) var requestBodySize: Int?
-    public internal(set) var responseBody: String?
-    public internal(set) var responseBodyIsBase64: Bool
-    public internal(set) var responseBodyTruncated: Bool
-    public internal(set) var responseBodySize: Int?
+    public internal(set) var requestBody: WINetworkBody?
+    public internal(set) var responseBody: WINetworkBody?
     public internal(set) var webSocket: WINetworkWebSocketInfo?
     
     init(
@@ -329,13 +480,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.requestBodyBytesSent = nil
         self.phase = .pending
         self.requestBody = nil
-        self.requestBodyIsBase64 = false
-        self.requestBodyTruncated = false
-        self.requestBodySize = nil
         self.responseBody = nil
-        self.responseBodyIsBase64 = false
-        self.responseBodyTruncated = false
-        self.responseBodySize = nil
         self.webSocket = nil
     }
 
@@ -353,10 +498,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         )
         requestType = payload.requestType
         requestBody = payload.requestBody
-        requestBodyIsBase64 = payload.requestBodyIsBase64
-        requestBodyTruncated = payload.requestBodyTruncated
-        requestBodySize = payload.requestBodySize
-        requestBodyBytesSent = payload.requestBodyBytesSent
+        requestBody?.role = .request
+        requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size
     }
 
     func applyResponsePayload(_ payload: HTTPNetworkEvent) {
@@ -395,6 +538,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
         if let decodedBodySize = payload.decodedBodySize {
             self.decodedBodyLength = decodedBodySize
+        } else if let responseBody {
+            self.decodedBodyLength = responseBody.size
         }
         if let endTime = payload.endTimeSeconds {
             endTimestamp = endTime
@@ -405,12 +550,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
         if let responseBody = payload.responseBody {
             self.responseBody = responseBody
+            self.responseBody?.role = .response
         }
-        if payload.responseBodySize != nil {
-            responseBodySize = payload.responseBodySize
-        }
-        responseBodyIsBase64 = payload.responseBodyIsBase64
-        responseBodyTruncated = payload.responseBodyTruncated
         errorDescription = payload.errorDescription
         phase = failed ? .failed : .completed
         if failed && statusCode == nil {
@@ -616,14 +757,6 @@ public final class WINetworkWebSocketInfo: Identifiable, Equatable, Hashable{
             return nil
         }
         return entries[index]
-    }
-
-    func updateResponseBody(sessionID: String?, requestID: Int, body: WINetworkBody) {
-        guard let entry = entry(forRequestID: requestID, sessionID: sessionID) else { return }
-        entry.responseBody = body.body
-        entry.responseBodyIsBase64 = body.isBase64Encoded
-        entry.responseBodyTruncated = body.isTruncated
-        entry.responseBodySize = body.body.count
     }
 
     private func handleStart(_ event: HTTPNetworkEvent) {

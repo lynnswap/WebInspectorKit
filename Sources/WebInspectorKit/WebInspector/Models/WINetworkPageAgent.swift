@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import OSLog
 import WebKit
 import Observation
@@ -93,17 +94,21 @@ extension WINetworkPageAgent {
         store.reset()
     }
 
-    func fetchResponseBody(requestID: Int, sessionID: String?) async -> WINetworkBody? {
+    func fetchBody(requestID: Int, role: WINetworkBody.Role) async -> WINetworkBody? {
         guard let webView else { return nil }
-        let sessionArgument: Any = sessionID ?? NSNull()
         do {
+            let isRequest = role == .request
             let result = try await webView.callAsyncJavaScript(
                 """
-                return (function(requestId, session) {
-                    if (!window.webInspectorNetwork || typeof window.webInspectorNetwork.getResponseBody !== "function") {
+                return (function(requestId, isRequest) {
+                    if (!window.webInspectorNetwork) {
                         return null;
                     }
-                    const body = window.webInspectorNetwork.getResponseBody(requestId, session);
+                    const getter = isRequest ? window.webInspectorNetwork.getRequestBody : window.webInspectorNetwork.getResponseBody;
+                    if (typeof getter !== "function") {
+                        return null;
+                    }
+                    const body = getter(requestId);
                     if (body == null) {
                         return null;
                     }
@@ -112,33 +117,26 @@ extension WINetworkPageAgent {
                     } catch (error) {
                         return null;
                     }
-                })(requestId, session);
+                })(requestId, isRequest);
                 """,
                 arguments: [
                     "requestId": requestID,
-                    "session": sessionArgument
+                    "isRequest": isRequest
                 ],
                 in: nil,
                 contentWorld: .page
             )
-            let parsed: [String: Any]
+            let decoded: Any
             if let jsonString = result as? String,
                let data = jsonString.data(using: .utf8),
-               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                parsed = object
-            } else if let dictionary = result as? [String: Any] {
-                parsed = dictionary
+               let object = try? JSONSerialization.jsonObject(with: data) {
+                decoded = object
             } else {
-                return nil
+                decoded = result as Any
             }
-            guard let body = parsed["body"] as? String else {
-                return nil
-            }
-            let base64 = parsed["base64Encoded"] as? Bool ?? parsed["base64encoded"] as? Bool ?? false
-            let truncated = parsed["truncated"] as? Bool ?? false
-            return WINetworkBody(body: body, isBase64Encoded: base64, isTruncated: truncated)
+            return WINetworkBody.decode(from: decoded)
         } catch {
-            networkLogger.error("getResponseBody failed: \(error.localizedDescription, privacy: .public)")
+            networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

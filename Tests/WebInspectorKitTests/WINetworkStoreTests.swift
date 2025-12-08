@@ -80,10 +80,12 @@ struct WINetworkStoreTests {
                 "requestId": 10,
                 "url": "https://example.com/api",
                 "method": "POST",
-                "requestBody": #"{"hello":"world"}"#,
-                "requestBodyBase64": false,
-                "requestBodyTruncated": false,
-                "requestBodySize": 17
+                "requestBody": [
+                    "kind": "text",
+                    "body": #"{"hello":"world"}"#,
+                    "truncated": false,
+                    "size": 17
+                ]
             ])
         )
         store.applyEvent(start)
@@ -92,21 +94,24 @@ struct WINetworkStoreTests {
             HTTPNetworkEvent(dictionary: [
                 "type": "finish",
                 "requestId": 10,
-                "responseBody": "ok",
-                "responseBodyBase64": false,
-                "responseBodyTruncated": false,
-                "responseBodySize": 2
+                "responseBody": [
+                    "kind": "text",
+                    "body": "ok",
+                    "truncated": false,
+                    "size": 2
+                ]
             ])
         )
         store.applyEvent(finish)
 
         let entry = try #require(store.entry(forRequestID: 10, sessionID: nil))
-        #expect(entry.requestBody == #"{"hello":"world"}"#)
-        #expect(entry.requestBodyIsBase64 == false)
+        #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
+        #expect(entry.requestBody?.isBase64Encoded == false)
+        #expect(entry.requestBody?.size == 17)
         #expect(entry.requestBodyBytesSent == 17)
-        #expect(entry.responseBody == "ok")
-        #expect(entry.responseBodyIsBase64 == false)
-        #expect(entry.responseBodyTruncated == false)
+        #expect(entry.responseBody?.displayText == "ok")
+        #expect(entry.responseBody?.isBase64Encoded == false)
+        #expect(entry.responseBody?.isTruncated == false)
     }
 
     @Test

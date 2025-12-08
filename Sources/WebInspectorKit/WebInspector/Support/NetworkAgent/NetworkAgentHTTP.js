@@ -13,40 +13,34 @@ const installFetchPatch = () => {
         const args = Array.from(arguments);
         const [input, init = {}] = args;
         const method = init.method || (input && input.method) || "GET";
-        const identity = shouldTrack ? nextRequestIdentity() : null;
+        const requestId = shouldTrack ? nextRequestID() : null;
         const url = typeof input === "string" ? input : (input && input.url) || "";
         const headers = normalizeHeaders(init.headers || (input && input.headers));
         const requestBodyInfo = serializeRequestBody(init.body);
 
-        if (shouldTrack && identity) {
-            postHTTPEvent({
-                type: "start",
-                session: identity.session,
-                requestId: identity.requestId,
-                url: url,
-                method: String(method).toUpperCase(),
-                requestHeaders: headers,
-                startTime: now(),
-                wallTime: wallTime(),
-                requestType: "fetch",
-                requestBody: requestBodyInfo ? requestBodyInfo.body : undefined,
-                requestBodyBase64: requestBodyInfo ? requestBodyInfo.base64Encoded : undefined,
-                requestBodySize: requestBodyInfo ? requestBodyInfo.size : undefined,
-                requestBodyTruncated: requestBodyInfo ? requestBodyInfo.truncated : undefined,
-                requestBodyBytesSent: requestBodyInfo ? requestBodyInfo.size : undefined
-            });
+        if (shouldTrack && requestId != null) {
+            recordStart(
+                requestId,
+                url,
+                String(method).toUpperCase(),
+                headers,
+                "fetch",
+                now(),
+                wallTime(),
+                requestBodyInfo
+            );
         }
 
         try {
             const response = await nativeFetch.apply(window, args);
             let mimeType;
             let responseBodyInfo = null;
-            if (shouldTrack && identity) {
-                mimeType = recordResponse(identity, response, "fetch");
+            if (shouldTrack && requestId != null) {
+                mimeType = recordResponse(requestId, response, "fetch");
                 postHTTPEvent({
                     type: "responseExtra",
-                    session: identity.session,
-                    requestId: identity.requestId,
+                    session: networkState.sessionID,
+                    requestId: requestId,
                     responseHeaders: normalizeHeaders(response.headers),
                     blockedCookies: [],
                     wallTime: wallTime()
@@ -61,7 +55,7 @@ const installFetchPatch = () => {
                     responseBodyInfo
                 );
                 recordFinish(
-                    identity,
+                    requestId,
                     encodedLength,
                     "fetch",
                     response && typeof response.status === "number" ? response.status : undefined,
@@ -74,8 +68,8 @@ const installFetchPatch = () => {
             }
             return response;
         } catch (error) {
-            if (shouldTrack && identity) {
-                recordFailure(identity, error, "fetch");
+            if (shouldTrack && requestId != null) {
+                recordFailure(requestId, error, "fetch");
             }
             throw error;
         }
@@ -114,33 +108,27 @@ const installXHRPatch = () => {
 
     XMLHttpRequest.prototype.send = function() {
         const shouldTrack = !!this.__wiNetwork;
-        const identity = shouldTrack ? nextRequestIdentity() : null;
+        const requestId = shouldTrack ? nextRequestID() : null;
         const info = this.__wiNetwork;
-        if (shouldTrack && identity && info) {
+        if (shouldTrack && requestId != null && info) {
             info.requestBody = serializeRequestBody(arguments[0]);
-            postHTTPEvent({
-                type: "start",
-                session: identity.session,
-                requestId: identity.requestId,
-                url: info.url,
-                method: info.method,
-                requestHeaders: info.headers || {},
-                startTime: now(),
-                wallTime: wallTime(),
-                requestType: "xhr",
-                requestBody: info.requestBody ? info.requestBody.body : undefined,
-                requestBodyBase64: info.requestBody ? info.requestBody.base64Encoded : undefined,
-                requestBodySize: info.requestBody ? info.requestBody.size : undefined,
-                requestBodyTruncated: info.requestBody ? info.requestBody.truncated : undefined,
-                requestBodyBytesSent: info.requestBody ? info.requestBody.size : undefined
-            });
+            recordStart(
+                requestId,
+                info.url,
+                info.method,
+                info.headers || {},
+                "xhr",
+                now(),
+                wallTime(),
+                info.requestBody
+            );
             this.addEventListener("readystatechange", function() {
-                if (this.readyState === 2 && identity) {
-                    recordResponse(identity, this, "xhr");
+                if (this.readyState === 2 && requestId != null) {
+                    recordResponse(requestId, this, "xhr");
                     postHTTPEvent({
                         type: "responseExtra",
-                        session: identity.session,
-                        requestId: identity.requestId,
+                        session: networkState.sessionID,
+                        requestId: requestId,
                         responseHeaders: parseRawHeaders(this.getAllResponseHeaders && this.getAllResponseHeaders()),
                         blockedCookies: [],
                         wallTime: wallTime()
@@ -148,14 +136,14 @@ const installXHRPatch = () => {
                 }
             }, false);
             this.addEventListener("load", function() {
-                if (identity) {
+                if (requestId != null) {
                     const responseBody = captureXHRResponseBody(this);
                     const length = estimatedEncodedLength(
                         captureContentLength(this),
                         responseBody
                     );
                     recordFinish(
-                        identity,
+                        requestId,
                         length,
                         "xhr",
                         this.status,
@@ -168,13 +156,13 @@ const installXHRPatch = () => {
                 }
             }, false);
             this.addEventListener("error", function(event) {
-                if (identity) {
-                    recordFailure(identity, event && event.error ? event.error : "Network error", "xhr");
+                if (requestId != null) {
+                    recordFailure(requestId, event && event.error ? event.error : "Network error", "xhr");
                 }
             }, false);
             this.addEventListener("abort", function() {
-                if (identity) {
-                    recordFailure(identity, "Request aborted", "xhr");
+                if (requestId != null) {
+                    recordFailure(requestId, "Request aborted", "xhr");
                 }
             }, false);
         }

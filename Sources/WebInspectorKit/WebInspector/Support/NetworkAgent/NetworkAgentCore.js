@@ -2,7 +2,7 @@
 // This file keeps recording logic and wires sub-patches.
 
 const recordStart = (
-    identity,
+    requestId,
     url,
     method,
     requestHeaders,
@@ -11,37 +11,33 @@ const recordStart = (
     wallTimeOverride,
     requestBody
 ) => {
-    if (!identity) {
-        return;
-    }
     const startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    const key = trackingKey(identity);
-    if (key) {
-        trackedRequests.set(key, {startTime: startTime, wallTime: wall});
+    trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
+    if (requestBody && typeof requestBody.storageBody === "string") {
+        const stored = {...requestBody, body: requestBody.storageBody};
+        if (stored.truncated) {
+            stored.truncated = false;
+        }
+        requestBodies.set(requestId, stored);
+        pruneStoredRequestBodies();
     }
     postHTTPEvent({
         type: "start",
-        session: identity.session,
-        requestId: identity.requestId,
+        session: networkState.sessionID,
+        requestId: requestId,
         url: url,
         method: method,
         requestHeaders: requestHeaders || {},
         startTime: startTime,
         wallTime: wall,
         requestType: requestType,
-        requestBody: requestBody ? requestBody.body : undefined,
-        requestBodyBase64: requestBody ? requestBody.base64Encoded : undefined,
-        requestBodySize: requestBody ? requestBody.size : undefined,
-        requestBodyTruncated: requestBody ? requestBody.truncated : undefined,
+        requestBody: inlineBodyPayload(requestBody),
         requestBodyBytesSent: requestBody ? requestBody.size : undefined
     });
 };
 
-const recordResponse = (identity, response, requestType) => {
-    if (!identity) {
-        return;
-    }
+const recordResponse = (requestId, response, requestType) => {
     let mimeType = "";
     let headers = {};
     try {
@@ -65,8 +61,8 @@ const recordResponse = (identity, response, requestType) => {
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
     postHTTPEvent({
         type: "response",
-        session: identity.session,
-        requestId: identity.requestId,
+        session: networkState.sessionID,
+        requestId: requestId,
         status: status,
         statusText: statusText,
         mimeType: mimeType,
@@ -79,7 +75,7 @@ const recordResponse = (identity, response, requestType) => {
 };
 
 const recordFinish = (
-    identity,
+    requestId,
     encodedBodyLength,
     requestType,
     status,
@@ -89,15 +85,12 @@ const recordFinish = (
     wallTimeOverride,
     responseBody
 ) => {
-    if (!identity) {
-        return;
-    }
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     postHTTPEvent({
         type: "finish",
-        session: identity.session,
-        requestId: identity.requestId,
+        session: networkState.sessionID,
+        requestId: requestId,
         endTime: time,
         wallTime: wall,
         encodedBodyLength: encodedBodyLength,
@@ -106,30 +99,20 @@ const recordFinish = (
         statusText: statusText,
         mimeType: mimeType,
         decodedBodySize: responseBody ? responseBody.size : undefined,
-        responseBody: responseBody ? responseBody.body : undefined,
-        responseBodyBase64: responseBody ? responseBody.base64Encoded : undefined,
-        responseBodySize: responseBody ? responseBody.size : undefined,
-        responseBodyTruncated: responseBody ? responseBody.truncated : undefined
+        responseBody: inlineBodyPayload(responseBody)
     });
-    const key = trackingKey(identity);
-    if (key) {
-        trackedRequests.delete(key);
-    }
-    const bodyKey = trackingKey(identity);
-    if (bodyKey && responseBody && typeof responseBody.body === "string") {
-        responseBodies.set(bodyKey, {
-            base64Encoded: !!responseBody.base64Encoded,
-            body: typeof responseBody.storageBody === "string" ? responseBody.storageBody : responseBody.body,
-            truncated: !!responseBody.truncated
-        });
+    trackedRequests.delete(requestId);
+    if (responseBody) {
+        const storedBody = {...responseBody};
+        if (typeof responseBody.storageBody === "string") {
+            storedBody.body = responseBody.storageBody;
+        }
+        responseBodies.set(requestId, storedBody);
         pruneStoredResponseBodies();
     }
 };
 
-const recordFailure = (identity, error, requestType) => {
-    if (!identity) {
-        return;
-    }
+const recordFailure = (requestId, error, requestType) => {
     const time = now();
     const wall = wallTime();
     let description = "";
@@ -140,17 +123,14 @@ const recordFailure = (identity, error, requestType) => {
     }
     postHTTPEvent({
         type: "fail",
-        session: identity.session,
-        requestId: identity.requestId,
+        session: networkState.sessionID,
+        requestId: requestId,
         endTime: time,
         wallTime: wall,
         error: description,
         requestType: requestType
     });
-    const key = trackingKey(identity);
-    if (key) {
-        trackedRequests.delete(key);
-    }
+    trackedRequests.delete(requestId);
 };
 
 const flushQueuedEvents = () => {
@@ -159,7 +139,7 @@ const flushQueuedEvents = () => {
     }
     const pending = queuedEvents.splice(0, queuedEvents.length);
     const batchPayload = {
-        session: networkState.sessionPrefix,
+        session: networkState.sessionID,
         events: pending
     };
     try {
@@ -196,6 +176,7 @@ export const setNetworkLoggingEnabled = enabled => {
 
 export const clearNetworkRecords = () => {
     trackedRequests.clear();
+    requestBodies.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
@@ -208,12 +189,20 @@ export const installNetworkObserver = () => {
     ensureInstalled();
 };
 
-export const getResponseBody = (requestId, session) => {
-    const key = (session || networkState.sessionPrefix) + "::" + String(requestId);
-    if (!responseBodies.has(key)) {
+export const getResponseBody = requestId => {
+    if (!responseBodies.has(requestId)) {
         return null;
     }
-    const body = responseBodies.get(key);
-    responseBodies.delete(key);
+    const body = responseBodies.get(requestId);
+    responseBodies.delete(requestId);
+    return body;
+};
+
+export const getRequestBody = requestId => {
+    if (!requestBodies.has(requestId)) {
+        return null;
+    }
+    const body = requestBodies.get(requestId);
+    requestBodies.delete(requestId);
     return body;
 };

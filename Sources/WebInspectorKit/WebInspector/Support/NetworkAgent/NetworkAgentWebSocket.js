@@ -37,11 +37,11 @@ const installWebSocketPatch = () => {
     const OriginalWebSocket = WebSocket;
     function WrappedWebSocket(url, protocols) {
         const socket = new OriginalWebSocket(url, protocols);
-        const identity = nextRequestIdentity();
+        const requestId = nextRequestID();
         postWebSocketEvent({
             type: "wsCreated",
-            session: identity.session,
-            requestId: identity.requestId,
+            session: networkState.sessionID,
+            requestId: requestId,
             url: url,
             startTime: now(),
             wallTime: wallTime()
@@ -50,8 +50,8 @@ const installWebSocketPatch = () => {
         socket.addEventListener("open", () => {
             postWebSocketEvent({
                 type: "wsHandshakeRequest",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 // Browser APIs do not expose handshake request headers to JS for security.
                 requestHeaders: {},
                 startTime: now(),
@@ -59,8 +59,8 @@ const installWebSocketPatch = () => {
             });
             postWebSocketEvent({
                 type: "wsHandshake",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 status: 101,
                 statusText: "Switching Protocols",
                 endTime: now(),
@@ -73,8 +73,8 @@ const installWebSocketPatch = () => {
             const opcode = typeof event.data === "string" ? 1 : 2;
             postWebSocketEvent({
                 type: "wsFrame",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 endTime: now(),
                 wallTime: wallTime(),
                 frameDirection: "incoming",
@@ -91,8 +91,8 @@ const installWebSocketPatch = () => {
             const serialized = await serializeFramePayload(data);
             postWebSocketEvent({
                 type: "wsFrame",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 endTime: now(),
                 wallTime: wallTime(),
                 frameDirection: "outgoing",
@@ -108,8 +108,8 @@ const installWebSocketPatch = () => {
         socket.addEventListener("close", event => {
             postWebSocketEvent({
                 type: "wsClosed",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 closeCode: event && typeof event.code === "number" ? event.code : undefined,
                 closeReason: event && typeof event.reason === "string" ? event.reason : undefined,
                 closeWasClean: event && typeof event.wasClean === "boolean" ? event.wasClean : undefined,
@@ -121,8 +121,8 @@ const installWebSocketPatch = () => {
         socket.addEventListener("error", event => {
             postWebSocketEvent({
                 type: "wsFrameError",
-                session: identity.session,
-                requestId: identity.requestId,
+                session: networkState.sessionID,
+                requestId: requestId,
                 endTime: now(),
                 wallTime: wallTime(),
                 error: event && typeof event.message === "string" && event.message ? event.message : "WebSocket error",
