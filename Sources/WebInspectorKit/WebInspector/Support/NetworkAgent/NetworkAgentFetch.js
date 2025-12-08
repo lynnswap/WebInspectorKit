@@ -17,16 +17,21 @@ const installFetchPatch = () => {
         const requestBodyInfo = serializeRequestBody(init.body);
 
         if (shouldTrack && identity) {
-            recordStart(
-                identity,
-                url,
-                String(method).toUpperCase(),
-                headers,
-                "fetch",
-                undefined,
-                undefined,
-                requestBodyInfo
-            );
+            postHTTPEvent({
+                type: "start",
+                session: identity.session,
+                requestId: identity.requestId,
+                url: url,
+                method: String(method).toUpperCase(),
+                requestHeaders: headers,
+                startTime: now(),
+                wallTime: wallTime(),
+                requestType: "fetch",
+                requestBody: requestBodyInfo ? requestBodyInfo.body : undefined,
+                requestBodyBase64: requestBodyInfo ? requestBodyInfo.base64Encoded : undefined,
+                requestBodySize: requestBodyInfo ? requestBodyInfo.size : undefined,
+                requestBodyTruncated: requestBodyInfo ? requestBodyInfo.truncated : undefined
+            });
         }
 
         try {
@@ -35,7 +40,7 @@ const installFetchPatch = () => {
             let responseBodyInfo = null;
             if (shouldTrack && identity) {
                 mimeType = recordResponse(identity, response, "fetch");
-                postNetworkEvent({
+                postHTTPEvent({
                     type: "responseExtra",
                     session: identity.session,
                     requestId: identity.requestId,

@@ -32,20 +32,25 @@ const installXHRPatch = () => {
         const info = this.__wiNetwork;
         if (shouldTrack && identity && info) {
             info.requestBody = serializeRequestBody(arguments[0]);
-            recordStart(
-                identity,
-                info.url,
-                info.method,
-                info.headers || {},
-                "xhr",
-                undefined,
-                undefined,
-                info.requestBody
-            );
+            postHTTPEvent({
+                type: "start",
+                session: identity.session,
+                requestId: identity.requestId,
+                url: info.url,
+                method: info.method,
+                requestHeaders: info.headers || {},
+                startTime: now(),
+                wallTime: wallTime(),
+                requestType: "xhr",
+                requestBody: info.requestBody ? info.requestBody.body : undefined,
+                requestBodyBase64: info.requestBody ? info.requestBody.base64Encoded : undefined,
+                requestBodySize: info.requestBody ? info.requestBody.size : undefined,
+                requestBodyTruncated: info.requestBody ? info.requestBody.truncated : undefined
+            });
             this.addEventListener("readystatechange", function() {
                 if (this.readyState === 2 && identity) {
                     recordResponse(identity, this, "xhr");
-                    postNetworkEvent({
+                    postHTTPEvent({
                         type: "responseExtra",
                         session: identity.session,
                         requestId: identity.requestId,

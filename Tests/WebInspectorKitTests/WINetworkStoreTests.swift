@@ -8,7 +8,7 @@ struct WINetworkStoreTests {
         let store = WINetworkStore()
 
         let firstStart = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "first",
                 "requestId": 1,
@@ -19,7 +19,7 @@ struct WINetworkStoreTests {
         store.applyEvent(firstStart)
 
         let secondStart = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "second",
                 "requestId": 1,
@@ -38,7 +38,7 @@ struct WINetworkStoreTests {
     func resetClearsSessionsAndEntries() throws {
         let store = WINetworkStore()
         let payload = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 1,
                 "url": "https://example.com",
@@ -57,7 +57,7 @@ struct WINetworkStoreTests {
     @Test
     func parsesNumericRequestIdFromString() throws {
         let payload = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "wi_session_123",
                 "requestId": "42",
@@ -75,7 +75,7 @@ struct WINetworkStoreTests {
         let store = WINetworkStore()
 
         let start = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 10,
                 "url": "https://example.com/api",
@@ -89,7 +89,7 @@ struct WINetworkStoreTests {
         store.applyEvent(start)
 
         let finish = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "finish",
                 "requestId": 10,
                 "responseBody": "ok",

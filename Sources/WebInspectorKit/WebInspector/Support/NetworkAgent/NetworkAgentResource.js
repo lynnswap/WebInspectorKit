@@ -13,7 +13,7 @@ const installResourceObserver = () => {
                 }
             }
             if (payloads.length) {
-                postNetworkBatchEvents(payloads);
+                postHTTPBatchEvents(payloads);
             }
         });
         observer.observe({type: "resource", buffered: true});

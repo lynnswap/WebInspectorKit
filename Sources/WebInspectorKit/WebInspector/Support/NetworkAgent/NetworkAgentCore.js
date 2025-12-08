@@ -20,7 +20,7 @@ const recordStart = (
     if (key) {
         trackedRequests.set(key, {startTime: startTime, wallTime: wall});
     }
-    postNetworkEvent({
+    postHTTPEvent({
         type: "start",
         session: identity.session,
         requestId: identity.requestId,
@@ -62,7 +62,7 @@ const recordResponse = (identity, response, requestType) => {
     const wall = wallTime();
     const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
-    postNetworkEvent({
+    postHTTPEvent({
         type: "response",
         session: identity.session,
         requestId: identity.requestId,
@@ -93,7 +93,7 @@ const recordFinish = (
     }
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    postNetworkEvent({
+    postHTTPEvent({
         type: "finish",
         session: identity.session,
         requestId: identity.requestId,
@@ -134,7 +134,7 @@ const recordFailure = (identity, error, requestType) => {
     } else if (error) {
         description = String(error);
     }
-    postNetworkEvent({
+    postHTTPEvent({
         type: "fail",
         session: identity.session,
         requestId: identity.requestId,
@@ -146,6 +146,47 @@ const recordFailure = (identity, error, requestType) => {
     const key = trackingKey(identity);
     if (key) {
         trackedRequests.delete(key);
+    }
+};
+
+const flushQueuedEvents = () => {
+    if (!queuedEvents.length) {
+        return;
+    }
+    const pending = queuedEvents.splice(0, queuedEvents.length);
+    pending.forEach(item => {
+        switch (item.kind) {
+        case "http":
+            try {
+                window.webkit.messageHandlers.webInspectorHTTPUpdate.postMessage(item.payload);
+            } catch {
+            }
+            break;
+        case "httpBatch":
+            try {
+                window.webkit.messageHandlers.webInspectorHTTPBatchUpdate.postMessage({
+                    session: networkState.sessionPrefix,
+                    events: item.payloads || []
+                });
+            } catch {
+            }
+            break;
+        case "websocket":
+            try {
+                window.webkit.messageHandlers.webInspectorWSUpdate.postMessage(item.payload);
+            } catch {
+            }
+            break;
+        default:
+            break;
+        }
+    });
+};
+
+const postNetworkReset = () => {
+    try {
+        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
+    } catch {
     }
 };
 

@@ -25,10 +25,6 @@ const serializeFramePayload = async data => {
     return {payload: "", base64: false, size: 0};
 };
 
-const postWebSocketEvent = payload => {
-    postNetworkEvent(payload);
-};
-
 const installWebSocketPatch = () => {
     if (typeof WebSocket !== "function") {
         return;
@@ -38,7 +34,7 @@ const installWebSocketPatch = () => {
         const socket = new OriginalWebSocket(url, protocols);
         const identity = nextRequestIdentity();
         postWebSocketEvent({
-            type: "webSocketCreated",
+            type: "wsCreated",
             session: identity.session,
             requestId: identity.requestId,
             url: url,
@@ -48,7 +44,7 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("open", () => {
             postWebSocketEvent({
-                type: "webSocketHandshake",
+                type: "wsHandshake",
                 session: identity.session,
                 requestId: identity.requestId,
                 status: 101,
@@ -60,14 +56,15 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("message", async event => {
             const serialized = await serializeFramePayload(event.data);
+            const opcode = typeof event.data === "string" ? 1 : 2;
             postWebSocketEvent({
-                type: "webSocketFrameReceived",
+                type: "wsFrame",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),
                 wallTime: wallTime(),
                 frameDirection: "incoming",
-                frameOpcode: typeof event.type === "string" ? 1 : 1,
+                frameOpcode: opcode,
                 framePayload: serialized.payload,
                 framePayloadBase64: serialized.base64,
                 framePayloadSize: serialized.size
@@ -78,7 +75,7 @@ const installWebSocketPatch = () => {
         socket.send = async function(data) {
             const serialized = await serializeFramePayload(data);
             postWebSocketEvent({
-                type: "webSocketFrameSent",
+                type: "wsFrame",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),
@@ -94,7 +91,7 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("close", () => {
             postWebSocketEvent({
-                type: "webSocketClosed",
+                type: "wsClosed",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),
@@ -104,7 +101,7 @@ const installWebSocketPatch = () => {
 
         socket.addEventListener("error", () => {
             postWebSocketEvent({
-                type: "webSocketError",
+                type: "wsError",
                 session: identity.session,
                 requestId: identity.requestId,
                 endTime: now(),
@@ -121,4 +118,14 @@ const installWebSocketPatch = () => {
     WrappedWebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
     WrappedWebSocket.OPEN = OriginalWebSocket.OPEN;
     window.WebSocket = WrappedWebSocket;
+};
+const postWebSocketEvent = payload => {
+    if (!networkState.enabled) {
+        queuedEvents.push({kind: "websocket", payload});
+        return;
+    }
+    try {
+        window.webkit.messageHandlers.webInspectorWSUpdate.postMessage(payload);
+    } catch {
+    }
 };

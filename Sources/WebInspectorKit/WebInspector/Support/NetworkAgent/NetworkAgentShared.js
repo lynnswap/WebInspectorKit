@@ -55,6 +55,35 @@ const trackedResourceTypes = new Set([
 
 const MAX_BODY_LENGTH = 64 * 1024;
 
+const postHTTPEvent = payload => {
+    if (!networkState.enabled) {
+        queuedEvents.push({kind: "http", payload});
+        return;
+    }
+    try {
+        window.webkit.messageHandlers.webInspectorHTTPUpdate.postMessage(payload);
+    } catch {
+    }
+};
+
+const postHTTPBatchEvents = payloads => {
+    if (!networkState.enabled) {
+        queuedEvents.push({kind: "httpBatch", payloads});
+        return;
+    }
+    if (!Array.isArray(payloads) || !payloads.length) {
+        return;
+    }
+    const batchPayload = {
+        session: networkState.sessionPrefix,
+        events: payloads
+    };
+    try {
+        window.webkit.messageHandlers.webInspectorHTTPBatchUpdate.postMessage(batchPayload);
+    } catch {
+    }
+};
+
 const nextRequestIdentity = () => {
     const requestId = networkState.nextId;
     networkState.nextId += 1;
@@ -73,56 +102,6 @@ const trackingKey = identity => {
         return identity.session + "::" + idPart;
     }
     return idPart != null ? String(idPart) : null;
-};
-
-const postNetworkEvent = payload => {
-    if (!networkState.enabled) {
-        queuedEvents.push({type: "single", payload});
-        return;
-    }
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
-    } catch {
-    }
-};
-
-const postNetworkBatchEvents = payloads => {
-    if (!networkState.enabled) {
-        queuedEvents.push({type: "batch", payloads});
-        return;
-    }
-    if (!Array.isArray(payloads) || !payloads.length) {
-        return;
-    }
-    const batchPayload = {
-        session: networkState.sessionPrefix,
-        events: payloads
-    };
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkBatchUpdate.postMessage(batchPayload);
-    } catch {
-    }
-};
-
-const postNetworkReset = () => {
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
-    } catch {
-    }
-};
-
-const flushQueuedEvents = () => {
-    if (!queuedEvents.length) {
-        return;
-    }
-    const pending = queuedEvents.splice(0, queuedEvents.length);
-    pending.forEach(item => {
-        if (item.type === "batch") {
-            postNetworkBatchEvents(item.payloads);
-            return;
-        }
-        postNetworkEvent(item.payload);
-    });
 };
 
 const normalizeHeaders = headers => {

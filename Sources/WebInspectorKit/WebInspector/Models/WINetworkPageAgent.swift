@@ -12,8 +12,9 @@ private let networkPresenceProbeScript: String = """
 @Observable
 final class WINetworkPageAgent: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
-        case network = "webInspectorNetworkUpdate"
-        case networkBatch = "webInspectorNetworkBatchUpdate"
+        case http = "webInspectorHTTPUpdate"
+        case httpBatch = "webInspectorHTTPBatchUpdate"
+        case webSocket = "webInspectorWSUpdate"
         case networkReset = "webInspectorNetworkReset"
     }
 
@@ -97,21 +98,31 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
         }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
-        case .network:
-            handleNetworkMessage(message)
-        case .networkBatch:
+        case .http:
+            handleHTTPMessage(message)
+        case .httpBatch:
             handleNetworkBatchMessage(message)
+        case .webSocket:
+            handleWebSocketMessage(message)
         case .networkReset:
             handleNetworkReset()
         }
     }
 
-    private func handleNetworkMessage(_ message: WKScriptMessage) {
+    private func handleHTTPMessage(_ message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any],
-              let event = NetworkEvent(dictionary: payload) else {
+              let event = HTTPNetworkEvent(dictionary: payload) else {
             return
         }
-        store.applyEvent(event)
+        store.applyHTTPEvent(event)
+    }
+
+    private func handleWebSocketMessage(_ message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any],
+              let event = WSNetworkEvent(dictionary: payload) else {
+            return
+        }
+        store.applyWSEvent(event)
     }
 
     private func handleNetworkReset() {
