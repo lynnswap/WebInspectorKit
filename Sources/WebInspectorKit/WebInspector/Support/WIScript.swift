@@ -19,10 +19,8 @@ enum WIScript {
     ]
     private static let networkModuleNames = [
         "NetworkAgent/NetworkAgentShared",
-        "NetworkAgent/NetworkAgentFetch",
-        "NetworkAgent/NetworkAgentXHR",
+        "NetworkAgent/NetworkAgentHTTP",
         "NetworkAgent/NetworkAgentWebSocket",
-        "NetworkAgent/NetworkAgentResource",
         "NetworkAgent/NetworkAgentCore",
         "NetworkAgent"
     ]
