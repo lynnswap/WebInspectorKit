@@ -120,8 +120,9 @@ const recordFinish = (
         responseBodies.set(bodyKey, {
             base64Encoded: !!responseBody.base64Encoded,
             body: typeof responseBody.storageBody === "string" ? responseBody.storageBody : responseBody.body,
-            truncated: !!responseBody.storageTruncated
+            truncated: !!responseBody.truncated
         });
+        pruneStoredResponseBodies();
     }
 };
 
@@ -212,5 +213,7 @@ export const getResponseBody = (requestId, session) => {
     if (!responseBodies.has(key)) {
         return null;
     }
-    return responseBodies.get(key);
+    const body = responseBodies.get(key);
+    responseBodies.delete(key);
+    return body;
 };

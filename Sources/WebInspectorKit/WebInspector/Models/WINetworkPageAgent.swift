@@ -103,7 +103,15 @@ extension WINetworkPageAgent {
                     if (!window.webInspectorNetwork || typeof window.webInspectorNetwork.getResponseBody !== "function") {
                         return null;
                     }
-                    return window.webInspectorNetwork.getResponseBody(requestId, session);
+                    const body = window.webInspectorNetwork.getResponseBody(requestId, session);
+                    if (body == null) {
+                        return null;
+                    }
+                    try {
+                        return JSON.stringify(body);
+                    } catch (error) {
+                        return null;
+                    }
                 })(requestId, session);
                 """,
                 arguments: [
@@ -113,12 +121,21 @@ extension WINetworkPageAgent {
                 in: nil,
                 contentWorld: .page
             )
-            guard let dictionary = result as? [String: Any],
-                  let body = dictionary["body"] as? String else {
+            let parsed: [String: Any]
+            if let jsonString = result as? String,
+               let data = jsonString.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                parsed = object
+            } else if let dictionary = result as? [String: Any] {
+                parsed = dictionary
+            } else {
                 return nil
             }
-            let base64 = dictionary["base64Encoded"] as? Bool ?? dictionary["base64encoded"] as? Bool ?? false
-            let truncated = dictionary["truncated"] as? Bool ?? false
+            guard let body = parsed["body"] as? String else {
+                return nil
+            }
+            let base64 = parsed["base64Encoded"] as? Bool ?? parsed["base64encoded"] as? Bool ?? false
+            let truncated = parsed["truncated"] as? Bool ?? false
             return WINetworkBody(body: body, isBase64Encoded: base64, isTruncated: truncated)
         } catch {
             networkLogger.error("getResponseBody failed: \(error.localizedDescription, privacy: .public)")

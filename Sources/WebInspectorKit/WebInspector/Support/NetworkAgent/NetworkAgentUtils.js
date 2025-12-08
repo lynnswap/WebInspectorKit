@@ -53,9 +53,37 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
-const MAX_INLINE_BODY_LENGTH = 64 * 1024;
-const MAX_STORED_BODY_LENGTH = 512 * 1024;
+// Keep inline payloads small to avoid OOL IPC; full body is cached separately with only a count cap.
+const MAX_INLINE_BODY_LENGTH = 512;
+const MAX_STORED_RESPONSE_BODIES = 50;
 const MAX_QUEUED_EVENTS = 500;
+
+/**
+ * @typedef {Object} RequestBodyInfo
+ * @property {"text"|"form"|"binary"} kind
+ * @property {string=} body
+ * @property {boolean} base64Encoded
+ * @property {boolean} truncated
+ * @property {number=} size
+ * @property {string=} storageBody
+ * @property {string=} summary
+ * @property {Array<{name:string,value:string,isFile?:boolean,fileName?:string,size?:number}>=} formEntries
+ */
+
+const pruneStoredResponseBodies = () => {
+    if (responseBodies.size <= MAX_STORED_RESPONSE_BODIES) {
+        return;
+    }
+    const overLimit = responseBodies.size - MAX_STORED_RESPONSE_BODIES;
+    for (let i = 0; i < overLimit; ++i) {
+        const iterator = responseBodies.keys();
+        const next = iterator.next();
+        if (next.done) {
+            break;
+        }
+        responseBodies.delete(next.value);
+    }
+};
 
 const enqueueEvent = event => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
@@ -164,20 +192,101 @@ const parseRawHeaders = raw => {
     return headers;
 };
 
-const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, storedLimit = MAX_STORED_BODY_LENGTH) => {
+/** @returns {RequestBodyInfo} */
+const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize) => {
     const stringified = typeof text === "string" ? text : String(text ?? "");
-    const inlineTruncated = stringified.length > inlineLimit;
+    const size = Number.isFinite(reportedSize) ? reportedSize : stringified.length;
+    const inlineTruncated = size > inlineLimit;
     const body = inlineTruncated ? stringified.slice(0, inlineLimit) : stringified;
-    const storedTruncated = stringified.length > storedLimit;
-    const storageBody = storedTruncated ? stringified.slice(0, storedLimit) : stringified;
+    const storageBody = stringified;
     return {
+        kind: "text",
         body: body,
         base64Encoded: false,
         truncated: inlineTruncated,
-        size: stringified.length,
-        storageBody: storageBody,
-        storageTruncated: storedTruncated
+        size: size,
+        storageBody: storageBody
     };
+};
+
+/** @returns {RequestBodyInfo} */
+const serializeBinaryBodySummary = (size, label) => {
+    const knownSize = Number.isFinite(size) && size >= 0 ? size : undefined;
+    const description = label || "Binary body";
+    const summary = knownSize != null ? description + " (" + knownSize + " bytes)" : description;
+    const truncated = knownSize != null ? knownSize > MAX_INLINE_BODY_LENGTH : true;
+    return {
+        kind: "binary",
+        body: summary,
+        base64Encoded: false,
+        truncated: truncated,
+        size: knownSize,
+        storageBody: summary,
+        summary: summary
+    };
+};
+
+/** @returns {RequestBodyInfo|null} */
+const serializeFormDataBody = formData => {
+    try {
+        if (typeof formData.forEach !== "function") {
+            return null;
+        }
+        const entries = [];
+        let size = 0;
+        let sizeKnown = true;
+        formData.forEach((value, key) => {
+            const name = String(key);
+            if (typeof value === "string") {
+                entries.push(name + "=" + value);
+                if (sizeKnown) {
+                    size += value.length;
+                }
+                return;
+            }
+            if (typeof File !== "undefined" && value instanceof File) {
+                const fileSize = Number.isFinite(value.size) ? value.size : undefined;
+                const fileName = value.name ? value.name : "file";
+                entries.push(name + "=<file " + fileName + ">");
+                if (sizeKnown && fileSize != null) {
+                    size += fileSize;
+                } else {
+                    sizeKnown = false;
+                }
+                return;
+            }
+            if (typeof Blob !== "undefined" && value instanceof Blob) {
+                const blobSize = Number.isFinite(value.size) ? value.size : undefined;
+                entries.push(name + "=<blob>");
+                if (sizeKnown && blobSize != null) {
+                    size += blobSize;
+                } else {
+                    sizeKnown = false;
+                }
+                return;
+            }
+            entries.push(name + "=<unserializable>");
+            sizeKnown = false;
+        });
+        const reportedSize = sizeKnown ? size : undefined;
+        const serialized = serializeTextBody(entries.join("\n"), MAX_INLINE_BODY_LENGTH, reportedSize);
+        serialized.kind = "form";
+        serialized.summary = "FormData (" + entries.length + " fields)";
+        serialized.formEntries = entries.map(entry => {
+            const eq = entry.indexOf("=");
+            const name = eq >= 0 ? entry.slice(0, eq) : "";
+            const value = eq >= 0 ? entry.slice(eq + 1) : entry;
+            const isFile = value.startsWith("<file ") || value === "<blob>";
+            const fileName = value.startsWith("<file ") ? value.slice("<file ".length, -1) : undefined;
+            return {name, value, isFile, fileName};
+        });
+        if (!sizeKnown) {
+            serialized.truncated = true;
+        }
+        return serialized;
+    } catch {
+    }
+    return null;
 };
 
 const serializeRequestBody = body => {
@@ -190,7 +299,35 @@ const serializeRequestBody = body => {
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
         return serializeTextBody(body.toString());
     }
-    if (typeof body === "object" && !(body instanceof ArrayBuffer) && !(typeof Blob !== "undefined" && body instanceof Blob)) {
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+        const serialized = serializeFormDataBody(body);
+        if (serialized) {
+            return serialized;
+        }
+    }
+    if (typeof Blob !== "undefined" && body instanceof Blob) {
+        return serializeBinaryBodySummary(body.size, "Blob body");
+    }
+    if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) {
+        return serializeBinaryBodySummary(body.byteLength, "ArrayBuffer body");
+    }
+    if (typeof ArrayBuffer !== "undefined" && typeof ArrayBuffer.isView === "function" && ArrayBuffer.isView(body)) {
+        const label = body && body.constructor && typeof body.constructor.name === "string" ? body.constructor.name + " body" : "Typed array body";
+        return serializeBinaryBodySummary(body.byteLength, label);
+    }
+    if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) {
+        const summary = "ReadableStream body (not captured)";
+        return {
+            kind: "binary",
+            summary: summary,
+            body: summary,
+            base64Encoded: false,
+            truncated: true,
+            size: undefined,
+            storageBody: summary
+        };
+    }
+    if (typeof body === "object" && !(body instanceof ArrayBuffer) && !(typeof Blob !== "undefined" && body instanceof Blob) && !(typeof FormData !== "undefined" && body instanceof FormData)) {
         try {
             return serializeTextBody(JSON.stringify(body));
         } catch {
@@ -225,6 +362,62 @@ const shouldCaptureResponseBody = mimeType => {
     return false;
 };
 
+const readStreamedTextResponse = async response => {
+    if (!response || !response.body || typeof response.body.getReader !== "function") {
+        return null;
+    }
+    if (typeof TextDecoder !== "function") {
+        return null;
+    }
+    let reader;
+    try {
+        reader = response.body.getReader();
+    } catch {
+        return null;
+    }
+    const decoder = new TextDecoder();
+    const chunks = [];
+    let total = 0;
+    let truncated = false;
+    try {
+        while (true) {
+            const result = await reader.read();
+            if (result.done) {
+                break;
+            }
+            const value = result.value;
+            if (!(value instanceof Uint8Array)) {
+                continue;
+            }
+            const length = value.byteLength;
+            total += length;
+            if (length > 0) {
+                chunks.push(value);
+            }
+        }
+    } catch {
+        truncated = true;
+        if (reader && typeof reader.cancel === "function") {
+            try {
+                reader.cancel();
+            } catch {
+            }
+        }
+    }
+    try {
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (let i = 0; i < chunks.length; ++i) {
+            merged.set(chunks[i], offset);
+            offset += chunks[i].length;
+        }
+        const text = decoder.decode(merged);
+        return {text: text, size: total, truncated: truncated};
+    } catch {
+    }
+    return null;
+};
+
 const captureResponseBody = async (response, mimeType) => {
     if (!response) {
         return null;
@@ -234,23 +427,27 @@ const captureResponseBody = async (response, mimeType) => {
         return null;
     }
     const contentLength = captureContentLength(response);
-    if (Number.isFinite(contentLength) && contentLength > MAX_STORED_BODY_LENGTH) {
-        return {
-            body: "",
-            base64Encoded: false,
-            truncated: true,
-            size: contentLength,
-            storageBody: "",
-            storageTruncated: true
-        };
-    }
+    const expectedSize = Number.isFinite(contentLength) ? contentLength : undefined;
     try {
         if (typeof response.clone !== "function") {
             return null;
         }
         const clone = response.clone();
+        const streamed = await readStreamedTextResponse(clone);
+        if (streamed && typeof streamed.text === "string") {
+            const serialized = serializeTextBody(
+                streamed.text,
+                MAX_INLINE_BODY_LENGTH,
+                expectedSize != null ? expectedSize : streamed.size
+            );
+            if (streamed.truncated) {
+                serialized.truncated = true;
+            }
+            return serialized;
+        }
         const text = await clone.text();
-        return serializeTextBody(text);
+        const serialized = serializeTextBody(text, MAX_INLINE_BODY_LENGTH, expectedSize);
+        return serialized;
     } catch {
     }
     return null;
@@ -263,10 +460,10 @@ const captureXHRResponseBody = xhr => {
     try {
         const type = xhr.responseType;
         if (type === "" || type === "text" || type === undefined) {
-            return serializeTextBody(xhr.responseText || "");
+            return serializeTextBody(xhr.responseText || "", MAX_INLINE_BODY_LENGTH);
         }
         if (type === "json" && xhr.response != null) {
-            return serializeTextBody(JSON.stringify(xhr.response));
+            return serializeTextBody(JSON.stringify(xhr.response), MAX_INLINE_BODY_LENGTH);
         }
     } catch {
     }
@@ -351,7 +548,10 @@ const handleResourceEntry = entry => {
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
         encoded = entry.encodedBodySize;
     }
-    const status = encoded && encoded > 0 ? 200 : undefined;
+    let status = undefined;
+    if (typeof entry.responseStatus === "number") {
+        status = entry.responseStatus;
+    }
     return {
         type: "resourceTiming",
         session: identity.session,

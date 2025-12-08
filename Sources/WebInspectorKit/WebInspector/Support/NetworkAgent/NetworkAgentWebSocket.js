@@ -125,7 +125,10 @@ const installWebSocketPatch = () => {
                 requestId: identity.requestId,
                 endTime: now(),
                 wallTime: wallTime(),
-                error: event && typeof event.message === "string" && event.message ? event.message : "WebSocket error"
+                error: event && typeof event.message === "string" && event.message ? event.message : "WebSocket error",
+                closeCode: event && typeof event.code === "number" ? event.code : undefined,
+                closeReason: event && typeof event.reason === "string" ? event.reason : undefined,
+                closeWasClean: event && typeof event.wasClean === "boolean" ? event.wasClean : undefined
             });
         });
 
