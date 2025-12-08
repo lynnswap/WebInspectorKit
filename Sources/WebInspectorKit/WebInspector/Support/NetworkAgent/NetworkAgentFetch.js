@@ -13,9 +13,6 @@ const installFetchPatch = () => {
         const method = init.method || (input && input.method) || "GET";
         const identity = shouldTrack ? nextRequestIdentity() : null;
         const url = typeof input === "string" ? input : (input && input.url) || "";
-        if (shouldIgnoreUrl(url)) {
-            return nativeFetch.apply(window, args);
-        }
         const headers = normalizeHeaders(init.headers || (input && input.headers));
         const requestBodyInfo = serializeRequestBody(init.body);
 

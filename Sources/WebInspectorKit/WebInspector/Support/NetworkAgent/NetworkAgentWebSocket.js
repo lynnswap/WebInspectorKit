@@ -36,9 +36,6 @@ const installWebSocketPatch = () => {
     const OriginalWebSocket = WebSocket;
     function WrappedWebSocket(url, protocols) {
         const socket = new OriginalWebSocket(url, protocols);
-        if (shouldIgnoreUrl(url)) {
-            return socket;
-        }
         const identity = nextRequestIdentity();
         postWebSocketEvent({
             type: "webSocketCreated",

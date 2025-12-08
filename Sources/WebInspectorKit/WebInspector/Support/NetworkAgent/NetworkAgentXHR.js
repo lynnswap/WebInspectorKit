@@ -31,9 +31,6 @@ const installXHRPatch = () => {
         const identity = shouldTrack ? nextRequestIdentity() : null;
         const info = this.__wiNetwork;
         if (shouldTrack && identity && info) {
-            if (shouldIgnoreUrl(info.url)) {
-                return originalSend.apply(this, arguments);
-            }
             info.requestBody = serializeRequestBody(arguments[0]);
             recordStart(
                 identity,

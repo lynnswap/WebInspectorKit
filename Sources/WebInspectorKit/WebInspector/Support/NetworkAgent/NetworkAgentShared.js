@@ -54,7 +54,6 @@ const trackedResourceTypes = new Set([
 ]);
 
 const MAX_BODY_LENGTH = 64 * 1024;
-const HIDE_MARKER = "__chobitsu-hide__=true";
 
 const nextRequestIdentity = () => {
     const requestId = networkState.nextId;
@@ -299,17 +298,6 @@ const estimatedEncodedLength = (explicitLength, bodyInfo) => {
         return bodyInfo.size;
     }
     return undefined;
-};
-
-const shouldIgnoreUrl = url => {
-    if (!url) {
-        return false;
-    }
-    try {
-        return String(url).includes(HIDE_MARKER);
-    } catch {
-        return false;
-    }
 };
 
 const shouldTrackResourceEntry = entry => {
