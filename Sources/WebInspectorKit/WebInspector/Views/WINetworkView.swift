@@ -474,6 +474,55 @@ enum WINetworkPreviewData {
             "startTime": 2_320.0,
             "wallTime": 1_708_000_001_320.0,
             "requestType": "event-stream"
+        ],
+        [
+            "type": "start",
+            "requestId": 9,
+            "session": "preview",
+            "url": "https://api.example.com/report",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "application/json",
+                "authorization": "Bearer preview-token"
+            ],
+            "startTime": 2_460.0,
+            "wallTime": 1_708_000_001_460.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "requestId": 9,
+            "session": "preview",
+            "status": 206,
+            "statusText": "Partial Content",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8",
+                "content-range": "bytes 0-1023/20480"
+            ],
+            "endTime": 2_640.0,
+            "wallTime": 1_708_000_001_640.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "finish",
+            "requestId": 9,
+            "session": "preview",
+            "status": 206,
+            "statusText": "Partial Content",
+            "mimeType": "application/json",
+            "responseBody": """
+            {
+              "data": ["alpha", "beta", "gamma"],
+              "next_page": "/report?page=2"
+            }
+            """,
+            "responseBodyTruncated": true,
+            "responseBodySize": 20_480,
+            "encodedBodyLength": 1_024,
+            "endTime": 2_740.0,
+            "wallTime": 1_708_000_001_740.0,
+            "requestType": "fetch"
         ]
     ]
 }
