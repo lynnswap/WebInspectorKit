@@ -273,6 +273,14 @@ const postHTTPEvent = payload => {
     if (!isActiveLogging()) {
         if (shouldQueueNetworkEvent()) {
             enqueueEvent({kind: "http", payload});
+            return;
+        }
+        const requestId = payload && typeof payload.requestId === "number" ? payload.requestId : null;
+        if (requestId != null && trackedRequests.has(requestId)) {
+            try {
+                window.webkit.messageHandlers.webInspectorHTTPUpdate.postMessage(payload);
+            } catch {
+            }
         }
         return;
     }
