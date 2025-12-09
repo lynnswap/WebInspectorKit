@@ -144,9 +144,6 @@ extension WINetworkPageAgent {
 
 extension WINetworkPageAgent: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame else {
-            return
-        }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
         case .http:
@@ -244,7 +241,8 @@ private extension WINetworkPageAgent {
 
     func installNetworkAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
-        if controller.userScripts.contains(where: { $0.source == networkPresenceProbeScript }) {
+        let hasSubframeAwareProbe = controller.userScripts.contains(where: { $0.source == networkPresenceProbeScript && $0.isForMainFrameOnly == false })
+        if hasSubframeAwareProbe {
             return
         }
 
@@ -259,12 +257,12 @@ private extension WINetworkPageAgent {
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
+            forMainFrameOnly: false
         )
         let checkScript = WKUserScript(
             source: networkPresenceProbeScript,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
+            forMainFrameOnly: false
         )
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
@@ -294,7 +292,19 @@ private extension WINetworkPageAgent {
         let networkReady = webView.configuration.userContentController.userScripts.contains { $0.source == networkPresenceProbeScript }
         var script = ""
         if enabled != nil {
-            script += "window.webInspectorNetwork.setLoggingEnabled(enabled);"
+            script += """
+            window.webInspectorNetwork.setLoggingEnabled(enabled);
+            try {
+                const frames = window.frames || [];
+                for (let i = 0; i < frames.length; ++i) {
+                    try {
+                        frames[i].postMessage({__wiNetworkLoggingEnabled: enabled}, "*");
+                    } catch (error) {
+                    }
+                }
+            } catch (error) {
+            }
+            """
         }
         if clearExisting {
             script += "window.webInspectorNetwork.clearRecords();"

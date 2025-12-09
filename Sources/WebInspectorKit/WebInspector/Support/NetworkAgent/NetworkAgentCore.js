@@ -155,6 +155,33 @@ const postNetworkReset = () => {
     }
 };
 
+const installLoggingToggleListener = () => {
+    if (networkState.loggingListenerInstalled) {
+        return;
+    }
+    try {
+        window.addEventListener("message", event => {
+            if (!event || !event.data || typeof event.data.__wiNetworkLoggingEnabled !== "boolean") {
+                return;
+            }
+            const enabled = !!event.data.__wiNetworkLoggingEnabled;
+            setNetworkLoggingEnabled(enabled);
+            try {
+                const frames = window.frames || [];
+                for (let i = 0; i < frames.length; ++i) {
+                    try {
+                        frames[i].postMessage({__wiNetworkLoggingEnabled: enabled}, "*");
+                    } catch {
+                    }
+                }
+            } catch {
+            }
+        });
+        networkState.loggingListenerInstalled = true;
+    } catch {
+    }
+};
+
 const ensureInstalled = () => {
     if (networkState.installed) {
         return;
@@ -163,6 +190,7 @@ const ensureInstalled = () => {
     installXHRPatch();
     installResourceObserver();
     installWebSocketPatch();
+    installLoggingToggleListener();
     networkState.installed = true;
 };
 
