@@ -67,6 +67,7 @@ const inlineBodyPayload = body => {
 
 // Keep inline payloads small to avoid OOL IPC; full body is cached separately with only a count cap.
 const MAX_INLINE_BODY_LENGTH = 512;
+const MAX_CAPTURE_BODY_LENGTH = 5 * 1024 * 1024;
 const MAX_STORED_REQUEST_BODIES = 50;
 const MAX_STORED_RESPONSE_BODIES = 50;
 const MAX_QUEUED_EVENTS = 500;
@@ -207,17 +208,22 @@ const parseRawHeaders = raw => {
 };
 
 /** @returns {RequestBodyInfo} */
-const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize) => {
+const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize, storageLimit = Infinity) => {
     const stringified = typeof text === "string" ? text : String(text ?? "");
     const size = Number.isFinite(reportedSize) ? reportedSize : stringified.length;
     const inlineTruncated = size > inlineLimit;
     const body = inlineTruncated ? stringified.slice(0, inlineLimit) : stringified;
-    const storageBody = stringified;
+    let storageBody = stringified;
+    let storageTruncated = false;
+    if (Number.isFinite(storageLimit) && storageLimit >= 0 && storageBody.length > storageLimit) {
+        storageBody = storageBody.slice(0, storageLimit);
+        storageTruncated = true;
+    }
     return {
         kind: "text",
         body: body,
         base64Encoded: false,
-        truncated: inlineTruncated,
+        truncated: inlineTruncated || storageTruncated,
         size: size,
         storageBody: storageBody
     };
@@ -241,7 +247,7 @@ const serializeBinaryBodySummary = (size, label) => {
 };
 
 /** @returns {RequestBodyInfo|null} */
-const serializeFormDataBody = formData => {
+const serializeFormDataBody = (formData, storageLimit = Infinity) => {
     try {
         if (typeof formData.forEach !== "function") {
             return null;
@@ -283,7 +289,7 @@ const serializeFormDataBody = formData => {
             sizeKnown = false;
         });
         const reportedSize = sizeKnown ? size : undefined;
-        const serialized = serializeTextBody(entries.join("\n"), MAX_INLINE_BODY_LENGTH, reportedSize);
+        const serialized = serializeTextBody(entries.join("\n"), MAX_INLINE_BODY_LENGTH, reportedSize, storageLimit);
         serialized.kind = "form";
         serialized.summary = "FormData (" + entries.length + " fields)";
         serialized.formEntries = entries.map(entry => {
@@ -303,18 +309,18 @@ const serializeFormDataBody = formData => {
     return null;
 };
 
-const serializeRequestBody = body => {
+const serializeRequestBody = (body, storageLimit = MAX_CAPTURE_BODY_LENGTH) => {
     if (body == null) {
         return null;
     }
     if (typeof body === "string") {
-        return serializeTextBody(body);
+        return serializeTextBody(body, MAX_INLINE_BODY_LENGTH, undefined, storageLimit);
     }
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
-        return serializeTextBody(body.toString());
+        return serializeTextBody(body.toString(), MAX_INLINE_BODY_LENGTH, undefined, storageLimit);
     }
     if (typeof FormData !== "undefined" && body instanceof FormData) {
-        const serialized = serializeFormDataBody(body);
+        const serialized = serializeFormDataBody(body, storageLimit);
         if (serialized) {
             return serialized;
         }
@@ -376,13 +382,18 @@ const shouldCaptureResponseBody = mimeType => {
     return false;
 };
 
-const readStreamedTextResponse = async response => {
+const readStreamedTextResponse = async (response, expectedSize) => {
     if (!response || !response.body || typeof response.body.getReader !== "function") {
         return null;
     }
     if (typeof TextDecoder !== "function") {
         return null;
     }
+    const sizeHint = Number.isFinite(expectedSize) && expectedSize >= 0 ? expectedSize : undefined;
+    if (sizeHint === 0) {
+        return {text: "", size: 0, truncated: false};
+    }
+    const byteLimit = sizeHint != null ? Math.min(MAX_CAPTURE_BODY_LENGTH, sizeHint) : MAX_CAPTURE_BODY_LENGTH;
     let reader;
     try {
         reader = response.body.getReader();
@@ -393,6 +404,7 @@ const readStreamedTextResponse = async response => {
     const chunks = [];
     let total = 0;
     let truncated = false;
+    let limitReached = false;
     try {
         while (true) {
             const result = await reader.read();
@@ -403,19 +415,36 @@ const readStreamedTextResponse = async response => {
             if (!(value instanceof Uint8Array)) {
                 continue;
             }
-            const length = value.byteLength;
+            const remaining = byteLimit - total;
+            if (remaining <= 0) {
+                limitReached = true;
+                truncated = true;
+                break;
+            }
+            let chunk = value;
+            if (value.byteLength > remaining) {
+                chunk = value.slice(0, remaining);
+                limitReached = true;
+                truncated = true;
+            }
+            const length = chunk.byteLength;
             total += length;
             if (length > 0) {
-                chunks.push(value);
+                chunks.push(chunk);
+            }
+            if (total >= byteLimit) {
+                limitReached = true;
+                truncated = truncated || result.done === false;
+                break;
             }
         }
     } catch {
         truncated = true;
-        if (reader && typeof reader.cancel === "function") {
-            try {
-                reader.cancel();
-            } catch {
-            }
+    }
+    if (truncated && reader && typeof reader.cancel === "function") {
+        try {
+            reader.cancel();
+        } catch {
         }
     }
     try {
@@ -426,7 +455,8 @@ const readStreamedTextResponse = async response => {
             offset += chunks[i].length;
         }
         const text = decoder.decode(merged);
-        return {text: text, size: total, truncated: truncated};
+        const reportedSize = Number.isFinite(sizeHint) ? sizeHint : (limitReached ? Math.max(total, byteLimit + 1) : total);
+        return {text: text, size: reportedSize, truncated: truncated};
     } catch {
     }
     return null;
@@ -447,21 +477,23 @@ const captureResponseBody = async (response, mimeType) => {
             return null;
         }
         const clone = response.clone();
-        const streamed = await readStreamedTextResponse(clone);
+        const streamed = await readStreamedTextResponse(clone, expectedSize);
         if (streamed && typeof streamed.text === "string") {
             const serialized = serializeTextBody(
                 streamed.text,
                 MAX_INLINE_BODY_LENGTH,
-                expectedSize != null ? expectedSize : streamed.size
+                streamed.size
             );
             if (streamed.truncated) {
                 serialized.truncated = true;
             }
             return serialized;
         }
-        const text = await clone.text();
-        const serialized = serializeTextBody(text, MAX_INLINE_BODY_LENGTH, expectedSize);
-        return serialized;
+        if (expectedSize != null && expectedSize > MAX_CAPTURE_BODY_LENGTH) {
+            const summary = serializeBinaryBodySummary(expectedSize, "Response body too large");
+            summary.truncated = true;
+            return summary;
+        }
     } catch {
     }
     return null;
