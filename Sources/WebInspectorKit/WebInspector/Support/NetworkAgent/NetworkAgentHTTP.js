@@ -9,7 +9,7 @@ const installFetchPatch = () => {
         return;
     }
     const patched = async function() {
-        const shouldTrack = true;
+        const shouldTrack = shouldTrackNetworkEvents();
         const args = Array.from(arguments);
         const [input, init = {}] = args;
         const method = init.method || (input && input.method) || "GET";
@@ -107,7 +107,7 @@ const installXHRPatch = () => {
     };
 
     XMLHttpRequest.prototype.send = function() {
-        const shouldTrack = !!this.__wiNetwork;
+        const shouldTrack = shouldTrackNetworkEvents() && !!this.__wiNetwork;
         const requestId = shouldTrack ? nextRequestID() : null;
         const info = this.__wiNetwork;
         if (shouldTrack && requestId != null && info) {
@@ -178,6 +178,9 @@ const installResourceObserver = () => {
     }
     try {
         const observer = new PerformanceObserver(list => {
+            if (!shouldTrackNetworkEvents()) {
+                return;
+            }
             const entries = list.getEntries();
             const payloads = [];
             for (let i = 0; i < entries.length; ++i) {

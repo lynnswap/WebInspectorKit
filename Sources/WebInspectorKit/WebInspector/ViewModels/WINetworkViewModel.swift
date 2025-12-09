@@ -26,8 +26,8 @@ public final class WINetworkViewModel {
         session.attach(pageWebView: webView)
     }
 
-    public func setRecording(_ enabled: Bool) {
-        session.setRecording(enabled)
+    public func setRecording(_ mode: WINetworkLoggingMode) {
+        session.setRecording(mode)
     }
 
     public func fetchRequestBody(for entry: WINetworkEntry) async {
@@ -65,6 +65,14 @@ public final class WINetworkViewModel {
 
     public func detach() {
         session.detach()
+    }
+    
+    public func willAppear() {
+        session.willAppear()
+    }
+    
+    public func willDisappear() {
+        session.willDisappear()
     }
 
     public var isShowingDetail: Binding<Bool> {

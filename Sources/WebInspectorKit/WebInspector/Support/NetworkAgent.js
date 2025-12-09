@@ -1,7 +1,7 @@
 import {
     clearNetworkRecords,
     installNetworkObserver,
-    setNetworkLoggingEnabled,
+    setNetworkLoggingMode,
     getResponseBody,
     getRequestBody
 } from "./NetworkAgent/NetworkAgentCore.js";
@@ -10,7 +10,7 @@ if (!(window.webInspectorNetwork && window.webInspectorNetwork.__installed)) {
     installNetworkObserver();
 
     var webInspectorNetwork = {
-        setLoggingEnabled: setNetworkLoggingEnabled,
+        setLoggingMode: setNetworkLoggingMode,
         clearRecords: clearNetworkRecords,
         getResponseBody: getResponseBody,
         getRequestBody: getRequestBody,

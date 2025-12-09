@@ -155,6 +155,23 @@ const postNetworkReset = () => {
     }
 };
 
+const clearDisabledNetworkState = () => {
+    queuedEvents.splice(0, queuedEvents.length);
+};
+
+const resetNetworkState = () => {
+    queuedEvents.splice(0, queuedEvents.length);
+    trackedRequests.clear();
+    requestBodies.clear();
+    responseBodies.clear();
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
+    networkState.sessionID = generateSessionID();
+    networkState.nextId = 1;
+    postNetworkReset();
+};
+
 const ensureInstalled = () => {
     if (networkState.installed) {
         return;
@@ -162,14 +179,30 @@ const ensureInstalled = () => {
     installFetchPatch();
     installXHRPatch();
     installResourceObserver();
-    installWebSocketPatch();
+    // WebSocket capture disabled for this release; keep patch uninstalled intentionally.
+    // installWebSocketPatch();
     networkState.installed = true;
 };
 
-export const setNetworkLoggingEnabled = enabled => {
-    const wasEnabled = networkState.enabled;
-    networkState.enabled = !!enabled;
-    if (networkState.enabled && !wasEnabled) {
+const normalizeLoggingMode = mode => {
+    if (mode === NetworkLoggingMode.BUFFERING) {
+        return NetworkLoggingMode.BUFFERING;
+    }
+    if (mode === NetworkLoggingMode.STOPPED) {
+        return NetworkLoggingMode.STOPPED;
+    }
+    return NetworkLoggingMode.ACTIVE;
+};
+
+export const setNetworkLoggingMode = mode => {
+    const previousMode = networkState.mode;
+    const resolvedMode = normalizeLoggingMode(mode);
+    networkState.mode = resolvedMode;
+    if (networkState.mode === NetworkLoggingMode.STOPPED) {
+        resetNetworkState();
+        return;
+    }
+    if (networkState.mode === NetworkLoggingMode.ACTIVE && previousMode !== NetworkLoggingMode.ACTIVE) {
         flushQueuedEvents();
     }
 };

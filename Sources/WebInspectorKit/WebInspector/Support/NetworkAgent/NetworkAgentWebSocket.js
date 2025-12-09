@@ -39,6 +39,9 @@ const installWebSocketPatch = () => {
     const OriginalWebSocket = WebSocket;
     function WrappedWebSocket(url, protocols) {
         const socket = new OriginalWebSocket(url, protocols);
+        if (!shouldTrackNetworkEvents()) {
+            return socket;
+        }
         const requestId = nextRequestID();
         postWebSocketEvent({
             type: "wsCreated",
@@ -50,6 +53,9 @@ const installWebSocketPatch = () => {
         });
 
         socket.addEventListener("open", () => {
+            if (!shouldTrackNetworkEvents()) {
+                return;
+            }
             postWebSocketEvent({
                 type: "wsHandshakeRequest",
                 session: networkState.sessionID,
@@ -71,6 +77,9 @@ const installWebSocketPatch = () => {
         });
 
         socket.addEventListener("message", async event => {
+            if (!shouldTrackNetworkEvents()) {
+                return;
+            }
             const serialized = await serializeFramePayload(event.data);
             const opcode = typeof event.data === "string" ? 1 : 2;
             postWebSocketEvent({
@@ -90,6 +99,9 @@ const installWebSocketPatch = () => {
 
         const originalSend = socket.send;
         socket.send = async function(data) {
+            if (!shouldTrackNetworkEvents()) {
+                return originalSend.apply(this, arguments);
+            }
             const serialized = await serializeFramePayload(data);
             postWebSocketEvent({
                 type: "wsFrame",
@@ -108,6 +120,9 @@ const installWebSocketPatch = () => {
         };
 
         socket.addEventListener("close", event => {
+            if (!shouldTrackNetworkEvents()) {
+                return;
+            }
             postWebSocketEvent({
                 type: "wsClosed",
                 session: networkState.sessionID,
@@ -121,6 +136,9 @@ const installWebSocketPatch = () => {
         });
 
         socket.addEventListener("error", event => {
+            if (!shouldTrackNetworkEvents()) {
+                return;
+            }
             postWebSocketEvent({
                 type: "wsFrameError",
                 session: networkState.sessionID,
@@ -144,8 +162,10 @@ const installWebSocketPatch = () => {
     window.WebSocket = WrappedWebSocket;
 };
 const postWebSocketEvent = payload => {
-    if (!networkState.enabled) {
-        enqueueEvent({kind: "websocket", payload});
+    if (!isActiveLogging()) {
+        if (shouldQueueNetworkEvent()) {
+            enqueueEvent({kind: "websocket", payload});
+        }
         return;
     }
     try {

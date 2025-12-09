@@ -19,8 +19,14 @@ const generateSessionID = () => {
     return time + "-" + random;
 };
 
+const NetworkLoggingMode = {
+    ACTIVE: "active",
+    BUFFERING: "buffering",
+    STOPPED: "stopped"
+};
+
 const networkState = {
-    enabled: true,
+    mode: NetworkLoggingMode.ACTIVE,
     installed: false,
     nextId: 1,
     sessionID: generateSessionID(),
@@ -259,9 +265,15 @@ const enqueueEvent = event => {
     queuedEvents.push(event);
 };
 
+const isActiveLogging = () => networkState.mode === NetworkLoggingMode.ACTIVE;
+const shouldTrackNetworkEvents = () => networkState.mode !== NetworkLoggingMode.STOPPED;
+const shouldQueueNetworkEvent = () => networkState.mode === NetworkLoggingMode.BUFFERING;
+
 const postHTTPEvent = payload => {
-    if (!networkState.enabled) {
-        enqueueEvent({kind: "http", payload});
+    if (!isActiveLogging()) {
+        if (shouldQueueNetworkEvent()) {
+            enqueueEvent({kind: "http", payload});
+        }
         return;
     }
     try {
@@ -271,8 +283,10 @@ const postHTTPEvent = payload => {
 };
 
 const postHTTPBatchEvents = payloads => {
-    if (!networkState.enabled) {
-        enqueueEvent({kind: "httpBatch", payloads});
+    if (!isActiveLogging()) {
+        if (shouldQueueNetworkEvent()) {
+            enqueueEvent({kind: "httpBatch", payloads});
+        }
         return;
     }
     if (!Array.isArray(payloads) || !payloads.length) {

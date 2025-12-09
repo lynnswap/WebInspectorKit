@@ -28,8 +28,16 @@ public final class WINetworkSession: WIPageSession {
         lastPageWebView = nil
     }
 
-    public func setRecording(_ enabled: Bool) {
-        networkAgent.setRecording(enabled)
+    public func willAppear() {
+        setRecording(.active)
+    }
+
+    public func willDisappear() {
+        setRecording(.buffering)
+    }
+
+    public func setRecording(_ mode: WINetworkLoggingMode) {
+        networkAgent.setRecording(mode)
     }
 
     public func clearNetworkLogs() {
@@ -63,12 +71,14 @@ public final class WINetworkSession: WIPageSession {
                 existing.applyFullBody(
                     fullText,
                     isBase64Encoded: body.isBase64Encoded,
+                    isTruncated: body.isTruncated,
                     size: body.size ?? fullText.count
                 )
             }
             existing.summary = body.summary ?? existing.summary
             existing.formEntries = body.formEntries
             existing.kind = body.kind
+            existing.isTruncated = body.isTruncated
             existing.fetchState = .full
             let updatedSize = existing.size ?? existing.full?.count ?? existing.preview?.count
             if let size = updatedSize {

@@ -40,6 +40,12 @@ public struct WINetworkView: View {
                 }
             }
         }
+        .onAppear {
+            viewModel.willAppear()
+        }
+        .onDisappear {
+            viewModel.willDisappear()
+        }
     }
 
     private var emptyState: some View {
