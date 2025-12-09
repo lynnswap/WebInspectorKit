@@ -18,6 +18,9 @@ enum WIScript {
         "DOMAgent"
     ]
     private static let networkModuleNames = [
+        "NetworkAgent/NetworkAgentUtils",
+        "NetworkAgent/NetworkAgentHTTP",
+        "NetworkAgent/NetworkAgentWebSocket",
         "NetworkAgent/NetworkAgentCore",
         "NetworkAgent"
     ]

@@ -8,7 +8,7 @@ struct WINetworkStoreTests {
         let store = WINetworkStore()
 
         let firstStart = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "first",
                 "requestId": 1,
@@ -19,7 +19,7 @@ struct WINetworkStoreTests {
         store.applyEvent(firstStart)
 
         let secondStart = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "second",
                 "requestId": 1,
@@ -38,7 +38,7 @@ struct WINetworkStoreTests {
     func resetClearsSessionsAndEntries() throws {
         let store = WINetworkStore()
         let payload = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "requestId": 1,
                 "url": "https://example.com",
@@ -57,7 +57,7 @@ struct WINetworkStoreTests {
     @Test
     func parsesNumericRequestIdFromString() throws {
         let payload = try #require(
-            NetworkEvent(dictionary: [
+            HTTPNetworkEvent(dictionary: [
                 "type": "start",
                 "session": "wi_session_123",
                 "requestId": "42",
@@ -68,5 +68,88 @@ struct WINetworkStoreTests {
 
         #expect(payload.sessionID == "wi_session_123")
         #expect(payload.requestID == 42)
+    }
+
+    @Test
+    func storesRequestAndResponseBodies() throws {
+        let store = WINetworkStore()
+
+        let start = try #require(
+            HTTPNetworkEvent(dictionary: [
+                "type": "start",
+                "requestId": 10,
+                "url": "https://example.com/api",
+                "method": "POST",
+                "requestBody": [
+                    "kind": "text",
+                    "body": #"{"hello":"world"}"#,
+                    "truncated": false,
+                    "size": 17
+                ]
+            ])
+        )
+        store.applyEvent(start)
+
+        let finish = try #require(
+            HTTPNetworkEvent(dictionary: [
+                "type": "finish",
+                "requestId": 10,
+                "responseBody": [
+                    "kind": "text",
+                    "body": "ok",
+                    "truncated": false,
+                    "size": 2
+                ]
+            ])
+        )
+        store.applyEvent(finish)
+
+        let entry = try #require(store.entry(forRequestID: 10, sessionID: nil))
+        #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
+        #expect(entry.requestBody?.isBase64Encoded == false)
+        #expect(entry.requestBody?.size == 17)
+        #expect(entry.requestBodyBytesSent == 17)
+        #expect(entry.responseBody?.displayText == "ok")
+        #expect(entry.responseBody?.isBase64Encoded == false)
+        #expect(entry.responseBody?.isTruncated == false)
+    }
+
+    @Test
+    func websocketHandshakeAndErrorEventsAreApplied() throws {
+        let store = WINetworkStore()
+        let created = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsCreated",
+                "requestId": 1,
+                "url": "wss://example.com/socket",
+                "startTime": 1_000.0,
+                "wallTime": 2_000.0
+            ])
+        )
+        store.applyWSEvent(created)
+
+        let handshakeRequest = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsHandshakeRequest",
+                "requestId": 1,
+                "requestHeaders": ["sec-websocket-protocol": "chat"]
+            ])
+        )
+        store.applyWSEvent(handshakeRequest)
+
+        let frameError = try #require(
+            WSNetworkEvent(dictionary: [
+                "type": "wsFrameError",
+                "requestId": 1,
+                "error": "WebSocket error",
+                "endTime": 2_000.0
+            ])
+        )
+        store.applyWSEvent(frameError)
+
+        let entry = try #require(store.entry(forRequestID: 1, sessionID: nil))
+        #expect(entry.phase == .failed)
+        #expect(entry.errorDescription == "WebSocket error")
+        #expect(entry.requestHeaders["sec-websocket-protocol"] == "chat")
     }
 }

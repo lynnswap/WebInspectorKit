@@ -30,6 +30,30 @@ public final class WINetworkViewModel {
         session.setRecording(enabled)
     }
 
+    public func fetchRequestBody(for entry: WINetworkEntry) async {
+        guard let body = entry.requestBody else { return }
+        if body.isFetching {
+            return
+        }
+        body.markFetching()
+        let error = await session.fetchBody(for: entry, role: .request)
+        if let error {
+            body.markFailed(error)
+        }
+    }
+
+    public func fetchResponseBody(for entry: WINetworkEntry) async {
+        guard let body = entry.responseBody else { return }
+        if body.isFetching {
+            return
+        }
+        body.markFetching()
+        let error = await session.fetchBody(for: entry, role: .response)
+        if let error {
+            body.markFailed(error)
+        }
+    }
+
     public func clearNetworkLogs() {
         selectedEntryID = nil
         session.clearNetworkLogs()

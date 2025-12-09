@@ -133,8 +133,19 @@ private let logger = Logger(
 }
 
 extension BrowserViewModel: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy{
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         logger.debug("\(#function) decide navigation policy (action)")
+#if os(macOS)
+        if navigationAction.navigationType == .linkActivated,
+           navigationAction.modifierFlags.contains(.command),
+           let url = navigationAction.request.url,
+           let scheme = url.scheme?.lowercased(),
+           (scheme == "http" || scheme == "https"),
+           navigationAction.targetFrame?.isMainFrame != false {
+            webView.load(URLRequest(url: url))
+            return .cancel
+        }
+#endif
         return .allow
     }
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

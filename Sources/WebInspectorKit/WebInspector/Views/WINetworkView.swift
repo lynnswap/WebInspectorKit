@@ -115,7 +115,7 @@ private struct WINetworkTableView: View {
                 NavigationStack {
                     if let isSelectedEntryID = viewModel.selectedEntryID,
                        let entry = viewModel.store.entry(forEntryID: isSelectedEntryID) {
-                        WINetworkDetailView(entry: entry)
+                        WINetworkDetailView(entry: entry, viewModel: viewModel)
                             .toolbar{
                                 ToolbarItem(placement:.primaryAction){
                                     Button(role:.closeRole){
@@ -152,7 +152,7 @@ private struct WINetworkListView: View {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = viewModel.store.entry(forEntryID:isSelectedEntryID) {
-                    WINetworkDetailView(entry: entry)
+                    WINetworkDetailView(entry: entry, viewModel: viewModel)
                         .scrollContentBackground(.hidden)
                 }
             }
@@ -186,257 +186,13 @@ private struct WINetworkRow: View {
         }
     }
 }
-
-
-private struct WINetworkDetailView: View {
-    let entry: WINetworkEntry
-
-    var body: some View {
-        List {
-            Section {
-                summaryRow
-            } header: {
-                Text("network.detail.section.overview")
-            }
-            Section {
-                WINetworkHeaderSection(headers: entry.requestHeaders)
-            }header:{
-                Text("network.section.request")
-            }
-            Section{
-                WINetworkHeaderSection(headers: entry.responseHeaders)
-            }header:{
-                Text("network.section.response")
-            }
-            if let error = entry.errorDescription, !error.isEmpty {
-                Section {
-                    errorRow(error)
-                } header: {
-                    Text("network.section.error")
-                }
-            }
-        }
-        .listSectionSeparator(.hidden)
-        .listStyle(.plain)
-#if os(iOS)
-        .listRowSpacing(8)
-        .listSectionSpacing(12)
-#endif
-        .contentMargins(.bottom, 24, for: .scrollContent)
-    }
-
-    private var summaryRow: some View {
-        VStack(alignment: .leading) {
-            HStack {
-                statusBadge(for: entry)
-                if let duration = entry.duration {
-                    HStack(spacing:8){
-                        Image(systemName: "clock")
-                        Text(formatDuration(duration))
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-                if let size = entry.encodedBodyLength {
-                    HStack(spacing:8){
-                        Image(systemName: "arrow.down.to.line")
-                        Text(formatBytes(size))
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-            }
-            Text(entry.url)
-                .font(.footnote)
-                .textSelection(.enabled)
-                .lineLimit(4)
-        }
-        .networkListRowStyle()
-    }
-    private func errorRow(_ message: String) -> some View {
-        Label {
-            Text(message)
-                .textSelection(.enabled)
-        } icon: {
-            Image(systemName: "exclamationmark.triangle.fill")
-        }
-        .font(.footnote)
-        .foregroundStyle(.orange)
-        .networkListRowStyle()
-    }
-
-    @ViewBuilder
-    private func statusBadge(for entry: WINetworkEntry) -> some View {
-        let tint = entry.statusTint
-        Text(entry.statusLabel)
-            .font(.caption.weight(.semibold))
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .background(tint.opacity(0.14))
-            .foregroundStyle(tint)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        if duration < 1 {
-            return String(format: "%.0f ms", duration * 1000)
-        }
-        return String(format: "%.2f s", duration)
-    }
-
-    private func formatBytes(_ length: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        return formatter.string(fromByteCount: Int64(length))
-    }
-}
-
-private struct WINetworkHeaderSection: View {
-    let headers: WINetworkHeaders
-
-    var body: some View {
-        if headers.isEmpty {
-            Text("network.headers.empty")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .networkListRowStyle()
-        } else {
-            ForEach(headers.fields.indices, id: \.self) { index in
-                let header = headers.fields[index]
-                headerRow(name: header.name, value: header.value)
-            }
-        }
-    }
-
-    private func headerRow(name: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(name)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .foregroundStyle(.primary)
-        }
-        .networkListRowStyle()
-    }
-}
-
-private extension View {
-    func networkListRowStyle() -> some View {
-        padding(.vertical, 10)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(networkListRowBackground)
-            .scenePadding(.horizontal)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .listRowInsets(.init())
-    }
-
-    @ViewBuilder
-    private var networkListRowBackground: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.secondary.opacity(0.12))
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.secondary.opacity(0.15))
-        }
-    }
-}
-
-
-private extension WINetworkEntry {
-    var displayName: String {
-        if let url = URL(string: url) {
-            let last = url.lastPathComponent
-            if !last.isEmpty {
-                return last
-            }
-            if let host {
-                return host
-            }
-        }
-        return url
-    }
-
-    var fileTypeLabel: String {
-        if let mimeType {
-            let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
-            if let subtype = trimmed.split(separator: "/").last, !subtype.isEmpty {
-                return subtype.lowercased()
-            }
-        }
-        if let pathExtension = URL(string: url)?.pathExtension, !pathExtension.isEmpty {
-            return pathExtension.lowercased()
-        }
-        if let requestType, !requestType.isEmpty {
-            return requestType
-        }
-        return "-"
-    }
-
-    var host: String? {
-        URL(string: url)?.host
-    }
-
-    var statusLabel: String {
-        if let statusCode, statusCode > 0 {
-            return String(statusCode)
-        }
-        switch phase {
-        case .failed:
-            return "Failed"
-        case .pending:
-            return "Pending"
-        case .completed:
-            return "Finished"
-        }
-    }
-
-    var statusTint: Color {
-        if phase == .failed {
-            return .red
-        }
-        if let statusCode {
-            if statusCode >= 500 {
-                return .red
-            }
-            if statusCode >= 400 {
-                return .orange
-            }
-            if statusCode >= 300 {
-                return .yellow
-            }
-            return .green
-        }
-        if phase == .completed {
-            return .green
-        }
-        return .secondary
-    }
-
-    func durationText(for value: TimeInterval) -> String {
-        if value < 1 {
-            return String(format: "%.0f ms", value * 1000)
-        }
-        return String(format: "%.2f s", value)
-    }
-
-    func sizeText(for length: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .binary
-        return formatter.string(fromByteCount: Int64(length))
-    }
-}
-
 #if DEBUG
 @MainActor
-private func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> WINetworkViewModel {
+func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> WINetworkViewModel {
     let viewModel = WINetworkViewModel()
     let store = viewModel.store
     WINetworkPreviewData.events
-        .compactMap(NetworkEvent.init(dictionary:))
+        .compactMap(HTTPNetworkEvent.init(dictionary:))
         .forEach { store.applyEvent($0) }
     
     viewModel.selectedEntryID = selectedID ?? store.entries.last?.id
@@ -444,7 +200,7 @@ private func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> 
 }
 
 @MainActor
-private enum WINetworkPreviewData {
+enum WINetworkPreviewData {
     static let events: [[String: Any]] = [
         [
             "type": "start",
@@ -718,6 +474,58 @@ private enum WINetworkPreviewData {
             "startTime": 2_320.0,
             "wallTime": 1_708_000_001_320.0,
             "requestType": "event-stream"
+        ],
+        [
+            "type": "start",
+            "requestId": 9,
+            "session": "preview",
+            "url": "https://api.example.com/report",
+            "method": "GET",
+            "requestHeaders": [
+                "accept": "application/json",
+                "authorization": "Bearer preview-token"
+            ],
+            "startTime": 2_460.0,
+            "wallTime": 1_708_000_001_460.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "response",
+            "requestId": 9,
+            "session": "preview",
+            "status": 206,
+            "statusText": "Partial Content",
+            "mimeType": "application/json",
+            "responseHeaders": [
+                "content-type": "application/json; charset=utf-8",
+                "content-range": "bytes 0-1023/20480"
+            ],
+            "endTime": 2_640.0,
+            "wallTime": 1_708_000_001_640.0,
+            "requestType": "fetch"
+        ],
+        [
+            "type": "finish",
+            "requestId": 9,
+            "session": "preview",
+            "status": 206,
+            "statusText": "Partial Content",
+            "mimeType": "application/json",
+            "responseBody": [
+                "kind": "text",
+                "body": """
+            {
+              "data": ["alpha", "beta", "gamma"],
+              "next_page": "/report?page=2"
+            }
+            """,
+                "truncated": true,
+                "size": 20_480
+            ],
+            "encodedBodyLength": 1_024,
+            "endTime": 2_740.0,
+            "wallTime": 1_708_000_001_740.0,
+            "requestType": "fetch"
         ]
     ]
 }

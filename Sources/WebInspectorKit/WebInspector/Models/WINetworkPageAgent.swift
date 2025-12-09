@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import OSLog
 import WebKit
 import Observation
@@ -12,9 +13,13 @@ private let networkPresenceProbeScript: String = """
 @Observable
 final class WINetworkPageAgent: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
-        case network = "webInspectorNetworkUpdate"
-        case networkBatch = "webInspectorNetworkBatchUpdate"
+        case http = "webInspectorHTTPUpdate"
+        case httpBatch = "webInspectorHTTPBatchUpdate"
+        
+        case webSocket = "webInspectorWSUpdate"
         case networkReset = "webInspectorNetworkReset"
+        
+        case queuedBatch = "webInspectorNetworkQueuedUpdate"
     }
 
     weak var webView: WKWebView?
@@ -88,6 +93,53 @@ extension WINetworkPageAgent {
     func didClearPageWebView() {
         store.reset()
     }
+
+    func fetchBody(requestID: Int, role: WINetworkBody.Role) async -> WINetworkBody? {
+        guard let webView else { return nil }
+        do {
+            let isRequest = role == .request
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return (function(requestId, isRequest) {
+                    if (!window.webInspectorNetwork) {
+                        return null;
+                    }
+                    const getter = isRequest ? window.webInspectorNetwork.getRequestBody : window.webInspectorNetwork.getResponseBody;
+                    if (typeof getter !== "function") {
+                        return null;
+                    }
+                    const body = getter(requestId);
+                    if (body == null) {
+                        return null;
+                    }
+                    try {
+                        return JSON.stringify(body);
+                    } catch (error) {
+                        return null;
+                    }
+                })(requestId, isRequest);
+                """,
+                arguments: [
+                    "requestId": requestID,
+                    "isRequest": isRequest
+                ],
+                in: nil,
+                contentWorld: .page
+            )
+            let decoded: Any
+            if let jsonString = result as? String,
+               let data = jsonString.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) {
+                decoded = object
+            } else {
+                decoded = result as Any
+            }
+            return WINetworkBody.decode(from: decoded)
+        } catch {
+            networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
 }
 
 extension WINetworkPageAgent: WKScriptMessageHandler {
@@ -97,21 +149,33 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
         }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
-        case .network:
-            handleNetworkMessage(message)
-        case .networkBatch:
+        case .http:
+            handleHTTPMessage(message)
+        case .httpBatch:
             handleNetworkBatchMessage(message)
+        case .webSocket:
+            handleWebSocketMessage(message)
         case .networkReset:
             handleNetworkReset()
+        case .queuedBatch:
+            handleQueuedBatchMessage(message)
         }
     }
 
-    private func handleNetworkMessage(_ message: WKScriptMessage) {
+    private func handleHTTPMessage(_ message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any],
-              let event = NetworkEvent(dictionary: payload) else {
+              let event = HTTPNetworkEvent(dictionary: payload) else {
             return
         }
-        store.applyEvent(event)
+        store.applyHTTPEvent(event)
+    }
+
+    private func handleWebSocketMessage(_ message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any],
+              let event = WSNetworkEvent(dictionary: payload) else {
+            return
+        }
+        store.applyWSEvent(event)
     }
 
     private func handleNetworkReset() {
@@ -123,6 +187,38 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
            let batch = NetworkEventBatch(dictionary: dictionary) {
             store.applyBatchedInsertions(batch)
             return
+        }
+    }
+
+    private func handleQueuedBatchMessage(_ message: WKScriptMessage) {
+        guard let dictionary = message.body as? [String: Any],
+              let events = dictionary["events"] as? [[String: Any]] else {
+            return
+        }
+        for event in events {
+            guard let kind = event["kind"] as? String else { continue }
+            switch kind {
+            case "http":
+                guard let payload = event["payload"] as? [String: Any],
+                      let parsed = HTTPNetworkEvent(dictionary: payload) else {
+                    continue
+                }
+                store.applyHTTPEvent(parsed)
+            case "httpBatch":
+                let payloads = event["payloads"] as? [[String: Any]] ?? []
+                for payload in payloads {
+                    guard let parsed = HTTPNetworkEvent(dictionary: payload) else { continue }
+                    store.applyHTTPEvent(parsed)
+                }
+            case "websocket":
+                guard let payload = event["payload"] as? [String: Any],
+                      let parsed = WSNetworkEvent(dictionary: payload) else {
+                    continue
+                }
+                store.applyWSEvent(parsed)
+            default:
+                continue
+            }
         }
     }
 }
