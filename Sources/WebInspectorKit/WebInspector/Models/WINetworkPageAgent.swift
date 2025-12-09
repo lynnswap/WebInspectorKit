@@ -31,6 +31,7 @@ final class WINetworkPageAgent: NSObject, WIPageAgent {
     weak var webView: WKWebView?
     let store = WINetworkStore()
     private var loggingMode: WINetworkLoggingMode = .active
+    private var lastConfiguredMode: WINetworkLoggingMode = .active
 
     @MainActor deinit {
         detachPageWebView()
@@ -87,9 +88,10 @@ extension WINetworkPageAgent {
         }
         registerMessageHandlers()
         Task {
+            let shouldClearRecords = self.lastConfiguredMode != .buffering
             await self.configureNetworkLogging(
                 mode: self.loggingMode,
-                clearExisting: true,
+                clearExisting: shouldClearRecords,
                 on: webView
             )
         }
@@ -314,6 +316,7 @@ private extension WINetworkPageAgent {
                 ],
                 contentWorld: .page
             )
+            lastConfiguredMode = mode
         } catch {
             networkLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
         }
