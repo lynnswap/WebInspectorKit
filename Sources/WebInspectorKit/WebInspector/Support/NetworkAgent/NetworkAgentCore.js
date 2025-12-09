@@ -157,6 +157,12 @@ const postNetworkReset = () => {
 
 const clearDisabledNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
+    trackedRequests.clear();
+    requestBodies.clear();
+    responseBodies.clear();
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
 };
 
 const ensureInstalled = () => {
