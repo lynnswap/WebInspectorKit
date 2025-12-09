@@ -437,6 +437,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var statusCode: Int?
     public internal(set) var statusText: String
     public internal(set) var mimeType: String?
+    public internal(set) var fileTypeLabel: String
     public internal(set) var requestHeaders: WINetworkHeaders
     public internal(set) var responseHeaders: WINetworkHeaders
     public internal(set) var startTimestamp: TimeInterval
@@ -476,6 +477,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.statusCode = nil
         self.statusText = ""
         self.mimeType = nil
+        self.fileTypeLabel = "-"
         self.endTimestamp = nil
         self.duration = nil
         self.encodedBodyLength = nil
@@ -487,6 +489,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.requestBody = nil
         self.responseBody = nil
         self.webSocket = nil
+        refreshFileTypeLabel()
     }
 
     convenience init(startPayload payload: HTTPNetworkEvent) {
@@ -505,6 +508,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         requestBody = payload.requestBody
         requestBody?.role = .request
         requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size
+        refreshFileTypeLabel()
     }
 
     func applyResponsePayload(_ payload: HTTPNetworkEvent) {
@@ -525,6 +529,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         if let requestType = payload.requestType {
             self.requestType = requestType
         }
+        refreshFileTypeLabel()
         phase = .pending
     }
 
@@ -558,10 +563,39 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             self.responseBody?.role = .response
         }
         errorDescription = payload.errorDescription
+        refreshFileTypeLabel()
         phase = failed ? .failed : .completed
         if failed && statusCode == nil {
             statusCode = 0
         }
+    }
+
+    func refreshFileTypeLabel() {
+        fileTypeLabel = Self.makeFileTypeLabel(
+            mimeType: mimeType,
+            url: url,
+            requestType: requestType
+        )
+    }
+
+    private static func makeFileTypeLabel(
+        mimeType: String?,
+        url: String,
+        requestType: String?
+    ) -> String {
+        if let mimeType, !mimeType.isEmpty {
+            let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
+            if let subtype = trimmed.split(separator: "/").last, !subtype.isEmpty {
+                return subtype.lowercased()
+            }
+        }
+        if let pathExtension = URL(string: url)?.pathExtension, !pathExtension.isEmpty {
+            return pathExtension.lowercased()
+        }
+        if let requestType, !requestType.isEmpty {
+            return requestType
+        }
+        return "-"
     }
 
     // NOTE: When re-enabling WebSocket capture, ensure this does not mark the entry as completed
@@ -814,6 +848,7 @@ public final class WINetworkWebSocketInfo: Identifiable, Equatable, Hashable{
         )
         entry.requestType = "websocket"
         entry.webSocket = WINetworkWebSocketInfo()
+        entry.refreshFileTypeLabel()
         appendEntry(entry, requestID: event.requestID, in: bucket)
     }
 

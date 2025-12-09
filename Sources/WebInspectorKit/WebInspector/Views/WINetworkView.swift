@@ -83,6 +83,7 @@ private struct WINetworkTableView: View {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(entry.statusTint)
+                            .animation(.smooth(duration:0.22),value:entry.statusTint)
                             .frame(width: 8, height: 8)
                         Text(entry.statusLabel)
                     }
@@ -146,14 +147,9 @@ private struct WINetworkListView: View {
                 viewModel.displayEntries,
             ) { entry in
                 WINetworkRow(entry: entry)
-                    .contentShape(.rect)
-                    .onTapGesture {
-                        viewModel.selectedEntryID = entry.id
-                    }
             }
         }
         .scrollContentBackground(.hidden)
-        .listStyle(.plain)
         .sheet(isPresented: viewModel.isShowingDetail) {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
@@ -175,20 +171,20 @@ private struct WINetworkRow: View {
     let entry: WINetworkEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack{
-                Circle()
-                    .fill(entry.statusTint)
-                    .frame(width: 8, height: 8)
-                Text(entry.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                Text(entry.method)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        HStack{
+            Circle()
+                .fill(entry.statusTint)
+                .animation(.smooth(duration:0.22),value:entry.statusTint)
+                .frame(width: 8, height: 8)
+            Text(entry.displayName)
+                .font(.subheadline.weight(.semibold))
+                .truncationMode(.middle)
+                .lineLimit(2)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+            Text(entry.fileTypeLabel)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 }

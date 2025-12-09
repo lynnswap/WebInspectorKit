@@ -156,6 +156,7 @@ private struct WINetworkBodySection: View {
                     .frame(maxWidth:.infinity,alignment:.leading)
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
+                    .truncationMode(.tail)
                     .lineLimit(12)
                  
             } else {
@@ -277,22 +278,6 @@ extension WINetworkEntry {
             }
         }
         return url
-    }
-
-    var fileTypeLabel: String {
-        if let mimeType {
-            let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
-            if let subtype = trimmed.split(separator: "/").last, !subtype.isEmpty {
-                return subtype.lowercased()
-            }
-        }
-        if let pathExtension = URL(string: url)?.pathExtension, !pathExtension.isEmpty {
-            return pathExtension.lowercased()
-        }
-        if let requestType, !requestType.isEmpty {
-            return requestType
-        }
-        return "-"
     }
 
     var host: String? {
