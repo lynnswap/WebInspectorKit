@@ -307,7 +307,19 @@ private extension WINetworkPageAgent {
             """
         }
         if clearExisting {
-            script += "window.webInspectorNetwork.clearRecords();"
+            script += """
+            window.webInspectorNetwork.clearRecords();
+            try {
+                const frames = window.frames || [];
+                for (let i = 0; i < frames.length; ++i) {
+                    try {
+                        frames[i].postMessage({__wiNetworkClearRecords: true}, "*");
+                    } catch (error) {
+                    }
+                }
+            } catch (error) {
+            }
+            """
         }
         guard !script.isEmpty, networkReady else { return }
 

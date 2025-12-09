@@ -161,20 +161,36 @@ const installLoggingToggleListener = () => {
     }
     try {
         window.addEventListener("message", event => {
-            if (!event || !event.data || typeof event.data.__wiNetworkLoggingEnabled !== "boolean") {
+            if (!event || !event.data || typeof event.data !== "object") {
                 return;
             }
-            const enabled = !!event.data.__wiNetworkLoggingEnabled;
-            setNetworkLoggingEnabled(enabled);
-            try {
-                const frames = window.frames || [];
-                for (let i = 0; i < frames.length; ++i) {
-                    try {
-                        frames[i].postMessage({__wiNetworkLoggingEnabled: enabled}, "*");
-                    } catch {
+            const data = event.data;
+            if (typeof data.__wiNetworkLoggingEnabled === "boolean") {
+                const enabled = !!data.__wiNetworkLoggingEnabled;
+                setNetworkLoggingEnabled(enabled);
+                try {
+                    const frames = window.frames || [];
+                    for (let i = 0; i < frames.length; ++i) {
+                        try {
+                            frames[i].postMessage({__wiNetworkLoggingEnabled: enabled}, "*");
+                        } catch {
+                        }
                     }
+                } catch {
                 }
-            } catch {
+            }
+            if (data.__wiNetworkClearRecords === true) {
+                clearNetworkRecords();
+                try {
+                    const frames = window.frames || [];
+                    for (let i = 0; i < frames.length; ++i) {
+                        try {
+                            frames[i].postMessage({__wiNetworkClearRecords: true}, "*");
+                        } catch {
+                        }
+                    }
+                } catch {
+                }
             }
         });
         networkState.loggingListenerInstalled = true;
