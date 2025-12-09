@@ -485,7 +485,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     convenience init(startPayload payload: HTTPNetworkEvent) {
-        let method = payload.method ?? "GET"
+        let method = (payload.method?.isEmpty == false ? payload.method : nil) ?? "UNKNOWN"
         let url = payload.url ?? ""
         self.init(
             sessionID: payload.sessionID,

@@ -5,9 +5,11 @@ const serializeFramePayload = async data => {
         return {payload: "", base64: false, size: 0, truncated: false};
     }
     if (typeof data === "string") {
-        const truncated = data.length > MAX_WS_FRAME_BODY_LENGTH;
-        const body = truncated ? data.slice(0, MAX_WS_FRAME_BODY_LENGTH) : data;
-        return {payload: body, base64: false, size: data.length, truncated: truncated};
+        const encoded = encodeTextToBytes(data);
+        const size = encoded ? encoded.byteLength : data.length;
+        const clamped = clampStringToByteLength(data, MAX_WS_FRAME_BODY_LENGTH, encoded);
+        const truncated = clamped.truncated || (Number.isFinite(size) && size > MAX_WS_FRAME_BODY_LENGTH);
+        return {payload: clamped.text, base64: false, size: size, truncated: truncated};
     }
     try {
         let bytes = null;
