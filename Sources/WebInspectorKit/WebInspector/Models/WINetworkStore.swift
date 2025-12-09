@@ -559,6 +559,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
+    // NOTE: When re-enabling WebSocket capture, ensure this does not mark the entry as completed
+    // for every frame. Keep the phase pending until close/error to reflect the live connection state.
     func appendWebSocketFrame(_ payload: WSNetworkEvent) {
         let direction = payload.frameDirection ?? .incoming
         let opcode = payload.frameOpcode ?? 1
