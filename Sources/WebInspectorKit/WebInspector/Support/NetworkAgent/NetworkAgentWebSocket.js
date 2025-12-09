@@ -36,7 +36,11 @@ const installWebSocketPatch = () => {
     }
     const OriginalWebSocket = WebSocket;
     function WrappedWebSocket(url, protocols) {
+        const shouldTrack = !!networkState.enabled;
         const socket = new OriginalWebSocket(url, protocols);
+        if (!shouldTrack) {
+            return socket;
+        }
         const requestId = nextRequestID();
         postWebSocketEvent({
             type: "wsCreated",
@@ -69,6 +73,9 @@ const installWebSocketPatch = () => {
         });
 
         socket.addEventListener("message", async event => {
+            if (!networkState.enabled) {
+                return;
+            }
             const serialized = await serializeFramePayload(event.data);
             const opcode = typeof event.data === "string" ? 1 : 2;
             postWebSocketEvent({
@@ -88,6 +95,9 @@ const installWebSocketPatch = () => {
 
         const originalSend = socket.send;
         socket.send = async function(data) {
+            if (!networkState.enabled) {
+                return originalSend.apply(this, arguments);
+            }
             const serialized = await serializeFramePayload(data);
             postWebSocketEvent({
                 type: "wsFrame",
@@ -143,7 +153,6 @@ const installWebSocketPatch = () => {
 };
 const postWebSocketEvent = payload => {
     if (!networkState.enabled) {
-        enqueueEvent({kind: "websocket", payload});
         return;
     }
     try {

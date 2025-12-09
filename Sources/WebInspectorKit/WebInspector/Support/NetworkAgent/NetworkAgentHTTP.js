@@ -9,14 +9,14 @@ const installFetchPatch = () => {
         return;
     }
     const patched = async function() {
-        const shouldTrack = true;
+        const shouldTrack = !!networkState.enabled;
         const args = Array.from(arguments);
         const [input, init = {}] = args;
         const method = init.method || (input && input.method) || "GET";
         const requestId = shouldTrack ? nextRequestID() : null;
         const url = typeof input === "string" ? input : (input && input.url) || "";
-        const headers = normalizeHeaders(init.headers || (input && input.headers));
-        const requestBodyInfo = serializeRequestBody(init.body);
+        const headers = shouldTrack ? normalizeHeaders(init.headers || (input && input.headers)) : {};
+        const requestBodyInfo = shouldTrack ? serializeRequestBody(init.body) : null;
 
         if (shouldTrack && requestId != null) {
             recordStart(
@@ -107,7 +107,7 @@ const installXHRPatch = () => {
     };
 
     XMLHttpRequest.prototype.send = function() {
-        const shouldTrack = !!this.__wiNetwork;
+        const shouldTrack = !!this.__wiNetwork && !!networkState.enabled;
         const requestId = shouldTrack ? nextRequestID() : null;
         const info = this.__wiNetwork;
         if (shouldTrack && requestId != null && info) {

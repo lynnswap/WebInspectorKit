@@ -123,7 +123,6 @@ const enqueueEvent = event => {
 
 const postHTTPEvent = payload => {
     if (!networkState.enabled) {
-        enqueueEvent({kind: "http", payload});
         return;
     }
     try {
@@ -134,7 +133,6 @@ const postHTTPEvent = payload => {
 
 const postHTTPBatchEvents = payloads => {
     if (!networkState.enabled) {
-        enqueueEvent({kind: "httpBatch", payloads});
         return;
     }
     if (!Array.isArray(payloads) || !payloads.length) {
@@ -572,6 +570,9 @@ const shouldTrackResourceEntry = entry => {
 };
 
 const handleResourceEntry = entry => {
+    if (!networkState.enabled) {
+        return null;
+    }
     if (!shouldTrackResourceEntry(entry)) {
         return null;
     }

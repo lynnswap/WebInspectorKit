@@ -646,14 +646,17 @@ public final class WINetworkWebSocketInfo: Identifiable, Equatable, Hashable{
     @ObservationIgnored private var indexByEntryID: [UUID: Int] = [:]
 
     func applyEvent(_ event: HTTPNetworkEvent) {
+        guard isRecording else { return }
         applyHTTPEvent(event)
     }
 
     func applyEvent(_ event: WSNetworkEvent) {
+        guard isRecording else { return }
         applyWSEvent(event)
     }
 
     func applyBatchedInsertions(_ batch: NetworkEventBatch) {
+        guard isRecording else { return }
         let events = batch.events
         guard !events.isEmpty else { return }
 

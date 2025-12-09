@@ -11,6 +11,9 @@ const recordStart = (
     wallTimeOverride,
     requestBody
 ) => {
+    if (!networkState.enabled) {
+        return;
+    }
     const startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
@@ -38,6 +41,12 @@ const recordStart = (
 };
 
 const recordResponse = (requestId, response, requestType) => {
+    if (!networkState.enabled) {
+        trackedRequests.delete(requestId);
+        requestBodies.delete(requestId);
+        responseBodies.delete(requestId);
+        return "";
+    }
     let mimeType = "";
     let headers = {};
     try {
@@ -85,6 +94,12 @@ const recordFinish = (
     wallTimeOverride,
     responseBody
 ) => {
+    if (!networkState.enabled) {
+        trackedRequests.delete(requestId);
+        requestBodies.delete(requestId);
+        responseBodies.delete(requestId);
+        return;
+    }
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     postHTTPEvent({
@@ -113,6 +128,12 @@ const recordFinish = (
 };
 
 const recordFailure = (requestId, error, requestType) => {
+    if (!networkState.enabled) {
+        trackedRequests.delete(requestId);
+        requestBodies.delete(requestId);
+        responseBodies.delete(requestId);
+        return;
+    }
     const time = now();
     const wall = wallTime();
     let description = "";
@@ -169,6 +190,16 @@ const ensureInstalled = () => {
 export const setNetworkLoggingEnabled = enabled => {
     const wasEnabled = networkState.enabled;
     networkState.enabled = !!enabled;
+    if (!networkState.enabled) {
+        trackedRequests.clear();
+        requestBodies.clear();
+        if (networkState.resourceSeen) {
+            networkState.resourceSeen.clear();
+        }
+        responseBodies.clear();
+        queuedEvents.splice(0, queuedEvents.length);
+        return;
+    }
     if (networkState.enabled && !wasEnabled) {
         flushQueuedEvents();
     }
