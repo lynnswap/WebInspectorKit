@@ -155,6 +155,16 @@ const postNetworkReset = () => {
     }
 };
 
+const clearDisabledNetworkState = () => {
+    queuedEvents.splice(0, queuedEvents.length);
+    trackedRequests.clear();
+    requestBodies.clear();
+    responseBodies.clear();
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
+};
+
 const ensureInstalled = () => {
     if (networkState.installed) {
         return;
@@ -166,10 +176,25 @@ const ensureInstalled = () => {
     networkState.installed = true;
 };
 
-export const setNetworkLoggingEnabled = enabled => {
-    const wasEnabled = networkState.enabled;
-    networkState.enabled = !!enabled;
-    if (networkState.enabled && !wasEnabled) {
+const normalizeLoggingMode = mode => {
+    if (mode === NetworkLoggingMode.BUFFERING) {
+        return NetworkLoggingMode.BUFFERING;
+    }
+    if (mode === NetworkLoggingMode.STOPPED) {
+        return NetworkLoggingMode.STOPPED;
+    }
+    return NetworkLoggingMode.ACTIVE;
+};
+
+export const setNetworkLoggingMode = mode => {
+    const previousMode = networkState.mode;
+    const resolvedMode = normalizeLoggingMode(mode);
+    networkState.mode = resolvedMode;
+    if (networkState.mode === NetworkLoggingMode.STOPPED) {
+        clearDisabledNetworkState();
+        return;
+    }
+    if (networkState.mode === NetworkLoggingMode.ACTIVE && previousMode !== NetworkLoggingMode.ACTIVE) {
         flushQueuedEvents();
     }
 };

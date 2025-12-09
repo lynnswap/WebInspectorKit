@@ -4,6 +4,12 @@ import OSLog
 import WebKit
 import Observation
 
+public enum WINetworkLoggingMode: String {
+    case active
+    case buffering
+    case stopped
+}
+
 private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "WINetworkPageAgent")
 private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetwork */ })();
@@ -24,16 +30,18 @@ final class WINetworkPageAgent: NSObject, WIPageAgent {
 
     weak var webView: WKWebView?
     let store = WINetworkStore()
+    private var loggingMode: WINetworkLoggingMode = .active
 
     @MainActor deinit {
         detachPageWebView()
     }
 
-    func setRecording(_ enabled: Bool) {
-        store.setRecording(enabled)
+    func setRecording(_ mode: WINetworkLoggingMode) {
+        loggingMode = mode
+        store.setRecording(mode != .stopped)
         Task {
             await self.configureNetworkLogging(
-                enabled: enabled,
+                mode: mode,
                 clearExisting: false,
                 on: self.webView
             )
@@ -43,11 +51,7 @@ final class WINetworkPageAgent: NSObject, WIPageAgent {
     func clearNetworkLogs() {
         store.clear()
         Task {
-            await self.configureNetworkLogging(
-                enabled: nil,
-                clearExisting: true,
-                on: self.webView
-            )
+            await self.clearRemoteNetworkRecords(on: self.webView)
         }
     }
 }
@@ -62,8 +66,9 @@ extension WINetworkPageAgent {
     func detachPageWebView(disableNetworkLogging: Bool = false) {
         if disableNetworkLogging, let webView {
             Task {
+                let mode: WINetworkLoggingMode = loggingMode == .stopped ? .stopped : .buffering
                 await self.configureNetworkLogging(
-                    enabled: false,
+                    mode: mode,
                     clearExisting: false,
                     on: webView
                 )
@@ -83,7 +88,7 @@ extension WINetworkPageAgent {
         registerMessageHandlers()
         Task {
             await self.configureNetworkLogging(
-                enabled: self.store.isRecording,
+                mode: self.loggingMode,
                 clearExisting: true,
                 on: webView
             )
@@ -278,14 +283,15 @@ private extension WINetworkPageAgent {
     }
 
     func configureNetworkLogging(
-        enabled: Bool?,
+        mode: WINetworkLoggingMode,
         clearExisting: Bool,
         on targetWebView: WKWebView?
     ) async {
         guard let webView = targetWebView ?? self.webView else { return }
         let controller = webView.configuration.userContentController
         let networkInstalled = controller.userScripts.contains { $0.source == networkPresenceProbeScript }
-        let shouldInstallNetworkAgent = (enabled == true) || (networkInstalled && (enabled != nil || clearExisting))
+        let modeRequiresAgent = mode != .stopped
+        let shouldInstallNetworkAgent = modeRequiresAgent || (networkInstalled && clearExisting)
 
         if shouldInstallNetworkAgent {
             await installNetworkAgentScriptIfNeeded(on: webView)
@@ -293,9 +299,7 @@ private extension WINetworkPageAgent {
 
         let networkReady = webView.configuration.userContentController.userScripts.contains { $0.source == networkPresenceProbeScript }
         var script = ""
-        if enabled != nil {
-            script += "window.webInspectorNetwork.setLoggingEnabled(enabled);"
-        }
+        script += "window.webInspectorNetwork.setLoggingMode(mode);"
         if clearExisting {
             script += "window.webInspectorNetwork.clearRecords();"
         }
@@ -304,11 +308,27 @@ private extension WINetworkPageAgent {
         do {
             try await webView.callAsyncVoidJavaScript(
                 script,
-                arguments: ["enabled": enabled as Any, "clearExisting": clearExisting],
+                arguments: [
+                    "clearExisting": clearExisting,
+                    "mode": mode.rawValue
+                ],
                 contentWorld: .page
             )
         } catch {
             networkLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func clearRemoteNetworkRecords(on targetWebView: WKWebView?) async {
+        guard let webView = targetWebView ?? self.webView else { return }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorNetwork.clearRecords();",
+                arguments: [:],
+                contentWorld: .page
+            )
+        } catch {
+            networkLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

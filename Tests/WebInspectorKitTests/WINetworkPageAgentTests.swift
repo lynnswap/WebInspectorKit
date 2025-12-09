@@ -9,9 +9,9 @@ struct WINetworkPageAgentTests {
         let agent = WINetworkPageAgent()
 
         #expect(agent.store.isRecording == true)
-        agent.setRecording(false)
+        agent.setRecording(.stopped)
         #expect(agent.store.isRecording == false)
-        agent.setRecording(true)
+        agent.setRecording(.active)
         #expect(agent.store.isRecording == true)
     }
 

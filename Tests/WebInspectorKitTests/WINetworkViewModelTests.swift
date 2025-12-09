@@ -15,10 +15,13 @@ struct WINetworkViewModelTests {
         let viewModel = WINetworkViewModel()
         #expect(viewModel.store.isRecording == true)
 
-        viewModel.setRecording(false)
+        viewModel.setRecording(.stopped)
         #expect(viewModel.store.isRecording == false)
 
-        viewModel.setRecording(true)
+        viewModel.setRecording(.active)
+        #expect(viewModel.store.isRecording == true)
+
+        viewModel.setRecording(.buffering)
         #expect(viewModel.store.isRecording == true)
     }
 

@@ -28,8 +28,8 @@ public final class WINetworkSession: WIPageSession {
         lastPageWebView = nil
     }
 
-    public func setRecording(_ enabled: Bool) {
-        networkAgent.setRecording(enabled)
+    public func setRecording(_ mode: WINetworkLoggingMode) {
+        networkAgent.setRecording(mode)
     }
 
     public func clearNetworkLogs() {
