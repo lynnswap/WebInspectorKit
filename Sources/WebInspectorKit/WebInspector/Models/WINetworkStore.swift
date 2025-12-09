@@ -188,11 +188,16 @@ public final class WINetworkBody {
         fetchState = .failed(error)
     }
 
-    public func applyFullBody(_ fullBody: String, isBase64Encoded: Bool, size: Int?) {
+    public func applyFullBody(
+        _ fullBody: String,
+        isBase64Encoded: Bool,
+        isTruncated: Bool,
+        size: Int?
+    ) {
         full = fullBody
         preview = preview ?? fullBody
         self.isBase64Encoded = isBase64Encoded
-        isTruncated = false
+        self.isTruncated = isTruncated
         self.size = size ?? fullBody.count
         fetchState = .full
     }
