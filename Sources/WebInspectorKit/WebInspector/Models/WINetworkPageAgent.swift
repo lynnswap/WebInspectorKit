@@ -39,6 +39,9 @@ final class WINetworkPageAgent: NSObject, WIPageAgent {
     func setRecording(_ mode: WINetworkLoggingMode) {
         loggingMode = mode
         store.setRecording(mode != .stopped)
+        if mode == .stopped {
+            store.reset()
+        }
         Task {
             await self.configureNetworkLogging(
                 mode: mode,

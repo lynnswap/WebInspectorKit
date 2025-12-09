@@ -28,6 +28,14 @@ public final class WINetworkSession: WIPageSession {
         lastPageWebView = nil
     }
 
+    public func willAppear() {
+        setRecording(.active)
+    }
+
+    public func willDisappear() {
+        setRecording(.buffering)
+    }
+
     public func setRecording(_ mode: WINetworkLoggingMode) {
         networkAgent.setRecording(mode)
     }

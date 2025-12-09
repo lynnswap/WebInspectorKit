@@ -157,12 +157,19 @@ const postNetworkReset = () => {
 
 const clearDisabledNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
+};
+
+const resetNetworkState = () => {
+    queuedEvents.splice(0, queuedEvents.length);
     trackedRequests.clear();
     requestBodies.clear();
     responseBodies.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
+    networkState.sessionID = generateSessionID();
+    networkState.nextId = 1;
+    postNetworkReset();
 };
 
 const ensureInstalled = () => {
@@ -191,7 +198,7 @@ export const setNetworkLoggingMode = mode => {
     const resolvedMode = normalizeLoggingMode(mode);
     networkState.mode = resolvedMode;
     if (networkState.mode === NetworkLoggingMode.STOPPED) {
-        clearDisabledNetworkState();
+        resetNetworkState();
         return;
     }
     if (networkState.mode === NetworkLoggingMode.ACTIVE && previousMode !== NetworkLoggingMode.ACTIVE) {

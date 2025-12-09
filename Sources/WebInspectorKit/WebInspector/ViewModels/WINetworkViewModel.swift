@@ -66,6 +66,14 @@ public final class WINetworkViewModel {
     public func detach() {
         session.detach()
     }
+    
+    public func willAppear() {
+        session.willAppear()
+    }
+    
+    public func willDisappear() {
+        session.willDisappear()
+    }
 
     public var isShowingDetail: Binding<Bool> {
         Binding(
