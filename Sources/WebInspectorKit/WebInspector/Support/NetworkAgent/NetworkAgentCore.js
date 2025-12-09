@@ -179,7 +179,8 @@ const ensureInstalled = () => {
     installFetchPatch();
     installXHRPatch();
     installResourceObserver();
-    installWebSocketPatch();
+    // WebSocket capture disabled for this release; keep patch uninstalled intentionally.
+    // installWebSocketPatch();
     networkState.installed = true;
 };
 

@@ -188,11 +188,16 @@ public final class WINetworkBody {
         fetchState = .failed(error)
     }
 
-    public func applyFullBody(_ fullBody: String, isBase64Encoded: Bool, size: Int?) {
+    public func applyFullBody(
+        _ fullBody: String,
+        isBase64Encoded: Bool,
+        isTruncated: Bool,
+        size: Int?
+    ) {
         full = fullBody
         preview = preview ?? fullBody
         self.isBase64Encoded = isBase64Encoded
-        isTruncated = false
+        self.isTruncated = isTruncated
         self.size = size ?? fullBody.count
         fetchState = .full
     }
@@ -559,6 +564,8 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
+    // NOTE: When re-enabling WebSocket capture, ensure this does not mark the entry as completed
+    // for every frame. Keep the phase pending until close/error to reflect the live connection state.
     func appendWebSocketFrame(_ payload: WSNetworkEvent) {
         let direction = payload.frameDirection ?? .incoming
         let opcode = payload.frameOpcode ?? 1
