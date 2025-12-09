@@ -1,7 +1,7 @@
 import SwiftUI
 import Observation
 
-public struct WIDetailView: View {
+public struct WIDOMElementView: View {
     private var viewModel: WIDOMViewModel
     
     public init(viewModel: WIDOMViewModel) {
@@ -22,7 +22,7 @@ public struct WIDetailView: View {
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }header: {
-                        Text("dom.detail.section.element")
+                        Text("dom.element.section.element")
                     }
                     Section {
                         SelectionPreviewTextRepresentable(
@@ -33,11 +33,11 @@ public struct WIDetailView: View {
                         .listRowStyle()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     } header: {
-                        Text("dom.detail.section.selector")
+                        Text("dom.element.section.selector")
                     }
                     Section {
                         if viewModel.selection.attributes.isEmpty {
-                            Text("dom.detail.attributes.empty")
+                            Text("dom.element.attributes.empty")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .listRowSeparator(.hidden)
@@ -68,7 +68,7 @@ public struct WIDetailView: View {
                             }
                         }
                     }header:{
-                        Text("dom.detail.section.attributes")
+                        Text("dom.element.section.attributes")
                     }
                 }
                 .listSectionSeparator(.hidden)
@@ -79,9 +79,9 @@ public struct WIDetailView: View {
                 .contentMargins(.bottom, 24 ,for: .scrollContent)
             }else{
                 ContentUnavailableView(
-                    String(localized:"dom.detail.select_prompt",bundle:.module),
+                    String(localized:"dom.element.select_prompt",bundle:.module),
                     systemImage: "cursorarrow.rays",
-                    description: Text("dom.detail.hint")
+                    description: Text("dom.element.hint")
                 )
             }
         }
@@ -272,7 +272,7 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
 
 #if DEBUG
 @MainActor
-private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIDOMViewModel {
+private func makeWIDOMElementPreviewModel(selection: WIDOMSelection?) -> WIDOMViewModel {
     let model = WIDOMViewModel()
     if let selection {
         model.selection.nodeId = selection.nodeId
@@ -287,7 +287,7 @@ private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIDOMViewMo
 }
 
 @MainActor
-private enum WIDetailPreviewData {
+private enum WIDOMElementPreviewData {
     static let selected = WIDOMSelection(
         nodeId: 128,
         preview: "<article class=\"entry\">Preview post content</article>",
@@ -322,14 +322,14 @@ private enum WIDetailPreviewData {
 }
 
 #Preview("DOM Selected") {
-    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
+    WIDOMElementView(viewModel: makeWIDOMElementPreviewModel(selection: WIDOMElementPreviewData.selected))
 }
 
 #Preview("Attributes Empty") {
-    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
+    WIDOMElementView(viewModel: makeWIDOMElementPreviewModel(selection: WIDOMElementPreviewData.attributesEmpty))
 }
 
 #Preview("No DOM Selection") {
-    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: nil))
+    WIDOMElementView(viewModel: makeWIDOMElementPreviewModel(selection: nil))
 }
 #endif

@@ -2,15 +2,15 @@ import SwiftUI
 
 enum WIDefaultTab: Int, CaseIterable {
     case dom
-    case detail
+    case element
     case network
 
     var title: LocalizedStringResource {
         switch self {
         case .dom:
             LocalizedStringResource("inspector.tab.dom", bundle: .module)
-        case .detail:
-            LocalizedStringResource("inspector.tab.detail", bundle: .module)
+        case .element:
+            LocalizedStringResource("inspector.tab.element", bundle: .module)
         case .network:
             LocalizedStringResource("inspector.tab.network", bundle: .module)
         }
@@ -20,7 +20,7 @@ enum WIDefaultTab: Int, CaseIterable {
         switch self {
         case .dom:
             "chevron.left.forwardslash.chevron.right"
-        case .detail:
+        case .element:
             "info.circle"
         case .network:
             "waveform.path.ecg.rectangle"
@@ -31,8 +31,8 @@ enum WIDefaultTab: Int, CaseIterable {
         switch self {
         case .dom:
             "wi_dom"
-        case .detail:
-            "wi_detail"
+        case .element:
+            "wi_element"
         case .network:
             "wi_network"
         }
@@ -55,17 +55,17 @@ public extension WITab {
         )
     }
 
-    static func detail(
+    static func element(
         title: LocalizedStringResource? = nil,
         systemImage: String? = nil
     ) -> WITab {
         WITab(
-            title ?? WIDefaultTab.detail.title,
-            systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
-            value: WIDefaultTab.detail.identifier,
+            title ?? WIDefaultTab.element.title,
+            systemImage: systemImage ?? WIDefaultTab.element.systemImage,
+            value: WIDefaultTab.element.identifier,
             role: .inspector,
             content: { model in
-                WIDetailView(viewModel: model.dom)
+                WIDOMElementView(viewModel: model.dom)
             }
         )
     }

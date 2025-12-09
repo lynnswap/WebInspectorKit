@@ -31,7 +31,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                             Button {
                                 model.copySelection(.selectorPath)
                             } label: {
-                                Text("dom.detail.copy.selector_path")
+                                Text("dom.element.copy.selector_path")
                             }
                             Button {
                                 model.copySelection(.xpath)

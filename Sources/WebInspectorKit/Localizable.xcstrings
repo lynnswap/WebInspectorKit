@@ -286,7 +286,7 @@
         }
       }
     },
-    "dom.detail.attributes.empty" : {
+    "dom.element.attributes.empty" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -428,7 +428,7 @@
         }
       }
     },
-    "dom.detail.copy.selector_path" : {
+    "dom.element.copy.selector_path" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -570,7 +570,7 @@
         }
       }
     },
-    "dom.detail.hint" : {
+    "dom.element.hint" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -712,7 +712,7 @@
         }
       }
     },
-    "dom.detail.section.attributes" : {
+    "dom.element.section.attributes" : {
       "comment" : "Section title for DOM attributes list.",
       "localizations" : {
         "ar" : {
@@ -855,7 +855,7 @@
         }
       }
     },
-    "dom.detail.section.element" : {
+    "dom.element.section.element" : {
       "comment" : "Section title for the selected DOM element preview.",
       "localizations" : {
         "ar" : {
@@ -998,7 +998,7 @@
         }
       }
     },
-    "dom.detail.section.selector" : {
+    "dom.element.section.selector" : {
       "comment" : "Section title for CSS selector path.",
       "localizations" : {
         "ar" : {
@@ -1141,7 +1141,7 @@
         }
       }
     },
-    "dom.detail.select_prompt" : {
+    "dom.element.select_prompt" : {
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1568,145 +1568,145 @@
         }
       }
     },
-    "inspector.tab.detail" : {
-      "comment" : "Tab title that shows details of the selected node.",
+    "inspector.tab.element" : {
+      "comment" : "Tab title for the selected DOM element.",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "التفاصيل"
+            "value" : "العنصر"
           }
         },
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Details"
+            "value" : "Element"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detail"
+            "value" : "Element"
           }
         },
         "en-GB" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detail"
+            "value" : "Element"
           }
         },
         "en-IN" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detail"
+            "value" : "Element"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detalles"
+            "value" : "Elemento"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detalles"
+            "value" : "Elemento"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Détails"
+            "value" : "Élément"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Détails"
+            "value" : "Élément"
           }
         },
         "hi" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "विवरण"
+            "value" : "तत्व"
           }
         },
         "id" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rincian"
+            "value" : "Elemen"
           }
         },
         "it" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dettagli"
+            "value" : "Elemento"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "詳細"
+            "value" : "要素"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "상세"
+            "value" : "요소"
           }
         },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Details"
+            "value" : "Element"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detalhes"
+            "value" : "Elemento"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detalhes"
+            "value" : "Elemento"
           }
         },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detalii"
+            "value" : "Element"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Детали"
+            "value" : "Элемент"
           }
         },
         "th" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "รายละเอียด"
+            "value" : "องค์ประกอบ"
           }
         },
         "tr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Detay"
+            "value" : "Öğe"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "详情"
+            "value" : "元素"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "詳細"
+            "value" : "元素"
           }
         }
       }
