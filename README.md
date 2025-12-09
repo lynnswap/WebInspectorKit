@@ -57,7 +57,7 @@ For a more complete preview setup, see [`Sources/WebInspectorKit/WebInspector/Vi
 ```swift
 WebInspectorView(inspector, webView: pageWebView) {
     WITab.dom()
-    WITab.detail()
+    WITab.element()
     WITab("Custom", systemImage: "folder") { _ in
         List{
             Text("Custom tab content")
