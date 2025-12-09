@@ -1,27 +1,21 @@
-//
-//  WIDetailView.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2024/12/08.
-//
-
 import SwiftUI
 import Observation
 
 public struct WIDetailView: View {
-    @Environment(WebInspectorModel.self) private var model
+    private var viewModel: WIDOMViewModel
     
-    public init() {}
+    public init(viewModel: WIDOMViewModel) {
+        self.viewModel = viewModel
+    }
     
     public var body: some View {
 #if canImport(UIKit)
-        let selection = model.webBridge.domSelection
         Group{
-            if selection.nodeId != nil {
+            if viewModel.selection.nodeId != nil {
                 List{
                     Section{
                         SelectionPreviewTextRepresentable(
-                            text: selection.preview,
+                            text: viewModel.selection.preview,
                             textStyle: .footnote,
                             textColor: .label
                         )
@@ -32,7 +26,7 @@ public struct WIDetailView: View {
                     }
                     Section {
                         SelectionPreviewTextRepresentable(
-                            text: selection.selectorPath,
+                            text: viewModel.selection.selectorPath,
                             textStyle: .footnote,
                             textColor: .label
                         )
@@ -42,13 +36,13 @@ public struct WIDetailView: View {
                         Text("dom.detail.section.selector")
                     }
                     Section {
-                        if selection.attributes.isEmpty {
+                        if viewModel.selection.attributes.isEmpty {
                             Text("dom.detail.attributes.empty")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .listRowSeparator(.hidden)
                         } else {
-                            ForEach(selection.attributes) { element in
+                            ForEach(viewModel.selection.attributes) { element in
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(element.name)
                                         .font(.subheadline.weight(.semibold))
@@ -59,7 +53,7 @@ public struct WIDetailView: View {
                                         textColor: .label,
                                         isEditable: true,
                                         onChange: { newValue in
-                                            model.webBridge.updateAttributeValue(name: element.name, value: newValue)
+                                            viewModel.updateAttributeValue(name: element.name, value: newValue)
                                         }
                                     )
                                 }
@@ -91,13 +85,13 @@ public struct WIDetailView: View {
                 )
             }
         }
-        .animation(.easeInOut(duration:0.12),value:selection.nodeId == nil)
+        .animation(.easeInOut(duration:0.12),value:viewModel.selection.nodeId == nil)
 #endif
     }
    
     private func deleteButton(_ element:WIDOMAttribute) -> some View{
         Button(role:.destructive){
-            model.webBridge.removeAttribute(name: element.name)
+            viewModel.removeAttribute(name: element.name)
         }label:{
             Label{
                 Text("delete")
@@ -278,12 +272,16 @@ public final class SelectionUITextView: UITextView, UITextViewDelegate {
 
 #if DEBUG
 @MainActor
-private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WebInspectorModel {
-    let model = WebInspectorModel()
+private func makeWIDetailPreviewModel(selection: WIDOMSelection?) -> WIDOMViewModel {
+    let model = WIDOMViewModel()
     if let selection {
-        model.webBridge.domSelection = selection
+        model.selection.nodeId = selection.nodeId
+        model.selection.preview = selection.preview
+        model.selection.attributes = selection.attributes
+        model.selection.path = selection.path
+        model.selection.selectorPath = selection.selectorPath
     } else {
-        model.webBridge.domSelection.clear()
+        model.selection.clear()
     }
     return model
 }
@@ -324,17 +322,14 @@ private enum WIDetailPreviewData {
 }
 
 #Preview("DOM Selected") {
-    WIDetailView()
-        .environment(makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
+    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: WIDetailPreviewData.selected))
 }
 
 #Preview("Attributes Empty") {
-    WIDetailView()
-        .environment(makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
+    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: WIDetailPreviewData.attributesEmpty))
 }
 
 #Preview("No DOM Selection") {
-    WIDetailView()
-        .environment(makeWIDetailPreviewModel(selection: nil))
+    WIDetailView(viewModel: makeWIDetailPreviewModel(selection: nil))
 }
 #endif

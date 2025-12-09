@@ -1,4 +1,4 @@
-import {inspector} from "./InspectorAgentState.js";
+import {inspector} from "./DOMAgentState.js";
 
 export function rememberNode(node) {
     if (!node) {

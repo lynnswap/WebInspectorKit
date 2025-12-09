@@ -1,10 +1,12 @@
 import SwiftUI
 
 struct WebInspectorToolbarModifier: ViewModifier {
-    @Environment(WebInspectorModel.self) private var model
+    var model: WIDOMViewModel
+    private var isShowingToolbar: Bool
     
-    private var isShowingToolbar: Bool {
-        model.selectedTab?.role == .inspector
+    init(model: WIDOMViewModel, isVisible: Bool) {
+        self.model = model
+        self.isShowingToolbar = isVisible
     }
     
     func body(content: Content) -> some View {
@@ -43,18 +45,17 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                 Image(systemName: "document.on.document")
                             }
                         }
-                        .disabled(model.webBridge.domSelection.nodeId == nil)
+                        .disabled(model.selection.nodeId == nil)
                         
-                   
+                        
                         Menu{
                             Button {
-                                Task { await model.reload() }
+                                Task { await model.reloadInspector() }
                             } label: {
                                 Text("reload.target.inspector")
                             }
-                            .disabled(model.webBridge.isLoading)
                             Button {
-                                model.webBridge.contentModel.webView?.reload()
+                                model.session.reloadPage()
                             } label: {
                                 Text("reload.target.page")
                             }
@@ -76,7 +77,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
                                     Image(systemName: "trash")
                                 }
                             }
-                            .disabled(model.webBridge.domSelection.nodeId == nil)
+                            .disabled(model.selection.nodeId == nil)
                         }
                     }
                 }
@@ -86,7 +87,7 @@ struct WebInspectorToolbarModifier: ViewModifier {
 }
 
 public extension View {
-    func webInspectorToolbar() -> some View {
-        modifier(WebInspectorToolbarModifier())
+    func webInspectorToolbar(_ model: WIDOMViewModel, isVisible:Bool = true) -> some View {
+        return modifier(WebInspectorToolbarModifier(model: model, isVisible: isVisible))
     }
 }

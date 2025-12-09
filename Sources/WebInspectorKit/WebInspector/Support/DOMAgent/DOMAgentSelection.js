@@ -1,7 +1,7 @@
-import {inspector} from "./InspectorAgentState.js";
-import {computeNodePath} from "./InspectorAgentDOMCore.js";
-import {clearHighlight, highlightSelectionNode} from "./InspectorAgentOverlay.js";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./InspectorAgentSnapshot.js";
+import {inspector} from "./DOMAgentState.js";
+import {computeNodePath} from "./DOMAgentDOMCore.js";
+import {clearHighlight, highlightSelectionNode} from "./DOMAgentOverlay.js";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./DOMAgentSnapshot.js";
 
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {

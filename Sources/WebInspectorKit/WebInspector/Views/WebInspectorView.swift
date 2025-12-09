@@ -18,6 +18,9 @@ public struct WebInspectorView: View {
         self.model = viewModel
         self.webView = webView
         self.tabs = tabs()
+        if viewModel.selectedTab == nil {
+            viewModel.selectedTab = self.tabs.first
+        }
     }
 
     public init(
@@ -27,28 +30,36 @@ public struct WebInspectorView: View {
         self.init(viewModel, webView: webView) {
             WITab.dom()
             WITab.detail()
+            WITab.network()
         }
     }
 
     public var body: some View {
         tabContent
             .onAppear {
-                model.attach(webView: webView)
+                if let webView {
+                    model.attach(webView: webView)
+                } else {
+                    model.suspend()
+                }
             }
             .onChange(of: webView) {
-                model.attach(webView: webView)
+                if let webView {
+                    model.attach(webView: webView)
+                } else {
+                    model.suspend()
+                }
             }
             .onDisappear {
                 model.suspend()
             }
-            .webInspectorToolbar()
-            .environment(model)
+            .webInspectorToolbar(model.dom, isVisible: model.selectedTab?.role == .inspector)
     }
 
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WITabBarContainer(tabs: tabs)
+        WITabBarContainer(model: model, tabs: tabs)
             .ignoresSafeArea()
 #elseif canImport(AppKit)
         TabView(selection: Bindable(model).selectedTab) {
@@ -64,7 +75,6 @@ public struct WebInspectorView: View {
                     .tag(tab)
             }
         }
-        .environment(model)
 #endif
     }
 }

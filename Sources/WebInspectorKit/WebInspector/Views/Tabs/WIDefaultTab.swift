@@ -3,6 +3,7 @@ import SwiftUI
 enum WIDefaultTab: Int, CaseIterable {
     case dom
     case detail
+    case network
 
     var title: LocalizedStringResource {
         switch self {
@@ -10,6 +11,8 @@ enum WIDefaultTab: Int, CaseIterable {
             LocalizedStringResource("inspector.tab.dom", bundle: .module)
         case .detail:
             LocalizedStringResource("inspector.tab.detail", bundle: .module)
+        case .network:
+            LocalizedStringResource("inspector.tab.network", bundle: .module)
         }
     }
 
@@ -19,6 +22,8 @@ enum WIDefaultTab: Int, CaseIterable {
             "chevron.left.forwardslash.chevron.right"
         case .detail:
             "info.circle"
+        case .network:
+            "waveform.path.ecg.rectangle"
         }
     }
 
@@ -28,6 +33,8 @@ enum WIDefaultTab: Int, CaseIterable {
             "wi_dom"
         case .detail:
             "wi_detail"
+        case .network:
+            "wi_network"
         }
     }
 }
@@ -42,8 +49,8 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.dom.systemImage,
             value: WIDefaultTab.dom.identifier,
             role: .inspector,
-            content: {
-                WIDOMView()
+            content: { model in
+                WIDOMView(viewModel: model.dom)
             }
         )
     }
@@ -57,8 +64,23 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
             value: WIDefaultTab.detail.identifier,
             role: .inspector,
-            content: {
-                WIDetailView()
+            content: { model in
+                WIDetailView(viewModel: model.dom)
+            }
+        )
+    }
+
+    static func network(
+        title: LocalizedStringResource? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            title ?? WIDefaultTab.network.title,
+            systemImage: systemImage ?? WIDefaultTab.network.systemImage,
+            value: WIDefaultTab.network.identifier,
+            role: .inspector,
+            content: { model in
+                WINetworkView(viewModel: model.network)
             }
         )
     }
