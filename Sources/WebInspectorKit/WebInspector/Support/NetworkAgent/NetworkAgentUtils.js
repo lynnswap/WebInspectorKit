@@ -26,7 +26,9 @@ const networkState = {
     sessionID: generateSessionID(),
     resourceObserver: null,
     resourceSeen: null,
-    loggingListenerInstalled: false
+    loggingListenerInstalled: false,
+    isRootFrame: true,
+    lastClearId: null
 };
 
 const trackedRequests = new Map();

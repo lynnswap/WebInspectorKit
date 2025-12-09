@@ -155,6 +155,108 @@ const postNetworkReset = () => {
     }
 };
 
+const isRootFrame = (() => {
+    try {
+        return window === window.top;
+    } catch {
+        return true;
+    }
+})();
+
+networkState.isRootFrame = isRootFrame;
+
+const rootState = (() => {
+    try {
+        if (window.top) {
+            if (!window.top.__wiNetworkRootState) {
+                window.top.__wiNetworkRootState = {
+                    enabled: networkState.enabled,
+                    lastClearId: networkState.lastClearId
+                };
+            }
+            return window.top.__wiNetworkRootState;
+        }
+    } catch {
+    }
+    return null;
+})();
+
+const applyRootStateSnapshot = () => {
+    if (!rootState || networkState.isRootFrame) {
+        return;
+    }
+    if (typeof rootState.enabled === "boolean") {
+        networkState.enabled = rootState.enabled;
+    }
+    if (rootState.lastClearId != null) {
+        networkState.lastClearId = rootState.lastClearId;
+    }
+};
+
+const broadcastToChildren = payload => {
+    if (!networkState.isRootFrame) {
+        return;
+    }
+    try {
+        const frames = window.frames || [];
+        for (let i = 0; i < frames.length; ++i) {
+            try {
+                frames[i].postMessage({...payload, __wiNetworkFromRoot: true}, "*");
+            } catch {
+            }
+        }
+    } catch {
+    }
+};
+
+const requestInitialSync = () => {
+    if (networkState.isRootFrame) {
+        return;
+    }
+    try {
+        if (window.parent && typeof window.parent.postMessage === "function") {
+            window.parent.postMessage({__wiNetworkSyncRequest: true}, "*");
+        }
+    } catch {
+    }
+};
+
+const setNetworkLoggingEnabledInternal = (enabled, {propagate = true, updateRoot = true} = {}) => {
+    const wasEnabled = networkState.enabled;
+    networkState.enabled = !!enabled;
+    if (updateRoot && rootState) {
+        rootState.enabled = networkState.enabled;
+    }
+    if (propagate) {
+        broadcastToChildren({__wiNetworkLoggingEnabled: networkState.enabled});
+    }
+    if (networkState.enabled && !wasEnabled) {
+        flushQueuedEvents();
+    }
+};
+
+const clearNetworkRecordsInternal = (clearId, {propagate = true, updateRoot = true} = {}) => {
+    if (clearId != null && networkState.lastClearId === clearId) {
+        return;
+    }
+    const appliedClearId = clearId != null ? clearId : generateSessionID();
+    networkState.lastClearId = appliedClearId;
+    if (updateRoot && rootState) {
+        rootState.lastClearId = appliedClearId;
+    }
+    trackedRequests.clear();
+    requestBodies.clear();
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
+    responseBodies.clear();
+    queuedEvents.splice(0, queuedEvents.length);
+    postNetworkReset();
+    if (propagate) {
+        broadcastToChildren({__wiNetworkClearRecords: true, __wiNetworkClearId: appliedClearId});
+    }
+};
+
 const installLoggingToggleListener = () => {
     if (networkState.loggingListenerInstalled) {
         return;
@@ -166,29 +268,19 @@ const installLoggingToggleListener = () => {
             }
             const data = event.data;
             if (typeof data.__wiNetworkLoggingEnabled === "boolean") {
-                const enabled = !!data.__wiNetworkLoggingEnabled;
-                setNetworkLoggingEnabled(enabled);
-                try {
-                    const frames = window.frames || [];
-                    for (let i = 0; i < frames.length; ++i) {
-                        try {
-                            frames[i].postMessage({__wiNetworkLoggingEnabled: enabled}, "*");
-                        } catch {
-                        }
-                    }
-                } catch {
-                }
+                setNetworkLoggingEnabledInternal(data.__wiNetworkLoggingEnabled, {propagate: false, updateRoot: false});
             }
             if (data.__wiNetworkClearRecords === true) {
-                clearNetworkRecords();
+                clearNetworkRecordsInternal(data.__wiNetworkClearId, {propagate: false, updateRoot: false});
+            }
+            if (data.__wiNetworkSyncRequest === true && networkState.isRootFrame && event.source && typeof event.source.postMessage === "function") {
                 try {
-                    const frames = window.frames || [];
-                    for (let i = 0; i < frames.length; ++i) {
-                        try {
-                            frames[i].postMessage({__wiNetworkClearRecords: true}, "*");
-                        } catch {
-                        }
-                    }
+                    event.source.postMessage({
+                        __wiNetworkFromRoot: true,
+                        __wiNetworkLoggingEnabled: rootState ? rootState.enabled : networkState.enabled,
+                        __wiNetworkClearRecords: rootState && rootState.lastClearId != null ? true : false,
+                        __wiNetworkClearId: rootState ? rootState.lastClearId : networkState.lastClearId
+                    }, "*");
                 } catch {
                 }
             }
@@ -207,26 +299,18 @@ const ensureInstalled = () => {
     installResourceObserver();
     installWebSocketPatch();
     installLoggingToggleListener();
+    requestInitialSync();
     networkState.installed = true;
 };
 
+applyRootStateSnapshot();
+
 export const setNetworkLoggingEnabled = enabled => {
-    const wasEnabled = networkState.enabled;
-    networkState.enabled = !!enabled;
-    if (networkState.enabled && !wasEnabled) {
-        flushQueuedEvents();
-    }
+    setNetworkLoggingEnabledInternal(enabled, {propagate: true, updateRoot: true});
 };
 
 export const clearNetworkRecords = () => {
-    trackedRequests.clear();
-    requestBodies.clear();
-    if (networkState.resourceSeen) {
-        networkState.resourceSeen.clear();
-    }
-    responseBodies.clear();
-    queuedEvents.splice(0, queuedEvents.length);
-    postNetworkReset();
+    clearNetworkRecordsInternal(null, {propagate: true, updateRoot: true});
 };
 
 export const installNetworkObserver = () => {
