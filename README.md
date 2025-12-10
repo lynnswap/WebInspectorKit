@@ -36,10 +36,8 @@ struct ContentView: View {
         NavigationStack {
             YourPageView(webView: pageWebView) // your page UI that hosts the WKWebView
                 .sheet(isPresented: $isInspectorPresented) {
-                    NavigationStack {
-                        WebInspectorView(inspector, webView: pageWebView)
-                    }
-                    .presentationDetents([.medium, .large])
+                    WebInspectorView(inspector, webView: pageWebView)
+                        .presentationDetents([.medium, .large])
                 }
                 .toolbar {
                     Button("Inspect page") {
