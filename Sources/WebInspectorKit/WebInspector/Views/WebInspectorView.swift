@@ -62,34 +62,10 @@ public struct WebInspectorView: View {
         WITabBarContainer(model: model, tabs: tabs)
             .ignoresSafeArea()
 #elseif canImport(AppKit)
-        TabView(selection: Bindable(model).selectedTab) {
-            ForEach(tabs) { tab in
-                WITabContentHost(tab: tab, model: model)
-                    .tabItem {
-                        Label {
-                            Text(tab.title)
-                        } icon: {
-                            Image(systemName: tab.systemImage)
-                        }
-                    }
-                    .tag(tab)
-            }
-        }
+        WITabBarContainer(model: model, tabs: tabs)
 #endif
     }
 }
-#if canImport(AppKit)
-private struct WITabContentHost: NSViewControllerRepresentable {
-    let tab: WITab
-    let model: WebInspectorModel
-
-    func makeNSViewController(context: Context) -> NSViewController {
-        tab.viewController(with: model)
-    }
-
-    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
-}
-#endif
 
 #if DEBUG
 @MainActor
