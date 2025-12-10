@@ -3,11 +3,11 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 typealias WITabHostingController<Content: View> = UIHostingController<Content>
-typealias WITabViewController = UIViewController
+typealias WIViewController = UIViewController
 #elseif canImport(AppKit)
 import AppKit
 typealias WITabHostingController<Content: View> = NSHostingController<Content>
-typealias WITabViewController = NSViewController
+typealias WIViewController = NSViewController
 #endif
 
 public struct WITab: Identifiable,Hashable{
@@ -15,7 +15,7 @@ public struct WITab: Identifiable,Hashable{
     public let title: LocalizedStringResource
     public let systemImage: String
     public let role: WITabRole
-    private let makeViewController: @MainActor (WebInspectorModel) -> WITabViewController
+    private let makeViewController: @MainActor (WebInspectorModel) -> WIViewController
 
     @MainActor
     public init(
@@ -43,7 +43,7 @@ public struct WITab: Identifiable,Hashable{
     }
 
     @MainActor
-    func viewController(with model: WebInspectorModel) -> WITabViewController {
+    func viewController(with model: WebInspectorModel) -> WIViewController {
         makeViewController(model)
     }
     
