@@ -94,24 +94,10 @@ private struct WIPreviewHost: View {
 #else
             PreviewWebViewRepresentable(webView: model.webView)
                 .sheet(isPresented: $isPresented) {
-                    NavigationStack {
-                        WebInspectorView(inspectorModel, webView: model.webView)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button {
-                                        isPresented = false
-                                    } label: {
-                                        Image(systemName: "xmark")
-                                    }
-                                }
-                            }
-                            .background(backgroundColor.opacity(0.5))
-                        
-                    }
-                    
-                    .presentationBackgroundInteraction(.enabled)
-                    .presentationDetents([.medium, .large])
-                    .presentationContentInteraction(.scrolls)
+                    WebInspectorView(inspectorModel, webView: model.webView)
+                        .presentationBackgroundInteraction(.enabled)
+                        .presentationDetents([.medium, .large])
+                        .presentationContentInteraction(.scrolls)
                 }
 #endif
         }else{
