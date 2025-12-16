@@ -1,11 +1,11 @@
 import SwiftUI
 
-enum WIDefaultTab: Int, CaseIterable {
+public enum WIDefaultTab: Int, CaseIterable {
     case dom
     case element
     case network
 
-    var title: LocalizedStringResource {
+    public var title: LocalizedStringResource {
         switch self {
         case .dom:
             LocalizedStringResource("inspector.tab.dom", bundle: .module)
@@ -16,7 +16,7 @@ enum WIDefaultTab: Int, CaseIterable {
         }
     }
 
-    var systemImage: String {
+    public var systemImage: String {
         switch self {
         case .dom:
             "chevron.left.forwardslash.chevron.right"
@@ -27,7 +27,7 @@ enum WIDefaultTab: Int, CaseIterable {
         }
     }
 
-    var identifier: String {
+    public var identifier: String {
         switch self {
         case .dom:
             "wi_dom"
