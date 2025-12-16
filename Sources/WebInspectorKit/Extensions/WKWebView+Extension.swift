@@ -1,10 +1,3 @@
-//
-//  WKWebView+Extension.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/03.
-//
-
 import WebKit
 
 extension WKWebView {

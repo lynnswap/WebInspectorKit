@@ -1,33 +1,40 @@
 import SwiftUI
 
-enum WIDefaultTab: Int, CaseIterable {
+public enum WIDefaultTab: Int, CaseIterable {
     case dom
-    case detail
+    case element
+    case network
 
-    var title: LocalizedStringResource {
+    public var title: LocalizedStringResource {
         switch self {
         case .dom:
             LocalizedStringResource("inspector.tab.dom", bundle: .module)
-        case .detail:
-            LocalizedStringResource("inspector.tab.detail", bundle: .module)
+        case .element:
+            LocalizedStringResource("inspector.tab.element", bundle: .module)
+        case .network:
+            LocalizedStringResource("inspector.tab.network", bundle: .module)
         }
     }
 
-    var systemImage: String {
+    public var systemImage: String {
         switch self {
         case .dom:
             "chevron.left.forwardslash.chevron.right"
-        case .detail:
+        case .element:
             "info.circle"
+        case .network:
+            "waveform.path.ecg.rectangle"
         }
     }
 
-    var identifier: String {
+    public var identifier: String {
         switch self {
         case .dom:
             "wi_dom"
-        case .detail:
-            "wi_detail"
+        case .element:
+            "wi_element"
+        case .network:
+            "wi_network"
         }
     }
 }
@@ -42,23 +49,48 @@ public extension WITab {
             systemImage: systemImage ?? WIDefaultTab.dom.systemImage,
             value: WIDefaultTab.dom.identifier,
             role: .inspector,
-            content: {
-                WIDOMView()
+            content: { model in
+                NavigationStack{
+                    WIDOMView(viewModel: model.dom)
+                        .domInspectorToolbar(model, identifier: WIDefaultTab.dom.identifier)
+                    
+                }
             }
         )
     }
 
-    static func detail(
+    static func element(
         title: LocalizedStringResource? = nil,
         systemImage: String? = nil
     ) -> WITab {
         WITab(
-            title ?? WIDefaultTab.detail.title,
-            systemImage: systemImage ?? WIDefaultTab.detail.systemImage,
-            value: WIDefaultTab.detail.identifier,
+            title ?? WIDefaultTab.element.title,
+            systemImage: systemImage ?? WIDefaultTab.element.systemImage,
+            value: WIDefaultTab.element.identifier,
             role: .inspector,
-            content: {
-                WIDetailView()
+            content: { model in
+                NavigationStack{
+                    WIDOMElementView(viewModel: model.dom)
+                        .domInspectorToolbar(model, identifier: WIDefaultTab.element.identifier)
+                }
+            }
+        )
+    }
+
+    static func network(
+        title: LocalizedStringResource? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            title ?? WIDefaultTab.network.title,
+            systemImage: systemImage ?? WIDefaultTab.network.systemImage,
+            value: WIDefaultTab.network.identifier,
+            role: .inspector,
+            content: { model in
+                NavigationStack{
+                    WINetworkView(viewModel: model.network)
+                        .networkInspectorToolbar(model, identifier: WIDefaultTab.network.identifier)
+                }
             }
         )
     }

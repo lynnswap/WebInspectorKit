@@ -1,10 +1,3 @@
-//
-//  WIWebView.swift
-//  WebInspectorKit
-//
-//  Created by Codex on 2025/03/04.
-//
-
 import WebKit
 
 @MainActor

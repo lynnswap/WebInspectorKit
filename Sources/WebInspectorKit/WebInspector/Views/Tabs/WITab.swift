@@ -3,11 +3,11 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 typealias WITabHostingController<Content: View> = UIHostingController<Content>
-typealias WITabViewController = UIViewController
+typealias WIViewController = UIViewController
 #elseif canImport(AppKit)
 import AppKit
 typealias WITabHostingController<Content: View> = NSHostingController<Content>
-typealias WITabViewController = NSViewController
+typealias WIViewController = NSViewController
 #endif
 
 public struct WITab: Identifiable,Hashable{
@@ -15,7 +15,7 @@ public struct WITab: Identifiable,Hashable{
     public let title: LocalizedStringResource
     public let systemImage: String
     public let role: WITabRole
-    private let makeViewController: @MainActor (WebInspectorModel) -> WITabViewController
+    private let makeViewController: @MainActor (WebInspectorModel) -> WIViewController
 
     @MainActor
     public init(
@@ -23,7 +23,7 @@ public struct WITab: Identifiable,Hashable{
         systemImage: String,
         value: String? = nil,
         role: WITabRole = .other,
-        @ViewBuilder content: @escaping () -> some View
+        @ViewBuilder content: @escaping (WebInspectorModel) -> some View
     ) {
         if let value {
             self.id = value
@@ -34,7 +34,7 @@ public struct WITab: Identifiable,Hashable{
         self.systemImage = systemImage
         self.role = role
         self.makeViewController = { model in
-            let host = WITabHostingController(rootView: content().environment(model))
+            let host = WITabHostingController(rootView: content(model))
 #if canImport(UIKit)
             host.view.backgroundColor = .clear
 #endif
@@ -43,7 +43,20 @@ public struct WITab: Identifiable,Hashable{
     }
 
     @MainActor
-    func viewController(with model: WebInspectorModel) -> WITabViewController {
+    public init(
+        _ title: LocalizedStringResource,
+        systemImage: String,
+        value: String? = nil,
+        role: WITabRole = .other,
+        @ViewBuilder content: @escaping () -> some View
+    ) {
+        self.init(title, systemImage: systemImage, value: value, role: role) { _ in
+            content()
+        }
+    }
+
+    @MainActor
+    func viewController(with model: WebInspectorModel) -> WIViewController {
         makeViewController(model)
     }
     

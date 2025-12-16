@@ -18,6 +18,9 @@ public struct WebInspectorView: View {
         self.model = viewModel
         self.webView = webView
         self.tabs = tabs()
+        if viewModel.selectedTab == nil {
+            viewModel.selectedTab = self.tabs.first
+        }
     }
 
     public init(
@@ -26,60 +29,42 @@ public struct WebInspectorView: View {
     ) {
         self.init(viewModel, webView: webView) {
             WITab.dom()
-            WITab.detail()
+            WITab.element()
+            WITab.network()
         }
     }
 
     public var body: some View {
         tabContent
             .onAppear {
-                model.attach(webView: webView)
+                if let webView {
+                    model.attach(webView: webView)
+                } else {
+                    model.suspend()
+                }
             }
             .onChange(of: webView) {
-                model.attach(webView: webView)
+                if let webView {
+                    model.attach(webView: webView)
+                } else {
+                    model.suspend()
+                }
             }
             .onDisappear {
                 model.suspend()
             }
-            .webInspectorToolbar()
-            .environment(model)
     }
 
     @ViewBuilder
     private var tabContent: some View {
 #if canImport(UIKit)
-        WITabBarContainer(tabs: tabs)
+        WITabBarContainer(model: model, tabs: tabs)
             .ignoresSafeArea()
 #elseif canImport(AppKit)
-        TabView(selection: Bindable(model).selectedTab) {
-            ForEach(tabs) { tab in
-                WITabContentHost(tab: tab, model: model)
-                    .tabItem {
-                        Label {
-                            Text(tab.title)
-                        } icon: {
-                            Image(systemName: tab.systemImage)
-                        }
-                    }
-                    .tag(tab)
-            }
-        }
-        .environment(model)
+        WITabBarContainer(model: model, tabs: tabs)
 #endif
     }
 }
-#if canImport(AppKit)
-private struct WITabContentHost: NSViewControllerRepresentable {
-    let tab: WITab
-    let model: WebInspectorModel
-
-    func makeNSViewController(context: Context) -> NSViewController {
-        tab.viewController(with: model)
-    }
-
-    func updateNSViewController(_ nsViewController: NSViewController, context: Context) {}
-}
-#endif
 
 #if DEBUG
 @MainActor
@@ -109,24 +94,10 @@ private struct WIPreviewHost: View {
 #else
             PreviewWebViewRepresentable(webView: model.webView)
                 .sheet(isPresented: $isPresented) {
-                    NavigationStack {
-                        WebInspectorView(inspectorModel, webView: model.webView)
-                            .toolbar {
-                                ToolbarItem(placement: .cancellationAction) {
-                                    Button {
-                                        isPresented = false
-                                    } label: {
-                                        Image(systemName: "xmark")
-                                    }
-                                }
-                            }
-                            .background(backgroundColor.opacity(0.5))
-                        
-                    }
-                    
-                    .presentationBackgroundInteraction(.enabled)
-                    .presentationDetents([.medium, .large])
-                    .presentationContentInteraction(.scrolls)
+                    WebInspectorView(inspectorModel, webView: model.webView)
+                        .presentationBackgroundInteraction(.enabled)
+                        .presentationDetents([.medium, .large])
+                        .presentationContentInteraction(.scrolls)
                 }
 #endif
         }else{

@@ -1,10 +1,9 @@
-#if canImport(UIKit)
 import SwiftUI
+#if canImport(UIKit)
 
-@available(iOS 18.0, *)
 struct WITabBarContainer: UIViewControllerRepresentable {
+    var model: WebInspectorModel
     var tabs: [WITab]
-    @Environment(WebInspectorModel.self) private var model
     
     func makeCoordinator() -> Coordinator {
         Coordinator(model:model,tabs: tabs)
@@ -65,4 +64,56 @@ struct WITabBarContainer: UIViewControllerRepresentable {
         }
     }
 }
+#elseif canImport(AppKit)
+struct WITabBarContainer: NSViewControllerRepresentable {
+    var model: WebInspectorModel
+    var tabs: [WITab]
+
+    func makeNSViewController(context: Context) -> WITabViewController {
+        let controller = WITabViewController()
+        controller.tabStyle = .segmentedControlOnTop
+        controller.model = model
+        controller.wiTabs = tabs
+
+        controller.tabViewItems = tabs.map { tab in
+            let host = tab.viewController(with: model)
+            let item = NSTabViewItem(viewController: host)
+            item.identifier = tab.id
+            item.label = String(localized: tab.title)
+            item.image = NSImage(
+                systemSymbolName: tab.systemImage,
+                accessibilityDescription: nil
+            )
+            return item
+        }
+
+        if let selectedTab = model.selectedTab,
+           let index = tabs.firstIndex(where: { $0.id == selectedTab.id }) {
+            controller.selectedTabViewItemIndex = index
+        } else {
+            controller.selectedTabViewItemIndex = 0
+            model.selectedTab = tabs.first
+        }
+
+        return controller
+    }
+    func updateNSViewController(_ controller: WITabViewController, context: Context) {
+    }
+}
+final class WITabViewController: NSTabViewController {
+    weak var model: WebInspectorModel?
+    var wiTabs: [WITab] = []
+
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+
+        guard let id = tabViewItem?.identifier as? String,
+              let tab = wiTabs.first(where: { $0.id == id }) else {
+            return
+        }
+
+        model?.selectedTab = tab
+    }
+}
+
 #endif

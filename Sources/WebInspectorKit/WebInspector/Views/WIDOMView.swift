@@ -2,15 +2,17 @@ import SwiftUI
 import WebKit
 
 public struct WIDOMView: View {
-    @Environment(WebInspectorModel.self) private var model
+    private var viewModel: WIDOMViewModel
 
-    public init() {}
+    public init(viewModel: WIDOMViewModel ) {
+        self.viewModel = viewModel
+    }
     
     public var body: some View {
-        WIDOMViewRepresentable(bridge: model.webBridge)
+        WIDOMViewRepresentable(domStore: viewModel.domStore)
             .ignoresSafeArea()
             .overlay{
-                if let errorMessage = model.webBridge.errorMessage {
+                if let errorMessage = viewModel.errorMessage {
                     ContentUnavailableView {
                         Image(systemName:"exclamationmark.triangle")
                             .foregroundStyle(.yellow)
@@ -27,35 +29,35 @@ public struct WIDOMView: View {
 
 @MainActor
 struct WIDOMViewRepresentable {
-    var bridge: WIBridgeModel
+    var domStore: WIDOMStore
 }
 
 #if os(macOS)
 extension WIDOMViewRepresentable: NSViewRepresentable {
-    typealias Coordinator = WIBridgeModel
+    typealias Coordinator = WIDOMStore
 
     func makeNSView(context: Context) -> WIWebView {
-        bridge.inspectorModel.makeInspectorWebView()
+        domStore.makeInspectorWebView()
     }
 
     func updateNSView(_ nsView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        bridge
+        domStore
     }
 }
 #else
 extension WIDOMViewRepresentable: UIViewRepresentable {
-    typealias Coordinator = WIBridgeModel
+    typealias Coordinator = WIDOMStore
 
     func makeUIView(context: Context) -> WIWebView {
-        bridge.inspectorModel.makeInspectorWebView()
+        domStore.makeInspectorWebView()
     }
 
     func updateUIView(_ uiView: WIWebView, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
-        bridge
+        domStore
     }
 }
 #endif

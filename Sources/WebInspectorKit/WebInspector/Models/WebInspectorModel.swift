@@ -1,212 +1,37 @@
-//
-//  WebInspectorModel.swift
-//  WebInspectorKit
-//
-//  Created by Kazuki Nakashima on 2025/11/20.
-//
-
 import SwiftUI
-import OSLog
 import WebKit
 import Observation
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
-
-private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorModel")
 
 @MainActor
 @Observable
 public final class WebInspectorModel {
-    public struct Configuration {
-        /// Maximum DOM depth captured in the initial/full document snapshot.
-        public var snapshotDepth: Int
-        /// Depth used when requesting child subtrees (DOM.requestChildNodes).
-        public var subtreeDepth: Int
-        /// Debounce window (seconds) for automatic DOM snapshot updates.
-        public var autoUpdateDebounce: TimeInterval
-
-        public init(
-            snapshotDepth: Int = 4,
-            subtreeDepth: Int = 3,
-            autoUpdateDebounce: TimeInterval = 0.6
-        ) {
-            self.snapshotDepth = max(1, snapshotDepth)
-            self.subtreeDepth = max(1, subtreeDepth)
-            self.autoUpdateDebounce = max(0, autoUpdateDebounce)
-        }
-    }
-
-    @ObservationIgnored private var selectionTask: Task<Void, Never>?
-#if canImport(UIKit)
-    @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
-#endif
-
-    public let webBridge: WIBridgeModel
-    public var configuration:Configuration{
-        webBridge.configuration
-    }
-    public private(set) var isSelectingElement = false
     public var selectedTab: WITab? = nil
 
-    public var hasPageWebView: Bool {
-        webBridge.contentModel.webView != nil
-    }
+    public let dom: WIDOMViewModel
+    public let network: WINetworkViewModel
 
-    public init(configuration: Configuration = .init()) {
-        self.webBridge = WIBridgeModel(configuration: configuration)
+    public init(configuration: WebInspectorConfiguration = .init()) {
+        self.dom = WIDOMViewModel(session: WIDOMSession(configuration: configuration))
+        self.network = WINetworkViewModel(session: WINetworkSession())
     }
 
     public func attach(webView: WKWebView?) {
-        updateLifecycle(.attach(webView))
+        if let webView {
+            dom.attach(to: webView)
+            network.attach(to: webView)
+        } else {
+            dom.suspend()
+            network.suspend()
+        }
     }
 
     public func suspend() {
-        updateLifecycle(.suspend)
+        dom.suspend()
+        network.suspend()
     }
 
     public func detach() {
-        updateLifecycle(.detach)
+        dom.detach()
+        network.detach()
     }
-    
-    public func updateLifecycle(_ state: WILifecycleState) {
-        switch state {
-        case .attach(let webView):
-            webBridge.setLifecycle(.attach(webView))
-        case .suspend:
-            resetInteractionState()
-            webBridge.setLifecycle(.suspend)
-        case .detach:
-            resetInteractionState()
-            webBridge.setLifecycle(.detach)
-        }
-    }
-
-    private func resetInteractionState() {
-        cancelSelectionMode()
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
-    }
-
-    public func copySelection(_ kind: WISelectionCopyKind) {
-        performCopy(kind)
-    }
-
-    public func deleteSelectedNode() {
-        guard let nodeId = webBridge.domSelection.nodeId else { return }
-        Task {
-            await webBridge.contentModel.removeNode(identifier: nodeId)
-        }
-    }
-
-    public func reload() async {
-        guard hasPageWebView else {
-            webBridge.errorMessage = "WebView is not available."
-            return
-        }
-
-        await webBridge.reloadInspector(preserveState: false)
-    }
-
-    public func toggleSelectionMode() {
-        if isSelectingElement {
-            cancelSelectionMode()
-        } else {
-            startSelectionMode()
-        }
-    }
-
-    public func cancelSelectionMode() {
-        guard isSelectingElement || selectionTask != nil else { return }
-        selectionTask?.cancel()
-        selectionTask = nil
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
-        Task {
-            await webBridge.contentModel.cancelSelectionMode()
-        }
-        isSelectingElement = false
-    }
-
-    private func startSelectionMode() {
-        guard hasPageWebView else { return }
-#if canImport(UIKit)
-        disablePageScrollingForSelection()
-#endif
-        isSelectingElement = true
-        webBridge.contentModel.clearWebInspectorHighlight()
-        selectionTask?.cancel()
-        selectionTask = Task {
-            defer {
-                self.isSelectingElement = false
-                self.selectionTask = nil
-#if canImport(UIKit)
-                self.restorePageScrollingState()
-#endif
-            }
-            do {
-                let result = try await self.webBridge.contentModel.beginSelectionMode()
-                guard !result.cancelled else { return }
-                if Task.isCancelled { return }
-                let requestedDepth = max(self.configuration.snapshotDepth, result.requiredDepth + 1)
-                self.webBridge.updateSnapshotDepth(requestedDepth)
-                await self.webBridge.reloadInspector(preserveState: true)
-            } catch is CancellationError {
-                await self.webBridge.contentModel.cancelSelectionMode()
-            } catch {
-                logger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-                webBridge.errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func performCopy(_ kind: WISelectionCopyKind) {
-        guard let nodeId = webBridge.domSelection.nodeId else { return }
-        Task { @MainActor in
-            do {
-                let text = try await webBridge.contentModel.selectionCopyText(for: nodeId, kind: kind)
-                guard !text.isEmpty else { return }
-                copyToPasteboard(text)
-            } catch {
-                logger.error("copy \(kind.logLabel, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
-    private func copyToPasteboard(_ text: String) {
-#if canImport(UIKit)
-        UIPasteboard.general.string = text
-#elseif canImport(AppKit)
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-#endif
-    }
-
-#if canImport(UIKit)
-    private func disablePageScrollingForSelection() {
-        guard let scrollView = webBridge.contentModel.webView?.scrollView else { return }
-        if scrollBackup == nil {
-            scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
-        }
-        scrollView.isScrollEnabled = false
-        scrollView.panGestureRecognizer.isEnabled = false
-    }
-
-    private func restorePageScrollingState() {
-        guard let scrollView = webBridge.contentModel.webView?.scrollView else {
-            scrollBackup = nil
-            return
-        }
-        if let backup = scrollBackup {
-            scrollView.isScrollEnabled = backup.isScrollEnabled
-            scrollView.panGestureRecognizer.isEnabled = backup.isPanEnabled
-        }
-        scrollBackup = nil
-    }
-#endif
 }
