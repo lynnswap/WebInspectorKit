@@ -43,6 +43,19 @@ public struct WITab: Identifiable,Hashable{
     }
 
     @MainActor
+    public init(
+        _ title: LocalizedStringResource,
+        systemImage: String,
+        value: String? = nil,
+        role: WITabRole = .other,
+        @ViewBuilder content: @escaping () -> some View
+    ) {
+        self.init(title, systemImage: systemImage, value: value, role: role) { _ in
+            content()
+        }
+    }
+
+    @MainActor
     func viewController(with model: WebInspectorModel) -> WIViewController {
         makeViewController(model)
     }

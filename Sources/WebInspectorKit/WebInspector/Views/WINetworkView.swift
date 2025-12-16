@@ -24,22 +24,6 @@ public struct WINetworkView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .secondaryAction) {
-                Section {
-                    Button(role: .destructive) {
-                        viewModel.clearNetworkLogs()
-                    } label: {
-                        Label {
-                            Text("network.controls.clear")
-                        } icon: {
-                            Image(systemName: "trash")
-                        }
-                    }
-                    .disabled(store.entries.isEmpty)
-                }
-            }
-        }
         .onAppear {
             viewModel.willAppear()
         }

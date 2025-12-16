@@ -50,7 +50,11 @@ public extension WITab {
             value: WIDefaultTab.dom.identifier,
             role: .inspector,
             content: { model in
-                WIDOMView(viewModel: model.dom)
+                NavigationStack{
+                    WIDOMView(viewModel: model.dom)
+                        .domInspectorToolbar(model, identifier: WIDefaultTab.dom.identifier)
+                    
+                }
             }
         )
     }
@@ -65,7 +69,10 @@ public extension WITab {
             value: WIDefaultTab.element.identifier,
             role: .inspector,
             content: { model in
-                WIDOMElementView(viewModel: model.dom)
+                NavigationStack{
+                    WIDOMElementView(viewModel: model.dom)
+                        .domInspectorToolbar(model, identifier: WIDefaultTab.element.identifier)
+                }
             }
         )
     }
@@ -80,7 +87,10 @@ public extension WITab {
             value: WIDefaultTab.network.identifier,
             role: .inspector,
             content: { model in
-                WINetworkView(viewModel: model.network)
+                NavigationStack{
+                    WINetworkView(viewModel: model.network)
+                        .networkInspectorToolbar(model, identifier: WIDefaultTab.network.identifier)
+                }
             }
         )
     }

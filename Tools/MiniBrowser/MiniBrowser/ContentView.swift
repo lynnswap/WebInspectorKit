@@ -10,14 +10,13 @@ struct ContentView: View {
     var body: some View {
         if let model ,let inspectorModel{
 #if os(macOS)
-            HSplitView {
-                NavigationStack{
-                    ContentWebView(model: model)
-                }
-                NavigationStack{
-                    WebInspectorView(inspectorModel, webView: model.webView)
-                }
-            }
+//            HSplitView {
+//                NavigationStack{
+//                    ContentWebView(model: model)
+//                }
+//                WebInspectorView(inspectorModel, webView: model.webView)
+//            }
+            WebInspectorView(inspectorModel, webView: model.webView)
 #else
             NavigationStack {
                 ContentWebView(model: model)
@@ -31,12 +30,10 @@ struct ContentView: View {
                         }
                     }
                     .sheet(isPresented: $isShowingInspector) {
-                        NavigationStack {
-                            InspectorSheetView(
-                                model:model,
-                                inspectorModel: inspectorModel
-                            )
-                        }
+                        InspectorSheetView(
+                            model:model,
+                            inspectorModel: inspectorModel
+                        )
                         .presentationBackgroundInteraction(.enabled)
                         .presentationDetents([.medium, .large])
                         .presentationContentInteraction(.scrolls)

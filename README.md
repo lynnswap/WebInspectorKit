@@ -36,10 +36,8 @@ struct ContentView: View {
         NavigationStack {
             YourPageView(webView: pageWebView) // your page UI that hosts the WKWebView
                 .sheet(isPresented: $isInspectorPresented) {
-                    NavigationStack {
-                        WebInspectorView(inspector, webView: pageWebView)
-                    }
-                    .presentationDetents([.medium, .large])
+                    WebInspectorView(inspector, webView: pageWebView)
+                        .presentationDetents([.medium, .large])
                 }
                 .toolbar {
                     Button("Inspect page") {
@@ -58,8 +56,8 @@ For a more complete preview setup, see [`Sources/WebInspectorKit/WebInspector/Vi
 WebInspectorView(inspector, webView: pageWebView) {
     WITab.dom()
     WITab.element()
-    WITab("Custom", systemImage: "folder") { _ in
-        List{
+    WITab("Custom", systemImage: "folder") {
+        List {
             Text("Custom tab content")
         }
     }
