@@ -20,6 +20,7 @@ public final class WINetworkSession: WIPageSession {
     }
 
     public func suspend() {
+        setRecording(.stopped)
         networkAgent.detachPageWebView(disableNetworkLogging: true)
     }
 
