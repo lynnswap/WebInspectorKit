@@ -9,7 +9,7 @@ iOS-ready Web inspector, SwiftUI-friendly and easy to add.
 - Attribute editing/removal plus copying HTML, CSS selector, and XPath
 - Configurable tabs via a SwiftUI-style result builder (DOM and Detail tabs included)
 - Dedicated view models for DOM / Detail / Network views so each view can run standalone
-- Network tab for fetch/XHR requests (status, headers, timing)
+- Network tab for fetch/XHR requests with recording/clearing controls (status, headers, timing)
 - Automatic DOM snapshot reloads with debounce and adjustable depth
 - Selection mode toggle to start/stop element picking and highlighting
 - Lifecycle handled by `WebInspectorView` (`attach`, `suspend`, `detach`)
@@ -57,43 +57,23 @@ WebInspectorView(inspector, webView: pageWebView) {
     WITab.dom()
     WITab.element()
     WITab("Custom", systemImage: "folder") {
-        List {
-            Text("Custom tab content")
+        NavigationStack{
+            List {
+                Text("Custom tab content")
+            }
         }
     }
 }
 ```
 
-## Configuration (snapshot depth, subtree depth, debounce)
-```swift
-let config = WebInspectorConfiguration(
-    snapshotDepth: 6,       // max depth for initial/full snapshots
-    subtreeDepth: 4,        // depth for child subtree requests
-    autoUpdateDebounce: 0.8 // seconds for automatic snapshot debounce
-)
-let inspector = WebInspectorModel(configuration: config)
-```
-If selection mode requires deeper nodes, the inspector automatically raises `snapshotDepth` and reloads while preserving state.
-
-## Key APIs and behavior
-- Lifecycle is handled inside `WebInspectorView` (`attach`, `suspend`, `detach` on appear/disappear).
-- `dom.toggleSelectionMode()` starts/stops element selection with page highlighting.
-- `dom.reloadInspector()` refreshes the DOM snapshot using the current `snapshotDepth`.
-- `dom.copySelection(_:)` copies HTML, selectorPath, or XPath for the selected node.
-- `dom.deleteSelectedNode()` removes the selected DOM node.
-- Attribute editing uses `dom.updateAttributeValue` / `dom.removeAttribute`.
-- Network capture uses `network.setRecording(_:)` and `network.clearNetworkLogs()`.
-- Auto-updates are managed internally using `autoUpdateDebounce`.
-
 ## How it works
 - `DOMAgent.js` is injected into the page WKWebView to stream DOM snapshots and mutation bundles.
 - `NetworkAgent.js` observes network activity in the inspected page when recording is enabled.
-- The inspector UI uses bundled HTML/CSS/JS assets resolved via `WIAssets` and rendered in a dedicated inspector WebView.
 
 ## Limitations
 - WKWebView only; JavaScript must be enabled.
-- For very large DOMs, tune `snapshotDepth` and `autoUpdateDebounce` to balance performance.
-- Network and console features are not implemented.
+- Console features are not implemented.
+- Documentation is in progress; fuller docs are coming soon.
 
 ## Apps Using
 
