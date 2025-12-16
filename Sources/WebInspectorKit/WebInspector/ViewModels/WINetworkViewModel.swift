@@ -10,12 +10,22 @@ public final class WINetworkViewModel {
     public var store: WINetworkStore {
         session.store
     }
+    public var searchText: String = ""
     public var sortDescriptors: [SortDescriptor<WINetworkEntry>] = [
         SortDescriptor<WINetworkEntry>(\.createdAt, order: .reverse),
         SortDescriptor<WINetworkEntry>(\.requestID, order: .reverse)
     ]
     public var displayEntries: [WINetworkEntry] {
-        store.entries.sorted(using: sortDescriptors)
+        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filteredEntries: [WINetworkEntry]
+        if trimmedQuery.isEmpty {
+            filteredEntries = store.entries
+        } else {
+            filteredEntries = store.entries.filter { entry in
+                entry.matchesSearchText(trimmedQuery)
+            }
+        }
+        return filteredEntries.sorted(using: sortDescriptors)
     }
 
     public init(session: WINetworkSession = WINetworkSession()) {
@@ -98,5 +108,21 @@ public final class WINetworkViewModel {
                 self.selectedEntryID = newSelection.first
             }
         )
+    }
+}
+
+private extension WINetworkEntry {
+    func matchesSearchText(_ query: String) -> Bool {
+        if query.isEmpty {
+            return true
+        }
+        let candidates = [
+            url,
+            method,
+            statusLabel,
+            statusText,
+            fileTypeLabel
+        ]
+        return candidates.contains { $0.localizedStandardContains(query) }
     }
 }

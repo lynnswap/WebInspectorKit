@@ -49,7 +49,7 @@ public struct WINetworkView: View {
 }
 
 private struct WINetworkTableView: View {
-    var viewModel: WINetworkViewModel
+    @Bindable var viewModel: WINetworkViewModel
 
     var body: some View {
         GeometryReader{ proxy in
@@ -102,6 +102,10 @@ private struct WINetworkTableView: View {
                 }
                 .width(min: 90, ideal: 110)
             }
+            .searchable(
+                text: $viewModel.searchText,
+                prompt: Text(LocalizedStringResource("network.search.placeholder",bundle:.module))
+            )
             .inspector(isPresented: viewModel.isShowingDetail) {
                 NavigationStack {
                     if let isSelectedEntryID = viewModel.selectedEntryID,
@@ -133,13 +137,15 @@ private struct WINetworkListView: View {
                 WINetworkRow(entry: entry)
             }
         }
-        .scrollContentBackground(.hidden)
+        .searchable(
+            text: $viewModel.searchText,
+            prompt: Text(LocalizedStringResource("network.search.placeholder",bundle:.module))
+        )
         .sheet(isPresented: viewModel.isShowingDetail) {
             NavigationStack {
                 if let isSelectedEntryID = viewModel.selectedEntryID,
                    let entry = viewModel.store.entry(forEntryID:isSelectedEntryID) {
                     WINetworkDetailView(entry: entry, viewModel: viewModel)
-                        .scrollContentBackground(.hidden)
                 }
             }
 #if os(iOS)
@@ -174,14 +180,18 @@ private struct WINetworkRow: View {
 }
 #if DEBUG
 @MainActor
-func makeWINetworkPreviewModel(selectedID: WINetworkEntry.ID? = nil) -> WINetworkViewModel {
+func makeWINetworkPreviewModel(
+    selectedID: WINetworkEntry.ID? = nil,
+    selectEntry: Bool = false
+) -> WINetworkViewModel {
     let viewModel = WINetworkViewModel()
+
     let store = viewModel.store
     WINetworkPreviewData.events
         .compactMap(HTTPNetworkEvent.init(dictionary:))
         .forEach { store.applyEvent($0) }
-    
-    viewModel.selectedEntryID = selectedID ?? store.entries.last?.id
+
+    viewModel.selectedEntryID = selectedID ?? (selectEntry ? store.entries.last?.id : nil)
     return viewModel
 }
 
@@ -518,10 +528,36 @@ enum WINetworkPreviewData {
 
 #Preview("Network Logs") {
     NavigationStack {
-        WINetworkView(viewModel: makeWINetworkPreviewModel())
+        WINetworkView(viewModel: makeWINetworkPreviewModel(selectEntry: true))
     }
 #if os(macOS)
     .frame(height: 420)
 #endif
+}
+#Preview("Filter") {
+    NavigationStack {
+        List{
+            
+        }
+       
+        .sheet(isPresented:.constant(true)){
+            NavigationStack{
+                WINetworkView(viewModel: makeWINetworkPreviewModel())
+                    .toolbar{
+                        ToolbarItem{
+                            Button{
+                                
+                            }label:{
+                                Image(systemName:"plus")
+                            }
+                        }
+                    }
+                  
+            }
+            .presentationBackgroundInteraction(.enabled)
+            .presentationDetents([.medium, .large])
+            .presentationContentInteraction(.scrolls)
+        }
+    }
 }
 #endif
