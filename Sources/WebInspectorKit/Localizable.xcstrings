@@ -2002,14 +2002,14 @@
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "جلب محتوى الاستجابة"
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Antwortinhalt abrufen"
           }
         },
         "en" : {
@@ -2032,110 +2032,110 @@
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Obtener el cuerpo de la respuesta"
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Obtener el cuerpo de la respuesta"
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Récupérer le corps de la réponse"
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Récupérer le corps de la réponse"
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी प्राप्त करें"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Ambil isi respons"
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Recupera il corpo della risposta"
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "レスポンスボディを取得"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "응답 본문 가져오기"
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Antwoordbody ophalen"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Obter corpo da resposta"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Obter corpo da resposta"
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Preia corpul răspunsului"
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Получить тело ответа"
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "ดึงเนื้อหาตอบกลับ"
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "Yanıt gövdesini getir"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "获取响应体"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Fetch body"
+            "state" : "translated",
+            "value" : "取得回應本文"
           }
         }
       }
@@ -2145,14 +2145,14 @@
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "فشل في فك ترميز محتوى الاستجابة."
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Antwortinhalt konnte nicht dekodiert werden."
           }
         },
         "en" : {
@@ -2175,110 +2175,110 @@
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "No se pudo decodificar el cuerpo de la respuesta."
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "No se pudo decodificar el cuerpo de la respuesta."
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Impossible de décoder le corps de la réponse."
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Impossible de décoder le corps de la réponse."
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी डिकोड नहीं हो सकी।"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Gagal mendekode isi respons."
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Impossibile decodificare il corpo della risposta."
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "レスポンスボディのデコードに失敗しました。"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "응답 본문을 디코딩하지 못했습니다."
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Antwoordbody kon niet worden gedecodeerd."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Falha ao decodificar o corpo da resposta."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Falha ao descodificar o corpo da resposta."
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Nu s-a putut decoda corpul răspunsului."
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Не удалось декодировать тело ответа."
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "ถอดรหัสเนื้อหาตอบกลับไม่สำเร็จ."
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "Yanıt gövdesi çözümlenemedi."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "无法解码响应体。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to decode response body."
+            "state" : "translated",
+            "value" : "無法解碼回應本文。"
           }
         }
       }
@@ -2288,14 +2288,14 @@
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "محتوى الاستجابة غير متوفر."
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Antwortinhalt nicht verfügbar."
           }
         },
         "en" : {
@@ -2318,110 +2318,110 @@
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Cuerpo de la respuesta no disponible."
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Cuerpo de la respuesta no disponible."
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corps de la réponse indisponible."
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corps de la réponse indisponible."
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी उपलब्ध नहीं है।"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Isi respons tidak tersedia."
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corpo della risposta non disponibile."
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "レスポンスボディを利用できません。"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "응답 본문을 사용할 수 없습니다."
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Antwoordbody niet beschikbaar."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corpo da resposta indisponível."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corpo da resposta indisponível."
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Corp de răspuns indisponibil."
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Тело ответа недоступно."
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "ไม่มีเนื้อหาตอบกลับ."
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "Yanıt gövdesi kullanılamıyor."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "响应体不可用。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body unavailable."
+            "state" : "translated",
+            "value" : "回應本文不可用。"
           }
         }
       }
@@ -2431,14 +2431,14 @@
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "فشل في جلب محتوى الاستجابة."
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Antwortinhalt konnte nicht abgerufen werden."
           }
         },
         "en" : {
@@ -2461,110 +2461,110 @@
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "No se pudo obtener el cuerpo de la respuesta."
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "No se pudo obtener el cuerpo de la respuesta."
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Impossible de récupérer le corps de la réponse."
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Impossible de récupérer le corps de la réponse."
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी प्राप्त नहीं हो सकी।"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Gagal mengambil isi respons."
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Impossibile recuperare il corpo della risposta."
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "レスポンスボディを取得できませんでした。"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "응답 본문을 가져오지 못했습니다."
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Antwoordbody ophalen is mislukt."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Falha ao obter o corpo da resposta."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Falha ao obter o corpo da resposta."
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Nu s-a putut prelua corpul răspunsului."
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Не удалось получить тело ответа."
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "ไม่สามารถดึงเนื้อหาตอบกลับได้."
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "Yanıt gövdesi alınamadı."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "获取响应体失败。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Failed to fetch response body."
+            "state" : "translated",
+            "value" : "無法取得回應本文。"
           }
         }
       }
@@ -2574,14 +2574,14 @@
       "localizations" : {
         "ar" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "لم يتم التقاط محتوى الاستجابة."
           }
         },
         "de" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Antwortinhalt wurde nicht erfasst."
           }
         },
         "en" : {
@@ -2604,110 +2604,110 @@
         },
         "es" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "No se capturó el cuerpo de la respuesta."
           }
         },
         "es-419" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "No se capturó el cuerpo de la respuesta."
           }
         },
         "fr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corps de la réponse non capturé."
           }
         },
         "fr-CA" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corps de la réponse non capturé."
           }
         },
         "hi" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "रेस्पॉन्स बॉडी कैप्चर नहीं की गई।"
           }
         },
         "id" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Isi respons tidak terekam."
           }
         },
         "it" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corpo della risposta non acquisito."
           }
         },
         "ja" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "レスポンスボディは記録されていません。"
           }
         },
         "ko" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "응답 본문이 캡처되지 않았습니다."
           }
         },
         "nl" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Antwoordbody niet vastgelegd."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corpo da resposta não capturado."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corpo da resposta não capturado."
           }
         },
         "ro" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Corpul răspunsului nu a fost capturat."
           }
         },
         "ru" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Тело ответа не захвачено."
           }
         },
         "th" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "ไม่ได้บันทึกเนื้อหาตอบกลับ."
           }
         },
         "tr" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "Yanıt gövdesi yakalanmadı."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "未捕获响应体。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
-            "state" : "new",
-            "value" : "Response body not captured."
+            "state" : "translated",
+            "value" : "未擷取回應本文。"
           }
         }
       }
