@@ -15,7 +15,7 @@ const recordStart = (
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
     if (requestBody && typeof requestBody.storageBody === "string") {
-        storeCapturedBody(requestBodies, requestId, requestBody, pruneStoredRequestBodies);
+        bodyCache.store("request", requestId, requestBody);
     }
     postHTTPEvent({
         type: "start",
@@ -98,7 +98,7 @@ const recordFinish = (
     });
     trackedRequests.delete(requestId);
     if (responseBody) {
-        storeCapturedBody(responseBodies, requestId, responseBody, pruneStoredResponseBodies);
+        bodyCache.store("response", requestId, responseBody);
     }
 };
 
@@ -152,8 +152,7 @@ const clearDisabledNetworkState = () => {
 const resetNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
     trackedRequests.clear();
-    requestBodies.clear();
-    responseBodies.clear();
+    bodyCache.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
@@ -199,11 +198,10 @@ export const setNetworkLoggingMode = mode => {
 
 export const clearNetworkRecords = () => {
     trackedRequests.clear();
-    requestBodies.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
-    responseBodies.clear();
+    bodyCache.clear();
     queuedEvents.splice(0, queuedEvents.length);
     postNetworkReset();
 };
@@ -213,19 +211,9 @@ export const installNetworkObserver = () => {
 };
 
 export const getResponseBody = requestId => {
-    if (!responseBodies.has(requestId)) {
-        return null;
-    }
-    const body = responseBodies.get(requestId);
-    responseBodies.delete(requestId);
-    return body;
+    return bodyCache.take("response", requestId);
 };
 
 export const getRequestBody = requestId => {
-    if (!requestBodies.has(requestId)) {
-        return null;
-    }
-    const body = requestBodies.get(requestId);
-    requestBodies.delete(requestId);
-    return body;
+    return bodyCache.take("request", requestId);
 };

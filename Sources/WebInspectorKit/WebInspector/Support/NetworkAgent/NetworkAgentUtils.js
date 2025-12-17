@@ -35,8 +35,6 @@ const networkState = {
 };
 
 const trackedRequests = new Map();
-const requestBodies = new Map();
-const responseBodies = new Map();
 const queuedEvents = [];
 const textEncoder = typeof TextEncoder === "function" ? new TextEncoder() : null;
 const trackedResourceTypes = new Set([
@@ -118,6 +116,17 @@ const clampBytes = (bytes, limit) => {
         return {bytes: bytes, truncated: false};
     }
     return {bytes: bytes.slice(0, limit), truncated: true};
+};
+
+const byteLengthOfText = value => {
+    if (typeof value !== "string") {
+        return 0;
+    }
+    const encoded = encodeTextToBytes(value);
+    if (encoded) {
+        return encoded.byteLength;
+    }
+    return value.length;
 };
 
 const bytesToBase64 = bytes => {
@@ -212,8 +221,7 @@ const inlineBodyPayload = body => {
 // Keep inline payloads small to avoid OOL IPC; full body is cached separately with only a count cap.
 const MAX_INLINE_BODY_LENGTH = 512;
 const MAX_CAPTURE_BODY_LENGTH = 5 * 1024 * 1024;
-const MAX_STORED_REQUEST_BODIES = 50;
-const MAX_STORED_RESPONSE_BODIES = 50;
+const MAX_BODY_CACHE_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_EVENTS = 500;
 
 /**
@@ -228,50 +236,97 @@ const MAX_QUEUED_EVENTS = 500;
  * @property {Array<{name:string,value:string,isFile?:boolean,fileName?:string,size?:number}>=} formEntries
  */
 
-// Store a captured body in the provided map while keeping storage copy intact.
-const storeCapturedBody = (map, requestId, bodyInfo, pruneCallback) => {
-    if (!map || requestId == null || !bodyInfo) {
-        return;
+class BodyCache {
+    constructor(maxBytes) {
+        this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : Infinity;
+        this.usedBytes = 0;
+        this.entries = new Map();
     }
-    const stored = {...bodyInfo};
-    if (typeof bodyInfo.storageBody === "string") {
-        stored.body = bodyInfo.storageBody;
-    }
-    map.set(requestId, stored);
-    if (typeof pruneCallback === "function") {
-        pruneCallback();
-    }
-};
 
-const pruneStoredResponseBodies = () => {
-    if (responseBodies.size <= MAX_STORED_RESPONSE_BODIES) {
-        return;
+    key(kind, requestId) {
+        return String(kind) + ":" + requestId;
     }
-    const overLimit = responseBodies.size - MAX_STORED_RESPONSE_BODIES;
-    for (let i = 0; i < overLimit; ++i) {
-        const iterator = responseBodies.keys();
-        const next = iterator.next();
-        if (next.done) {
-            break;
-        }
-        responseBodies.delete(next.value);
-    }
-};
 
-const pruneStoredRequestBodies = () => {
-    if (requestBodies.size <= MAX_STORED_REQUEST_BODIES) {
-        return;
-    }
-    const overLimit = requestBodies.size - MAX_STORED_REQUEST_BODIES;
-    for (let i = 0; i < overLimit; ++i) {
-        const iterator = requestBodies.keys();
-        const next = iterator.next();
-        if (next.done) {
-            break;
+    estimateBytes(bodyInfo) {
+        if (!bodyInfo) {
+            return 0;
         }
-        requestBodies.delete(next.value);
+        if (Number.isFinite(bodyInfo.size) && bodyInfo.size >= 0) {
+            return bodyInfo.size;
+        }
+        if (typeof bodyInfo.storageBody === "string") {
+            return byteLengthOfText(bodyInfo.storageBody);
+        }
+        if (typeof bodyInfo.body === "string") {
+            return byteLengthOfText(bodyInfo.body);
+        }
+        if (typeof bodyInfo.summary === "string") {
+            return byteLengthOfText(bodyInfo.summary);
+        }
+        return 0;
     }
-};
+
+    evictUntilFits(additionalBytes) {
+        if (!Number.isFinite(additionalBytes) || additionalBytes <= 0) {
+            return;
+        }
+        while (this.usedBytes + additionalBytes > this.maxBytes && this.entries.size) {
+            const next = this.entries.keys().next();
+            if (next.done) {
+                break;
+            }
+            const entry = this.entries.get(next.value);
+            this.entries.delete(next.value);
+            if (entry && Number.isFinite(entry.size)) {
+                this.usedBytes -= entry.size;
+            }
+        }
+    }
+
+    store(kind, requestId, bodyInfo) {
+        if (requestId == null || !bodyInfo) {
+            return;
+        }
+        const stored = {...bodyInfo};
+        if (typeof bodyInfo.storageBody === "string") {
+            stored.body = bodyInfo.storageBody;
+        }
+        const size = this.estimateBytes(stored);
+        this.evictUntilFits(size);
+        if (Number.isFinite(size) && size > this.maxBytes) {
+            return;
+        }
+        const key = this.key(kind, requestId);
+        const previous = this.entries.get(key);
+        if (previous && Number.isFinite(previous.size)) {
+            this.usedBytes -= previous.size;
+        }
+        this.entries.set(key, {body: stored, size: size});
+        if (Number.isFinite(size)) {
+            this.usedBytes += size;
+        }
+    }
+
+    take(kind, requestId) {
+        const key = this.key(kind, requestId);
+        if (!this.entries.has(key)) {
+            return null;
+        }
+        const entry = this.entries.get(key);
+        this.entries.delete(key);
+        if (entry && Number.isFinite(entry.size)) {
+            this.usedBytes -= entry.size;
+        }
+        return entry ? entry.body : null;
+    }
+
+    clear() {
+        this.entries.clear();
+        this.usedBytes = 0;
+    }
+}
+
+const bodyCache = new BodyCache(MAX_BODY_CACHE_BYTES);
 
 const enqueueEvent = event => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
