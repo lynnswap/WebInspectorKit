@@ -15,14 +15,9 @@ const recordStart = (
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
     if (requestBody && typeof requestBody.storageBody === "string") {
-        const stored = {...requestBody, body: requestBody.storageBody};
-        if (stored.truncated) {
-            stored.truncated = false;
-        }
-        requestBodies.set(requestId, stored);
-        pruneStoredRequestBodies();
+        bodyCache.store("request", requestId, requestBody);
     }
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "start",
         session: networkState.sessionID,
         requestId: requestId,
@@ -59,7 +54,7 @@ const recordResponse = (requestId, response, requestType) => {
     const wall = wallTime();
     const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "response",
         session: networkState.sessionID,
         requestId: requestId,
@@ -87,7 +82,7 @@ const recordFinish = (
 ) => {
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "finish",
         session: networkState.sessionID,
         requestId: requestId,
@@ -103,12 +98,7 @@ const recordFinish = (
     });
     trackedRequests.delete(requestId);
     if (responseBody) {
-        const storedBody = {...responseBody};
-        if (typeof responseBody.storageBody === "string") {
-            storedBody.body = responseBody.storageBody;
-        }
-        responseBodies.set(requestId, storedBody);
-        pruneStoredResponseBodies();
+        bodyCache.store("response", requestId, responseBody);
     }
 };
 
@@ -121,7 +111,7 @@ const recordFailure = (requestId, error, requestType) => {
     } else if (error) {
         description = String(error);
     }
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "fail",
         session: networkState.sessionID,
         requestId: requestId,
@@ -138,32 +128,32 @@ const flushQueuedEvents = () => {
         return;
     }
     const pending = queuedEvents.splice(0, queuedEvents.length);
-    const batchPayload = {
-        session: networkState.sessionID,
-        events: pending
-    };
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkQueuedUpdate.postMessage(batchPayload);
-    } catch {
+    if (shouldThrottleDelivery()) {
+        for (let i = 0; i < pending.length; ++i) {
+            enqueueThrottledEvent(pending[i]);
+        }
+        return;
     }
+    deliverNetworkEvents(pending);
 };
 
 const postNetworkReset = () => {
     try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
+        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset", session: networkState.sessionID});
     } catch {
     }
 };
 
 const clearDisabledNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
+    clearThrottledEvents();
 };
 
 const resetNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
     trackedRequests.clear();
-    requestBodies.clear();
-    responseBodies.clear();
+    bodyCache.clear();
+    clearThrottledEvents();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
@@ -209,11 +199,11 @@ export const setNetworkLoggingMode = mode => {
 
 export const clearNetworkRecords = () => {
     trackedRequests.clear();
-    requestBodies.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
-    responseBodies.clear();
+    bodyCache.clear();
+    clearThrottledEvents();
     queuedEvents.splice(0, queuedEvents.length);
     postNetworkReset();
 };
@@ -223,19 +213,13 @@ export const installNetworkObserver = () => {
 };
 
 export const getResponseBody = requestId => {
-    if (!responseBodies.has(requestId)) {
-        return null;
-    }
-    const body = responseBodies.get(requestId);
-    responseBodies.delete(requestId);
-    return body;
+    return bodyCache.take("response", requestId);
 };
 
 export const getRequestBody = requestId => {
-    if (!requestBodies.has(requestId)) {
-        return null;
-    }
-    const body = requestBodies.get(requestId);
-    requestBodies.delete(requestId);
-    return body;
+    return bodyCache.take("request", requestId);
+};
+
+export const setNetworkThrottling = options => {
+    setThrottleOptions(options);
 };

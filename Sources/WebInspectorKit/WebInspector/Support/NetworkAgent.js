@@ -3,7 +3,8 @@ import {
     installNetworkObserver,
     setNetworkLoggingMode,
     getResponseBody,
-    getRequestBody
+    getRequestBody,
+    setNetworkThrottling
 } from "./NetworkAgent/NetworkAgentCore.js";
 
 if (!(window.webInspectorNetwork && window.webInspectorNetwork.__installed)) {
@@ -14,6 +15,7 @@ if (!(window.webInspectorNetwork && window.webInspectorNetwork.__installed)) {
         clearRecords: clearNetworkRecords,
         getResponseBody: getResponseBody,
         getRequestBody: getRequestBody,
+        setThrottling: setNetworkThrottling,
         __installed: true
     };
 

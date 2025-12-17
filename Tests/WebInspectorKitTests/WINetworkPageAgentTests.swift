@@ -65,8 +65,7 @@ struct WINetworkPageAgentTests {
         await waitForScripts(on: controller, atLeast: 2)
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
-        #expect(addedHandlerNames.contains("webInspectorHTTPUpdate"))
-        #expect(addedHandlerNames.contains("webInspectorHTTPBatchUpdate"))
+        #expect(addedHandlerNames.contains("webInspectorNetworkUpdate"))
         #expect(addedHandlerNames.contains("webInspectorWSUpdate"))
         #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(controller.userScripts.count == 2)
@@ -83,8 +82,7 @@ struct WINetworkPageAgentTests {
         agent.detachPageWebView(disableNetworkLogging: true)
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
-        #expect(removedHandlerNames.contains("webInspectorHTTPUpdate"))
-        #expect(removedHandlerNames.contains("webInspectorHTTPBatchUpdate"))
+        #expect(removedHandlerNames.contains("webInspectorNetworkUpdate"))
         #expect(removedHandlerNames.contains("webInspectorWSUpdate"))
         #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(agent.webView == nil)
