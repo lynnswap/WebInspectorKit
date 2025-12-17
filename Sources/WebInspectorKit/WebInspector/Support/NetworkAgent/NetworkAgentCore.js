@@ -138,10 +138,10 @@ const flushQueuedEvents = () => {
 };
 
 const postNetworkReset = () => {
-    deliverNetworkEvents([{
-        type: "reset",
-        session: networkState.sessionID
-    }]);
+    try {
+        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset", session: networkState.sessionID});
+    } catch {
+    }
 };
 
 const clearDisabledNetworkState = () => {

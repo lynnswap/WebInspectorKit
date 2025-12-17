@@ -67,6 +67,7 @@ struct WINetworkPageAgentTests {
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorNetworkUpdate"))
         #expect(addedHandlerNames.contains("webInspectorWSUpdate"))
+        #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(controller.userScripts.count == 2)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetwork") })
     }
@@ -83,6 +84,7 @@ struct WINetworkPageAgentTests {
         let removedHandlerNames = controller.removedHandlers.map(\.name)
         #expect(removedHandlerNames.contains("webInspectorNetworkUpdate"))
         #expect(removedHandlerNames.contains("webInspectorWSUpdate"))
+        #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(agent.webView == nil)
     }
 
