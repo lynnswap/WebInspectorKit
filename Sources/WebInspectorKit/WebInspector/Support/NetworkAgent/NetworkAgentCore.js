@@ -17,7 +17,7 @@ const recordStart = (
     if (requestBody && typeof requestBody.storageBody === "string") {
         bodyCache.store("request", requestId, requestBody);
     }
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "start",
         session: networkState.sessionID,
         requestId: requestId,
@@ -54,7 +54,7 @@ const recordResponse = (requestId, response, requestType) => {
     const wall = wallTime();
     const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "response",
         session: networkState.sessionID,
         requestId: requestId,
@@ -82,7 +82,7 @@ const recordFinish = (
 ) => {
     const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "finish",
         session: networkState.sessionID,
         requestId: requestId,
@@ -111,7 +111,7 @@ const recordFailure = (requestId, error, requestType) => {
     } else if (error) {
         description = String(error);
     }
-    postHTTPEvent({
+    enqueueNetworkEvent({
         type: "fail",
         session: networkState.sessionID,
         requestId: requestId,
@@ -128,31 +128,32 @@ const flushQueuedEvents = () => {
         return;
     }
     const pending = queuedEvents.splice(0, queuedEvents.length);
-    const batchPayload = {
-        session: networkState.sessionID,
-        events: pending
-    };
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkQueuedUpdate.postMessage(batchPayload);
-    } catch {
+    if (shouldThrottleDelivery()) {
+        for (let i = 0; i < pending.length; ++i) {
+            enqueueThrottledEvent(pending[i]);
+        }
+        return;
     }
+    deliverNetworkEvents(pending);
 };
 
 const postNetworkReset = () => {
-    try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset"});
-    } catch {
-    }
+    deliverNetworkEvents([{
+        type: "reset",
+        session: networkState.sessionID
+    }]);
 };
 
 const clearDisabledNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
+    clearThrottledEvents();
 };
 
 const resetNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
     trackedRequests.clear();
     bodyCache.clear();
+    clearThrottledEvents();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
     }
@@ -202,6 +203,7 @@ export const clearNetworkRecords = () => {
         networkState.resourceSeen.clear();
     }
     bodyCache.clear();
+    clearThrottledEvents();
     queuedEvents.splice(0, queuedEvents.length);
     postNetworkReset();
 };
@@ -216,4 +218,8 @@ export const getResponseBody = requestId => {
 
 export const getRequestBody = requestId => {
     return bodyCache.take("request", requestId);
+};
+
+export const setNetworkThrottling = options => {
+    setThrottleOptions(options);
 };

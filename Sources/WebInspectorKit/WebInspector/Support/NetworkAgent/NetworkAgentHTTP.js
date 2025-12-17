@@ -37,7 +37,7 @@ const installFetchPatch = () => {
             let responseBodyInfo = null;
             if (shouldTrack && requestId != null) {
                 mimeType = recordResponse(requestId, response, "fetch");
-                postHTTPEvent({
+                enqueueNetworkEvent({
                     type: "responseExtra",
                     session: networkState.sessionID,
                     requestId: requestId,
@@ -125,7 +125,7 @@ const installXHRPatch = () => {
             this.addEventListener("readystatechange", function() {
                 if (this.readyState === 2 && requestId != null) {
                     recordResponse(requestId, this, "xhr");
-                    postHTTPEvent({
+                    enqueueNetworkEvent({
                         type: "responseExtra",
                         session: networkState.sessionID,
                         requestId: requestId,
@@ -190,7 +190,21 @@ const installResourceObserver = () => {
                 }
             }
             if (payloads.length) {
-                postHTTPBatchEvents(payloads);
+                if (!isActiveLogging()) {
+                    if (shouldQueueNetworkEvent()) {
+                        for (let i = 0; i < payloads.length; ++i) {
+                            bufferEvent(payloads[i]);
+                        }
+                    }
+                    return;
+                }
+                if (shouldThrottleDelivery()) {
+                    for (let i = 0; i < payloads.length; ++i) {
+                        enqueueThrottledEvent(payloads[i]);
+                    }
+                    return;
+                }
+                deliverNetworkEvents(payloads);
             }
         });
         observer.observe({type: "resource", buffered: true});

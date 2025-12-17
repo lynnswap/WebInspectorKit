@@ -223,6 +223,7 @@ const MAX_INLINE_BODY_LENGTH = 512;
 const MAX_CAPTURE_BODY_LENGTH = 5 * 1024 * 1024;
 const MAX_BODY_CACHE_BYTES = 200 * 1024 * 1024;
 const MAX_QUEUED_EVENTS = 500;
+const DEFAULT_THROTTLE_INTERVAL_MS = 50;
 
 /**
  * @typedef {Object} RequestBodyInfo
@@ -328,48 +329,104 @@ class BodyCache {
 
 const bodyCache = new BodyCache(MAX_BODY_CACHE_BYTES);
 
-const enqueueEvent = event => {
+const throttleState = {
+    intervalMs: DEFAULT_THROTTLE_INTERVAL_MS,
+    maxQueuedEvents: MAX_QUEUED_EVENTS,
+    queue: [],
+    timer: null
+};
+
+const bufferEvent = event => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
         queuedEvents.shift();
     }
     queuedEvents.push(event);
 };
 
-const isActiveLogging = () => networkState.mode === NetworkLoggingMode.ACTIVE;
-const shouldTrackNetworkEvents = () => networkState.mode !== NetworkLoggingMode.STOPPED;
-const shouldQueueNetworkEvent = () => networkState.mode === NetworkLoggingMode.BUFFERING;
+const clearThrottledEvents = () => {
+    throttleState.queue.splice(0, throttleState.queue.length);
+    if (throttleState.timer) {
+        clearTimeout(throttleState.timer);
+        throttleState.timer = null;
+    }
+};
 
-const postHTTPEvent = payload => {
-    if (!isActiveLogging()) {
-        if (shouldQueueNetworkEvent()) {
-            enqueueEvent({kind: "http", payload});
-        }
+const deliverNetworkEvents = events => {
+    if (!Array.isArray(events) || !events.length) {
         return;
     }
+    const payload = {
+        session: networkState.sessionID,
+        events: events
+    };
     try {
-        window.webkit.messageHandlers.webInspectorHTTPUpdate.postMessage(payload);
+        window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
     } catch {
     }
 };
 
-const postHTTPBatchEvents = payloads => {
+const flushThrottledEvents = () => {
+    if (!throttleState.queue.length) {
+        return;
+    }
+    const events = throttleState.queue.splice(0, throttleState.queue.length);
+    throttleState.timer = null;
+    deliverNetworkEvents(events);
+};
+
+const scheduleThrottledFlush = () => {
+    if (!throttleState.queue.length) {
+        return;
+    }
+    if (throttleState.intervalMs <= 0) {
+        flushThrottledEvents();
+        return;
+    }
+    if (throttleState.timer) {
+        return;
+    }
+    throttleState.timer = setTimeout(() => {
+        throttleState.timer = null;
+        flushThrottledEvents();
+    }, throttleState.intervalMs);
+};
+
+const enqueueThrottledEvent = event => {
+    if (throttleState.queue.length >= throttleState.maxQueuedEvents) {
+        throttleState.queue.shift();
+    }
+    throttleState.queue.push(event);
+    scheduleThrottledFlush();
+};
+
+const setThrottleOptions = options => {
+    const interval = options && Number.isFinite(options.intervalMs) ? options.intervalMs : DEFAULT_THROTTLE_INTERVAL_MS;
+    const limit = options && Number.isFinite(options.maxQueuedEvents) ? options.maxQueuedEvents : MAX_QUEUED_EVENTS;
+    throttleState.intervalMs = interval >= 0 ? interval : 0;
+    throttleState.maxQueuedEvents = limit > 0 ? limit : MAX_QUEUED_EVENTS;
+    if (throttleState.intervalMs === 0 && throttleState.queue.length) {
+        flushThrottledEvents();
+    }
+};
+
+const shouldThrottleDelivery = () => throttleState.intervalMs != null && throttleState.intervalMs > 0;
+
+const isActiveLogging = () => networkState.mode === NetworkLoggingMode.ACTIVE;
+const shouldTrackNetworkEvents = () => networkState.mode !== NetworkLoggingMode.STOPPED;
+const shouldQueueNetworkEvent = () => networkState.mode === NetworkLoggingMode.BUFFERING;
+
+const enqueueNetworkEvent = event => {
     if (!isActiveLogging()) {
         if (shouldQueueNetworkEvent()) {
-            enqueueEvent({kind: "httpBatch", payloads});
+            bufferEvent(event);
         }
         return;
     }
-    if (!Array.isArray(payloads) || !payloads.length) {
+    if (shouldThrottleDelivery()) {
+        enqueueThrottledEvent(event);
         return;
     }
-    const batchPayload = {
-        session: networkState.sessionID,
-        events: payloads
-    };
-    try {
-        window.webkit.messageHandlers.webInspectorHTTPBatchUpdate.postMessage(batchPayload);
-    } catch {
-    }
+    deliverNetworkEvents([event]);
 };
 
 const nextRequestID = () => {
