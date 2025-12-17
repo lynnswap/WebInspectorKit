@@ -228,6 +228,21 @@ const MAX_QUEUED_EVENTS = 500;
  * @property {Array<{name:string,value:string,isFile?:boolean,fileName?:string,size?:number}>=} formEntries
  */
 
+// Store a captured body in the provided map while keeping storage copy intact.
+const storeCapturedBody = (map, requestId, bodyInfo, pruneCallback) => {
+    if (!map || requestId == null || !bodyInfo) {
+        return;
+    }
+    const stored = {...bodyInfo};
+    if (typeof bodyInfo.storageBody === "string") {
+        stored.body = bodyInfo.storageBody;
+    }
+    map.set(requestId, stored);
+    if (typeof pruneCallback === "function") {
+        pruneCallback();
+    }
+};
+
 const pruneStoredResponseBodies = () => {
     if (responseBodies.size <= MAX_STORED_RESPONSE_BODIES) {
         return;
@@ -659,10 +674,20 @@ const captureXHRResponseBody = xhr => {
     try {
         const type = xhr.responseType;
         if (type === "" || type === "text" || type === undefined) {
-            return serializeTextBody(xhr.responseText || "", MAX_INLINE_BODY_LENGTH);
+            return serializeTextBody(
+                xhr.responseText || "",
+                MAX_INLINE_BODY_LENGTH,
+                captureContentLength(xhr),
+                MAX_CAPTURE_BODY_LENGTH
+            );
         }
         if (type === "json" && xhr.response != null) {
-            return serializeTextBody(JSON.stringify(xhr.response), MAX_INLINE_BODY_LENGTH);
+            return serializeTextBody(
+                JSON.stringify(xhr.response),
+                MAX_INLINE_BODY_LENGTH,
+                captureContentLength(xhr),
+                MAX_CAPTURE_BODY_LENGTH
+            );
         }
     } catch {
     }

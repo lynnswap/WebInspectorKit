@@ -15,12 +15,7 @@ const recordStart = (
     const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
     trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
     if (requestBody && typeof requestBody.storageBody === "string") {
-        const stored = {...requestBody, body: requestBody.storageBody};
-        if (stored.truncated) {
-            stored.truncated = false;
-        }
-        requestBodies.set(requestId, stored);
-        pruneStoredRequestBodies();
+        storeCapturedBody(requestBodies, requestId, requestBody, pruneStoredRequestBodies);
     }
     postHTTPEvent({
         type: "start",
@@ -103,12 +98,7 @@ const recordFinish = (
     });
     trackedRequests.delete(requestId);
     if (responseBody) {
-        const storedBody = {...responseBody};
-        if (typeof responseBody.storageBody === "string") {
-            storedBody.body = responseBody.storageBody;
-        }
-        responseBodies.set(requestId, storedBody);
-        pruneStoredResponseBodies();
+        storeCapturedBody(responseBodies, requestId, responseBody, pruneStoredResponseBodies);
     }
 };
 
