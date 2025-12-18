@@ -2,10 +2,9 @@ import {captureDOM, captureDOMSubtree} from "./DOMAgent/DOMAgentDOMCore.js";
 import {clearHighlight, highlightDOMNode} from "./DOMAgent/DOMAgentOverlay.js";
 import {cancelElementSelection, startElementSelection} from "./DOMAgent/DOMAgentSelection.js";
 import {
+    configureAutoSnapshot,
     disableAutoSnapshot,
-    enableAutoSnapshot,
     enableAutoSnapshotIfSupported,
-    setAutoSnapshotOptions,
     triggerSnapshotUpdate
 } from "./DOMAgent/DOMAgentSnapshot.js";
 import {
@@ -23,16 +22,15 @@ function detachInspector() {
     disableAutoSnapshot();
 }
 
-if (!(window.webInspectorKit && window.webInspectorKit.__installed)) {
-    var webInspectorKit = {
-        captureDOM: captureDOM,
-        captureDOMSubtree: captureDOMSubtree,
-        startElementSelection: startElementSelection,
-        cancelElementSelection: cancelElementSelection,
-        highlightDOMNode: highlightDOMNode,
+if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
+    var webInspectorDOM = {
+        captureSnapshot: captureDOM,
+        captureSubtree: captureDOMSubtree,
+        startSelection: startElementSelection,
+        cancelSelection: cancelElementSelection,
+        highlightNode: highlightDOMNode,
         clearHighlight: clearHighlight,
-        setAutoSnapshotOptions: setAutoSnapshotOptions,
-        setAutoSnapshotEnabled: enableAutoSnapshot,
+        configureAutoSnapshot: configureAutoSnapshot,
         disableAutoSnapshot: disableAutoSnapshot,
         detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,
@@ -45,8 +43,8 @@ if (!(window.webInspectorKit && window.webInspectorKit.__installed)) {
         debugStatus: debugStatus,
         __installed: true
     };
-    Object.defineProperty(window, "webInspectorKit", {
-        value: Object.freeze(webInspectorKit),
+    Object.defineProperty(window, "webInspectorDOM", {
+        value: Object.freeze(webInspectorDOM),
         writable: false,
         configurable: false
     });

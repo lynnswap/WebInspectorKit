@@ -398,6 +398,6 @@ export function debugStatus() {
         selectionActive: !!inspector.selectionState,
         documentURL: inspector.documentURL || document.URL || ""
     };
-    console.log("[webInspectorKit] status:", status);
+    console.log("[webInspectorDOM] status:", status);
     return status;
 }

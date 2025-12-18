@@ -7,26 +7,22 @@ struct WINetworkStoreTests {
     func keepsEntriesScopedBySessionAndRequestId() throws {
         let store = WINetworkStore()
 
-        let firstStart = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "session": "first",
-                "requestId": 1,
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+        let firstStart = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: "first")
         store.applyEvent(firstStart)
 
-        let secondStart = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "session": "second",
-                "requestId": 1,
-                "url": "https://example.com/api",
-                "method": "POST"
-            ])
-        )
+        let secondStart = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com/api",
+            "method": "POST",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_050.0, wallMs: 1_700_000_000_050.0)
+        ], sessionID: "second")
         store.applyEvent(secondStart)
 
         #expect(store.entries.count == 2)
@@ -37,14 +33,13 @@ struct WINetworkStoreTests {
     @Test
     func resetClearsSessionsAndEntries() throws {
         let store = WINetworkStore()
-        let payload = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 1,
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
         store.applyEvent(payload)
 
         #expect(store.entries.isEmpty == false)
@@ -55,16 +50,14 @@ struct WINetworkStoreTests {
     }
 
     @Test
-    func parsesNumericRequestIdFromString() throws {
-        let payload = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "session": "wi_session_123",
-                "requestId": "42",
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+    func preservesRequestIdFromPayload() throws {
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 42,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: "wi_session_123")
 
         #expect(payload.sessionID == "wi_session_123")
         #expect(payload.requestID == 42)
@@ -74,34 +67,34 @@ struct WINetworkStoreTests {
     func storesRequestAndResponseBodies() throws {
         let store = WINetworkStore()
 
-        let start = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 10,
-                "url": "https://example.com/api",
-                "method": "POST",
-                "requestBody": [
-                    "kind": "text",
-                    "body": #"{"hello":"world"}"#,
-                    "truncated": false,
-                    "size": 17
-                ]
-            ])
-        )
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 10,
+            "url": "https://example.com/api",
+            "method": "POST",
+            "body": [
+                "kind": "text",
+                "encoding": "utf-8",
+                "preview": #"{"hello":"world"}"#,
+                "truncated": false,
+                "size": 17
+            ],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
         store.applyEvent(start)
 
-        let finish = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "finish",
-                "requestId": 10,
-                "responseBody": [
-                    "kind": "text",
-                    "body": "ok",
-                    "truncated": false,
-                    "size": 2
-                ]
-            ])
-        )
+        let finish = try NetworkTestHelpers.decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 10,
+            "body": [
+                "kind": "text",
+                "encoding": "utf-8",
+                "preview": "ok",
+                "truncated": false,
+                "size": 2
+            ],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_200.0, wallMs: 1_700_000_000_200.0)
+        ])
         store.applyEvent(finish)
 
         let entry = try #require(store.entry(forRequestID: 10, sessionID: nil))
@@ -151,5 +144,55 @@ struct WINetworkStoreTests {
         #expect(entry.phase == .failed)
         #expect(entry.errorDescription == "WebSocket error")
         #expect(entry.requestHeaders["sec-websocket-protocol"] == "chat")
+    }
+
+    @Test
+    func decodesNetworkEventBatchPayload() throws {
+        let payload: [String: Any] = [
+            "version": 1,
+            "sessionId": "batch-session",
+            "seq": 1,
+            "events": [[
+                "kind": "requestWillBeSent",
+                "requestId": 9,
+                "url": "https://example.com",
+                "method": "GET",
+                "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+            ]]
+        ]
+
+        let batch = try #require(NetworkEventBatch.decode(from: payload))
+
+        #expect(batch.sessionID == "batch-session")
+        #expect(batch.events.count == 1)
+        #expect(batch.events.first?.kind == .requestWillBeSent)
+    }
+
+    @Test
+    func lenientDecodeDropsInvalidEvents() throws {
+        let payload: [String: Any] = [
+            "version": 1,
+            "sessionId": "batch-session",
+            "seq": 1,
+            "events": [
+                [
+                    "kind": "requestWillBeSent",
+                    "requestId": 11,
+                    "url": "https://example.com/valid",
+                    "method": "GET",
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_100.0, wallMs: 1_700_000_000_100.0)
+                ],
+                [
+                    "kind": "responseReceived",
+                    "requestId": "invalid",
+                    "status": 200
+                ]
+            ]
+        ]
+
+        let batch = try #require(NetworkEventBatch.decode(from: payload))
+
+        #expect(batch.events.count == 1)
+        #expect(batch.events.first?.requestID == 11)
     }
 }

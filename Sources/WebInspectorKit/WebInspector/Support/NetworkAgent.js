@@ -1,26 +1,22 @@
 import {
     clearNetworkRecords,
+    configureNetwork,
     installNetworkObserver,
-    setNetworkLoggingMode,
-    getResponseBody,
-    getRequestBody,
-    setNetworkThrottling
+    getBody
 } from "./NetworkAgent/NetworkAgentCore.js";
 
-if (!(window.webInspectorNetwork && window.webInspectorNetwork.__installed)) {
+if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed)) {
     installNetworkObserver();
 
-    var webInspectorNetwork = {
-        setLoggingMode: setNetworkLoggingMode,
-        clearRecords: clearNetworkRecords,
-        getResponseBody: getResponseBody,
-        getRequestBody: getRequestBody,
-        setThrottling: setNetworkThrottling,
+    var webInspectorNetworkAgent = {
+        configure: configureNetwork,
+        clear: clearNetworkRecords,
+        getBody: getBody,
         __installed: true
     };
 
-    Object.defineProperty(window, "webInspectorNetwork", {
-        value: Object.freeze(webInspectorNetwork),
+    Object.defineProperty(window, "webInspectorNetworkAgent", {
+        value: Object.freeze(webInspectorNetworkAgent),
         writable: false,
         configurable: false
     });

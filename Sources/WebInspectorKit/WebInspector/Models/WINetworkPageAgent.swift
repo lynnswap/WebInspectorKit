@@ -12,16 +12,15 @@ public enum WINetworkLoggingMode: String {
 
 private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "WINetworkPageAgent")
 private let networkPresenceProbeScript: String = """
-(function() { /* webInspectorNetwork */ })();
+(function() { /* webInspectorNetworkAgent */ })();
 """
 
 @MainActor
 @Observable
 final class WINetworkPageAgent: NSObject, WIPageAgent {
     private enum HandlerName: String, CaseIterable {
-        case networkUpdate = "webInspectorNetworkUpdate"
+        case networkEvents = "webInspectorNetworkEvents"
         case networkReset = "webInspectorNetworkReset"
-        case webSocket = "webInspectorWSUpdate"
     }
 
     weak var webView: WKWebView?
@@ -98,21 +97,16 @@ extension WINetworkPageAgent {
         store.reset()
     }
 
-    func fetchBody(requestID: Int, role: WINetworkBody.Role) async -> WINetworkBody? {
+    func fetchBody(bodyRef: String, role: WINetworkBody.Role) async -> WINetworkBody? {
         guard let webView else { return nil }
         do {
-            let isRequest = role == .request
             let result = try await webView.callAsyncJavaScript(
                 """
-                return (function(requestId, isRequest) {
-                    if (!window.webInspectorNetwork) {
+                return (function(ref) {
+                    if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {
                         return null;
                     }
-                    const getter = isRequest ? window.webInspectorNetwork.getRequestBody : window.webInspectorNetwork.getResponseBody;
-                    if (typeof getter !== "function") {
-                        return null;
-                    }
-                    const body = getter(requestId);
+                    const body = window.webInspectorNetworkAgent.getBody(ref);
                     if (body == null) {
                         return null;
                     }
@@ -121,24 +115,26 @@ extension WINetworkPageAgent {
                     } catch (error) {
                         return null;
                     }
-                })(requestId, isRequest);
+                })(ref);
                 """,
-                arguments: [
-                    "requestId": requestID,
-                    "isRequest": isRequest
-                ],
+                arguments: ["ref": bodyRef],
                 in: nil,
                 contentWorld: .page
             )
-            let decoded: Any
+            let payload: NetworkBodyPayload?
             if let jsonString = result as? String,
-               let data = jsonString.data(using: .utf8),
-               let object = try? JSONSerialization.jsonObject(with: data) {
-                decoded = object
+               let data = jsonString.data(using: .utf8) {
+                payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
+            } else if let dictionary = result as? [String: Any],
+                      let data = try? JSONSerialization.data(withJSONObject: dictionary) {
+                payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
             } else {
-                decoded = result as Any
+                payload = nil
             }
-            return WINetworkBody.decode(from: decoded)
+            guard let payload else {
+                return nil
+            }
+            return WINetworkBody.from(payload: payload, role: role)
         } catch {
             networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
             return nil
@@ -153,29 +149,25 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
         }
         guard let handlerName = HandlerName(rawValue: message.name) else { return }
         switch handlerName {
-        case .networkUpdate:
-            handleNetworkUpdateMessage(message)
+        case .networkEvents:
+            handleNetworkEventsMessage(message)
         case .networkReset:
             handleNetworkReset()
-        case .webSocket:
-            handleWebSocketMessage(message)
         }
     }
 
-    private func handleWebSocketMessage(_ message: WKScriptMessage) {
-        guard let payload = message.body as? [String: Any],
-              let event = WSNetworkEvent(dictionary: payload) else {
+    private func handleNetworkEventsMessage(_ message: WKScriptMessage) {
+        guard let batch = decodeNetworkBatch(from: message.body) else { return }
+        if batch.version != 1 {
+            networkLogger.debug("unsupported network batch version: \(batch.version, privacy: .public)")
             return
         }
-        store.applyWSEvent(event)
-    }
-
-    private func handleNetworkUpdateMessage(_ message: WKScriptMessage) {
-        guard let dictionary = message.body as? [String: Any] else { return }
-        let events = dictionary["events"] as? [[String: Any]] ?? []
-        for event in events {
-            guard let parsed = HTTPNetworkEvent(dictionary: event) else { continue }
-            store.applyHTTPEvent(parsed)
+        if let dropped = batch.dropped, dropped > 0 {
+            // TODO: Surface dropped event counts in the store/UI.
+            networkLogger.debug("network batch dropped events: \(dropped, privacy: .public)")
+        }
+        for event in batch.events {
+            store.applyHTTPEvent(event)
         }
     }
     
@@ -254,12 +246,15 @@ private extension WINetworkPageAgent {
         }
 
         let networkReady = webView.configuration.userContentController.userScripts.contains { $0.source == networkPresenceProbeScript }
-        var script = ""
-        script += "window.webInspectorNetwork.setLoggingMode(mode);"
-        if clearExisting {
-            script += "window.webInspectorNetwork.clearRecords();"
-        }
-        guard !script.isEmpty, networkReady else { return }
+        let script = """
+        (function(mode, clearExisting) {
+            if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
+                return;
+            }
+            window.webInspectorNetworkAgent.configure({mode: mode, clear: clearExisting});
+        })(mode, clearExisting);
+        """
+        guard networkReady else { return }
 
         do {
             try await webView.callAsyncVoidJavaScript(
@@ -279,12 +274,16 @@ private extension WINetworkPageAgent {
         guard let webView = targetWebView ?? self.webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorNetwork.clearRecords();",
+                "window.webInspectorNetworkAgent.clear();",
                 arguments: [:],
                 contentWorld: .page
             )
         } catch {
             networkLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    func decodeNetworkBatch(from payload: Any?) -> NetworkEventBatch? {
+        NetworkEventBatch.decode(from: payload)
     }
 }

@@ -1,6 +1,64 @@
 // Core orchestrator: shared helpers live in NetworkAgentUtils.js
 // This file keeps recording logic and wires sub-patches.
 
+const buildNetworkError = (error, requestType, options = {}) => {
+    let message = "";
+    if (error && typeof error.message === "string" && error.message) {
+        message = error.message;
+    } else if (typeof error === "string" && error) {
+        message = error;
+    } else if (error) {
+        message = String(error);
+    } else {
+        message = "Network error";
+    }
+
+    let code = null;
+    if (error && typeof error.name === "string" && error.name) {
+        code = error.name;
+    }
+
+    let domain = "other";
+    if (requestType === "fetch") {
+        domain = "fetch";
+    } else if (requestType === "xhr") {
+        domain = "xhr";
+    } else if (requestType === "resource") {
+        domain = "resource";
+    }
+
+    const payload = {
+        domain,
+        message
+    };
+
+    if (code) {
+        payload.code = code;
+    }
+
+    const isCanceled = options.isCanceled === true || code === "AbortError";
+    if (isCanceled) {
+        payload.isCanceled = true;
+    }
+    if (options.isTimeout === true) {
+        payload.isTimeout = true;
+    }
+
+    return payload;
+};
+
+const storeBodyForRole = (role, requestId, bodyInfo) => {
+    const stored = buildStoredBodyPayload(bodyInfo);
+    if (!stored) {
+        return null;
+    }
+    const ref = makeBodyRef(role, requestId);
+    if (!bodyCache.store(ref, stored)) {
+        return null;
+    }
+    return ref;
+};
+
 const recordStart = (
     requestId,
     url,
@@ -11,24 +69,19 @@ const recordStart = (
     wallTimeOverride,
     requestBody
 ) => {
-    const startTime = typeof startTimeOverride === "number" ? startTimeOverride : now();
-    const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
-    trackedRequests.set(requestId, {startTime: startTime, wallTime: wall});
-    if (requestBody && typeof requestBody.storageBody === "string") {
-        bodyCache.store("request", requestId, requestBody);
-    }
+    const time = makeNetworkTime(startTimeOverride, wallTimeOverride);
+    trackedRequests.set(requestId, {startTime: time.monotonicMs, wallTime: time.wallMs});
+    const bodyRef = storeBodyForRole("req", requestId, requestBody);
     enqueueNetworkEvent({
-        type: "start",
-        session: networkState.sessionID,
+        kind: "requestWillBeSent",
         requestId: requestId,
+        time: time,
         url: url,
         method: method,
-        requestHeaders: requestHeaders || {},
-        startTime: startTime,
-        wallTime: wall,
-        requestType: requestType,
-        requestBody: inlineBodyPayload(requestBody),
-        requestBodyBytesSent: requestBody ? requestBody.size : undefined
+        headers: requestHeaders || {},
+        initiator: requestType,
+        body: makeBodyPreviewPayload(requestBody, bodyRef),
+        bodySize: requestBody ? requestBody.size : undefined
     });
 };
 
@@ -50,21 +103,18 @@ const recordResponse = (requestId, response, requestType) => {
         mimeType = "";
         headers = {};
     }
-    const time = now();
-    const wall = wallTime();
+    const time = makeNetworkTime();
     const status = typeof response === "object" && response !== null && typeof response.status === "number" ? response.status : undefined;
     const statusText = typeof response === "object" && response !== null && typeof response.statusText === "string" ? response.statusText : "";
     enqueueNetworkEvent({
-        type: "response",
-        session: networkState.sessionID,
+        kind: "responseReceived",
         requestId: requestId,
+        time: time,
         status: status,
         statusText: statusText,
         mimeType: mimeType,
-        responseHeaders: headers,
-        endTime: time,
-        wallTime: wall,
-        requestType: requestType
+        headers: headers,
+        initiator: requestType
     });
     return mimeType;
 };
@@ -80,45 +130,31 @@ const recordFinish = (
     wallTimeOverride,
     responseBody
 ) => {
-    const time = typeof endTimeOverride === "number" ? endTimeOverride : now();
-    const wall = typeof wallTimeOverride === "number" ? wallTimeOverride : wallTime();
+    const time = makeNetworkTime(endTimeOverride, wallTimeOverride);
+    const bodyRef = storeBodyForRole("res", requestId, responseBody);
     enqueueNetworkEvent({
-        type: "finish",
-        session: networkState.sessionID,
+        kind: "loadingFinished",
         requestId: requestId,
-        endTime: time,
-        wallTime: wall,
+        time: time,
         encodedBodyLength: encodedBodyLength,
-        requestType: requestType,
+        decodedBodySize: responseBody ? responseBody.size : undefined,
         status: status,
         statusText: statusText,
         mimeType: mimeType,
-        decodedBodySize: responseBody ? responseBody.size : undefined,
-        responseBody: inlineBodyPayload(responseBody)
+        initiator: requestType,
+        body: makeBodyPreviewPayload(responseBody, bodyRef)
     });
     trackedRequests.delete(requestId);
-    if (responseBody) {
-        bodyCache.store("response", requestId, responseBody);
-    }
 };
 
-const recordFailure = (requestId, error, requestType) => {
-    const time = now();
-    const wall = wallTime();
-    let description = "";
-    if (error && typeof error.message === "string" && error.message) {
-        description = error.message;
-    } else if (error) {
-        description = String(error);
-    }
+const recordFailure = (requestId, error, requestType, options = {}) => {
+    const time = makeNetworkTime();
     enqueueNetworkEvent({
-        type: "fail",
-        session: networkState.sessionID,
+        kind: "loadingFailed",
         requestId: requestId,
-        endTime: time,
-        wallTime: wall,
-        error: description,
-        requestType: requestType
+        time: time,
+        error: buildNetworkError(error, requestType, options),
+        initiator: requestType
     });
     trackedRequests.delete(requestId);
 };
@@ -139,7 +175,10 @@ const flushQueuedEvents = () => {
 
 const postNetworkReset = () => {
     try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({type: "reset", session: networkState.sessionID});
+        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({
+            version: NETWORK_EVENT_VERSION,
+            sessionId: networkState.sessionID
+        });
     } catch {
     }
 };
@@ -147,6 +186,7 @@ const postNetworkReset = () => {
 const clearDisabledNetworkState = () => {
     queuedEvents.splice(0, queuedEvents.length);
     clearThrottledEvents();
+    networkState.droppedEvents = 0;
 };
 
 const resetNetworkState = () => {
@@ -159,6 +199,8 @@ const resetNetworkState = () => {
     }
     networkState.sessionID = generateSessionID();
     networkState.nextId = 1;
+    networkState.batchSeq = 0;
+    networkState.droppedEvents = 0;
     postNetworkReset();
 };
 
@@ -184,7 +226,7 @@ const normalizeLoggingMode = mode => {
     return NetworkLoggingMode.ACTIVE;
 };
 
-export const setNetworkLoggingMode = mode => {
+const setNetworkLoggingMode = mode => {
     const previousMode = networkState.mode;
     const resolvedMode = normalizeLoggingMode(mode);
     networkState.mode = resolvedMode;
@@ -197,7 +239,7 @@ export const setNetworkLoggingMode = mode => {
     }
 };
 
-export const clearNetworkRecords = () => {
+const clearNetworkRecords = () => {
     trackedRequests.clear();
     if (networkState.resourceSeen) {
         networkState.resourceSeen.clear();
@@ -205,21 +247,46 @@ export const clearNetworkRecords = () => {
     bodyCache.clear();
     clearThrottledEvents();
     queuedEvents.splice(0, queuedEvents.length);
+    networkState.batchSeq = 0;
+    networkState.droppedEvents = 0;
     postNetworkReset();
 };
 
-export const installNetworkObserver = () => {
+const installNetworkObserver = () => {
     ensureInstalled();
 };
 
-export const getResponseBody = requestId => {
-    return bodyCache.take("response", requestId);
+const getBody = ref => {
+    if (!ref || typeof ref !== "string") {
+        return null;
+    }
+    return bodyCache.take(ref);
 };
 
-export const getRequestBody = requestId => {
-    return bodyCache.take("request", requestId);
+const configureNetwork = options => {
+    if (!options || typeof options !== "object") {
+        return;
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "mode")) {
+        setNetworkLoggingMode(options.mode);
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "throttle")) {
+        setNetworkThrottling(options.throttle);
+    }
+    if (options.clear === true) {
+        clearNetworkRecords();
+    }
 };
 
-export const setNetworkThrottling = options => {
+const setNetworkThrottling = options => {
     setThrottleOptions(options);
+};
+
+export {
+    clearNetworkRecords,
+    configureNetwork,
+    getBody,
+    installNetworkObserver,
+    setNetworkLoggingMode,
+    setNetworkThrottling
 };

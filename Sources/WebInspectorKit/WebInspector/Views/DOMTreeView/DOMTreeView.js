@@ -23,13 +23,13 @@
     }
 
     function installWebInspectorKit() {
-        if (window.webInspectorKit && window.webInspectorKit.__installed) {
+        if (window.webInspectorDOMFrontend && window.webInspectorDOMFrontend.__installed) {
             return;
         }
 
         registerProtocolHandlers();
 
-        const webInspectorKit = {
+        const webInspectorDOMFrontend = {
             dispatchMessageFromBackend,
             applyMutationBundle,
             applyMutationBundles,
@@ -40,8 +40,8 @@
             __installed: true
         };
 
-        Object.defineProperty(window, "webInspectorKit", {
-            value: Object.freeze(webInspectorKit),
+        Object.defineProperty(window, "webInspectorDOMFrontend", {
+            value: Object.freeze(webInspectorDOMFrontend),
             writable: false,
             configurable: false
         });

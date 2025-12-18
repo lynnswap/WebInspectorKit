@@ -67,16 +67,19 @@
         if (!parsed || typeof parsed !== "object") {
             return;
         }
-        if (parsed.snapshot && !parsed.messages) {
-            setSnapshot(parsed.snapshot, {preserveState});
+        if (typeof parsed.version === "number" && parsed.version !== 1) {
             return;
         }
-        if (parsed.root && !parsed.messages) {
-            setSnapshot(parsed, {preserveState});
+        if (parsed.kind === "snapshot") {
+            if (parsed.snapshot) {
+                setSnapshot(parsed.snapshot, {preserveState});
+            }
             return;
         }
-        const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
-        messages.forEach(message => dispatchMessageFromBackend(message));
+        if (parsed.kind === "mutation") {
+            const events = Array.isArray(parsed.events) ? parsed.events : [];
+            events.forEach(message => dispatchMessageFromBackend(message));
+        }
     }
 
     function applyMutationBundles(bundles) {

@@ -187,9 +187,9 @@ func makeWINetworkPreviewModel(
     let viewModel = WINetworkViewModel()
 
     let store = viewModel.store
-    WINetworkPreviewData.events
-        .compactMap(HTTPNetworkEvent.init(dictionary:))
-        .forEach { store.applyEvent($0) }
+    if let batch = WINetworkPreviewData.batch {
+        batch.events.forEach { store.applyEvent($0) }
+    }
 
     viewModel.selectedEntryID = selectedID ?? (selectEntry ? store.entries.last?.id : nil)
     return viewModel
@@ -199,331 +199,108 @@ func makeWINetworkPreviewModel(
 enum WINetworkPreviewData {
     static let events: [[String: Any]] = [
         [
-            "type": "start",
+            "kind": "requestWillBeSent",
             "requestId": 1,
-            "session": "preview",
             "url": "https://x.com/home",
             "method": "GET",
-            "requestHeaders": [
+            "headers": [
                 "accept": "text/html,application/xhtml+xml",
                 "user-agent": "WebInspectorKit/Preview"
             ],
-            "startTime": 1_000.0,
-            "wallTime": 1_708_000_000_000.0,
-            "requestType": "document"
+            "initiator": "document",
+            "time": [
+                "monotonicMs": 1_000.0,
+                "wallMs": 1_708_000_000_000.0
+            ]
         ],
         [
-            "type": "response",
+            "kind": "responseReceived",
             "requestId": 1,
-            "session": "preview",
             "status": 200,
             "statusText": "OK",
             "mimeType": "text/html",
-            "responseHeaders": [
-                "content-type": "text/html; charset=utf-8",
-                "cache-control": "no-cache"
+            "headers": [
+                "content-type": "text/html; charset=utf-8"
             ],
-            "endTime": 1_140.0,
-            "wallTime": 1_708_000_000_140.0,
-            "requestType": "document"
+            "time": [
+                "monotonicMs": 1_200.0,
+                "wallMs": 1_708_000_000_200.0
+            ]
         ],
         [
-            "type": "finish",
+            "kind": "loadingFinished",
             "requestId": 1,
-            "session": "preview",
-            "endTime": 1_170.0,
-            "wallTime": 1_708_000_000_170.0,
             "encodedBodyLength": 252_779,
-            "requestType": "document"
+            "decodedBodySize": 4_096,
+            "body": [
+                "kind": "text",
+                "encoding": "utf-8",
+                "preview": "<!doctype html>",
+                "truncated": true,
+                "size": 4_096,
+                "ref": "res:1"
+            ],
+            "time": [
+                "monotonicMs": 1_400.0,
+                "wallMs": 1_708_000_000_400.0
+            ]
         ],
         [
-            "type": "start",
+            "kind": "requestWillBeSent",
             "requestId": 2,
-            "session": "preview",
-            "url": "https://cdn.example.com/images/9AxiduZ7_x96.png",
-            "method": "GET",
-            "requestHeaders": [
-                "accept": "image/avif,image/webp,image/png,*/*"
-            ],
-            "startTime": 1_300.0,
-            "wallTime": 1_708_000_000_300.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "response",
-            "requestId": 2,
-            "session": "preview",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "image/png",
-            "responseHeaders": [
-                "content-type": "image/png",
-                "cache-control": "public, max-age=31536000"
-            ],
-            "endTime": 1_326.0,
-            "wallTime": 1_708_000_000_326.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "finish",
-            "requestId": 2,
-            "session": "preview",
-            "endTime": 1_326.0,
-            "wallTime": 1_708_000_000_326.0,
-            "encodedBodyLength": 1_657,
-            "requestType": "image"
-        ],
-        [
-            "type": "start",
-            "requestId": 3,
-            "session": "preview",
-            "url": "https://cdn.example.com/images/j7ETageC_x96.jpg",
-            "method": "GET",
-            "requestHeaders": [
-                "accept": "image/avif,image/webp,image/jpeg,*/*"
-            ],
-            "startTime": 1_360.0,
-            "wallTime": 1_708_000_000_360.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "response",
-            "requestId": 3,
-            "session": "preview",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "image/jpeg",
-            "responseHeaders": [
-                "content-type": "image/jpeg"
-            ],
-            "endTime": 1_535.0,
-            "wallTime": 1_708_000_000_535.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "finish",
-            "requestId": 3,
-            "session": "preview",
-            "endTime": 1_535.0,
-            "wallTime": 1_708_000_000_535.0,
-            "encodedBodyLength": 3_550,
-            "requestType": "image"
-        ],
-        [
-            "type": "start",
-            "requestId": 4,
-            "session": "preview",
-            "url": "https://cdn.example.com/images/J0iMVfNY_normal.png",
-            "method": "GET",
-            "requestHeaders": [
-                "accept": "image/avif,image/webp,image/png,*/*"
-            ],
-            "startTime": 1_600.0,
-            "wallTime": 1_708_000_000_600.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "response",
-            "requestId": 4,
-            "session": "preview",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "image/png",
-            "responseHeaders": [
-                "content-type": "image/png"
-            ],
-            "endTime": 1_622.0,
-            "wallTime": 1_708_000_000_622.0,
-            "requestType": "image"
-        ],
-        [
-            "type": "finish",
-            "requestId": 4,
-            "session": "preview",
-            "endTime": 1_622.0,
-            "wallTime": 1_708_000_000_622.0,
-            "encodedBodyLength": 1_959,
-            "requestType": "image"
-        ],
-        [
-            "type": "start",
-            "requestId": 5,
-            "session": "preview",
-            "url": "https://api.example.com/user_flow.json",
-            "method": "POST",
-            "requestHeaders": [
-                "content-type": "application/json",
-                "accept": "application/json"
-            ],
-            "startTime": 1_750.0,
-            "wallTime": 1_708_000_000_750.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "response",
-            "requestId": 5,
-            "session": "preview",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "application/json",
-            "responseHeaders": [
-                "content-type": "application/json; charset=utf-8"
-            ],
-            "endTime": 1_978.0,
-            "wallTime": 1_708_000_000_978.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "finish",
-            "requestId": 5,
-            "session": "preview",
-            "endTime": 1_978.0,
-            "wallTime": 1_708_000_000_978.0,
-            "encodedBodyLength": 0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "start",
-            "requestId": 6,
-            "session": "preview",
-            "url": "https://api.example.com/update_subscriptions",
-            "method": "POST",
-            "requestHeaders": [
-                "content-type": "application/json",
-                "accept": "application/json"
-            ],
-            "startTime": 1_900.0,
-            "wallTime": 1_708_000_000_900.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "response",
-            "requestId": 6,
-            "session": "preview",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "application/json",
-            "responseHeaders": [
-                "content-type": "application/json; charset=utf-8"
-            ],
-            "endTime": 2_042.0,
-            "wallTime": 1_708_000_001_042.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "finish",
-            "requestId": 6,
-            "session": "preview",
-            "endTime": 2_042.0,
-            "wallTime": 1_708_000_001_042.0,
-            "encodedBodyLength": 35,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "start",
-            "requestId": 7,
-            "session": "preview",
-            "url": "https://upload.example.com/media",
-            "method": "POST",
-            "requestHeaders": [
-                "content-type": "application/json",
-                "accept": "application/json"
-            ],
-            "startTime": 2_120.0,
-            "wallTime": 1_708_000_001_120.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "response",
-            "requestId": 7,
-            "session": "preview",
-            "status": 500,
-            "statusText": "Internal Server Error",
-            "mimeType": "application/json",
-            "responseHeaders": [
-                "content-type": "application/json; charset=utf-8",
-                "retry-after": "30"
-            ],
-            "endTime": 2_210.0,
-            "wallTime": 1_708_000_001_210.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "fail",
-            "requestId": 7,
-            "session": "preview",
-            "error": "Request timed out",
-            "endTime": 2_400.0,
-            "wallTime": 1_708_000_001_400.0,
-            "requestType": "fetch"
-        ],
-        [
-            "type": "start",
-            "requestId": 8,
-            "session": "preview",
-            "url": "https://stream.example.com/live",
-            "method": "GET",
-            "requestHeaders": [
-                "accept": "text/event-stream",
-                "cache-control": "no-cache"
-            ],
-            "startTime": 2_320.0,
-            "wallTime": 1_708_000_001_320.0,
-            "requestType": "event-stream"
-        ],
-        [
-            "type": "start",
-            "requestId": 9,
-            "session": "preview",
             "url": "https://api.example.com/report",
             "method": "GET",
-            "requestHeaders": [
+            "headers": [
                 "accept": "application/json",
                 "authorization": "Bearer preview-token"
             ],
-            "startTime": 2_460.0,
-            "wallTime": 1_708_000_001_460.0,
-            "requestType": "fetch"
+            "initiator": "fetch",
+            "time": [
+                "monotonicMs": 1_900.0,
+                "wallMs": 1_708_000_000_900.0
+            ]
         ],
         [
-            "type": "response",
-            "requestId": 9,
-            "session": "preview",
-            "status": 206,
-            "statusText": "Partial Content",
+            "kind": "responseReceived",
+            "requestId": 2,
+            "status": 500,
+            "statusText": "Internal Server Error",
             "mimeType": "application/json",
-            "responseHeaders": [
-                "content-type": "application/json; charset=utf-8",
-                "content-range": "bytes 0-1023/20480"
+            "headers": [
+                "content-type": "application/json; charset=utf-8"
             ],
-            "endTime": 2_640.0,
-            "wallTime": 1_708_000_001_640.0,
-            "requestType": "fetch"
+            "time": [
+                "monotonicMs": 2_100.0,
+                "wallMs": 1_708_000_001_100.0
+            ]
         ],
         [
-            "type": "finish",
-            "requestId": 9,
-            "session": "preview",
-            "status": 206,
-            "statusText": "Partial Content",
-            "mimeType": "application/json",
-            "responseBody": [
-                "kind": "text",
-                "body": """
-            {
-              "data": ["alpha", "beta", "gamma"],
-              "next_page": "/report?page=2"
-            }
-            """,
-                "truncated": true,
-                "size": 20_480
+            "kind": "loadingFailed",
+            "requestId": 2,
+            "error": [
+                "domain": "fetch",
+                "message": "Request timed out",
+                "isTimeout": true
             ],
-            "encodedBodyLength": 1_024,
-            "endTime": 2_740.0,
-            "wallTime": 1_708_000_001_740.0,
-            "requestType": "fetch"
+            "time": [
+                "monotonicMs": 2_300.0,
+                "wallMs": 1_708_000_001_300.0
+            ]
         ]
     ]
+
+    static var batch: NetworkEventBatch? {
+        let payload: [String: Any] = [
+            "version": 1,
+            "sessionId": "preview",
+            "seq": 1,
+            "events": events
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(NetworkEventBatch.self, from: data)
+    }
 }
 
 #Preview("Network Logs") {

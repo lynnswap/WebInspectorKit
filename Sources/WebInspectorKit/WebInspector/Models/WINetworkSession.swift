@@ -47,8 +47,19 @@ public final class WINetworkSession: WIPageSession {
 
     @discardableResult
     public func fetchBody(for entry: WINetworkEntry, role: WINetworkBody.Role) async -> WINetworkBody.FetchError? {
+        let bodyRef = role == .request ? entry.requestBody?.reference : entry.responseBody?.reference
+        guard let bodyRef, !bodyRef.isEmpty else {
+            if role == .request {
+                if let existing = entry.requestBody {
+                    existing.markFailed(.unavailable)
+                }
+            } else if let existing = entry.responseBody {
+                existing.markFailed(.unavailable)
+            }
+            return .unavailable
+        }
         guard let body = await networkAgent.fetchBody(
-            requestID: entry.requestID,
+            bodyRef: bodyRef,
             role: role
         ) else {
             if role == .request {
