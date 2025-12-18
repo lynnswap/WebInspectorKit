@@ -2,11 +2,11 @@ import {inspector} from "./DOMAgentState.js";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./DOMAgentDOMCore.js";
 
 function autoSnapshotHandler() {
-    return window?.webkit?.messageHandlers?.webInspectorSnapshotUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorDOMSnapshot || null;
 }
 
 function mutationUpdateHandler() {
-    return window?.webkit?.messageHandlers?.webInspectorMutationUpdate || null;
+    return window?.webkit?.messageHandlers?.webInspectorDOMMutations || null;
 }
 
 export function enableAutoSnapshotIfSupported() {
@@ -135,9 +135,16 @@ function sendFullSnapshot(reason) {
     }
     try {
         var snapshot = captureDOM(inspector.snapshotAutoUpdateMaxDepth || 4);
+        var payload = {
+            version: 1,
+            kind: "snapshot",
+            reason: reason || inspector.snapshotAutoUpdateReason || "mutation",
+            depth: inspector.snapshotAutoUpdateMaxDepth || 4,
+            documentURL: document.URL || "",
+            snapshot: snapshot
+        };
         handler.postMessage({
-            snapshot: snapshot,
-            reason: reason || inspector.snapshotAutoUpdateReason || "mutation"
+            bundle: JSON.stringify(payload)
         });
     } catch (error) {
         console.error("auto snapshot failed", error);
@@ -300,7 +307,7 @@ function buildDomMutationEvents(records, maxDepth) {
 function sendAutoSnapshotUpdate() {
     var mutationHandler = mutationUpdateHandler();
     if (!mutationHandler) {
-        window?.webInspectorKit?.detach();
+        window?.webInspectorDOM?.detach();
         return;
     }
 
@@ -331,9 +338,10 @@ function sendAutoSnapshotUpdate() {
     try {
         for (var offset = 0; offset < messages.length; offset += chunkSize) {
             var payload = {
-                type: "protocolEvents",
+                version: 1,
+                kind: "mutation",
                 reason: reason,
-                messages: messages.slice(offset, offset + chunkSize)
+                events: messages.slice(offset, offset + chunkSize)
             };
             mutationHandler.postMessage({
                 bundle: JSON.stringify(payload)
@@ -354,6 +362,19 @@ function configureAutoSnapshotOptions(options) {
     }
     if (typeof options.debounce === "number" && options.debounce >= 50) {
         inspector.snapshotAutoUpdateDebounce = options.debounce;
+    }
+}
+
+export function configureAutoSnapshot(options) {
+    if (!options || typeof options !== "object") {
+        return;
+    }
+    configureAutoSnapshotOptions(options);
+    if (options.enabled === true) {
+        enableAutoSnapshot();
+    }
+    if (options.enabled === false) {
+        disableAutoSnapshot();
     }
 }
 

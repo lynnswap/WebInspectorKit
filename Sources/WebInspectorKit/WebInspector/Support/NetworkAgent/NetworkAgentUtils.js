@@ -7,6 +7,26 @@ const now = () => {
 
 const wallTime = () => Date.now();
 
+const makeNetworkTime = (monotonicOverride, wallOverride) => {
+    const monotonicMs = typeof monotonicOverride === "number" ? monotonicOverride : now();
+    const wallMs = typeof wallOverride === "number" ? wallOverride : wallTime();
+    return {monotonicMs, wallMs};
+};
+
+const makeNetworkTimeAt = (monotonicMs, nowMonotonic, nowWall) => {
+    const fallback = makeNetworkTime();
+    if (!Number.isFinite(monotonicMs)) {
+        return fallback;
+    }
+    const referenceMonotonic = Number.isFinite(nowMonotonic) ? nowMonotonic : fallback.monotonicMs;
+    const referenceWall = Number.isFinite(nowWall) ? nowWall : fallback.wallMs;
+    const delta = referenceMonotonic - monotonicMs;
+    return {
+        monotonicMs: monotonicMs,
+        wallMs: referenceWall - delta
+    };
+};
+
 const generateSessionID = () => {
     try {
         if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -25,10 +45,14 @@ const NetworkLoggingMode = {
     STOPPED: "stopped"
 };
 
+const NETWORK_EVENT_VERSION = 1;
+
 const networkState = {
     mode: NetworkLoggingMode.ACTIVE,
     installed: false,
     nextId: 1,
+    batchSeq: 0,
+    droppedEvents: 0,
     sessionID: generateSessionID(),
     resourceObserver: null,
     resourceSeen: null
@@ -166,7 +190,7 @@ const serializeBase64Body = (bytes, reportedSize, inlineLimit = MAX_INLINE_BODY_
     const size = Number.isFinite(reportedSize) ? reportedSize : bytes.byteLength;
     const truncated = inlineTruncated || storage.truncated || (Number.isFinite(size) && size > inlineLimit);
     return {
-        kind: "text",
+        kind: "binary",
         body: body,
         base64Encoded: true,
         truncated: truncated,
@@ -207,15 +231,67 @@ const parseCharsetFromMimeType = mimeType => {
     return null;
 };
 
-const inlineBodyPayload = body => {
-    if (!body) {
+const makeBodyRef = (role, requestId) => {
+    return `${role}:${requestId}`;
+};
+
+const buildStoredBodyPayload = bodyInfo => {
+    if (!bodyInfo) {
+        return null;
+    }
+    const encoding = bodyInfo.base64Encoded ? "base64" : (bodyInfo.kind === "binary" ? "none" : "utf-8");
+    const payload = {
+        kind: bodyInfo.kind || "other",
+        encoding: encoding,
+        truncated: !!bodyInfo.truncated
+    };
+    if (Number.isFinite(bodyInfo.size)) {
+        payload.size = bodyInfo.size;
+    }
+    const content = typeof bodyInfo.storageBody === "string"
+        ? bodyInfo.storageBody
+        : (!bodyInfo.truncated && typeof bodyInfo.body === "string" ? bodyInfo.body : null);
+    if (content != null) {
+        payload.content = content;
+    }
+    if (typeof bodyInfo.summary === "string") {
+        payload.summary = bodyInfo.summary;
+    }
+    if (Array.isArray(bodyInfo.formEntries) && bodyInfo.formEntries.length) {
+        payload.formEntries = bodyInfo.formEntries;
+    }
+    if (!payload.content && !payload.summary && !(payload.formEntries && payload.formEntries.length)) {
+        return null;
+    }
+    return payload;
+};
+
+const makeBodyPreviewPayload = (bodyInfo, ref) => {
+    if (!bodyInfo) {
         return undefined;
     }
-    const clone = {...body};
-    if (Object.prototype.hasOwnProperty.call(clone, "storageBody")) {
-        delete clone.storageBody;
+    const encoding = bodyInfo.base64Encoded ? "base64" : (bodyInfo.kind === "binary" ? "none" : "utf-8");
+    const payload = {
+        kind: bodyInfo.kind || "other",
+        encoding: encoding,
+        truncated: !!bodyInfo.truncated
+    };
+    if (Number.isFinite(bodyInfo.size)) {
+        payload.size = bodyInfo.size;
     }
-    return clone;
+    if (typeof bodyInfo.body === "string" && bodyInfo.body.length) {
+        payload.preview = bodyInfo.body;
+    }
+    if (typeof bodyInfo.summary === "string") {
+        payload.summary = bodyInfo.summary;
+    }
+    if (Array.isArray(bodyInfo.formEntries) && bodyInfo.formEntries.length) {
+        payload.formEntries = bodyInfo.formEntries;
+    }
+    if (ref) {
+        payload.ref = ref;
+    }
+    return payload;
 };
 
 // Keep inline payloads small to avoid OOL IPC; full body is cached separately with only a count cap.
@@ -244,8 +320,8 @@ class BodyCache {
         this.entries = new Map();
     }
 
-    key(kind, requestId) {
-        return String(kind) + ":" + requestId;
+    key(ref) {
+        return String(ref || "");
     }
 
     estimateBytes(bodyInfo) {
@@ -255,14 +331,14 @@ class BodyCache {
         if (Number.isFinite(bodyInfo.size) && bodyInfo.size >= 0) {
             return bodyInfo.size;
         }
-        if (typeof bodyInfo.storageBody === "string") {
-            return byteLengthOfText(bodyInfo.storageBody);
-        }
-        if (typeof bodyInfo.body === "string") {
-            return byteLengthOfText(bodyInfo.body);
+        if (typeof bodyInfo.content === "string") {
+            return byteLengthOfText(bodyInfo.content);
         }
         if (typeof bodyInfo.summary === "string") {
             return byteLengthOfText(bodyInfo.summary);
+        }
+        if (typeof bodyInfo.preview === "string") {
+            return byteLengthOfText(bodyInfo.preview);
         }
         return 0;
     }
@@ -284,20 +360,17 @@ class BodyCache {
         }
     }
 
-    store(kind, requestId, bodyInfo) {
-        if (requestId == null || !bodyInfo) {
+    store(ref, bodyInfo) {
+        if (!ref || !bodyInfo) {
             return;
         }
         const stored = {...bodyInfo};
-        if (typeof bodyInfo.storageBody === "string") {
-            stored.body = bodyInfo.storageBody;
-        }
         const size = this.estimateBytes(stored);
         this.evictUntilFits(size);
         if (Number.isFinite(size) && size > this.maxBytes) {
             return;
         }
-        const key = this.key(kind, requestId);
+        const key = this.key(ref);
         const previous = this.entries.get(key);
         if (previous && Number.isFinite(previous.size)) {
             this.usedBytes -= previous.size;
@@ -308,8 +381,8 @@ class BodyCache {
         }
     }
 
-    take(kind, requestId) {
-        const key = this.key(kind, requestId);
+    take(ref) {
+        const key = this.key(ref);
         if (!this.entries.has(key)) {
             return null;
         }
@@ -336,9 +409,17 @@ const throttleState = {
     timer: null
 };
 
+const recordDroppedEvents = count => {
+    if (!Number.isFinite(count) || count <= 0) {
+        return;
+    }
+    networkState.droppedEvents += count;
+};
+
 const bufferEvent = event => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
         queuedEvents.shift();
+        recordDroppedEvents(1);
     }
     queuedEvents.push(event);
 };
@@ -356,11 +437,18 @@ const deliverNetworkEvents = events => {
         return;
     }
     const payload = {
-        session: networkState.sessionID,
+        version: NETWORK_EVENT_VERSION,
+        sessionId: networkState.sessionID,
+        seq: networkState.batchSeq + 1,
         events: events
     };
+    if (networkState.droppedEvents > 0) {
+        payload.dropped = networkState.droppedEvents;
+        networkState.droppedEvents = 0;
+    }
     try {
-        window.webkit.messageHandlers.webInspectorNetworkUpdate.postMessage(payload);
+        networkState.batchSeq += 1;
+        window.webkit.messageHandlers.webInspectorNetworkEvents.postMessage(payload);
     } catch {
     }
 };
@@ -394,6 +482,7 @@ const scheduleThrottledFlush = () => {
 const enqueueThrottledEvent = event => {
     if (throttleState.queue.length >= throttleState.maxQueuedEvents) {
         throttleState.queue.shift();
+        recordDroppedEvents(1);
     }
     throttleState.queue.push(event);
     scheduleThrottledFlush();
@@ -880,6 +969,11 @@ const handleResourceEntry = entry => {
     const endTime = startTime + duration;
     const requestType = entry.initiatorType || "resource";
 
+    const nowMonotonic = now();
+    const nowWall = wallTime();
+    const startTimePayload = makeNetworkTimeAt(startTime, nowMonotonic, nowWall);
+    const endTimePayload = makeNetworkTimeAt(endTime, nowMonotonic, nowWall);
+
     let encoded = entry.encodedBodySize;
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
         encoded = entry.transferSize;
@@ -894,20 +988,16 @@ const handleResourceEntry = entry => {
     }
     const method = typeof entry.requestMethod === "string" ? entry.requestMethod.toUpperCase() : undefined;
     return {
-        type: "resourceTiming",
-        session: networkState.sessionID,
+        kind: "resourceTiming",
         requestId: requestId,
         url: entry.name || "",
         method: method,
-        requestHeaders: {},
-        startTime: startTime,
-        endTime: endTime,
-        wallTime: wallTime(),
-        encodedBodyLength: encoded,
-        decodedBodySize: decodedSize,
-        requestType: requestType,
         status: status,
-        statusText: "",
-        mimeType: ""
+        mimeType: "",
+        initiator: requestType,
+        startTime: startTimePayload,
+        endTime: endTimePayload,
+        encodedBodyLength: encoded,
+        decodedBodySize: decodedSize
     };
 };

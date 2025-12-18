@@ -1,13 +1,12 @@
 import Foundation
 import Observation
 
-enum HTTPNetworkEventKind: String {
-    case start
-    case response
-    case responseExtra
-    case finish
+enum HTTPNetworkEventKind: String, Decodable {
+    case requestWillBeSent
+    case responseReceived
+    case loadingFinished
+    case loadingFailed
     case resourceTiming
-    case fail
 }
 
 enum WSNetworkEventKind: String {
@@ -25,6 +24,84 @@ protocol NetworkEventProtocol {
     var startTimeSeconds: TimeInterval { get }
     var endTimeSeconds: TimeInterval? { get }
     var wallTimeSeconds: TimeInterval? { get }
+}
+
+struct NetworkTimePayload: Decodable {
+    let monotonicMs: Double
+    let wallMs: Double
+}
+
+struct NetworkBodyFormEntryPayload: Decodable {
+    let name: String
+    let value: String
+    let isFile: Bool?
+    let fileName: String?
+    let size: Int?
+}
+
+struct NetworkBodyPayload: Decodable {
+    let kind: String
+    let encoding: String?
+    let size: Int?
+    let truncated: Bool
+    let preview: String?
+    let content: String?
+    let summary: String?
+    let formEntries: [NetworkBodyFormEntryPayload]?
+    let ref: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case encoding
+        case size
+        case truncated
+        case preview
+        case content
+        case summary
+        case formEntries
+        case ref
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "other"
+        encoding = try container.decodeIfPresent(String.self, forKey: .encoding)
+        size = try container.decodeIfPresent(Int.self, forKey: .size)
+        truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        preview = try container.decodeIfPresent(String.self, forKey: .preview)
+        content = try container.decodeIfPresent(String.self, forKey: .content)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        formEntries = try container.decodeIfPresent([NetworkBodyFormEntryPayload].self, forKey: .formEntries)
+        ref = try container.decodeIfPresent(String.self, forKey: .ref)
+    }
+}
+
+struct NetworkErrorPayload: Decodable {
+    let domain: String
+    let code: String?
+    let message: String
+    let isCanceled: Bool?
+    let isTimeout: Bool?
+}
+
+struct NetworkEventPayload: Decodable {
+    let kind: String
+    let requestId: Int
+    let time: NetworkTimePayload?
+    let startTime: NetworkTimePayload?
+    let endTime: NetworkTimePayload?
+    let url: String?
+    let method: String?
+    let status: Int?
+    let statusText: String?
+    let mimeType: String?
+    let headers: [String: String]?
+    let initiator: String?
+    let body: NetworkBodyPayload?
+    let bodySize: Int?
+    let encodedBodyLength: Int?
+    let decodedBodySize: Int?
+    let error: NetworkErrorPayload?
 }
 
 @Observable
@@ -77,6 +154,15 @@ public final class WINetworkBody {
             let fileName = dictionary["fileName"] as? String
             self.init(name: name, value: value, isFile: isFile, fileName: fileName)
         }
+
+        init(payload: NetworkBodyFormEntryPayload) {
+            self.init(
+                name: payload.name,
+                value: payload.value,
+                isFile: payload.isFile ?? false,
+                fileName: payload.fileName
+            )
+        }
     }
 
     public var kind: Kind
@@ -86,6 +172,7 @@ public final class WINetworkBody {
     public var isBase64Encoded: Bool
     public var isTruncated: Bool
     public var summary: String?
+    public var reference: String?
     public var formEntries: [FormEntry]
     public var fetchState: FetchState
     public var role: Role
@@ -98,6 +185,7 @@ public final class WINetworkBody {
         isBase64Encoded: Bool = false,
         isTruncated: Bool = false,
         summary: String? = nil,
+        reference: String? = nil,
         formEntries: [FormEntry] = [],
         fetchState: FetchState? = nil,
         role: Role = .response
@@ -111,11 +199,12 @@ public final class WINetworkBody {
         self.isBase64Encoded = isBase64Encoded
         self.isTruncated = isTruncated
         self.summary = summary
+        self.reference = reference
         self.formEntries = formEntries
         self.role = role
         if let fetchState {
             self.fetchState = fetchState
-        } else if isTruncated && resolvedFull == nil {
+        } else if resolvedFull == nil && reference != nil {
             self.fetchState = .inline
         } else {
             self.fetchState = .full
@@ -125,18 +214,21 @@ public final class WINetworkBody {
     convenience init?(dictionary: [String: Any]) {
         let rawKind = (dictionary["kind"] as? String)?.lowercased() ?? ""
         let kind = Kind(rawValue: rawKind) ?? .other
-        let preview = dictionary["body"] as? String
-            ?? dictionary["preview"] as? String
+        let preview = dictionary["preview"] as? String
+            ?? dictionary["body"] as? String
             ?? dictionary["inlineBody"] as? String
-        let storedBody = dictionary["storageBody"] as? String
+        let storedBody = dictionary["content"] as? String
+            ?? dictionary["storageBody"] as? String
             ?? dictionary["fullBody"] as? String
+        let encoding = (dictionary["encoding"] as? String)?.lowercased() ?? ""
         let base64 = dictionary["base64Encoded"] as? Bool
             ?? dictionary["base64encoded"] as? Bool
-            ?? false
+            ?? (encoding == "base64")
         let truncated = dictionary["truncated"] as? Bool ?? false
         let rawSize = dictionary["size"]
         let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
         let summary = dictionary["summary"] as? String
+        let reference = dictionary["ref"] as? String
         let formEntries = (dictionary["formEntries"] as? [[String: Any]] ?? [])
             .compactMap(FormEntry.init(dictionary:))
 
@@ -148,11 +240,15 @@ public final class WINetworkBody {
             isBase64Encoded: base64,
             isTruncated: truncated,
             summary: summary,
+            reference: reference,
             formEntries: formEntries
         )
     }
 
     static func decode(from value: Any?) -> WINetworkBody? {
+        if let payload = value as? NetworkBodyPayload {
+            return WINetworkBody.from(payload: payload, role: .response)
+        }
         if let dictionary = value as? [String: Any] {
             return WINetworkBody(dictionary: dictionary)
         }
@@ -167,6 +263,25 @@ public final class WINetworkBody {
             )
         }
         return nil
+    }
+
+    static func from(payload: NetworkBodyPayload, role: Role) -> WINetworkBody {
+        let kind = Kind(rawValue: payload.kind.lowercased()) ?? .other
+        let encoding = (payload.encoding ?? "").lowercased()
+        let isBase64 = encoding == "base64"
+        let entries = payload.formEntries?.map(FormEntry.init(payload:)) ?? []
+        return WINetworkBody(
+            kind: kind,
+            preview: payload.preview,
+            full: payload.content,
+            size: payload.size,
+            isBase64Encoded: isBase64,
+            isTruncated: payload.truncated,
+            summary: payload.summary,
+            reference: payload.ref,
+            formEntries: entries,
+            role: role
+        )
     }
 
     public var displayText: String? {
@@ -226,68 +341,111 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     let responseBody: WINetworkBody?
     let blockedCookies: [String]
 
-    init?(dictionary: [String: Any]) {
-        guard let type = dictionary["type"] as? String,
-              let kind = HTTPNetworkEventKind(rawValue: type) else {
-            return nil
-        }
-        self.init(kind: kind, dictionary: dictionary)
-    }
-
-    init?(kind: HTTPNetworkEventKind, dictionary: [String: Any]) {
-        guard let requestID = Self.normalizedRequestIdentifier(from: dictionary["requestId"]) else {
+    init?(payload: NetworkEventPayload, sessionID: String) {
+        guard let kind = HTTPNetworkEventKind(rawValue: payload.kind) else {
             return nil
         }
         self.kind = kind
-        self.sessionID = dictionary["session"] as? String ?? ""
-        self.requestID = requestID
+        self.sessionID = sessionID
+        self.requestID = payload.requestId
 
-        self.url = dictionary["url"] as? String
-        if let method = dictionary["method"] as? String {
+        self.url = payload.url
+        if let method = payload.method {
             self.method = method.uppercased()
         } else {
             self.method = nil
         }
-        self.statusCode = dictionary["status"] as? Int
-        self.statusText = dictionary["statusText"] as? String
-        self.mimeType = dictionary["mimeType"] as? String
-        self.requestHeaders = WINetworkHeaders(dictionary: dictionary["requestHeaders"] as? [String: String] ?? [:])
-        self.responseHeaders = WINetworkHeaders(dictionary: dictionary["responseHeaders"] as? [String: String] ?? [:])
-        self.requestBody = WINetworkBody.decode(from: dictionary["requestBody"])
-        self.responseBody = WINetworkBody.decode(from: dictionary["responseBody"])
-        self.blockedCookies = dictionary["blockedCookies"] as? [String] ?? []
+        self.statusCode = payload.status
+        self.statusText = payload.statusText
+        self.mimeType = payload.mimeType
+        self.requestType = payload.initiator
 
-        if let start = dictionary["startTime"] as? Double {
-            self.startTimeSeconds = start / 1000.0
-        } else {
-            self.startTimeSeconds = Date().timeIntervalSince1970
+        let headers = WINetworkHeaders(dictionary: payload.headers ?? [:])
+        switch kind {
+        case .requestWillBeSent:
+            self.requestHeaders = headers
+            self.responseHeaders = WINetworkHeaders()
+        case .responseReceived:
+            self.requestHeaders = WINetworkHeaders()
+            self.responseHeaders = headers
+        case .loadingFinished, .loadingFailed, .resourceTiming:
+            self.requestHeaders = WINetworkHeaders()
+            self.responseHeaders = WINetworkHeaders()
         }
-        if let end = dictionary["endTime"] as? Double {
-            self.endTimeSeconds = end / 1000.0
+
+        if let body = payload.body {
+            switch kind {
+            case .requestWillBeSent:
+                self.requestBody = WINetworkBody.from(payload: body, role: .request)
+                self.responseBody = nil
+            case .loadingFinished:
+                self.requestBody = nil
+                self.responseBody = WINetworkBody.from(payload: body, role: .response)
+            default:
+                self.requestBody = nil
+                self.responseBody = nil
+            }
         } else {
+            self.requestBody = nil
+            self.responseBody = nil
+        }
+
+        self.blockedCookies = []
+
+        let nowSeconds = Date().timeIntervalSince1970
+        switch kind {
+        case .resourceTiming:
+            if let start = payload.startTime {
+                self.startTimeSeconds = start.monotonicMs / 1000.0
+                self.wallTimeSeconds = start.wallMs / 1000.0
+            } else {
+                self.startTimeSeconds = nowSeconds
+                self.wallTimeSeconds = nil
+            }
+            if let end = payload.endTime {
+                self.endTimeSeconds = end.monotonicMs / 1000.0
+            } else {
+                self.endTimeSeconds = nil
+            }
+        case .loadingFinished, .loadingFailed:
+            if let time = payload.time {
+                self.startTimeSeconds = time.monotonicMs / 1000.0
+                self.endTimeSeconds = time.monotonicMs / 1000.0
+                self.wallTimeSeconds = time.wallMs / 1000.0
+            } else {
+                self.startTimeSeconds = nowSeconds
+                self.endTimeSeconds = nil
+                self.wallTimeSeconds = nil
+            }
+        case .requestWillBeSent, .responseReceived:
+            if let time = payload.time {
+                self.startTimeSeconds = time.monotonicMs / 1000.0
+                self.wallTimeSeconds = time.wallMs / 1000.0
+            } else {
+                self.startTimeSeconds = nowSeconds
+                self.wallTimeSeconds = nil
+            }
             self.endTimeSeconds = nil
         }
-        if let wallTime = dictionary["wallTime"] as? Double {
-            self.wallTimeSeconds = wallTime / 1000.0
+
+        self.encodedBodyLength = payload.encodedBodyLength
+        if let decoded = payload.decodedBodySize {
+            self.decodedBodySize = decoded
         } else {
-            self.wallTimeSeconds = nil
+            self.decodedBodySize = self.responseBody?.size
         }
-        self.encodedBodyLength = dictionary["encodedBodyLength"] as? Int
-        self.decodedBodySize = dictionary["decodedBodySize"] as? Int ?? self.responseBody?.size
-        if let error = dictionary["error"] as? String, !error.isEmpty {
+        if let error = payload.error?.message, !error.isEmpty {
             self.errorDescription = error
         } else {
             self.errorDescription = nil
         }
-        self.requestType = dictionary["requestType"] as? String
-        let rawBytesSent = dictionary["requestBodyBytesSent"]
-        if let bytesSent = rawBytesSent as? Int ?? (rawBytesSent as? NSNumber)?.intValue {
+
+        if let bytesSent = payload.bodySize {
             self.requestBodyBytesSent = bytesSent
         } else if let requestBody {
             self.requestBodyBytesSent = requestBody.size
         } else {
-            let rawRequestBodySize = dictionary["requestBodySize"]
-            self.requestBodyBytesSent = rawRequestBodySize as? Int ?? (rawRequestBodySize as? NSNumber)?.intValue
+            self.requestBodyBytesSent = nil
         }
     }
 
@@ -391,24 +549,34 @@ struct WSNetworkEvent: NetworkEventProtocol {
     }
 }
 
-struct NetworkEventBatch {
+struct NetworkEventBatch: Decodable {
+    let version: Int
     let sessionID: String
+    let seq: Int
     let events: [HTTPNetworkEvent]
+    let dropped: Int?
 
-    init?(dictionary: [String: Any]) {
-        guard let sessionID = dictionary["session"] as? String, !sessionID.isEmpty else {
-            assertionFailure("NetworkEventBatch requires session ID")
-            return nil
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case sessionId
+        case seq
+        case events
+        case dropped
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        let decodedSessionID = try container.decode(String.self, forKey: .sessionId)
+        seq = try container.decodeIfPresent(Int.self, forKey: .seq) ?? 0
+        dropped = try container.decodeIfPresent(Int.self, forKey: .dropped)
+        let payloads = try container.decode([NetworkEventPayload].self, forKey: .events)
+        let mapped = payloads.compactMap { HTTPNetworkEvent(payload: $0, sessionID: decodedSessionID) }
+        if mapped.isEmpty {
+            throw DecodingError.dataCorruptedError(forKey: .events, in: container, debugDescription: "No valid network events")
         }
-        let eventsArray = dictionary["events"] as? [[String: Any]] ?? []
-        let parsed = eventsArray.compactMap { item -> HTTPNetworkEvent? in
-            guard let type = item["type"] as? String,
-                  let kind = HTTPNetworkEventKind(rawValue: type) else { return nil }
-            return HTTPNetworkEvent(kind: kind, dictionary: item)
-        }
-        guard !parsed.isEmpty else { return nil }
-        self.events = parsed
-        self.sessionID = sessionID
+        events = mapped
+        sessionID = decodedSessionID
     }
 }
 
@@ -736,17 +904,15 @@ public final class WINetworkWebSocketInfo: Identifiable, Equatable, Hashable{
 
     func applyHTTPEvent(_ event: HTTPNetworkEvent) {
         switch event.kind {
-        case .start:
+        case .requestWillBeSent:
             handleStart(event)
-        case .response:
+        case .responseReceived:
             handleResponse(event)
-        case .responseExtra:
-            handleResponse(event)
-        case .finish:
+        case .loadingFinished:
             handleFinish(event, failed: false)
         case .resourceTiming:
             handleResourceTiming(event)
-        case .fail:
+        case .loadingFailed:
             handleFinish(event, failed: true)
         }
     }

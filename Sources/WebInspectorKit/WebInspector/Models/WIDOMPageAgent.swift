@@ -5,7 +5,7 @@ import Observation
 
 private let domLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMPageAgent")
 private let domAgentPresenceProbeScript: String = """
-(function() { })();
+(function() { /* webInspectorDOM */ })();
 """
 
 @MainActor
@@ -29,8 +29,8 @@ final class WIDOMPageAgent: NSObject, WIPageAgent {
     }
 
     private enum HandlerName: String, CaseIterable {
-        case snapshot = "webInspectorSnapshotUpdate"
-        case mutation = "webInspectorMutationUpdate"
+        case snapshot = "webInspectorDOMSnapshot"
+        case mutation = "webInspectorDOMMutations"
     }
 
     weak var inspector: WIDOMStore?
@@ -53,13 +53,13 @@ final class WIDOMPageAgent: NSObject, WIPageAgent {
     func cancelSelectionMode(using targetWebView: WKWebView? = nil) async {
         guard let webView = targetWebView ?? self.webView else { return }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorKit.cancelElementSelection()",
+            "window.webInspectorDOM.cancelSelection()",
             contentWorld: .page
         )
     }
 
     func clearWebInspectorHighlight() {
-        webView?.evaluateJavaScript("window.webInspectorKit && window.webInspectorKit.clearHighlight();", completionHandler: nil)
+        webView?.evaluateJavaScript("window.webInspectorDOM && window.webInspectorDOM.clearHighlight();", completionHandler: nil)
     }
 }
 
@@ -81,7 +81,7 @@ extension WIDOMPageAgent: WKScriptMessageHandler {
 
     private func handleSnapshotMessage(_ message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any],
-              let rawJSON = payload["snapshot"] as? String,
+              let rawJSON = payload["bundle"] as? String,
               let inspector else {
             return
         }
@@ -91,7 +91,7 @@ extension WIDOMPageAgent: WKScriptMessageHandler {
 
     private func handleMutationMessage(_ message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any],
-              let rawJSON = payload["bundle"] as? String ?? payload["updates"] as? String,
+              let rawJSON = payload["bundle"] as? String,
               let inspector else {
             return
         }
@@ -110,7 +110,7 @@ extension WIDOMPageAgent {
         }
         let depth = maxDepth ?? configuration.snapshotDepth
         let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorKit.captureDOM(maxDepth)",
+            "return window.webInspectorDOM.captureSnapshot(maxDepth)",
             arguments: ["maxDepth": depth],
             in: nil,
             contentWorld: .page
@@ -125,7 +125,7 @@ extension WIDOMPageAgent {
         }
         let depth = maxDepth ?? configuration.subtreeDepth
         let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorKit.captureDOMSubtree(identifier, maxDepth)",
+            "return window.webInspectorDOM.captureSubtree(identifier, maxDepth)",
             arguments: ["identifier": identifier, "maxDepth": depth],
             in: nil,
             contentWorld: .page
@@ -142,7 +142,7 @@ extension WIDOMPageAgent {
             throw WIError.scriptUnavailable
         }
         let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorKit.startElementSelection()",
+            "return window.webInspectorDOM.startSelection()",
             arguments: [:],
             in: nil,
             contentWorld: .page
@@ -154,7 +154,7 @@ extension WIDOMPageAgent {
     func highlightDOMNode(id: Int) async {
         guard let webView else { return }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorKit.highlightDOMNode(identifier)",
+            "window.webInspectorDOM.highlightNode(identifier)",
             arguments: ["identifier": id],
             contentWorld: .page
         )
@@ -164,7 +164,7 @@ extension WIDOMPageAgent {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.removeNode(identifier)",
+                "window.webInspectorDOM.removeNode(identifier)",
                 arguments: ["identifier": identifier],
                 contentWorld: .page
             )
@@ -177,7 +177,7 @@ extension WIDOMPageAgent {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.setAttributeForNode(identifier, name, value)",
+                "window.webInspectorDOM.setAttributeForNode(identifier, name, value)",
                 arguments: [
                     "identifier": identifier,
                     "name": name,
@@ -194,7 +194,7 @@ extension WIDOMPageAgent {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit.removeAttributeForNode(identifier, name)",
+                "window.webInspectorDOM.removeAttributeForNode(identifier, name)",
                 arguments: [
                     "identifier": identifier,
                     "name": name
@@ -208,7 +208,7 @@ extension WIDOMPageAgent {
 
     func selectionCopyText(for identifier: Int, kind: WISelectionCopyKind) async throws -> String {
         try await evaluateStringScript("""
-        return window.webInspectorKit?.\(kind.jsFunction)(identifier) ?? \"\"
+        return window.webInspectorDOM?.\(kind.jsFunction)(identifier) ?? \"\"
         """, identifier: identifier)
     }
 }
@@ -288,7 +288,7 @@ private extension WIDOMPageAgent {
     }
 
     func stopAutoUpdate(for webView: WKWebView) {
-        webView.evaluateJavaScript("(() => { window.webInspectorKit.detach(); })();  ", in: nil, in: .page)
+        webView.evaluateJavaScript("(() => { window.webInspectorDOM.detach(); })();  ", in: nil, in: .page)
     }
 
     func setAutoUpdate(for webView: WKWebView, maxDepth: Int) async {
@@ -296,12 +296,12 @@ private extension WIDOMPageAgent {
             let debounce = max(50, Int(configuration.autoUpdateDebounce * 1000))
             let options: [String: Any] = [
                 "maxDepth": max(1, maxDepth),
-                "debounce": debounce
+                "debounce": debounce,
+                "enabled": true
             ]
             try await webView.callAsyncVoidJavaScript(
                 """
-                window.webInspectorKit.setAutoSnapshotOptions(options);
-                window.webInspectorKit.setAutoSnapshotEnabled();
+                window.webInspectorDOM.configureAutoSnapshot(options);
                 """,
                 arguments: ["options": options],
                 contentWorld: .page

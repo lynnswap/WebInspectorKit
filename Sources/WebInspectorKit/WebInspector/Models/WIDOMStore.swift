@@ -92,7 +92,7 @@ final class WIDOMStore: NSObject {
         let config = configuration
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.updateConfig?.(config)",
+                "window.webInspectorDOMFrontend?.updateConfig?.(config)",
                 arguments: [
                     "config": [
                         "snapshotDepth": config.snapshotDepth,
@@ -172,7 +172,7 @@ final class WIDOMStore: NSObject {
         do {
             let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.applyMutationBundles?.(bundles)",
+                "window.webInspectorDOMFrontend?.applyMutationBundles?.(bundles)",
                 arguments: ["bundles": payloads],
                 contentWorld: .page
             )
@@ -185,7 +185,7 @@ final class WIDOMStore: NSObject {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.applyMutationBundle?.(bundle)",
+                "window.webInspectorDOMFrontend?.applyMutationBundle?.(bundle)",
                 arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
                 contentWorld: .page
             )
@@ -198,7 +198,7 @@ final class WIDOMStore: NSObject {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.setPreferredDepth?.(depth)",
+                "window.webInspectorDOMFrontend?.setPreferredDepth?.(depth)",
                 arguments: ["depth": depth],
                 contentWorld: .page
             )
@@ -211,7 +211,7 @@ final class WIDOMStore: NSObject {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.requestDocument?.(options)",
+                "window.webInspectorDOMFrontend?.requestDocument?.(options)",
                 arguments: ["options": ["depth": depth, "preserveState": preserveState]],
                 contentWorld: .page
             )
@@ -357,7 +357,7 @@ private extension WIDOMStore {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorKit?.dispatchMessageFromBackend?.(message)",
+                "window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(message)",
                 arguments: ["message": message],
                 contentWorld: .page
             )

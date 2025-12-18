@@ -37,14 +37,6 @@ const installFetchPatch = () => {
             let responseBodyInfo = null;
             if (shouldTrack && requestId != null) {
                 mimeType = recordResponse(requestId, response, "fetch");
-                enqueueNetworkEvent({
-                    type: "responseExtra",
-                    session: networkState.sessionID,
-                    requestId: requestId,
-                    responseHeaders: normalizeHeaders(response.headers),
-                    blockedCookies: [],
-                    wallTime: wallTime()
-                });
                 try {
                     responseBodyInfo = await captureResponseBody(response, mimeType);
                 } catch {
@@ -125,14 +117,6 @@ const installXHRPatch = () => {
             this.addEventListener("readystatechange", function() {
                 if (this.readyState === 2 && requestId != null) {
                     recordResponse(requestId, this, "xhr");
-                    enqueueNetworkEvent({
-                        type: "responseExtra",
-                        session: networkState.sessionID,
-                        requestId: requestId,
-                        responseHeaders: parseRawHeaders(this.getAllResponseHeaders && this.getAllResponseHeaders()),
-                        blockedCookies: [],
-                        wallTime: wallTime()
-                    });
                 }
             }, false);
             this.addEventListener("load", function() {
@@ -162,7 +146,12 @@ const installXHRPatch = () => {
             }, false);
             this.addEventListener("abort", function() {
                 if (requestId != null) {
-                    recordFailure(requestId, "Request aborted", "xhr");
+                    recordFailure(requestId, "Request aborted", "xhr", {isCanceled: true});
+                }
+            }, false);
+            this.addEventListener("timeout", function() {
+                if (requestId != null) {
+                    recordFailure(requestId, "Request timeout", "xhr", {isTimeout: true});
                 }
             }, false);
         }

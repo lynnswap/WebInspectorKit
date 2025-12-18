@@ -522,7 +522,7 @@
                 reportInspectorError("dispatchDomUpdates", error);
                 return;
             }
-            const events = Array.isArray(bundle.events) ? bundle.events : (Array.isArray(bundle.messages) ? bundle.messages : []);
+            const events = Array.isArray(bundle.events) ? bundle.events : [];
             if (!bundle || !events.length) {
                 return;
             }
