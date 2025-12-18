@@ -20,14 +20,13 @@ struct WINetworkPageAgentTests {
         let agent = WINetworkPageAgent()
         let store = agent.store
 
-        let payload = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 1,
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
         store.applyEvent(payload)
         #expect(store.entries.isEmpty == false)
 
@@ -40,14 +39,13 @@ struct WINetworkPageAgentTests {
     func didClearPageWebViewResetsStore() throws {
         let agent = WINetworkPageAgent()
         let store = agent.store
-        let payload = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 2,
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 2,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
         store.applyEvent(payload)
         #expect(store.entries.count == 1)
 
@@ -65,11 +63,10 @@ struct WINetworkPageAgentTests {
         await waitForScripts(on: controller, atLeast: 2)
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
-        #expect(addedHandlerNames.contains("webInspectorNetworkUpdate"))
-        #expect(addedHandlerNames.contains("webInspectorWSUpdate"))
+        #expect(addedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(controller.userScripts.count == 2)
-        #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetwork") })
+        #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetworkAgent") })
     }
 
     @Test
@@ -82,8 +79,7 @@ struct WINetworkPageAgentTests {
         agent.detachPageWebView(disableNetworkLogging: true)
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
-        #expect(removedHandlerNames.contains("webInspectorNetworkUpdate"))
-        #expect(removedHandlerNames.contains("webInspectorWSUpdate"))
+        #expect(removedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
         #expect(agent.webView == nil)
     }
@@ -98,7 +94,7 @@ struct WINetworkPageAgentTests {
         await loadHTML("<html><body><p>hello</p></body></html>", in: webView)
 
         let raw = try await webView.evaluateJavaScript(
-            "(() => Boolean(window.webInspectorNetwork && window.webInspectorNetwork.__installed))();",
+            "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
             contentWorld: .page
         )
@@ -112,22 +108,23 @@ struct WINetworkPageAgentTests {
         let start: Double = 1_200
         let end: Double = 2_200
         let payloads: [[String: Any]] = [[
-            "type": "resourceTiming",
-            "session": "session-1",
+            "kind": "resourceTiming",
             "requestId": 99,
             "url": "https://example.com/image.png",
             "method": "GET",
-            "startTime": start,
-            "endTime": end,
+            "startTime": NetworkTestHelpers.timePayload(monotonicMs: start, wallMs: 1_700_000_000_000.0),
+            "endTime": NetworkTestHelpers.timePayload(monotonicMs: end, wallMs: 1_700_000_001_000.0),
             "encodedBodyLength": 512,
-            "requestType": "img"
+            "initiator": "img"
         ]]
 
         let batchPayload: [String: Any] = [
-            "session": "session-1",
+            "version": 1,
+            "sessionId": "session-1",
+            "seq": 1,
             "events": payloads
         ]
-        let batch = try #require(NetworkEventBatch(dictionary: batchPayload))
+        let batch = try NetworkTestHelpers.decodeBatch(batchPayload)
         agent.store.applyBatchedInsertions(batch)
 
         let entry = try #require(agent.store.entry(forRequestID: 99, sessionID: "session-1"))

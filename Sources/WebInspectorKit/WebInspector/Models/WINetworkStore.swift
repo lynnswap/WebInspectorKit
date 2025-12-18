@@ -564,6 +564,14 @@ struct NetworkEventBatch: Decodable {
         case dropped
     }
 
+    init(version: Int, sessionID: String, seq: Int, events: [HTTPNetworkEvent], dropped: Int?) {
+        self.version = version
+        self.sessionID = sessionID
+        self.seq = seq
+        self.events = events
+        self.dropped = dropped
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
@@ -577,6 +585,82 @@ struct NetworkEventBatch: Decodable {
         }
         events = mapped
         sessionID = decodedSessionID
+    }
+
+    static func decode(from payload: Any?) -> NetworkEventBatch? {
+        if let data = payload as? Data {
+            return decode(fromData: data)
+        }
+        if let jsonString = payload as? String,
+           let data = jsonString.data(using: .utf8) {
+            return decode(fromData: data)
+        }
+        if let dictionary = payload as? [String: Any] {
+            return decode(fromDictionary: dictionary)
+        }
+        return nil
+    }
+
+    private static func decode(fromData data: Data) -> NetworkEventBatch? {
+        if let batch = try? JSONDecoder().decode(NetworkEventBatch.self, from: data) {
+            return batch
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        return decode(fromDictionary: dictionary)
+    }
+
+    private static func decode(fromDictionary dictionary: [String: Any]) -> NetworkEventBatch? {
+        if let data = try? JSONSerialization.data(withJSONObject: dictionary),
+           let batch = try? JSONDecoder().decode(NetworkEventBatch.self, from: data) {
+            return batch
+        }
+        let version = dictionary["version"] as? Int ?? 1
+        let sessionID = dictionary["sessionId"] as? String ?? ""
+        let seq = dictionary["seq"] as? Int ?? 0
+        let dropped = dictionary["dropped"] as? Int
+        let rawEvents = dictionary["events"] as? [Any] ?? []
+        var events: [HTTPNetworkEvent] = []
+        events.reserveCapacity(rawEvents.count)
+        for rawEvent in rawEvents {
+            guard let payload = decodeEventPayload(from: rawEvent) else {
+                continue
+            }
+            guard let event = HTTPNetworkEvent(payload: payload, sessionID: sessionID) else {
+                continue
+            }
+            events.append(event)
+        }
+        if events.isEmpty {
+            return nil
+        }
+        return NetworkEventBatch(
+            version: version,
+            sessionID: sessionID,
+            seq: seq,
+            events: events,
+            dropped: dropped
+        )
+    }
+
+    private static func decodeEventPayload(from rawEvent: Any) -> NetworkEventPayload? {
+        if let payload = rawEvent as? NetworkEventPayload {
+            return payload
+        }
+        if let dictionary = rawEvent as? [String: Any],
+           let data = try? JSONSerialization.data(withJSONObject: dictionary) {
+            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+        }
+        if let jsonString = rawEvent as? String,
+           let data = jsonString.data(using: .utf8) {
+            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+        }
+        if let data = rawEvent as? Data {
+            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+        }
+        return nil
     }
 }
 

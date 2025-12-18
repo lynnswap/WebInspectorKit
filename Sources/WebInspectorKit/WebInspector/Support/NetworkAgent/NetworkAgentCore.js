@@ -53,7 +53,9 @@ const storeBodyForRole = (role, requestId, bodyInfo) => {
         return null;
     }
     const ref = makeBodyRef(role, requestId);
-    bodyCache.store(ref, stored);
+    if (!bodyCache.store(ref, stored)) {
+        return null;
+    }
     return ref;
 };
 

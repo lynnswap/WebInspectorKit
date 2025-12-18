@@ -362,13 +362,13 @@ class BodyCache {
 
     store(ref, bodyInfo) {
         if (!ref || !bodyInfo) {
-            return;
+            return false;
         }
         const stored = {...bodyInfo};
         const size = this.estimateBytes(stored);
         this.evictUntilFits(size);
         if (Number.isFinite(size) && size > this.maxBytes) {
-            return;
+            return false;
         }
         const key = this.key(ref);
         const previous = this.entries.get(key);
@@ -379,6 +379,7 @@ class BodyCache {
         if (Number.isFinite(size)) {
             this.usedBytes += size;
         }
+        return true;
     }
 
     take(ref) {

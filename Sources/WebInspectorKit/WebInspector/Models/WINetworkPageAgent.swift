@@ -162,6 +162,10 @@ extension WINetworkPageAgent: WKScriptMessageHandler {
             networkLogger.debug("unsupported network batch version: \(batch.version, privacy: .public)")
             return
         }
+        if let dropped = batch.dropped, dropped > 0 {
+            // TODO: Surface dropped event counts in the store/UI.
+            networkLogger.debug("network batch dropped events: \(dropped, privacy: .public)")
+        }
         for event in batch.events {
             store.applyHTTPEvent(event)
         }
@@ -280,17 +284,6 @@ private extension WINetworkPageAgent {
     }
 
     func decodeNetworkBatch(from payload: Any?) -> NetworkEventBatch? {
-        if let data = payload as? Data {
-            return try? JSONDecoder().decode(NetworkEventBatch.self, from: data)
-        }
-        if let jsonString = payload as? String,
-           let data = jsonString.data(using: .utf8) {
-            return try? JSONDecoder().decode(NetworkEventBatch.self, from: data)
-        }
-        if let dictionary = payload as? [String: Any],
-           let data = try? JSONSerialization.data(withJSONObject: dictionary) {
-            return try? JSONDecoder().decode(NetworkEventBatch.self, from: data)
-        }
-        return nil
+        NetworkEventBatch.decode(from: payload)
     }
 }
