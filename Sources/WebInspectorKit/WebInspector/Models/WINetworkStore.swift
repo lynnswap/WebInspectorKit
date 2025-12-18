@@ -104,6 +104,203 @@ struct NetworkEventPayload: Decodable {
     let error: NetworkErrorPayload?
 }
 
+private enum NetworkPayloadParser {
+    static func dictionary(from value: Any?) -> [String: Any]? {
+        value as? [String: Any]
+    }
+
+    static func array(from value: Any?) -> [Any]? {
+        value as? [Any]
+    }
+
+    static func string(from value: Any?) -> String? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    static func int(from value: Any?) -> Int? {
+        if let int = value as? Int {
+            return int
+        }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String,
+           let int = Int(string) {
+            return int
+        }
+        return nil
+    }
+
+    static func double(from value: Any?) -> Double? {
+        if let double = value as? Double {
+            return double
+        }
+        if let number = value as? NSNumber {
+            return number.doubleValue
+        }
+        if let int = value as? Int {
+            return Double(int)
+        }
+        if let string = value as? String,
+           let double = Double(string) {
+            return double
+        }
+        return nil
+    }
+
+    static func bool(from value: Any?) -> Bool? {
+        if let bool = value as? Bool {
+            return bool
+        }
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let string = value as? String {
+            if string == "true" {
+                return true
+            }
+            if string == "false" {
+                return false
+            }
+        }
+        return nil
+    }
+
+    static func stringMap(from value: Any?) -> [String: String]? {
+        guard let dictionary = value as? [String: Any] else {
+            return nil
+        }
+        var result: [String: String] = [:]
+        result.reserveCapacity(dictionary.count)
+        for (key, rawValue) in dictionary {
+            guard let stringValue = string(from: rawValue) else {
+                continue
+            }
+            result[key] = stringValue
+        }
+        return result
+    }
+
+    static func jsonDictionary(from value: Any?) -> [String: Any]? {
+        if let dictionary = value as? [String: Any] {
+            return dictionary
+        }
+        if let data = value as? Data {
+            return jsonDictionary(from: data)
+        }
+        if let string = value as? String,
+           let data = string.data(using: .utf8) {
+            return jsonDictionary(from: data)
+        }
+        return nil
+    }
+
+    static func jsonDictionary(from data: Data) -> [String: Any]? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
+            return nil
+        }
+        return dictionary
+    }
+}
+
+private extension NetworkTimePayload {
+    init?(dictionary: [String: Any]) {
+        guard let monotonicMs = NetworkPayloadParser.double(from: dictionary["monotonicMs"]),
+              let wallMs = NetworkPayloadParser.double(from: dictionary["wallMs"]) else {
+            return nil
+        }
+        self.monotonicMs = monotonicMs
+        self.wallMs = wallMs
+    }
+}
+
+private extension NetworkBodyFormEntryPayload {
+    init?(dictionary: [String: Any]) {
+        guard let name = NetworkPayloadParser.string(from: dictionary["name"]),
+              let value = NetworkPayloadParser.string(from: dictionary["value"]) else {
+            return nil
+        }
+        self.name = name
+        self.value = value
+        self.isFile = NetworkPayloadParser.bool(from: dictionary["isFile"])
+        self.fileName = NetworkPayloadParser.string(from: dictionary["fileName"])
+        self.size = NetworkPayloadParser.int(from: dictionary["size"])
+    }
+}
+
+private extension NetworkBodyPayload {
+    init?(dictionary: [String: Any]) {
+        let kind = NetworkPayloadParser.string(from: dictionary["kind"]) ?? "other"
+        let encoding = NetworkPayloadParser.string(from: dictionary["encoding"])
+        let size = NetworkPayloadParser.int(from: dictionary["size"])
+        let truncated = NetworkPayloadParser.bool(from: dictionary["truncated"]) ?? false
+        let preview = NetworkPayloadParser.string(from: dictionary["preview"])
+        let content = NetworkPayloadParser.string(from: dictionary["content"])
+        let summary = NetworkPayloadParser.string(from: dictionary["summary"])
+        let ref = NetworkPayloadParser.string(from: dictionary["ref"])
+        let formEntries = (NetworkPayloadParser.array(from: dictionary["formEntries"]) ?? [])
+            .compactMap { NetworkPayloadParser.dictionary(from: $0) }
+            .compactMap(NetworkBodyFormEntryPayload.init(dictionary:))
+
+        self.kind = kind
+        self.encoding = encoding
+        self.size = size
+        self.truncated = truncated
+        self.preview = preview
+        self.content = content
+        self.summary = summary
+        self.formEntries = formEntries.isEmpty ? nil : formEntries
+        self.ref = ref
+    }
+}
+
+private extension NetworkErrorPayload {
+    init?(dictionary: [String: Any]) {
+        guard let domain = NetworkPayloadParser.string(from: dictionary["domain"]),
+              let message = NetworkPayloadParser.string(from: dictionary["message"]) else {
+            return nil
+        }
+        self.domain = domain
+        self.code = NetworkPayloadParser.string(from: dictionary["code"])
+        self.message = message
+        self.isCanceled = NetworkPayloadParser.bool(from: dictionary["isCanceled"])
+        self.isTimeout = NetworkPayloadParser.bool(from: dictionary["isTimeout"])
+    }
+}
+
+extension NetworkEventPayload {
+    init?(dictionary: [String: Any]) {
+        guard let kind = NetworkPayloadParser.string(from: dictionary["kind"]),
+              let requestId = NetworkPayloadParser.int(from: dictionary["requestId"]) else {
+            return nil
+        }
+        self.kind = kind
+        self.requestId = requestId
+        self.time = NetworkPayloadParser.dictionary(from: dictionary["time"]).flatMap(NetworkTimePayload.init(dictionary:))
+        self.startTime = NetworkPayloadParser.dictionary(from: dictionary["startTime"]).flatMap(NetworkTimePayload.init(dictionary:))
+        self.endTime = NetworkPayloadParser.dictionary(from: dictionary["endTime"]).flatMap(NetworkTimePayload.init(dictionary:))
+        self.url = NetworkPayloadParser.string(from: dictionary["url"])
+        self.method = NetworkPayloadParser.string(from: dictionary["method"])
+        self.status = NetworkPayloadParser.int(from: dictionary["status"])
+        self.statusText = NetworkPayloadParser.string(from: dictionary["statusText"])
+        self.mimeType = NetworkPayloadParser.string(from: dictionary["mimeType"])
+        self.headers = NetworkPayloadParser.stringMap(from: dictionary["headers"])
+        self.initiator = NetworkPayloadParser.string(from: dictionary["initiator"])
+        self.body = NetworkPayloadParser.dictionary(from: dictionary["body"]).flatMap(NetworkBodyPayload.init(dictionary:))
+        self.bodySize = NetworkPayloadParser.int(from: dictionary["bodySize"])
+        self.encodedBodyLength = NetworkPayloadParser.int(from: dictionary["encodedBodyLength"])
+        self.decodedBodySize = NetworkPayloadParser.int(from: dictionary["decodedBodySize"])
+        self.error = NetworkPayloadParser.dictionary(from: dictionary["error"]).flatMap(NetworkErrorPayload.init(dictionary:))
+    }
+}
+
 @Observable
 public final class WINetworkBody {
     public enum Kind: String, Sendable {
@@ -588,40 +785,18 @@ struct NetworkEventBatch: Decodable {
     }
 
     static func decode(from payload: Any?) -> NetworkEventBatch? {
-        if let data = payload as? Data {
-            return decode(fromData: data)
-        }
-        if let jsonString = payload as? String,
-           let data = jsonString.data(using: .utf8) {
-            return decode(fromData: data)
-        }
-        if let dictionary = payload as? [String: Any] {
+        if let dictionary = NetworkPayloadParser.jsonDictionary(from: payload) {
             return decode(fromDictionary: dictionary)
         }
         return nil
     }
 
-    private static func decode(fromData data: Data) -> NetworkEventBatch? {
-        if let batch = try? JSONDecoder().decode(NetworkEventBatch.self, from: data) {
-            return batch
-        }
-        guard let object = try? JSONSerialization.jsonObject(with: data),
-              let dictionary = object as? [String: Any] else {
-            return nil
-        }
-        return decode(fromDictionary: dictionary)
-    }
-
     private static func decode(fromDictionary dictionary: [String: Any]) -> NetworkEventBatch? {
-        if let data = try? JSONSerialization.data(withJSONObject: dictionary),
-           let batch = try? JSONDecoder().decode(NetworkEventBatch.self, from: data) {
-            return batch
-        }
-        let version = dictionary["version"] as? Int ?? 1
-        let sessionID = dictionary["sessionId"] as? String ?? ""
-        let seq = dictionary["seq"] as? Int ?? 0
-        let dropped = dictionary["dropped"] as? Int
-        let rawEvents = dictionary["events"] as? [Any] ?? []
+        let version = NetworkPayloadParser.int(from: dictionary["version"]) ?? 1
+        let sessionID = NetworkPayloadParser.string(from: dictionary["sessionId"]) ?? ""
+        let seq = NetworkPayloadParser.int(from: dictionary["seq"]) ?? 0
+        let dropped = NetworkPayloadParser.int(from: dictionary["dropped"])
+        let rawEvents = NetworkPayloadParser.array(from: dictionary["events"]) ?? []
         var events: [HTTPNetworkEvent] = []
         events.reserveCapacity(rawEvents.count)
         for rawEvent in rawEvents {
@@ -649,16 +824,8 @@ struct NetworkEventBatch: Decodable {
         if let payload = rawEvent as? NetworkEventPayload {
             return payload
         }
-        if let dictionary = rawEvent as? [String: Any],
-           let data = try? JSONSerialization.data(withJSONObject: dictionary) {
-            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
-        }
-        if let jsonString = rawEvent as? String,
-           let data = jsonString.data(using: .utf8) {
-            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
-        }
-        if let data = rawEvent as? Data {
-            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+        if let dictionary = NetworkPayloadParser.jsonDictionary(from: rawEvent) {
+            return NetworkEventPayload(dictionary: dictionary)
         }
         return nil
     }
