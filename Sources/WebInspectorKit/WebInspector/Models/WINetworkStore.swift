@@ -872,6 +872,89 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     }
 }
 
+extension WINetworkEntry {
+    public var resourceFilter: WINetworkResourceFilter {
+        let normalizedRequestType = requestType?.lowercased() ?? ""
+        let normalizedMimeType = Self.normalizedMimeType(mimeType)
+        let pathExtension = Self.normalizedPathExtension(url)
+
+        if Self.xhrRequestTypes.contains(normalizedRequestType) {
+            return .xhrFetch
+        }
+        if Self.documentRequestTypes.contains(normalizedRequestType)
+            || Self.documentMimeTypes.contains(normalizedMimeType)
+            || Self.documentExtensions.contains(pathExtension) {
+            return .document
+        }
+        if Self.stylesheetRequestTypes.contains(normalizedRequestType)
+            || normalizedMimeType == "text/css"
+            || pathExtension == "css" {
+            return .stylesheet
+        }
+        if Self.scriptRequestTypes.contains(normalizedRequestType)
+            || Self.scriptMimeTokens.contains(where: { normalizedMimeType.contains($0) })
+            || Self.scriptExtensions.contains(pathExtension) {
+            return .script
+        }
+        if Self.fontRequestTypes.contains(normalizedRequestType)
+            || Self.fontMimePrefixes.contains(where: { normalizedMimeType.hasPrefix($0) })
+            || Self.fontExtensions.contains(pathExtension) {
+            return .font
+        }
+        if Self.imageRequestTypes.contains(normalizedRequestType)
+            || normalizedMimeType.hasPrefix("image/")
+            || Self.imageExtensions.contains(pathExtension) {
+            return .image
+        }
+        return .other
+    }
+
+    private static let xhrRequestTypes: Set<String> = ["fetch", "xhr", "xmlhttprequest"]
+    private static let documentRequestTypes: Set<String> = ["document", "frame", "iframe"]
+    private static let stylesheetRequestTypes: Set<String> = ["style", "css", "stylesheet", "link"]
+    private static let scriptRequestTypes: Set<String> = ["script"]
+    private static let fontRequestTypes: Set<String> = ["font"]
+    private static let imageRequestTypes: Set<String> = ["img", "image"]
+    private static let documentMimeTypes: Set<String> = ["text/html", "application/xhtml+xml"]
+    private static let scriptMimeTokens: Set<String> = ["javascript", "ecmascript"]
+    private static let fontMimePrefixes: Set<String> = [
+        "font/",
+        "application/font",
+        "application/x-font",
+        "application/vnd.ms-fontobject"
+    ]
+    private static let scriptExtensions: Set<String> = ["js", "mjs", "cjs"]
+    private static let documentExtensions: Set<String> = ["html", "htm", "xhtml"]
+    private static let imageExtensions: Set<String> = [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "svg",
+        "webp",
+        "avif",
+        "bmp",
+        "tiff",
+        "ico"
+    ]
+    private static let fontExtensions: Set<String> = ["woff", "woff2", "ttf", "otf", "eot"]
+
+    private static func normalizedMimeType(_ mimeType: String?) -> String {
+        guard let mimeType, mimeType.isEmpty == false else { return "" }
+        let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first ?? ""
+        return trimmed.lowercased()
+    }
+
+    private static func normalizedPathExtension(_ url: String) -> String {
+        guard let pathExtension = URL(string: url)?.pathExtension,
+              pathExtension.isEmpty == false else {
+            return ""
+        }
+        return pathExtension.lowercased()
+    }
+}
+
 public struct WINetworkWebSocketFrame: Hashable, Sendable {
     public enum Direction: String, Sendable {
         case incoming
