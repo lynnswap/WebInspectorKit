@@ -12,16 +12,16 @@ public final class WINetworkViewModel {
     }
     public var searchText: String = ""
     public var activeResourceFilters: Set<WINetworkResourceFilter> = []
-    public var selectedResourceFilter: WINetworkResourceFilter = .all
     public var sortDescriptors: [SortDescriptor<WINetworkEntry>] = [
         SortDescriptor<WINetworkEntry>(\.createdAt, order: .reverse),
         SortDescriptor<WINetworkEntry>(\.requestID, order: .reverse)
     ]
     public var displayEntries: [WINetworkEntry] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveFilters = WINetworkResourceFilter.normalizedSelection(activeResourceFilters)
         let filteredEntries = store.entries.filter { entry in
-            if !activeResourceFilters.isEmpty,
-               activeResourceFilters.contains(entry.resourceFilter) == false {
+            if !effectiveFilters.isEmpty,
+               effectiveFilters.contains(entry.resourceFilter) == false {
                 return false
             }
             if trimmedQuery.isEmpty {
@@ -113,13 +113,31 @@ public final class WINetworkViewModel {
             }
         )
     }
-    public var resourceFilterSelection: Binding<WINetworkResourceFilter> {
+
+    func bindingForAllResourceFilters() -> Binding<Bool> {
         Binding(
             get: {
-                self.selectedResourceFilter
+                self.activeResourceFilters.isEmpty
             },
-            set: { newValue in
-                self.applyResourceFilterSelection(newValue)
+            set: { isOn in
+                if isOn {
+                    self.activeResourceFilters.removeAll()
+                }
+            }
+        )
+    }
+
+    func bindingForResourceFilter(_ filter: WINetworkResourceFilter) -> Binding<Bool> {
+        Binding(
+            get: {
+                self.activeResourceFilters.contains(filter)
+            },
+            set: { isOn in
+                if isOn {
+                    self.activeResourceFilters.insert(filter)
+                } else {
+                    self.activeResourceFilters.remove(filter)
+                }
             }
         )
     }
@@ -138,39 +156,5 @@ private extension WINetworkEntry {
             fileTypeLabel
         ]
         return candidates.contains { $0.localizedStandardContains(query) }
-    }
-}
-
-private extension WINetworkViewModel {
-    func applyResourceFilterSelection(_ filter: WINetworkResourceFilter) {
-        if filter == .all {
-            activeResourceFilters.removeAll()
-            selectedResourceFilter = .all
-            return
-        }
-        if activeResourceFilters.contains(filter) {
-            activeResourceFilters.remove(filter)
-            updateSelectedResourceFilter()
-        } else {
-            activeResourceFilters.insert(filter)
-            selectedResourceFilter = filter
-        }
-    }
-
-    func updateSelectedResourceFilter() {
-        if activeResourceFilters.isEmpty {
-            selectedResourceFilter = .all
-            return
-        }
-        if activeResourceFilters.contains(selectedResourceFilter) {
-            return
-        }
-        if let firstActive = WINetworkResourceFilter.pickerCases.first(where: { filter in
-            filter != .all && activeResourceFilters.contains(filter)
-        }) {
-            selectedResourceFilter = firstActive
-        } else {
-            selectedResourceFilter = .all
-        }
     }
 }

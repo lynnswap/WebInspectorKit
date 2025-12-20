@@ -14,7 +14,6 @@ public enum WINetworkResourceFilter: String, CaseIterable, Hashable, Sendable, I
 
     public static var pickerCases: [WINetworkResourceFilter] {
         [
-            .all,
             .document,
             .stylesheet,
             .image,

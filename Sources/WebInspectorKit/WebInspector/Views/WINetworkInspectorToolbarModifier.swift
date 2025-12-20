@@ -34,17 +34,21 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu{
-                Picker(selection: viewModel.resourceFilterSelection) {
-                    ForEach(WINetworkResourceFilter.pickerCases) { filter in
-                        Text(filter.localizedTitle)
-                            .tag(filter)
-                    }
-                } label: {
-                    EmptyView()
+            Menu {
+                Toggle(isOn: viewModel.bindingForAllResourceFilters()) {
+                    Text(WINetworkResourceFilter.all.localizedTitle)
                 }
-            }label:{
+                Divider()
+                ForEach(WINetworkResourceFilter.pickerCases) { filter in
+                    Toggle(isOn: viewModel.bindingForResourceFilter(filter)) {
+                        Text(filter.localizedTitle)
+                    }
+                }
+            } label: {
                 Image(systemName: "line.3.horizontal.decrease")
+                    .accessibilityLabel(
+                        Text(LocalizedStringResource("network.controls.filter", bundle: .module))
+                    )
             }
             .menuOrder(.fixed)
         }
