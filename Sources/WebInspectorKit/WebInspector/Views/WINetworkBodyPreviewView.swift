@@ -298,11 +298,11 @@ private struct WINetworkJSONPreviewView: View {
             List {
                 OutlineGroup(nodes, children: \.children) { node in
                     WINetworkJSONRowView(node: node)
+                        .listRowInsets(.init(top: 4, leading: 12, bottom: 4, trailing: 12))
+                        .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.plain)
-            .environment(\.defaultMinListRowHeight, 24)
-            
         }
     }
 }
@@ -314,11 +314,11 @@ private struct WINetworkJSONRowView: View {
         HStack(alignment: .top, spacing: 8) {
             WINetworkJSONTypeBadge(symbol: badgeSymbol, tint: badgeTint)
             HStack(spacing: 4) {
-                if let displayKey {
-                    Text(displayKey)
+                if !node.key.isEmpty {
+                    Text(node.key)
                         .foregroundStyle(node.isIndex ? .secondary : .primary)
                 }
-                if displayKey != nil && !node.isIndex {
+                if !node.key.isEmpty {
                     Text(":")
                         .foregroundStyle(.secondary)
                 }
@@ -360,13 +360,6 @@ private struct WINetworkJSONRowView: View {
         case .null:
             return .secondary
         }
-    }
-
-    private var displayKey: String? {
-        guard !node.key.isEmpty else {
-            return nil
-        }
-        return node.key
     }
 
     private var badgeSymbol: String {
