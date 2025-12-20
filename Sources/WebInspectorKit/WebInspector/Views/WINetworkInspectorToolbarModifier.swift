@@ -50,6 +50,9 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
                         Text(LocalizedStringResource("network.controls.filter", bundle: .module))
                     )
             }
+#if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst) || os(visionOS)
+            .menuActionDismissBehavior(.disabled)
+#endif
             .menuOrder(.fixed)
         }
         ToolbarItem(placement: .secondaryAction) {
