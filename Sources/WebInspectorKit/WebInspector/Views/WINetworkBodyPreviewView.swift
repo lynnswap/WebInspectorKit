@@ -155,7 +155,7 @@ struct WINetworkBodyPreviewView: View {
         let decoded = decodedText(from: bodyState)
         let text = decoded ?? bodyState.full ?? bodyState.preview ?? bodyState.summary
         let jsonNodes = decoded.flatMap(WINetworkJSONNode.nodes(from:))
-        let domPayload = decoded.flatMap { makeDOMPreviewPayload(text: $0) }
+        let domPayload = decoded.flatMap { makeDOMPreviewPayload(text: $0, jsonNodes: jsonNodes) }
         return PreviewData(text: text, jsonNodes: jsonNodes, domPayload: domPayload)
     }
 
@@ -178,7 +178,7 @@ struct WINetworkBodyPreviewView: View {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func makeDOMPreviewPayload(text: String) -> WINetworkDOMPreviewPayload? {
+    private func makeDOMPreviewPayload(text: String, jsonNodes: [WINetworkJSONNode]?) -> WINetworkDOMPreviewPayload? {
         let mimeType = resolveMimeType(for: bodyState.role)
         let normalized = normalizeMIMEType(mimeType)
         let baseURL = URL(string: entry.url)
@@ -187,8 +187,24 @@ struct WINetworkBodyPreviewView: View {
             return WINetworkDOMPreviewPayload(html: text, baseURL: baseURL, mimeType: normalized)
         }
 
+        if let normalized, isJSONMIMEType(normalized) {
+            return WINetworkDOMPreviewPayload(
+                html: makeJSONPreviewHTML(from: text),
+                baseURL: baseURL,
+                mimeType: normalized
+            )
+        }
+
         if looksLikeMarkup(text) {
             return WINetworkDOMPreviewPayload(html: text, baseURL: baseURL, mimeType: "text/html")
+        }
+
+        if jsonNodes != nil {
+            return WINetworkDOMPreviewPayload(
+                html: makeJSONPreviewHTML(from: text),
+                baseURL: baseURL,
+                mimeType: "application/json"
+            )
         }
 
         return nil
@@ -243,6 +259,13 @@ struct WINetworkBodyPreviewView: View {
         }
     }
 
+    private func isJSONMIMEType(_ mimeType: String) -> Bool {
+        if mimeType == "application/json" || mimeType == "text/json" {
+            return true
+        }
+        return mimeType.hasSuffix("+json")
+    }
+
     private func looksLikeMarkup(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = trimmed.lowercased()
@@ -253,6 +276,46 @@ struct WINetworkBodyPreviewView: View {
             return true
         }
         return false
+    }
+
+    private func makeJSONPreviewHTML(from text: String) -> String {
+        let prettyPrinted = prettyPrintedJSON(from: text)
+        let escaped = escapeHTML(prettyPrinted)
+        return """
+        <!doctype html>
+        <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>JSON</title>
+            </head>
+            <body>
+                <pre>\(escaped)</pre>
+            </body>
+        </html>
+        """
+    }
+
+    private func prettyPrintedJSON(from text: String) -> String {
+        guard let data = text.data(using: .utf8) else {
+            return text
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return text
+        }
+        guard let formattedData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else {
+            return text
+        }
+        return String(data: formattedData, encoding: .utf8) ?? text
+    }
+
+    private func escapeHTML(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 
