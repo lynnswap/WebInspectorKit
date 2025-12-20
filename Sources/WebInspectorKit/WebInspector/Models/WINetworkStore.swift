@@ -690,6 +690,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var statusText: String
     public internal(set) var mimeType: String?
     public internal(set) var fileTypeLabel: String
+    public internal(set) var resourceFilter: WINetworkResourceFilter
     public internal(set) var requestHeaders: WINetworkHeaders
     public internal(set) var responseHeaders: WINetworkHeaders
     public internal(set) var startTimestamp: TimeInterval
@@ -730,6 +731,7 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         self.statusText = ""
         self.mimeType = nil
         self.fileTypeLabel = "-"
+        self.resourceFilter = .other
         self.endTimestamp = nil
         self.duration = nil
         self.encodedBodyLength = nil
@@ -828,6 +830,11 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
             url: url,
             requestType: requestType
         )
+        resourceFilter = Self.makeResourceFilter(
+            mimeType: mimeType,
+            url: url,
+            requestType: requestType
+        )
     }
 
     private static func makeFileTypeLabel(
@@ -850,6 +857,46 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         return "-"
     }
 
+    private static func makeResourceFilter(
+        mimeType: String?,
+        url: String,
+        requestType: String?
+    ) -> WINetworkResourceFilter {
+        let normalizedRequestType = requestType?.lowercased() ?? ""
+        let normalizedMimeType = normalizedMimeType(mimeType)
+        let pathExtension = normalizedPathExtension(url)
+
+        if xhrRequestTypes.contains(normalizedRequestType) {
+            return .xhrFetch
+        }
+        if documentRequestTypes.contains(normalizedRequestType)
+            || documentMimeTypes.contains(normalizedMimeType)
+            || documentExtensions.contains(pathExtension) {
+            return .document
+        }
+        if stylesheetRequestTypes.contains(normalizedRequestType)
+            || normalizedMimeType == "text/css"
+            || pathExtension == "css" {
+            return .stylesheet
+        }
+        if scriptRequestTypes.contains(normalizedRequestType)
+            || scriptMimeTokens.contains(where: { normalizedMimeType.contains($0) })
+            || scriptExtensions.contains(pathExtension) {
+            return .script
+        }
+        if fontRequestTypes.contains(normalizedRequestType)
+            || fontMimePrefixes.contains(where: { normalizedMimeType.hasPrefix($0) })
+            || fontExtensions.contains(pathExtension) {
+            return .font
+        }
+        if imageRequestTypes.contains(normalizedRequestType)
+            || normalizedMimeType.hasPrefix("image/")
+            || imageExtensions.contains(pathExtension) {
+            return .image
+        }
+        return .other
+    }
+
     // NOTE: When re-enabling WebSocket capture, ensure this does not mark the entry as completed
     // for every frame. Keep the phase pending until close/error to reflect the live connection state.
     func appendWebSocketFrame(_ payload: WSNetworkEvent) {
@@ -869,6 +916,53 @@ public class WINetworkEntry: Identifiable, Equatable, Hashable {
         info.appendFrame(frame)
         webSocket = info
         phase = .completed
+    }
+}
+
+extension WINetworkEntry {
+    fileprivate static let xhrRequestTypes: Set<String> = ["fetch", "xhr", "xmlhttprequest"]
+    fileprivate static let documentRequestTypes: Set<String> = ["document", "frame", "iframe"]
+    fileprivate static let stylesheetRequestTypes: Set<String> = ["style", "css", "stylesheet", "link"]
+    fileprivate static let scriptRequestTypes: Set<String> = ["script"]
+    fileprivate static let fontRequestTypes: Set<String> = ["font"]
+    fileprivate static let imageRequestTypes: Set<String> = ["img", "image"]
+    fileprivate static let documentMimeTypes: Set<String> = ["text/html", "application/xhtml+xml"]
+    fileprivate static let scriptMimeTokens: Set<String> = ["javascript", "ecmascript"]
+    fileprivate static let fontMimePrefixes: Set<String> = [
+        "font/",
+        "application/font",
+        "application/x-font",
+        "application/vnd.ms-fontobject"
+    ]
+    fileprivate static let scriptExtensions: Set<String> = ["js", "mjs", "cjs"]
+    fileprivate static let documentExtensions: Set<String> = ["html", "htm", "xhtml"]
+    fileprivate static let imageExtensions: Set<String> = [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "svg",
+        "webp",
+        "avif",
+        "bmp",
+        "tiff",
+        "ico"
+    ]
+    fileprivate static let fontExtensions: Set<String> = ["woff", "woff2", "ttf", "otf", "eot"]
+
+    fileprivate static func normalizedMimeType(_ mimeType: String?) -> String {
+        guard let mimeType, mimeType.isEmpty == false else { return "" }
+        let trimmed = mimeType.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first ?? ""
+        return trimmed.lowercased()
+    }
+
+    fileprivate static func normalizedPathExtension(_ url: String) -> String {
+        guard let pathExtension = URL(string: url)?.pathExtension,
+              pathExtension.isEmpty == false else {
+            return ""
+        }
+        return pathExtension.lowercased()
     }
 }
 

@@ -4,6 +4,8 @@ public struct WINetworkView: View {
     private var viewModel: WINetworkViewModel
     
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.wiNetworkFilters) private var resourceFilters
+    @Environment(\.wiNetworkFiltersBinding) private var resourceFiltersBinding
     
     public init(viewModel: WINetworkViewModel) {
         self.viewModel = viewModel
@@ -24,7 +26,32 @@ public struct WINetworkView: View {
                 }
             }
         }
+        .onChange(of: resourceFiltersBinding?.wrappedValue) {
+            guard let newValue = resourceFiltersBinding?.wrappedValue else {
+                return
+            }
+            applyResourceFilters(newValue)
+        }
+        .onChange(of: resourceFilters) {
+            guard resourceFiltersBinding == nil, let resourceFilters else {
+                return
+            }
+            applyResourceFilters(resourceFilters)
+        }
+        .onChange(of: viewModel.activeResourceFilters) {
+            guard let binding = resourceFiltersBinding else {
+                return
+            }
+            if binding.wrappedValue != viewModel.effectiveResourceFilters {
+                binding.wrappedValue = viewModel.effectiveResourceFilters
+            }
+        }
         .onAppear {
+            if let binding = resourceFiltersBinding {
+                applyResourceFilters(binding.wrappedValue)
+            } else if let filters = resourceFilters {
+                applyResourceFilters(filters)
+            }
             viewModel.willAppear()
         }
         .onDisappear {
@@ -45,6 +72,13 @@ public struct WINetworkView: View {
             }
         }
         .padding()
+    }
+
+    private func applyResourceFilters(_ filters: Set<WINetworkResourceFilter>) {
+        let normalized = WINetworkResourceFilter.normalizedSelection(filters)
+        if viewModel.activeResourceFilters != normalized {
+            viewModel.activeResourceFilters = normalized
+        }
     }
 }
 

@@ -11,19 +11,30 @@ public final class WINetworkViewModel {
         session.store
     }
     public var searchText: String = ""
+    public var activeResourceFilters: Set<WINetworkResourceFilter> = [] {
+        didSet {
+            let normalized = WINetworkResourceFilter.normalizedSelection(activeResourceFilters)
+            if effectiveResourceFilters != normalized {
+                effectiveResourceFilters = normalized
+            }
+        }
+    }
+    public private(set) var effectiveResourceFilters: Set<WINetworkResourceFilter> = []
     public var sortDescriptors: [SortDescriptor<WINetworkEntry>] = [
         SortDescriptor<WINetworkEntry>(\.createdAt, order: .reverse),
         SortDescriptor<WINetworkEntry>(\.requestID, order: .reverse)
     ]
     public var displayEntries: [WINetworkEntry] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filteredEntries: [WINetworkEntry]
-        if trimmedQuery.isEmpty {
-            filteredEntries = store.entries
-        } else {
-            filteredEntries = store.entries.filter { entry in
-                entry.matchesSearchText(trimmedQuery)
+        let filteredEntries = store.entries.filter { entry in
+            if !effectiveResourceFilters.isEmpty,
+               effectiveResourceFilters.contains(entry.resourceFilter) == false {
+                return false
             }
+            if trimmedQuery.isEmpty {
+                return true
+            }
+            return entry.matchesSearchText(trimmedQuery)
         }
         return filteredEntries.sorted(using: sortDescriptors)
     }
@@ -106,6 +117,34 @@ public final class WINetworkViewModel {
             },
             set: { newSelection in
                 self.selectedEntryID = newSelection.first
+            }
+        )
+    }
+
+    func bindingForAllResourceFilters() -> Binding<Bool> {
+        Binding(
+            get: {
+                self.effectiveResourceFilters.isEmpty
+            },
+            set: { isOn in
+                if isOn {
+                    self.activeResourceFilters.removeAll()
+                }
+            }
+        )
+    }
+
+    func bindingForResourceFilter(_ filter: WINetworkResourceFilter) -> Binding<Bool> {
+        Binding(
+            get: {
+                self.activeResourceFilters.contains(filter)
+            },
+            set: { isOn in
+                if isOn {
+                    self.activeResourceFilters.insert(filter)
+                } else {
+                    self.activeResourceFilters.remove(filter)
+                }
             }
         )
     }
