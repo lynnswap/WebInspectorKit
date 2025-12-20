@@ -295,14 +295,15 @@ private struct WINetworkJSONPreviewView: View {
         if nodes.isEmpty {
             WINetworkTextPreviewView(text: nil, summary: nil)
         } else {
-            List {
-                OutlineGroup(nodes, children: \.children) { node in
-                    WINetworkJSONRowView(node: node)
-                        .listRowInsets(.init(top: 4, leading: 12, bottom: 4, trailing: 12))
-                        .listRowSeparator(.hidden)
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    OutlineGroup(nodes, children: \.children) { node in
+                        WINetworkJSONRowView(node: node)
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 12)
+                    }
                 }
             }
-            .listStyle(.plain)
         }
     }
 }
@@ -316,17 +317,16 @@ private struct WINetworkJSONRowView: View {
             HStack(spacing: 4) {
                 if !node.key.isEmpty {
                     Text(node.key)
-                        .foregroundStyle(node.isIndex ? .secondary : .primary)
                 }
                 if !node.key.isEmpty {
                     Text(":")
-                        .foregroundStyle(.secondary)
                 }
                 Text(valueText)
-                    .foregroundStyle(valueColor)
             }
         }
         .font(.caption.monospaced())
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
         .textSelection(.enabled)
     }
 
@@ -344,21 +344,6 @@ private struct WINetworkJSONRowView: View {
             return value ? "true" : "false"
         case .null:
             return "null"
-        }
-    }
-
-    private var valueColor: Color {
-        switch node.displayKind {
-        case .object, .array:
-            return .secondary
-        case .string:
-            return .red
-        case .number:
-            return .blue
-        case .bool:
-            return .purple
-        case .null:
-            return .secondary
         }
     }
 
