@@ -131,19 +131,6 @@ struct WINetworkDetailView: View {
 }
 
 
-private extension WINetworkBody.FetchError {
-    var localizedResource: LocalizedStringResource {
-        switch self {
-        case .unavailable:
-            return LocalizedStringResource("network.body.fetch.error.unavailable", bundle: .module)
-        case .decodeFailed:
-            return LocalizedStringResource("network.body.fetch.error.decode_failed", bundle: .module)
-        case .unknown:
-            return LocalizedStringResource("network.body.fetch.error.unknown", bundle: .module)
-        }
-    }
-}
-
 private struct WINetworkBodySection: View {
     let entry: WINetworkEntry
     let viewModel: WINetworkViewModel
@@ -164,14 +151,29 @@ private struct WINetworkBodySection: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            if bodyState.fetchState == .inline {
-                fetchButton
-                if case let .failed(error) = bodyState.fetchState {
-                    Text(error.localizedResource)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .networkListRowStyle()
+            NavigationLink {
+                WINetworkBodyPreviewView(entry: entry, viewModel: viewModel, bodyState: bodyState)
+            } label: {
+                HStack {
+                    Label {
+                        Text("network.body.preview")
+                    } icon: {
+                        Image(systemName: "eye")
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
                 }
+            }
+            .font(.footnote)
+
+            if bodyState.fetchState != .full {
+                fetchButton
+            }
+            if case let .failed(error) = bodyState.fetchState {
+                Text(error.localizedResource)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
             }
         }
         .networkListRowStyle()
