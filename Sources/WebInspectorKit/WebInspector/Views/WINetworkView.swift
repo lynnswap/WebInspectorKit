@@ -42,8 +42,8 @@ public struct WINetworkView: View {
             guard let binding = resourceFiltersBinding else {
                 return
             }
-            if binding.wrappedValue != viewModel.activeResourceFilters {
-                binding.wrappedValue = viewModel.activeResourceFilters
+            if binding.wrappedValue != viewModel.effectiveResourceFilters {
+                binding.wrappedValue = viewModel.effectiveResourceFilters
             }
         }
         .onAppear {
@@ -75,8 +75,9 @@ public struct WINetworkView: View {
     }
 
     private func applyResourceFilters(_ filters: Set<WINetworkResourceFilter>) {
-        if viewModel.activeResourceFilters != filters {
-            viewModel.activeResourceFilters = filters
+        let normalized = WINetworkResourceFilter.normalizedSelection(filters)
+        if viewModel.activeResourceFilters != normalized {
+            viewModel.activeResourceFilters = normalized
         }
     }
 }

@@ -11,17 +11,24 @@ public final class WINetworkViewModel {
         session.store
     }
     public var searchText: String = ""
-    public var activeResourceFilters: Set<WINetworkResourceFilter> = []
+    public var activeResourceFilters: Set<WINetworkResourceFilter> = [] {
+        didSet {
+            let normalized = WINetworkResourceFilter.normalizedSelection(activeResourceFilters)
+            if effectiveResourceFilters != normalized {
+                effectiveResourceFilters = normalized
+            }
+        }
+    }
+    public private(set) var effectiveResourceFilters: Set<WINetworkResourceFilter> = []
     public var sortDescriptors: [SortDescriptor<WINetworkEntry>] = [
         SortDescriptor<WINetworkEntry>(\.createdAt, order: .reverse),
         SortDescriptor<WINetworkEntry>(\.requestID, order: .reverse)
     ]
     public var displayEntries: [WINetworkEntry] {
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveFilters = WINetworkResourceFilter.normalizedSelection(activeResourceFilters)
         let filteredEntries = store.entries.filter { entry in
-            if !effectiveFilters.isEmpty,
-               effectiveFilters.contains(entry.resourceFilter) == false {
+            if !effectiveResourceFilters.isEmpty,
+               effectiveResourceFilters.contains(entry.resourceFilter) == false {
                 return false
             }
             if trimmedQuery.isEmpty {
@@ -117,7 +124,7 @@ public final class WINetworkViewModel {
     func bindingForAllResourceFilters() -> Binding<Bool> {
         Binding(
             get: {
-                self.activeResourceFilters.isEmpty
+                self.effectiveResourceFilters.isEmpty
             },
             set: { isOn in
                 if isOn {

@@ -46,7 +46,7 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
                 }
             } label: {
                 Image(systemName: "line.3.horizontal.decrease")
-                    .foregroundStyle(viewModel.activeResourceFilters.isEmpty ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
+                    .foregroundStyle(viewModel.effectiveResourceFilters.isEmpty ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
                     .accessibilityLabel(
                         Text(LocalizedStringResource("network.controls.filter", bundle: .module))
                     )
