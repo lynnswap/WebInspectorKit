@@ -1,18 +1,10 @@
 import Foundation
 import SwiftUI
-import WebKit
-
-private struct WINetworkDOMPreviewPayload: Equatable {
-    let html: String
-    let baseURL: URL?
-    let mimeType: String
-}
 
 struct WINetworkBodyPreviewView: View {
     private enum PreviewMode: String, CaseIterable, Identifiable {
         case text
         case json
-        case dom
 
         var id: String { rawValue }
 
@@ -22,8 +14,6 @@ struct WINetworkBodyPreviewView: View {
                 return LocalizedStringResource("network.body.preview.mode.text", bundle: .module)
             case .json:
                 return LocalizedStringResource("network.body.preview.mode.json", bundle: .module)
-            case .dom:
-                return LocalizedStringResource("network.body.preview.mode.dom", bundle: .module)
             }
         }
     }
@@ -31,15 +21,11 @@ struct WINetworkBodyPreviewView: View {
     private struct PreviewData {
         let text: String?
         let jsonNodes: [WINetworkJSONNode]?
-        let domPayload: WINetworkDOMPreviewPayload?
 
         var availableModes: [PreviewMode] {
             var modes: [PreviewMode] = [.text]
             if jsonNodes != nil {
                 modes.append(.json)
-            }
-            if domPayload != nil {
-                modes.append(.dom)
             }
             return modes
         }
@@ -84,15 +70,9 @@ struct WINetworkBodyPreviewView: View {
                     WINetworkTextPreviewView(text: previewData.text, summary: bodyState.summary)
                 case .json:
                     WINetworkJSONPreviewView(nodes: previewData.jsonNodes ?? [])
-                case .dom:
-                    if let payload = previewData.domPayload {
-                        WINetworkDOMPreviewView(payload: payload)
-                    } else {
-                        WINetworkTextPreviewView(text: nil, summary: bodyState.summary)
-                    }
                 }
             }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle(previewTitle)
 #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst) || os(visionOS)
@@ -145,9 +125,6 @@ struct WINetworkBodyPreviewView: View {
         if modes.contains(.json) {
             return .json
         }
-        if modes.contains(.dom) {
-            return .dom
-        }
         return .text
     }
 
@@ -155,8 +132,7 @@ struct WINetworkBodyPreviewView: View {
         let decoded = decodedText(from: bodyState)
         let text = decoded ?? bodyState.full ?? bodyState.preview ?? bodyState.summary
         let jsonNodes = decoded.flatMap(WINetworkJSONNode.nodes(from:))
-        let domPayload = decoded.flatMap { makeDOMPreviewPayload(text: $0, jsonNodes: jsonNodes) }
-        return PreviewData(text: text, jsonNodes: jsonNodes, domPayload: domPayload)
+        return PreviewData(text: text, jsonNodes: jsonNodes)
     }
 
     private func decodedText(from body: WINetworkBody) -> String? {
@@ -176,146 +152,6 @@ struct WINetworkBodyPreviewView: View {
             return decoded
         }
         return String(decoding: data, as: UTF8.self)
-    }
-
-    private func makeDOMPreviewPayload(text: String, jsonNodes: [WINetworkJSONNode]?) -> WINetworkDOMPreviewPayload? {
-        let mimeType = resolveMimeType(for: bodyState.role)
-        let normalized = normalizeMIMEType(mimeType)
-        let baseURL = URL(string: entry.url)
-
-        if let normalized, isDOMMIMEType(normalized) {
-            return WINetworkDOMPreviewPayload(html: text, baseURL: baseURL, mimeType: normalized)
-        }
-
-        if let normalized, isJSONMIMEType(normalized) {
-            return WINetworkDOMPreviewPayload(
-                html: makeJSONPreviewHTML(from: text),
-                baseURL: baseURL,
-                mimeType: normalized
-            )
-        }
-
-        if looksLikeMarkup(text) {
-            return WINetworkDOMPreviewPayload(html: text, baseURL: baseURL, mimeType: "text/html")
-        }
-
-        if jsonNodes != nil {
-            return WINetworkDOMPreviewPayload(
-                html: makeJSONPreviewHTML(from: text),
-                baseURL: baseURL,
-                mimeType: "application/json"
-            )
-        }
-
-        return nil
-    }
-
-    private func resolveMimeType(for role: WINetworkBody.Role) -> String? {
-        switch role {
-        case .request:
-            return entry.requestHeaders["content-type"]
-        case .response:
-            return entry.mimeType ?? entry.responseHeaders["content-type"]
-        }
-    }
-
-    private func normalizeMIMEType(_ raw: String?) -> String? {
-        guard let raw else {
-            return nil
-        }
-        let trimmed = raw.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true).first
-        let normalized = trimmed?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let normalized, !normalized.isEmpty else {
-            return nil
-        }
-
-        if normalized.hasSuffix("/html") || normalized.hasSuffix("+html") {
-            return "text/html"
-        }
-        if normalized.hasSuffix("/xml") || normalized.hasSuffix("+xml") {
-            if normalized != "application/xhtml+xml" && normalized != "image/svg+xml" {
-                return "application/xml"
-            }
-        }
-        if normalized.hasSuffix("/xhtml") || normalized.hasSuffix("+xhtml") {
-            return "application/xhtml+xml"
-        }
-        if normalized.hasSuffix("/svg") || normalized.hasSuffix("+svg") {
-            return "image/svg+xml"
-        }
-        return normalized
-    }
-
-    private func isDOMMIMEType(_ mimeType: String) -> Bool {
-        switch mimeType {
-        case "text/html",
-             "application/xhtml+xml",
-             "application/xml",
-             "text/xml",
-             "image/svg+xml":
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func isJSONMIMEType(_ mimeType: String) -> Bool {
-        if mimeType == "application/json" || mimeType == "text/json" {
-            return true
-        }
-        return mimeType.hasSuffix("+json")
-    }
-
-    private func looksLikeMarkup(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lowered = trimmed.lowercased()
-        if lowered.hasPrefix("<!doctype") || lowered.hasPrefix("<?xml") {
-            return true
-        }
-        if lowered.contains("<html") || lowered.contains("<svg") {
-            return true
-        }
-        return false
-    }
-
-    private func makeJSONPreviewHTML(from text: String) -> String {
-        let prettyPrinted = prettyPrintedJSON(from: text)
-        let escaped = escapeHTML(prettyPrinted)
-        return """
-        <!doctype html>
-        <html>
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>JSON</title>
-            </head>
-            <body>
-                <pre>\(escaped)</pre>
-            </body>
-        </html>
-        """
-    }
-
-    private func prettyPrintedJSON(from text: String) -> String {
-        guard let data = text.data(using: .utf8) else {
-            return text
-        }
-        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-            return text
-        }
-        guard let formattedData = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else {
-            return text
-        }
-        return String(data: formattedData, encoding: .utf8) ?? text
-    }
-
-    private func escapeHTML(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 
@@ -485,100 +321,6 @@ private struct WINetworkJSONTypeBadge: View {
             )
     }
 }
-
-private struct WINetworkDOMPreviewView: View {
-    let payload: WINetworkDOMPreviewPayload
-
-    @State private var controller: WINetworkDOMPreviewController
-
-    init(payload: WINetworkDOMPreviewPayload) {
-        self.payload = payload
-        _controller = State(initialValue: WINetworkDOMPreviewController(payload: payload))
-    }
-
-    var body: some View {
-        ZStack {
-            WIDOMView(viewModel: controller.viewModel)
-            WINetworkHiddenWebView(webView: controller.pageWebView)
-                .frame(width: 0, height: 0)
-                .opacity(0.001)
-                .accessibilityHidden(true)
-        }
-        .onChange(of: payload) { _, newValue in
-            controller.update(payload: newValue)
-        }
-        .onDisappear {
-            controller.detach()
-        }
-    }
-}
-
-@MainActor
-private final class WINetworkDOMPreviewController: NSObject {
-    let viewModel: WIDOMViewModel
-    let pageWebView: WKWebView
-
-    private var lastPayload: WINetworkDOMPreviewPayload?
-
-    init(payload: WINetworkDOMPreviewPayload) {
-        self.viewModel = WIDOMViewModel()
-        self.pageWebView = WKWebView(frame: .zero, configuration: Self.makeConfiguration())
-        super.init()
-        pageWebView.navigationDelegate = self
-        viewModel.attach(to: pageWebView)
-        update(payload: payload)
-    }
-
-    func update(payload: WINetworkDOMPreviewPayload) {
-        guard payload != lastPayload else {
-            return
-        }
-        lastPayload = payload
-        pageWebView.loadHTMLString(payload.html, baseURL: payload.baseURL)
-    }
-
-    func detach() {
-        viewModel.detach()
-        pageWebView.navigationDelegate = nil
-    }
-
-    private static func makeConfiguration() -> WKWebViewConfiguration {
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.websiteDataStore = .nonPersistent()
-        return configuration
-    }
-}
-
-extension WINetworkDOMPreviewController: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor in
-            await viewModel.reloadInspector(preserveState: false)
-        }
-    }
-}
-
-#if os(macOS)
-private struct WINetworkHiddenWebView: NSViewRepresentable {
-    let webView: WKWebView
-
-    func makeNSView(context: Context) -> WKWebView {
-        webView
-    }
-
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
-}
-#else
-private struct WINetworkHiddenWebView: UIViewRepresentable {
-    let webView: WKWebView
-
-    func makeUIView(context: Context) -> WKWebView {
-        webView
-    }
-
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
-}
-#endif
 
 private struct WINetworkJSONNode: Identifiable {
     fileprivate enum JSONValue {
