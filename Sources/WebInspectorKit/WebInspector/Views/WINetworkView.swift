@@ -309,12 +309,27 @@ enum WINetworkPreviewData {
             ]
         ],
         [
-            "kind": "loadingFailed",
+            "kind": "loadingFinished",
             "requestId": 2,
-            "error": [
-                "domain": "fetch",
-                "message": "Request timed out",
-                "isTimeout": true
+            "body": [
+                "kind": "text",
+                "encoding": "utf-8",
+                "preview": """
+{
+  "ok": false,
+  "error": {
+    "code": "timeout",
+    "message": "Request timed out"
+  },
+  "requestId": "preview-2",
+  "retryAfterSeconds": 15,
+  "flags": [
+    "cache-miss",
+    "rate-limit"
+  ]
+}
+""",
+                "truncated": false
             ],
             "time": [
                 "monotonicMs": 2_300.0,
