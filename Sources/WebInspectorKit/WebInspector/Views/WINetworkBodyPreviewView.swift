@@ -218,11 +218,10 @@ private struct WINetworkJSONRowView: View {
                         .foregroundStyle(node.isIndex ? .secondary : .primary)
                 }
                 if !node.key.isEmpty {
-                    Text(":")
+                    Text(":" as String)
                         .foregroundStyle(.secondary)
                 }
                 Text(valueText)
-                    .foregroundStyle(valueColor)
             }
         }
         .font(.caption.monospaced())
