@@ -36,12 +36,12 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
         ToolbarItem(placement: .primaryAction) {
             Menu {
                 Toggle(isOn: viewModel.bindingForAllResourceFilters()) {
-                    Text(WINetworkResourceFilter.all.localizedTitle)
+                    Text(verbatim: WINetworkResourceFilter.all.displayTitle)
                 }
                 Divider()
                 ForEach(WINetworkResourceFilter.pickerCases) { filter in
                     Toggle(isOn: viewModel.bindingForResourceFilter(filter)) {
-                        Text(filter.localizedTitle)
+                        Text(verbatim: filter.displayTitle)
                     }
                 }
             } label: {
@@ -78,24 +78,24 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
 }
 
 private extension WINetworkResourceFilter {
-    var localizedTitle: LocalizedStringResource {
+    var displayTitle: String {
         switch self {
         case .all:
-            return LocalizedStringResource("network.filter.all", bundle: .module)
+            return "All"
         case .document:
-            return LocalizedStringResource("network.filter.document", bundle: .module)
+            return "Document"
         case .stylesheet:
-            return LocalizedStringResource("network.filter.stylesheet", bundle: .module)
+            return "CSS"
         case .image:
-            return LocalizedStringResource("network.filter.image", bundle: .module)
+            return "Image"
         case .font:
-            return LocalizedStringResource("network.filter.font", bundle: .module)
+            return "Font"
         case .script:
-            return LocalizedStringResource("network.filter.script", bundle: .module)
+            return "JS"
         case .xhrFetch:
-            return LocalizedStringResource("network.filter.xhr_fetch", bundle: .module)
+            return "XHR / Fetch"
         case .other:
-            return LocalizedStringResource("network.filter.other", bundle: .module)
+            return "Other"
         }
     }
 }
