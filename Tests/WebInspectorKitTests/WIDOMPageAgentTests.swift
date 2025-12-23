@@ -54,10 +54,10 @@ struct WIDOMPageAgentTests {
         agent.attachPageWebView(webView)
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
-        #expect(addedHandlerNames.contains("webInspectorSnapshotUpdate"))
-        #expect(addedHandlerNames.contains("webInspectorMutationUpdate"))
+        #expect(addedHandlerNames.contains("webInspectorDOMSnapshot"))
+        #expect(addedHandlerNames.contains("webInspectorDOMMutations"))
         #expect(controller.userScripts.count == 2)
-        #expect(controller.userScripts.contains { $0.source.contains("webInspectorKit") })
+        #expect(controller.userScripts.contains { $0.source.contains("webInspectorDOM") })
     }
 
     @Test
@@ -69,8 +69,8 @@ struct WIDOMPageAgentTests {
         agent.detachPageWebView()
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
-        #expect(removedHandlerNames.contains("webInspectorSnapshotUpdate"))
-        #expect(removedHandlerNames.contains("webInspectorMutationUpdate"))
+        #expect(removedHandlerNames.contains("webInspectorDOMSnapshot"))
+        #expect(removedHandlerNames.contains("webInspectorDOMMutations"))
         #expect(agent.webView == nil)
     }
 
@@ -83,7 +83,7 @@ struct WIDOMPageAgentTests {
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
 
         let raw = try await webView.evaluateJavaScript(
-            "(() => Boolean(window.webInspectorKit && window.webInspectorKit.__installed))();",
+            "(() => Boolean(window.webInspectorDOM && window.webInspectorDOM.__installed))();",
             in: nil,
             contentWorld: .page
         )

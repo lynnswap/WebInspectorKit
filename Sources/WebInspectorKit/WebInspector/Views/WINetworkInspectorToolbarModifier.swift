@@ -33,6 +33,29 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Toggle(isOn: viewModel.bindingForAllResourceFilters()) {
+                    Text(WINetworkResourceFilter.all.localizedTitle)
+                }
+                Divider()
+                ForEach(WINetworkResourceFilter.pickerCases) { filter in
+                    Toggle(isOn: viewModel.bindingForResourceFilter(filter)) {
+                        Text(filter.localizedTitle)
+                    }
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .foregroundStyle(viewModel.effectiveResourceFilters.isEmpty ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
+                    .accessibilityLabel(
+                        Text(LocalizedStringResource("network.controls.filter", bundle: .module))
+                    )
+            }
+#if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst) || os(visionOS)
+            .menuActionDismissBehavior(.disabled)
+#endif
+            .menuOrder(.fixed)
+        }
         ToolbarItem(placement: .secondaryAction) {
             Section {
                 clearItem
@@ -51,6 +74,29 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
             }
         }
         .disabled(viewModel.store.entries.isEmpty)
+    }
+}
+
+private extension WINetworkResourceFilter {
+    var localizedTitle: LocalizedStringResource {
+        switch self {
+        case .all:
+            return LocalizedStringResource("network.filter.all", bundle: .module)
+        case .document:
+            return LocalizedStringResource("network.filter.document", bundle: .module)
+        case .stylesheet:
+            return LocalizedStringResource("network.filter.stylesheet", bundle: .module)
+        case .image:
+            return LocalizedStringResource("network.filter.image", bundle: .module)
+        case .font:
+            return LocalizedStringResource("network.filter.font", bundle: .module)
+        case .script:
+            return LocalizedStringResource("network.filter.script", bundle: .module)
+        case .xhrFetch:
+            return LocalizedStringResource("network.filter.xhr_fetch", bundle: .module)
+        case .other:
+            return LocalizedStringResource("network.filter.other", bundle: .module)
+        }
     }
 }
 

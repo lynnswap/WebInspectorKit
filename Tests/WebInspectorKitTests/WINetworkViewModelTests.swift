@@ -30,14 +30,13 @@ struct WINetworkViewModelTests {
         let viewModel = WINetworkViewModel()
         let store = viewModel.store
 
-        let payload = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 1,
-                "url": "https://example.com",
-                "method": "GET"
-            ])
-        )
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
         store.applyEvent(payload)
 
         #expect(store.entries.count == 1)
@@ -64,35 +63,29 @@ struct WINetworkViewModelTests {
         let viewModel = WINetworkViewModel()
         let store = viewModel.store
 
-        let startEvent = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "start",
-                "requestId": 2,
-                "url": "https://example.com/api",
-                "method": "POST",
-                "requestHeaders": ["accept": "application/json"],
-                "startTime": 1_000.0,
-                "wallTime": 1_700_000_000_000.0
-            ])
-        )
-        let responseEvent = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "response",
-                "requestId": 2,
-                "status": 201,
-                "statusText": "Created",
-                "mimeType": "application/json",
-                "responseHeaders": ["content-type": "application/json"]
-            ])
-        )
-        let finishEvent = try #require(
-            HTTPNetworkEvent(dictionary: [
-                "type": "finish",
-                "requestId": 2,
-                "endTime": 1_400.0,
-                "encodedBodyLength": 512
-            ])
-        )
+        let startEvent = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 2,
+            "url": "https://example.com/api",
+            "method": "POST",
+            "headers": ["accept": "application/json"],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
+        let responseEvent = try NetworkTestHelpers.decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 2,
+            "status": 201,
+            "statusText": "Created",
+            "mimeType": "application/json",
+            "headers": ["content-type": "application/json"],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_200.0, wallMs: 1_700_000_000_200.0)
+        ])
+        let finishEvent = try NetworkTestHelpers.decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 2,
+            "encodedBodyLength": 512,
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_400.0, wallMs: 1_700_000_000_400.0)
+        ])
 
         store.applyEvent(startEvent)
         store.applyEvent(responseEvent)
