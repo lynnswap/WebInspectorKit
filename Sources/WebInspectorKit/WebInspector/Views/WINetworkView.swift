@@ -162,32 +162,31 @@ private struct WINetworkTableView: View {
     }
 }
 private struct WINetworkListView: View {
-    @Bindable var viewModel:WINetworkViewModel
-    var body:some View{
-        List(selection: viewModel.tableSelection) {
+    @Bindable var viewModel: WINetworkViewModel
+    var body: some View {
+        List {
             ForEach(
                 viewModel.displayEntries,
             ) { entry in
-                WINetworkRow(entry: entry)
+                NavigationLink(value: entry.id) {
+                    WINetworkRow(entry: entry)
+                }
             }
         }
         .searchable(
             text: $viewModel.searchText,
             prompt: Text(LocalizedStringResource("network.search.placeholder",bundle:.module))
         )
-        .sheet(isPresented: viewModel.isShowingDetail) {
-            NavigationStack {
-                if let isSelectedEntryID = viewModel.selectedEntryID,
-                   let entry = viewModel.store.entry(forEntryID:isSelectedEntryID) {
-                    WINetworkDetailView(entry: entry, viewModel: viewModel)
-                }
-            }
+        .navigationDestination(for: WINetworkEntry.ID.self) { entryID in
+            if let entry = viewModel.store.entry(forEntryID: entryID) {
+                WINetworkDetailView(entry: entry, viewModel: viewModel)
+                    .navigationTitle(entry.displayName)
 #if os(iOS)
-            .presentationDetents([.medium, .large])
-            .presentationBackgroundInteraction(.enabled)
-            .presentationContentInteraction(.scrolls)
-            .presentationDragIndicator(.hidden)
+                    .navigationBarTitleDisplayMode(.inline)
 #endif
+            } else {
+                EmptyView()
+            }
         }
     }
 }
