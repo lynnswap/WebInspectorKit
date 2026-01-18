@@ -28,9 +28,57 @@ private struct BackgroundClearView: UIViewRepresentable {
     }
 
     private final class InnerView: UIView {
+        private weak var targetView: UIView?
+        private var previousBackgroundColor: UIColor?
+        private var didApply = false
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            guard window != nil else {
+                return
+            }
+            applyIfNeeded()
+        }
+
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            superview?.superview?.backgroundColor = .clear
+            guard window != nil else {
+                return
+            }
+            applyIfNeeded()
+        }
+
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            if newWindow == nil {
+                restoreIfNeeded()
+            }
+        }
+
+        private func applyIfNeeded() {
+            guard let newTarget = superview?.superview else {
+                return
+            }
+            if targetView !== newTarget {
+                restoreIfNeeded()
+            }
+            guard !didApply else {
+                return
+            }
+            targetView = newTarget
+            previousBackgroundColor = newTarget.backgroundColor
+            newTarget.backgroundColor = .clear
+            didApply = true
+        }
+
+        private func restoreIfNeeded() {
+            guard didApply else {
+                return
+            }
+            targetView?.backgroundColor = previousBackgroundColor
+            targetView = nil
+            previousBackgroundColor = nil
+            didApply = false
         }
     }
 }
@@ -44,13 +92,66 @@ private struct BackgroundClearView: NSViewRepresentable {
     }
 
     private final class InnerView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let superSuperView = superview?.superview else {
+        private weak var targetView: NSView?
+        private var previousWantsLayer: Bool?
+        private var previousBackgroundColor: CGColor?
+        private var didApply = false
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            guard window != nil else {
                 return
             }
-            superSuperView.wantsLayer = true
-            superSuperView.layer?.backgroundColor = NSColor.clear.cgColor
+            applyIfNeeded()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else {
+                return
+            }
+            applyIfNeeded()
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil {
+                restoreIfNeeded()
+            }
+        }
+
+        private func applyIfNeeded() {
+            guard let newTarget = superview?.superview else {
+                return
+            }
+            if targetView !== newTarget {
+                restoreIfNeeded()
+            }
+            guard !didApply else {
+                return
+            }
+            targetView = newTarget
+            previousWantsLayer = newTarget.wantsLayer
+            previousBackgroundColor = newTarget.layer?.backgroundColor
+            newTarget.wantsLayer = true
+            newTarget.layer?.backgroundColor = NSColor.clear.cgColor
+            didApply = true
+        }
+
+        private func restoreIfNeeded() {
+            guard didApply else {
+                return
+            }
+            if let targetView {
+                targetView.layer?.backgroundColor = previousBackgroundColor
+                if let previousWantsLayer {
+                    targetView.wantsLayer = previousWantsLayer
+                }
+            }
+            targetView = nil
+            previousWantsLayer = nil
+            previousBackgroundColor = nil
+            didApply = false
         }
     }
 }
