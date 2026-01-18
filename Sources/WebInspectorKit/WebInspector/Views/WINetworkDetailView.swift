@@ -153,6 +153,7 @@ private struct WINetworkBodySection: View {
             }
             NavigationLink {
                 WINetworkBodyPreviewView(entry: entry, viewModel: viewModel, bodyState: bodyState)
+                    .background(.superClear)
             } label: {
                 HStack {
                     Label {

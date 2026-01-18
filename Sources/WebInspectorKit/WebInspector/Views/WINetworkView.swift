@@ -182,6 +182,7 @@ private struct WINetworkListView: View {
                 WINetworkDetailView(entry: entry, viewModel: viewModel)
                     .navigationTitle(entry.displayName)
 #if os(iOS)
+                    .background(.superClear)
                     .navigationBarTitleDisplayMode(.inline)
 #endif
             } else {
