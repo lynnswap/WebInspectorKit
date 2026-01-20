@@ -9,6 +9,7 @@ struct WINetworkBodySectionView: View {
     var body: some View {
         NavigationLink {
             WINetworkBodyPreviewView(entry: entry, viewModel: viewModel, bodyState: bodyState)
+                .background(.superClear)
         }label:{
             VStack(spacing:8){
                 metadataBlock
