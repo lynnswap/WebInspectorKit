@@ -27,19 +27,6 @@ struct WINetworkBodyPreviewView: View {
         }
     }
 
-    private struct PreviewData {
-        let text: String?
-        let jsonNodes: [WINetworkJSONNode]?
-
-        var availableModes: [PreviewMode] {
-            var modes: [PreviewMode] = [.text]
-            if jsonNodes != nil {
-                modes.append(.json)
-            }
-            return modes
-        }
-    }
-
     let entry: WINetworkEntry
     let viewModel: WINetworkViewModel
     let bodyState: WINetworkBody
@@ -47,7 +34,8 @@ struct WINetworkBodyPreviewView: View {
     @State private var selectedMode: PreviewMode = .text
 
     var body: some View {
-        let previewData = makePreviewData()
+        let previewData = bodyState.previewData
+        let availableModes = previewModes(from: previewData)
         Group {
             switch selectedMode {
             case .text:
@@ -61,7 +49,7 @@ struct WINetworkBodyPreviewView: View {
             ToolbarItem(placement: .principal) {
                 VStack {
                     Text(previewTitle)
-                    if case let .failed(error) = bodyState.fetchState{
+                    if case let .failed(error) = bodyState.fetchState {
                         Text(error.localizedResource)
                             .font(.caption)
                             .foregroundStyle(.red)
@@ -69,9 +57,9 @@ struct WINetworkBodyPreviewView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                if previewData.availableModes.count > 1 {
+                if availableModes.count > 1 {
                     Picker("network.body.preview", selection: $selectedMode) {
-                        ForEach(previewData.availableModes) { mode in
+                        ForEach(availableModes) { mode in
                             Label(mode.localized, systemImage: mode.icon)
                                 .tag(mode)
                         }
@@ -80,13 +68,13 @@ struct WINetworkBodyPreviewView: View {
                 }
             }
             ToolbarItem(placement: .secondaryAction) {
-                if canFetchBody {
+                if bodyState.canFetchBody {
                     Button {
                         if bodyState.fetchState == .fetching {
                             return
                         }
                         Task {
-                            await fetchBodyIfNeeded(force: true)
+                            await viewModel.fetchBodyIfNeeded(for: entry, body: bodyState, force: true)
                         }
                     } label: {
                         Label{
@@ -107,16 +95,16 @@ struct WINetworkBodyPreviewView: View {
         .navigationBarTitleDisplayMode(.inline)
 #endif
         .onAppear {
-            selectedMode = preferredMode(from: previewData.availableModes)
+            selectedMode = preferredMode(from: availableModes)
         }
-        .onChange(of: previewData.availableModes) { _, newModes in
+        .onChange(of: availableModes) { _, newModes in
             if newModes.contains(selectedMode) {
                 return
             }
             selectedMode = preferredMode(from: newModes)
         }
         .task {
-            await fetchBodyIfNeeded()
+            await viewModel.fetchBodyIfNeeded(for: entry, body: bodyState)
         }
     }
 
@@ -129,62 +117,19 @@ struct WINetworkBodyPreviewView: View {
         }
     }
 
+    private func previewModes(from previewData: WINetworkBodyPreviewData) -> [PreviewMode] {
+        var modes: [PreviewMode] = [.text]
+        if previewData.jsonNodes != nil {
+            modes.append(.json)
+        }
+        return modes
+    }
+
     private func preferredMode(from modes: [PreviewMode]) -> PreviewMode {
         if modes.contains(.json) {
             return .json
         }
         return .text
-    }
-
-    private func makePreviewData() -> PreviewData {
-        let decoded = decodedText(from: bodyState)
-        let text = decoded ?? bodyState.full ?? bodyState.preview ?? bodyState.summary
-        let jsonNodes = decoded.flatMap(WINetworkJSONNode.nodes(from:))
-        return PreviewData(text: text, jsonNodes: jsonNodes)
-    }
-
-    private func decodedText(from body: WINetworkBody) -> String? {
-        guard body.kind != .binary else {
-            return nil
-        }
-        guard let candidate = body.full ?? body.preview else {
-            return nil
-        }
-        guard body.isBase64Encoded else {
-            return candidate
-        }
-        guard let data = Data(base64Encoded: candidate) else {
-            return nil
-        }
-        if let decoded = String(data: data, encoding: .utf8) {
-            return decoded
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    private func fetchBodyIfNeeded(force: Bool = false) async {
-        if bodyState.fetchState == .fetching {
-            return
-        }
-        if !canFetchBody {
-            return
-        }
-        if !force && bodyState.fetchState == .full {
-            return
-        }
-        switch bodyState.role {
-        case .request:
-            await viewModel.fetchRequestBody(for: entry)
-        case .response:
-            await viewModel.fetchResponseBody(for: entry)
-        }
-    }
-
-    private var canFetchBody: Bool {
-        guard let reference = bodyState.reference, !reference.isEmpty else {
-            return false
-        }
-        return true
     }
 }
 
@@ -351,122 +296,5 @@ private struct WINetworkJSONTypeBadge: View {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(tint.opacity(0.6), lineWidth: 1)
             )
-    }
-}
-
-private struct WINetworkJSONNode: Identifiable {
-    fileprivate enum JSONValue {
-        case object([String: JSONValue])
-        case array([JSONValue])
-        case string(String)
-        case number(String)
-        case bool(Bool)
-        case null
-    }
-
-    enum DisplayKind {
-        case object(count: Int)
-        case array(count: Int)
-        case string(String)
-        case number(String)
-        case bool(Bool)
-        case null
-    }
-
-    let id = UUID()
-    let key: String
-    let isIndex: Bool
-    private let value: JSONValue
-    let children: [WINetworkJSONNode]?
-
-    var displayKind: DisplayKind {
-        switch value {
-        case .object(let dictionary):
-            return .object(count: dictionary.count)
-        case .array(let array):
-            return .array(count: array.count)
-        case .string(let value):
-            return .string(value)
-        case .number(let value):
-            return .number(value)
-        case .bool(let value):
-            return .bool(value)
-        case .null:
-            return .null
-        }
-    }
-
-    private init(key: String, value: JSONValue, isIndex: Bool) {
-        self.key = key
-        self.isIndex = isIndex
-        self.value = value
-        self.children = WINetworkJSONNode.makeChildren(from: value)
-    }
-
-    static func nodes(from text: String) -> [WINetworkJSONNode]? {
-        guard let data = text.data(using: .utf8) else {
-            return nil
-        }
-        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-            return nil
-        }
-        return nodes(from: object)
-    }
-
-    private static func nodes(from object: Any) -> [WINetworkJSONNode] {
-        let value = JSONValue.make(from: object)
-        return makeChildren(from: value) ?? [WINetworkJSONNode(key: "", value: value, isIndex: false)]
-    }
-
-    private static func makeChildren(from value: JSONValue) -> [WINetworkJSONNode]? {
-        switch value {
-        case .object(let dictionary):
-            let keys = Array(dictionary.keys)
-            return keys.map { key in
-                WINetworkJSONNode(key: key, value: dictionary[key] ?? .null, isIndex: false)
-            }
-        case .array(let array):
-            return array.enumerated().map { index, item in
-                WINetworkJSONNode(key: String(index), value: item, isIndex: true)
-            }
-        default:
-            return nil
-        }
-    }
-
-    private static func truncate(_ value: String, limit: Int = 160) -> String {
-        guard value.count > limit else {
-            return value
-        }
-        let index = value.index(value.startIndex, offsetBy: limit)
-        return String(value[..<index]) + "..."
-    }
-}
-
-private extension WINetworkJSONNode.JSONValue {
-    static func make(from object: Any) -> WINetworkJSONNode.JSONValue {
-        if let dictionary = object as? [String: Any] {
-            var mapped: [String: WINetworkJSONNode.JSONValue] = [:]
-            dictionary.forEach { key, value in
-                mapped[key] = make(from: value)
-            }
-            return .object(mapped)
-        }
-        if let array = object as? [Any] {
-            return .array(array.map { make(from: $0) })
-        }
-        if let string = object as? String {
-            return .string(string)
-        }
-        if let number = object as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
-                return .bool(number.boolValue)
-            }
-            return .number(String(describing: number))
-        }
-        if object is NSNull {
-            return .null
-        }
-        return .string(String(describing: object))
     }
 }
