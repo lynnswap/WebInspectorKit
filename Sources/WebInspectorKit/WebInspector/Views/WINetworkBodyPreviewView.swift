@@ -8,12 +8,21 @@ struct WINetworkBodyPreviewView: View {
 
         var id: String { rawValue }
 
-        var localizedTitle: LocalizedStringResource {
+        var localized: LocalizedStringResource {
             switch self {
             case .text:
                 return LocalizedStringResource("network.body.preview.mode.text", bundle: .module)
             case .json:
                 return LocalizedStringResource("network.body.preview.mode.json", bundle: .module)
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .text:
+                return "text.document"
+            case .json:
+                return "o.square.fill"
             }
         }
     }
@@ -39,40 +48,59 @@ struct WINetworkBodyPreviewView: View {
 
     var body: some View {
         let previewData = makePreviewData()
-
-        VStack(spacing: 12) {
-            if previewData.availableModes.count > 1 {
-                Picker("network.body.preview", selection: $selectedMode) {
-                    ForEach(previewData.availableModes) { mode in
-                        Text(mode.localizedTitle)
-                            .tag(mode)
+        Group {
+            switch selectedMode {
+            case .text:
+                WINetworkTextPreviewView(text: previewData.text, summary: bodyState.summary)
+            case .json:
+                WINetworkJSONPreviewView(nodes: previewData.jsonNodes ?? [])
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack {
+                    Text(previewTitle)
+                    if case let .failed(error) = bodyState.fetchState{
+                        Text(error.localizedResource)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
             }
-
-            if bodyState.fetchState != .full {
-                fetchButton
-                    .padding(.horizontal)
-            }
-
-            if case let .failed(error) = bodyState.fetchState {
-                Text(error.localizedResource)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal)
-            }
-
-            Group {
-                switch selectedMode {
-                case .text:
-                    WINetworkTextPreviewView(text: previewData.text, summary: bodyState.summary)
-                case .json:
-                    WINetworkJSONPreviewView(nodes: previewData.jsonNodes ?? [])
+            ToolbarItem(placement: .primaryAction) {
+                if previewData.availableModes.count > 1 {
+                    Picker("network.body.preview", selection: $selectedMode) {
+                        ForEach(previewData.availableModes) { mode in
+                            Label(mode.localized, systemImage: mode.icon)
+                                .tag(mode)
+                        }
+                    }
+                    .fixedSize()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ToolbarItem(placement: .secondaryAction) {
+                if canFetchBody {
+                    Button {
+                        if bodyState.fetchState == .fetching {
+                            return
+                        }
+                        Task {
+                            await fetchBodyIfNeeded(force: true)
+                        }
+                    } label: {
+                        Label{
+                            Text("network.body.fetch")
+                        }icon:{
+                            if bodyState.fetchState == .fetching {
+                                ProgressView()
+                            }else{
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle(previewTitle)
 #if os(iOS) || os(tvOS) || targetEnvironment(macCatalyst) || os(visionOS)
@@ -87,6 +115,9 @@ struct WINetworkBodyPreviewView: View {
             }
             selectedMode = preferredMode(from: newModes)
         }
+        .task {
+            await fetchBodyIfNeeded()
+        }
     }
 
     private var previewTitle: LocalizedStringResource {
@@ -96,29 +127,6 @@ struct WINetworkBodyPreviewView: View {
         case .response:
             return LocalizedStringResource("network.section.body.response", bundle: .module)
         }
-    }
-
-    private var fetchButton: some View {
-        Button {
-            Task {
-                switch bodyState.role {
-                case .request:
-                    await viewModel.fetchRequestBody(for: entry)
-                case .response:
-                    await viewModel.fetchResponseBody(for: entry)
-                }
-            }
-        } label: {
-            if bodyState.fetchState == .fetching {
-                ProgressView()
-                    .controlSize(.mini)
-            } else {
-                Text("network.body.fetch")
-                    .padding(.horizontal)
-            }
-        }
-        .fetchButtonStyle()
-        .font(.footnote)
     }
 
     private func preferredMode(from modes: [PreviewMode]) -> PreviewMode {
@@ -152,6 +160,31 @@ struct WINetworkBodyPreviewView: View {
             return decoded
         }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private func fetchBodyIfNeeded(force: Bool = false) async {
+        if bodyState.fetchState == .fetching {
+            return
+        }
+        if !canFetchBody {
+            return
+        }
+        if !force && bodyState.fetchState == .full {
+            return
+        }
+        switch bodyState.role {
+        case .request:
+            await viewModel.fetchRequestBody(for: entry)
+        case .response:
+            await viewModel.fetchResponseBody(for: entry)
+        }
+    }
+
+    private var canFetchBody: Bool {
+        guard let reference = bodyState.reference, !reference.isEmpty else {
+            return false
+        }
+        return true
     }
 }
 
@@ -435,19 +468,5 @@ private extension WINetworkJSONNode.JSONValue {
             return .null
         }
         return .string(String(describing: object))
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func fetchButtonStyle() -> some View {
-        if #available(iOS 26.0, macOS 26.0, *) {
-            self
-                .buttonStyle(.glassProminent)
-                .buttonSizing(.fitted)
-        } else {
-            self
-                .buttonStyle(.borderedProminent)
-        }
     }
 }
