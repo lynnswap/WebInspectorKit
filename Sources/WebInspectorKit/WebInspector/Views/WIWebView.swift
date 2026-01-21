@@ -11,6 +11,7 @@ final class WIWebView: WKWebView {
     
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
+        Self.installDOMTreeViewScriptsIfNeeded(on: configuration.userContentController)
         applyInspectorDefaults()
     }
     
@@ -29,11 +30,18 @@ final class WIWebView: WKWebView {
 
     private static func makeInspectorContentController() -> WKUserContentController {
         let controller = WKUserContentController()
-        let scripts = DOMTreeViewScriptSource.userScripts()
-        for script in scripts {
+        installDOMTreeViewScriptsIfNeeded(on: controller)
+        return controller
+    }
+
+    private static func installDOMTreeViewScriptsIfNeeded(on controller: WKUserContentController) {
+        let existingSources = Set(controller.userScripts.map(\.source))
+        for script in DOMTreeViewScriptSource.userScripts() {
+            if existingSources.contains(script.source) {
+                continue
+            }
             controller.addUserScript(script)
         }
-        return controller
     }
     
     private func applyInspectorDefaults() {
