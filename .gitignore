@@ -8,3 +8,4 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 AGENTS.md
+/Tools/ObfuscateJS/node_modules/
