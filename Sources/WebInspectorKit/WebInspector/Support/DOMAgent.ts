@@ -1,12 +1,13 @@
-import {captureDOM, captureDOMSubtree} from "./DOMAgent/DOMAgentDOMCore.js";
-import {clearHighlight, highlightDOMNode} from "./DOMAgent/DOMAgentOverlay.js";
-import {cancelElementSelection, startElementSelection} from "./DOMAgent/DOMAgentSelection.js";
+// @ts-nocheck
+import {captureDOM, captureDOMSubtree} from "./DOMAgent/DOMAgentDOMCore";
+import {clearHighlight, highlightDOMNode} from "./DOMAgent/DOMAgentOverlay";
+import {cancelElementSelection, startElementSelection} from "./DOMAgent/DOMAgentSelection";
 import {
     configureAutoSnapshot,
     disableAutoSnapshot,
     enableAutoSnapshotIfSupported,
     triggerSnapshotUpdate
-} from "./DOMAgent/DOMAgentSnapshot.js";
+} from "./DOMAgent/DOMAgentSnapshot";
 import {
     debugStatus,
     outerHTMLForNode,
@@ -15,7 +16,7 @@ import {
     selectorPathForNode,
     setAttributeForNode,
     xpathForNode
-} from "./DOMAgent/DOMAgentDOMUtils.js";
+} from "./DOMAgent/DOMAgentDOMUtils";
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();

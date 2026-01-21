@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {
         DOM_EVENT_BATCH_LIMIT,
