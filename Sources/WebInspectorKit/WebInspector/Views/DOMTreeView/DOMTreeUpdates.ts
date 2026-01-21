@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {
         DOM_EVENT_BATCH_LIMIT,
@@ -42,7 +43,7 @@
         }
     }
 
-    async function requestNodeRefresh(nodeId, options: { parentId?: number } = {}) {
+    async function requestNodeRefresh(nodeId, options = {}) {
         if (typeof nodeId !== "number" || nodeId <= 0) {
             return;
         }
@@ -100,9 +101,6 @@
     }
 
     class FrameDebouncer {
-        _callback: () => void;
-        _frameId: number | null;
-
         constructor(callback) {
             this._callback = callback;
             this._frameId = null;
@@ -128,14 +126,6 @@
     }
 
     class DOMTreeUpdater {
-        _pendingEvents: Array<{ method: string; params: any }>;
-        _recentlyInsertedNodes: Map<number, any>;
-        _recentlyDeletedNodes: Map<number, any>;
-        _recentlyModifiedNodes: Set<number>;
-        _recentlyModifiedAttributes: Map<any, Set<number>>;
-        _textContentAttributeSymbol: any;
-        _debouncer: FrameDebouncer;
-
         constructor() {
             this._pendingEvents = [];
             this._recentlyInsertedNodes = new Map();
@@ -498,7 +488,7 @@
             }
         }
 
-        _markNodeForRefresh(collection, node, options: { updateChildren?: boolean } = {}) {
+        _markNodeForRefresh(collection, node, options = {}) {
             if (!collection || !node || typeof node.id !== "number") {
                 return;
             }

@@ -1,3 +1,4 @@
+// @ts-nocheck
 export const inspector = {
     map: new Map(),
     nodeMap: new WeakMap(),

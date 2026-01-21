@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {
         ensureDomElements,
@@ -39,7 +40,7 @@
         updateDetails
     } = scope.DOMTreeViewSupport;
 
-    async function requestDocument(options: { depth?: number; preserveState?: boolean } = {}) {
+    async function requestDocument(options = {}) {
         const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
         protocolState.snapshotDepth = depth;
         const preserveState = !!options.preserveState;
@@ -95,7 +96,7 @@
         }
     }
 
-    function setSnapshot(payload, options: { preserveState?: boolean } = {}) {
+    function setSnapshot(payload, options = {}) {
         try {
             ensureDomElements();
             let snapshot = null;

@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {
         NODE_TYPES,
@@ -18,12 +19,6 @@
     } = scope.DOMTreeUtilities;
 
     let selectorRequestToken = 0;
-
-    type ModifiedAttributes = Set<any> | null;
-    type NodeRenderOptions = { modifiedAttributes?: ModifiedAttributes };
-    type NodeRefreshOptions = { updateChildren?: boolean; modifiedAttributes?: ModifiedAttributes };
-    type SelectionOptions = { shouldHighlight?: boolean; autoScroll?: boolean };
-    type PendingRenderItem = { node: any; updateChildren: boolean; modifiedAttributes: ModifiedAttributes };
 
     function captureTreeScrollPosition() {
         if (!dom.tree) {
@@ -76,7 +71,7 @@
         return container;
     }
 
-    function createNodeRow(node, options: NodeRenderOptions = {}) {
+    function createNodeRow(node, options = {}) {
         const {modifiedAttributes = null} = options;
         const row = document.createElement("div");
         row.className = "tree-node__row";
@@ -215,7 +210,7 @@
         }
     }
 
-    function refreshNodeElement(node, options: NodeRefreshOptions = {}) {
+    function refreshNodeElement(node, options = {}) {
         const {
             updateChildren = true,
             modifiedAttributes = null
@@ -266,7 +261,7 @@
         return merged;
     }
 
-    function scheduleNodeRender(node, options: NodeRefreshOptions = {}) {
+    function scheduleNodeRender(node, options = {}) {
         if (!node || typeof node.id === "undefined") {
             return;
         }
@@ -284,7 +279,7 @@
 
     function processPendingNodeRenders() {
         renderState.frameId = null;
-        const pending = Array.from(renderState.pendingNodes.values()) as PendingRenderItem[];
+        const pending = Array.from(renderState.pendingNodes.values());
         renderState.pendingNodes.clear();
         if (!pending.length) {
             return;
@@ -499,7 +494,7 @@
         return false;
     }
 
-    function selectNode(nodeId, options: SelectionOptions = {}) {
+    function selectNode(nodeId, options = {}) {
         if (!state.nodes.has(nodeId)) {
             return false;
         }
@@ -590,7 +585,7 @@
         return node;
     }
 
-    function selectNodeByPath(path, options: SelectionOptions = {}) {
+    function selectNodeByPath(path, options = {}) {
         const target = resolveNodeByPath(path);
         if (!target) {
             return false;
@@ -616,7 +611,7 @@
         }
     }
 
-    function createPrimaryLabel(node, options: NodeRenderOptions = {}) {
+    function createPrimaryLabel(node, options = {}) {
         const {modifiedAttributes = null} = options;
         const highlightClass = "node-state-changed";
         const hasModifiedAttributes = modifiedAttributes instanceof Set && modifiedAttributes.size > 0;

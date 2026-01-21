@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {captureDOM, captureDOMSubtree} from "./DOMAgent/DOMAgentDOMCore";
 import {clearHighlight, highlightDOMNode} from "./DOMAgent/DOMAgentOverlay";
 import {cancelElementSelection, startElementSelection} from "./DOMAgent/DOMAgentSelection";

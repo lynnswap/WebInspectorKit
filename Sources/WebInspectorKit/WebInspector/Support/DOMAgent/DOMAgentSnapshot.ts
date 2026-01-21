@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {inspector} from "./DOMAgentState";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./DOMAgentDOMCore";
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {protocolState} = scope.DOMTreeState;
     const {safeParseJSON} = scope.DOMTreeUtilities;

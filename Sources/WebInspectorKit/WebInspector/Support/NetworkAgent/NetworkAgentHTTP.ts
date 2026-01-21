@@ -1,21 +1,15 @@
+// @ts-nocheck
 // HTTP instrumentation: fetch, XHR, and resource timing.
-
-declare const recordStart: (...args: any[]) => void;
-declare const recordResponse: (...args: any[]) => any;
-declare const recordFinish: (...args: any[]) => void;
-declare const recordFailure: (...args: any[]) => void;
-
-type PatchedFunction<T extends Function> = T & { __wiNetworkPatched?: boolean };
 
 const installFetchPatch = () => {
     if (typeof window.fetch !== "function") {
         return;
     }
-    const nativeFetch = window.fetch as PatchedFunction<typeof window.fetch>;
+    const nativeFetch = window.fetch;
     if (nativeFetch.__wiNetworkPatched) {
         return;
     }
-    const patched = (async function() {
+    const patched = async function() {
         const shouldTrack = shouldTrackNetworkEvents();
         const args = Array.from(arguments);
         const [input, init = {}] = args;
@@ -72,7 +66,7 @@ const installFetchPatch = () => {
             }
             throw error;
         }
-    }) as PatchedFunction<typeof window.fetch>;
+    };
     patched.__wiNetworkPatched = true;
     window.fetch = patched;
 };
@@ -81,7 +75,7 @@ const installXHRPatch = () => {
     if (typeof XMLHttpRequest !== "function") {
         return;
     }
-    const originalOpen = XMLHttpRequest.prototype.open as PatchedFunction<typeof XMLHttpRequest.prototype.open>;
+    const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
 

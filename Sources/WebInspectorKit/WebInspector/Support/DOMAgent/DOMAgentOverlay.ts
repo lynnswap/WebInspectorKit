@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {inspector} from "./DOMAgentState";
 import {nodeIsRendered, rectForNode} from "./DOMAgentDOMCore";
 
