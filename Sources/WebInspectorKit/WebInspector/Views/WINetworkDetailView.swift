@@ -19,7 +19,7 @@ struct WINetworkDetailView: View {
             
             if let requestBody = entry.requestBody {
                 Section {
-                    WINetworkBodySection(
+                    WINetworkBodySectionView(
                         entry: entry,
                         viewModel: viewModel,
                         bodyState: requestBody
@@ -35,9 +35,9 @@ struct WINetworkDetailView: View {
                 Text("network.section.response")
             }
             
-            if let bodyState = entry.responseBody{
+            if let bodyState = entry.responseBody {
                 Section {
-                    WINetworkBodySection(
+                    WINetworkBodySectionView(
                         entry: entry,
                         viewModel: viewModel,
                         bodyState: bodyState
@@ -130,88 +130,6 @@ struct WINetworkDetailView: View {
     }
 }
 
-
-private extension WINetworkBody.FetchError {
-    var localizedResource: LocalizedStringResource {
-        switch self {
-        case .unavailable:
-            return LocalizedStringResource("network.body.fetch.error.unavailable", bundle: .module)
-        case .decodeFailed:
-            return LocalizedStringResource("network.body.fetch.error.decode_failed", bundle: .module)
-        case .unknown:
-            return LocalizedStringResource("network.body.fetch.error.unknown", bundle: .module)
-        }
-    }
-}
-
-private struct WINetworkBodySection: View {
-    let entry: WINetworkEntry
-    let viewModel: WINetworkViewModel
-    let bodyState: WINetworkBody
-
-    var body: some View {
-        VStack(alignment:.leading) {
-            if let text = bodyState.displayText {
-                Text(text)
-                    .frame(maxWidth:.infinity,alignment:.leading)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .truncationMode(.tail)
-                    .lineLimit(12)
-                 
-            } else {
-                Text("network.body.unavailable")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            if bodyState.fetchState == .inline {
-                fetchButton
-                if case let .failed(error) = bodyState.fetchState {
-                    Text(error.localizedResource)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .networkListRowStyle()
-                }
-            }
-        }
-        .networkListRowStyle()
-        .animation(.easeInOut(duration:0.16),value:bodyState.fetchState)
-    }
-    private var fetchButton: some View {
-        Button {
-            Task {
-                switch bodyState.role{
-                case .request: await viewModel.fetchRequestBody(for: entry)
-                case .response: await viewModel.fetchResponseBody(for: entry)
-                }
-            }
-        } label: {
-            if bodyState.fetchState == .fetching {
-                ProgressView()
-                    .controlSize(.mini)
-            } else {
-                Text("network.body.fetch")
-                    .padding(.horizontal)
-            }
-        }
-        .fetchButtonStyle()
-        .font(.footnote)
-    }
-}
-private extension View{
-    @ViewBuilder
-    func fetchButtonStyle() -> some View{
-        if #available(iOS 26.0,macOS 26.0, *) {
-            self
-                .buttonStyle(.glassProminent)
-                .buttonSizing(.fitted)
-        }else{
-            self
-                .buttonStyle(.borderedProminent)
-        }
-    }
-}
-
 private struct WINetworkHeaderSection: View {
     let headers: WINetworkHeaders
 
@@ -243,7 +161,7 @@ private struct WINetworkHeaderSection: View {
     }
 }
 
-private extension View {
+extension View {
     func networkListRowStyle() -> some View {
         padding(.vertical, 10)
             .padding(.horizontal, 12)
@@ -256,7 +174,7 @@ private extension View {
     }
 
     @ViewBuilder
-    private var networkListRowBackground: some View {
+    var networkListRowBackground: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.secondary.opacity(0.12))
@@ -346,8 +264,45 @@ private func makeWINetworkDetailPreview() -> (entry: WINetworkEntry, viewModel: 
     return (entry, viewModel)
 }
 
+@MainActor
+private func makeWINetworkDetailNeedsFetchPreview() -> (entry: WINetworkEntry, viewModel: WINetworkViewModel) {
+    let viewModel = makeWINetworkPreviewModel()
+    let store = viewModel.store
+
+    let entry = store.entries.first { entry in
+        if let requestBody = entry.requestBody,
+           requestBody.fetchState != .full,
+           let reference = requestBody.reference,
+           !reference.isEmpty {
+            return true
+        }
+        if let responseBody = entry.responseBody,
+           responseBody.fetchState != .full,
+           let reference = responseBody.reference,
+           !reference.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    guard let resolvedEntry = entry ?? store.entries.last else {
+        fatalError("WINetworkDetailView preview requires at least one entry")
+    }
+    return (resolvedEntry, viewModel)
+}
+
 #Preview("Network Detail") {
     let preview = makeWINetworkDetailPreview()
+    return NavigationStack {
+        WINetworkDetailView(entry: preview.entry, viewModel: preview.viewModel)
+    }
+#if os(macOS)
+    .frame(width: 540, height: 480)
+#endif
+}
+
+#Preview("Network Detail (Needs Fetch)") {
+    let preview = makeWINetworkDetailNeedsFetchPreview()
     return NavigationStack {
         WINetworkDetailView(entry: preview.entry, viewModel: preview.viewModel)
     }

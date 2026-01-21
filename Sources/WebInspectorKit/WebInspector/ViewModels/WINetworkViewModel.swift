@@ -2,11 +2,15 @@ import WebKit
 import SwiftUI
 import Observation
 
+typealias WINetworkBodyFetchHandler = @MainActor (WINetworkEntry, WINetworkBody.Role) async -> WINetworkBody.FetchError?
+
 @MainActor
 @Observable
 public final class WINetworkViewModel {
     public let session: WINetworkSession
+    private let bodyFetchHandler: WINetworkBodyFetchHandler
     public var selectedEntryID: UUID?
+    public var navigationPath = NavigationPath()
     public var store: WINetworkStore {
         session.store
     }
@@ -39,8 +43,18 @@ public final class WINetworkViewModel {
         return filteredEntries.sorted(using: sortDescriptors)
     }
 
-    public init(session: WINetworkSession = WINetworkSession()) {
+    public convenience init(session: WINetworkSession = WINetworkSession()) {
+        self.init(
+            session: session,
+            bodyFetchHandler: { entry, role in
+                await session.fetchBody(for: entry, role: role)
+            }
+        )
+    }
+
+    init(session: WINetworkSession, bodyFetchHandler: @escaping WINetworkBodyFetchHandler) {
         self.session = session
+        self.bodyFetchHandler = bodyFetchHandler
     }
 
     public func attach(to webView: WKWebView) {
@@ -57,7 +71,7 @@ public final class WINetworkViewModel {
             return
         }
         body.markFetching()
-        let error = await session.fetchBody(for: entry, role: .request)
+        let error = await bodyFetchHandler(entry, .request)
         if let error {
             body.markFailed(error)
         }
@@ -69,14 +83,37 @@ public final class WINetworkViewModel {
             return
         }
         body.markFetching()
-        let error = await session.fetchBody(for: entry, role: .response)
+        let error = await bodyFetchHandler(entry, .response)
         if let error {
             body.markFailed(error)
         }
     }
 
+    public func fetchBodyIfNeeded(
+        for entry: WINetworkEntry,
+        body: WINetworkBody,
+        force: Bool = false
+    ) async {
+        if body.fetchState == .fetching {
+            return
+        }
+        if !body.canFetchBody {
+            return
+        }
+        if !force && body.fetchState == .full {
+            return
+        }
+        switch body.role {
+        case .request:
+            await fetchRequestBody(for: entry)
+        case .response:
+            await fetchResponseBody(for: entry)
+        }
+    }
+
     public func clearNetworkLogs() {
         selectedEntryID = nil
+        navigationPath = NavigationPath()
         session.clearNetworkLogs()
     }
 
