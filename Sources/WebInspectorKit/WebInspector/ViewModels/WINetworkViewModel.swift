@@ -10,6 +10,7 @@ public final class WINetworkViewModel {
     public let session: WINetworkSession
     private let bodyFetchHandler: WINetworkBodyFetchHandler
     public var selectedEntryID: UUID?
+    public var navigationPath = NavigationPath()
     public var store: WINetworkStore {
         session.store
     }
@@ -112,6 +113,7 @@ public final class WINetworkViewModel {
 
     public func clearNetworkLogs() {
         selectedEntryID = nil
+        navigationPath = NavigationPath()
         session.clearNetworkLogs()
     }
 

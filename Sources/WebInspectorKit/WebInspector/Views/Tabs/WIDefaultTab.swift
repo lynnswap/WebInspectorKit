@@ -87,8 +87,9 @@ public extension WITab {
             value: WIDefaultTab.network.identifier,
             role: .inspector,
             content: { model in
-                NavigationStack{
-                    WINetworkView(viewModel: model.network)
+                @Bindable var network = model.network
+                NavigationStack(path: $network.navigationPath) {
+                    WINetworkView(viewModel: network)
                         .networkInspectorToolbar(model, identifier: WIDefaultTab.network.identifier)
                 }
             }
