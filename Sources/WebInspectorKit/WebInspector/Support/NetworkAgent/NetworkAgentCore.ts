@@ -1,8 +1,7 @@
-// @ts-nocheck
 // Core orchestrator: shared helpers live in NetworkAgentUtils.ts
 // This file keeps recording logic and wires sub-patches.
 
-const buildNetworkError = (error, requestType, options = {}) => {
+const buildNetworkError = (error, requestType, options: { isCanceled?: boolean; isTimeout?: boolean } = {}) => {
     let message = "";
     if (error && typeof error.message === "string" && error.message) {
         message = error.message;
@@ -28,7 +27,7 @@ const buildNetworkError = (error, requestType, options = {}) => {
         domain = "resource";
     }
 
-    const payload = {
+    const payload: Record<string, any> = {
         domain,
         message
     };
@@ -148,7 +147,7 @@ const recordFinish = (
     trackedRequests.delete(requestId);
 };
 
-const recordFailure = (requestId, error, requestType, options = {}) => {
+const recordFailure = (requestId, error, requestType, options: { isCanceled?: boolean; isTimeout?: boolean } = {}) => {
     const time = makeNetworkTime();
     enqueueNetworkEvent({
         kind: "loadingFailed",

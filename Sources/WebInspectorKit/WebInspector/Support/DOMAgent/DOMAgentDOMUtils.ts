@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {inspector} from "./DOMAgentState";
 import {clearHighlight} from "./DOMAgentOverlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./DOMAgentSnapshot";
