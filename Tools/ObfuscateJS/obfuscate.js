@@ -174,9 +174,9 @@ function containsModuleSyntax(source) {
 }
 
 function transpileTypeScript(source, filePath, ts) {
-  const moduleKind = Object.prototype.hasOwnProperty.call(ts.ModuleKind, "ES2022")
-    ? ts.ModuleKind.ES2022
-    : ts.ModuleKind.ESNext;
+  const moduleKind = Object.prototype.hasOwnProperty.call(ts.ModuleKind, "ESNext")
+    ? ts.ModuleKind.ESNext
+    : ts.ModuleKind.ES2022;
   const result = ts.transpileModule(source, {
     fileName: filePath,
     compilerOptions: {
