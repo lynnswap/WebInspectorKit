@@ -1,8 +1,14 @@
-// @ts-nocheck
 import {inspector} from "./DOMAgentState";
 import {computeNodePath} from "./DOMAgentDOMCore";
 import {clearHighlight, highlightSelectionNode} from "./DOMAgentOverlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./DOMAgentSnapshot";
+
+type SelectionState = {
+    active: boolean;
+    latestTarget: any;
+    bindings: Array<[string, EventListenerOrEventListenerObject]>;
+    cancel?: () => void;
+};
 
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {
@@ -87,7 +93,7 @@ function scheduleWindowClickBlockerRelease() {
 export function startElementSelection() {
     cancelElementSelection();
     return new Promise(function(resolve) {
-        var state = {
+        var state: SelectionState = {
             active: true,
             latestTarget: null,
             bindings: []

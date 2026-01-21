@@ -1,5 +1,6 @@
-// @ts-nocheck
 const MAX_WS_FRAME_BODY_LENGTH = typeof MAX_INLINE_BODY_LENGTH === "number" ? MAX_INLINE_BODY_LENGTH : 64 * 1024;
+
+declare const enqueueEvent: (event: any) => void;
 
 const serializeFramePayload = async data => {
     if (data == null) {
@@ -24,7 +25,7 @@ const serializeFramePayload = async data => {
         if (bytes) {
             const truncated = bytes.byteLength > MAX_WS_FRAME_BODY_LENGTH;
             const slice = truncated ? bytes.slice(0, MAX_WS_FRAME_BODY_LENGTH) : bytes;
-            const binary = Array.from(slice, byte => String.fromCharCode(byte)).join("");
+            const binary = Array.from(slice as Uint8Array, byte => String.fromCharCode(byte)).join("");
             const base64 = btoa(binary);
             return {payload: base64, base64: true, size: bytes.byteLength, truncated: truncated};
         }
@@ -37,7 +38,7 @@ const installWebSocketPatch = () => {
     if (typeof WebSocket !== "function") {
         return;
     }
-    const OriginalWebSocket = WebSocket;
+    const OriginalWebSocket = WebSocket as any;
     function WrappedWebSocket(url, protocols) {
         const socket = new OriginalWebSocket(url, protocols);
         if (!shouldTrackNetworkEvents()) {
@@ -77,7 +78,7 @@ const installWebSocketPatch = () => {
             });
         });
 
-        socket.addEventListener("message", async event => {
+        socket.addEventListener("message", async (event: MessageEvent) => {
             if (!shouldTrackNetworkEvents()) {
                 return;
             }
@@ -120,7 +121,7 @@ const installWebSocketPatch = () => {
             return originalSend.apply(this, arguments);
         };
 
-        socket.addEventListener("close", event => {
+        socket.addEventListener("close", (event: CloseEvent) => {
             if (!shouldTrackNetworkEvents()) {
                 return;
             }
@@ -136,7 +137,7 @@ const installWebSocketPatch = () => {
             });
         });
 
-        socket.addEventListener("error", event => {
+        socket.addEventListener("error", (event: any) => {
             if (!shouldTrackNetworkEvents()) {
                 return;
             }
@@ -160,8 +161,9 @@ const installWebSocketPatch = () => {
     WrappedWebSocket.CLOSING = OriginalWebSocket.CLOSING;
     WrappedWebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
     WrappedWebSocket.OPEN = OriginalWebSocket.OPEN;
-    window.WebSocket = WrappedWebSocket;
+    window.WebSocket = WrappedWebSocket as any;
 };
+
 const postWebSocketEvent = payload => {
     if (!isActiveLogging()) {
         if (shouldQueueNetworkEvent()) {

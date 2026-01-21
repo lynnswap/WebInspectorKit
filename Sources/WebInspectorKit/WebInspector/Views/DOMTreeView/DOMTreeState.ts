@@ -1,4 +1,3 @@
-// @ts-nocheck
 (function(scope) {
     const dom = {
         tree: document.getElementById("dom-tree"),

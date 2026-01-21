@@ -1,4 +1,3 @@
-// @ts-nocheck
 const now = () => {
     if (typeof performance !== "undefined" && typeof performance.now === "function") {
         return performance.now();
@@ -8,13 +7,13 @@ const now = () => {
 
 const wallTime = () => Date.now();
 
-const makeNetworkTime = (monotonicOverride, wallOverride) => {
+const makeNetworkTime = (monotonicOverride?: number, wallOverride?: number) => {
     const monotonicMs = typeof monotonicOverride === "number" ? monotonicOverride : now();
     const wallMs = typeof wallOverride === "number" ? wallOverride : wallTime();
     return {monotonicMs, wallMs};
 };
 
-const makeNetworkTimeAt = (monotonicMs, nowMonotonic, nowWall) => {
+const makeNetworkTimeAt = (monotonicMs?: number, nowMonotonic?: number, nowWall?: number) => {
     const fallback = makeNetworkTime();
     if (!Number.isFinite(monotonicMs)) {
         return fallback;
@@ -241,7 +240,7 @@ const buildStoredBodyPayload = bodyInfo => {
         return null;
     }
     const encoding = bodyInfo.base64Encoded ? "base64" : (bodyInfo.kind === "binary" ? "none" : "utf-8");
-    const payload = {
+    const payload: Record<string, any> = {
         kind: bodyInfo.kind || "other",
         encoding: encoding,
         truncated: !!bodyInfo.truncated
@@ -272,7 +271,7 @@ const makeBodyPreviewPayload = (bodyInfo, ref) => {
         return undefined;
     }
     const encoding = bodyInfo.base64Encoded ? "base64" : (bodyInfo.kind === "binary" ? "none" : "utf-8");
-    const payload = {
+    const payload: Record<string, any> = {
         kind: bodyInfo.kind || "other",
         encoding: encoding,
         truncated: !!bodyInfo.truncated
@@ -313,8 +312,23 @@ const DEFAULT_THROTTLE_INTERVAL_MS = 50;
  * @property {string=} summary
  * @property {Array<{name:string,value:string,isFile?:boolean,fileName?:string,size?:number}>=} formEntries
  */
+type RequestBodyInfo = {
+    kind?: string;
+    body?: string;
+    base64Encoded?: boolean;
+    truncated?: boolean;
+    size?: number;
+    storageBody?: string;
+    summary?: string;
+    preview?: string;
+    formEntries?: Array<{ name: string; value: string; isFile?: boolean; fileName?: string; size?: number }>;
+};
 
 class BodyCache {
+    maxBytes: number;
+    usedBytes: number;
+    entries: Map<string, { body: any; size: number }>;
+
     constructor(maxBytes) {
         this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : Infinity;
         this.usedBytes = 0;
@@ -438,7 +452,7 @@ const deliverNetworkEvents = events => {
     if (!Array.isArray(events) || !events.length) {
         return;
     }
-    const payload = {
+    const payload: Record<string, any> = {
         version: NETWORK_EVENT_VERSION,
         sessionId: networkState.sessionID,
         seq: networkState.batchSeq + 1,
@@ -578,7 +592,7 @@ const parseRawHeaders = raw => {
 };
 
 /** @returns {RequestBodyInfo} */
-const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize, storageLimit = Infinity) => {
+const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize?: number, storageLimit = Infinity): RequestBodyInfo => {
     const stringified = typeof text === "string" ? text : String(text ?? "");
     const encoded = encodeTextToBytes(stringified);
     const measuredSize = encoded ? encoded.byteLength : stringified.length;
@@ -597,7 +611,7 @@ const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedS
 };
 
 /** @returns {RequestBodyInfo} */
-const serializeBinaryBodySummary = (size, label) => {
+const serializeBinaryBodySummary = (size, label): RequestBodyInfo => {
     const knownSize = Number.isFinite(size) && size >= 0 ? size : undefined;
     const description = label || "Binary body";
     const summary = knownSize != null ? description + " (" + knownSize + " bytes)" : description;
@@ -614,7 +628,7 @@ const serializeBinaryBodySummary = (size, label) => {
 };
 
 /** @returns {RequestBodyInfo|null} */
-const serializeFormDataBody = (formData, storageLimit = Infinity) => {
+const serializeFormDataBody = (formData, storageLimit = Infinity): RequestBodyInfo | null => {
     try {
         if (typeof formData.forEach !== "function") {
             return null;
@@ -676,7 +690,7 @@ const serializeFormDataBody = (formData, storageLimit = Infinity) => {
     return null;
 };
 
-const serializeRequestBody = (body, storageLimit = MAX_CAPTURE_BODY_LENGTH) => {
+const serializeRequestBody = (body, storageLimit = MAX_CAPTURE_BODY_LENGTH): RequestBodyInfo | null => {
     if (body == null) {
         return null;
     }

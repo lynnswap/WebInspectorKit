@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {inspector} from "./DOMAgentState";
 
 export function rememberNode(node) {
@@ -121,7 +120,7 @@ export function textNodeIsRendered(node) {
     return rect && (rect.width || rect.height);
 }
 
-export function describe(node, depth, maxDepth, selectionPath, childLimit) {
+export function describe(node: any, depth: number, maxDepth: number, selectionPath: number[] | null, childLimit?: number) {
     if (!node) {
         return null;
     }
@@ -131,7 +130,7 @@ export function describe(node, depth, maxDepth, selectionPath, childLimit) {
         return null;
     }
 
-    var descriptor = {
+    var descriptor: Record<string, any> = {
         nodeId: identifier,
         nodeType: node.nodeType || 0,
         nodeName: node.nodeName || "",
@@ -156,8 +155,9 @@ export function describe(node, depth, maxDepth, selectionPath, childLimit) {
     }
 
     if (node.nodeType === Node.DOCUMENT_NODE) {
+        const documentAny = document as any;
         descriptor.documentURL = document.URL || "";
-        descriptor.xmlVersion = document.xmlVersion || "";
+        descriptor.xmlVersion = typeof documentAny.xmlVersion === "string" ? documentAny.xmlVersion : "";
     } else if (node.nodeType === Node.DOCUMENT_TYPE_NODE) {
         descriptor.publicId = node.publicId || "";
         descriptor.systemId = node.systemId || "";
