@@ -67,11 +67,17 @@ struct WINetworkJSONNode: Identifiable {
     private static func makeChildren(from value: JSONValue) -> [WINetworkJSONNode]? {
         switch value {
         case .object(let dictionary):
+            if dictionary.isEmpty {
+                return nil
+            }
             let keys = Array(dictionary.keys)
             return keys.map { key in
                 WINetworkJSONNode(key: key, value: dictionary[key] ?? .null, isIndex: false)
             }
         case .array(let array):
+            if array.isEmpty {
+                return nil
+            }
             return array.enumerated().map { index, item in
                 WINetworkJSONNode(key: String(index), value: item, isIndex: true)
             }

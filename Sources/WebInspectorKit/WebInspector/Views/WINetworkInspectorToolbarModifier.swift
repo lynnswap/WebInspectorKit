@@ -36,12 +36,12 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
         ToolbarItem(placement: .primaryAction) {
             Menu {
                 Toggle(isOn: viewModel.bindingForAllResourceFilters()) {
-                    Text(verbatim: WINetworkResourceFilter.all.displayTitle)
+                    Text(WINetworkResourceFilter.all.localizedTitle)
                 }
                 Divider()
                 ForEach(WINetworkResourceFilter.pickerCases) { filter in
                     Toggle(isOn: viewModel.bindingForResourceFilter(filter)) {
-                        Text(verbatim: filter.displayTitle)
+                        Text(filter.localizedTitle)
                     }
                 }
             } label: {
@@ -78,24 +78,24 @@ struct WINetworkInspectorToolbarModifier: ViewModifier {
 }
 
 private extension WINetworkResourceFilter {
-    var displayTitle: String {
+    var localizedTitle: LocalizedStringResource {
         switch self {
         case .all:
-            return "All"
+            return LocalizedStringResource("network.filter.all", bundle: .module)
         case .document:
-            return "Document"
+            return LocalizedStringResource("network.filter.document", bundle: .module)
         case .stylesheet:
-            return "CSS"
+            return LocalizedStringResource("network.filter.stylesheet", bundle: .module)
         case .image:
-            return "Image"
+            return LocalizedStringResource("network.filter.image", bundle: .module)
         case .font:
-            return "Font"
+            return LocalizedStringResource("network.filter.font", bundle: .module)
         case .script:
-            return "JS"
+            return LocalizedStringResource("network.filter.script", bundle: .module)
         case .xhrFetch:
-            return "XHR / Fetch"
+            return LocalizedStringResource("network.filter.xhr_fetch", bundle: .module)
         case .other:
-            return "Other"
+            return LocalizedStringResource("network.filter.other", bundle: .module)
         }
     }
 }
