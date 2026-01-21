@@ -1,6 +1,5 @@
-// @ts-nocheck
-import {inspector} from "./DOMAgentState";
-import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./DOMAgentDOMCore";
+import {inspector} from "./DOMAgentState.js";
+import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./DOMAgentDOMCore.js";
 
 function autoSnapshotHandler() {
     return window?.webkit?.messageHandlers?.webInspectorDOMSnapshot || null;

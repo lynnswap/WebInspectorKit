@@ -1,10 +1,9 @@
-// @ts-nocheck
 import {
     clearNetworkRecords,
     configureNetwork,
     installNetworkObserver,
     getBody
-} from "./NetworkAgent/NetworkAgentCore";
+} from "./NetworkAgent/NetworkAgentCore.js";
 
 if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed)) {
     installNetworkObserver();

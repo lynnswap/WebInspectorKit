@@ -1,4 +1,3 @@
-// @ts-nocheck
 const MAX_WS_FRAME_BODY_LENGTH = typeof MAX_INLINE_BODY_LENGTH === "number" ? MAX_INLINE_BODY_LENGTH : 64 * 1024;
 
 const serializeFramePayload = async data => {

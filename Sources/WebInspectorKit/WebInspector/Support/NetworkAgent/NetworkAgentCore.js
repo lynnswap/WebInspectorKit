@@ -1,5 +1,4 @@
-// @ts-nocheck
-// Core orchestrator: shared helpers live in NetworkAgentUtils.ts
+// Core orchestrator: shared helpers live in NetworkAgentUtils.js
 // This file keeps recording logic and wires sub-patches.
 
 const buildNetworkError = (error, requestType, options = {}) => {

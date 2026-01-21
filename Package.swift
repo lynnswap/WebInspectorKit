@@ -24,22 +24,17 @@ let package = Package(
             path: "Sources/WebInspectorKit",
             resources: [
                 .process("Localizable.xcstrings"),
-                .process("WebInspector/Views/DOMTreeView/DOMTreeView.html"),
-                .process("WebInspector/Views/DOMTreeView/DOMTreeView.css"),
-                .process("WebInspector/Views/DOMTreeView/DisclosureTriangles.svg")
-            ],
-            plugins: [
-                .plugin(name: "WebInspectorKitObfuscatePlugin")
+                .process("WebInspector/Views/DOMTreeView"),
+                .process("WebInspector/Support/DOMAgent.js"),
+                .process("WebInspector/Support/NetworkAgent.js"),
+                .process("WebInspector/Support/DOMAgent"),
+                .process("WebInspector/Support/NetworkAgent")
             ]
         ),
         .testTarget(
             name: "WebInspectorKitTests",
             dependencies: ["WebInspectorKit"]
         ),
-        .plugin(
-            name: "WebInspectorKitObfuscatePlugin",
-            capability: .buildTool()
-        )
 
     ]
 )

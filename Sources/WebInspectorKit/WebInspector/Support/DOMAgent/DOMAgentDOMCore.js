@@ -1,5 +1,4 @@
-// @ts-nocheck
-import {inspector} from "./DOMAgentState";
+import {inspector} from "./DOMAgentState.js";
 
 export function rememberNode(node) {
     if (!node) {

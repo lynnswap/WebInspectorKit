@@ -1,4 +1,3 @@
-// @ts-nocheck
 (function() {
     const {DOMTreeProtocol, DOMTreeSnapshot, DOMTreeViewSupport} = window.DOMTree || {};
     const {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // HTTP instrumentation: fetch, XHR, and resource timing.
 
 const installFetchPatch = () => {

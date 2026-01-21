@@ -1,6 +1,5 @@
-// @ts-nocheck
-import {inspector} from "./DOMAgentState";
-import {nodeIsRendered, rectForNode} from "./DOMAgentDOMCore";
+import {inspector} from "./DOMAgentState.js";
+import {nodeIsRendered, rectForNode} from "./DOMAgentDOMCore.js";
 
 function ensureOverlay() {
     var overlay = inspector.overlay;

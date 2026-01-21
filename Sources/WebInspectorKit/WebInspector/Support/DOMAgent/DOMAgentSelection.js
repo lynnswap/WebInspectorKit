@@ -1,8 +1,7 @@
-// @ts-nocheck
-import {inspector} from "./DOMAgentState";
-import {computeNodePath} from "./DOMAgentDOMCore";
-import {clearHighlight, highlightSelectionNode} from "./DOMAgentOverlay";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./DOMAgentSnapshot";
+import {inspector} from "./DOMAgentState.js";
+import {computeNodePath} from "./DOMAgentDOMCore.js";
+import {clearHighlight, highlightSelectionNode} from "./DOMAgentOverlay.js";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./DOMAgentSnapshot.js";
 
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {

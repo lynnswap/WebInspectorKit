@@ -62,39 +62,35 @@ enum WIScript {
         let fileName = components.last ?? name
         let subpath = components.dropLast().joined(separator: "/")
 
+        let candidateSubdirectories = [
+            ["WebInspector", "Support", subpath].filter { !$0.isEmpty }.joined(separator: "/"),
+            "WebInspector/Support",
+            nil
+        ]
+
+        var resolvedURL: URL?
+        for subdir in candidateSubdirectories {
+            if let url = WIAssets.locateResource(
+                named: fileName,
+                withExtension: "js",
+                subdirectory: subdir
+            ) {
+                resolvedURL = url
+                break
+            }
+        }
+
+        guard let url = resolvedURL else {
+            scriptLogger.error("missing web inspector module: \(name, privacy: .public)")
+            throw WIError.scriptUnavailable
+        }
+
         let rawSource: String
-        if let bundled = WIScriptBundle.source(named: fileName) {
-            rawSource = bundled
-        } else {
-            let candidateSubdirectories = [
-                ["WebInspector", "Support", subpath].filter { !$0.isEmpty }.joined(separator: "/"),
-                "WebInspector/Support",
-                nil
-            ]
-
-            var resolvedURL: URL?
-            for subdir in candidateSubdirectories {
-                if let url = WIAssets.locateResource(
-                    named: fileName,
-                    withExtension: "js",
-                    subdirectory: subdir
-                ) {
-                    resolvedURL = url
-                    break
-                }
-            }
-
-            guard let url = resolvedURL else {
-                scriptLogger.error("missing web inspector module: \(name, privacy: .public)")
-                throw WIError.scriptUnavailable
-            }
-
-            do {
-                rawSource = try String(contentsOf: url, encoding: .utf8)
-            } catch {
-                scriptLogger.error("failed to load web inspector module \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                throw WIError.scriptUnavailable
-            }
+        do {
+            rawSource = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            scriptLogger.error("failed to load web inspector module \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            throw WIError.scriptUnavailable
         }
 
         let withoutImports = rawSource
