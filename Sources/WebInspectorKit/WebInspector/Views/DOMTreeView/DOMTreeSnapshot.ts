@@ -39,7 +39,7 @@
         updateDetails
     } = scope.DOMTreeViewSupport;
 
-    async function requestDocument(options = {}) {
+    async function requestDocument(options: { depth?: number; preserveState?: boolean } = {}) {
         const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
         protocolState.snapshotDepth = depth;
         const preserveState = !!options.preserveState;
@@ -95,7 +95,7 @@
         }
     }
 
-    function setSnapshot(payload, options = {}) {
+    function setSnapshot(payload, options: { preserveState?: boolean } = {}) {
         try {
             ensureDomElements();
             let snapshot = null;
