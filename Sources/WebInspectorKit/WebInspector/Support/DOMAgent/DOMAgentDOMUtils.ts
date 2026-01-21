@@ -1,6 +1,7 @@
-import {inspector} from "./DOMAgentState.js";
-import {clearHighlight} from "./DOMAgentOverlay.js";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./DOMAgentSnapshot.js";
+// @ts-nocheck
+import {inspector} from "./DOMAgentState";
+import {clearHighlight} from "./DOMAgentOverlay";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./DOMAgentSnapshot";
 
 function resolveNode(identifier) {
     var map = inspector.map;

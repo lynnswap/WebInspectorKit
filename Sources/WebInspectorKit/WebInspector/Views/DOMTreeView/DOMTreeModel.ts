@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {NODE_TYPES, treeState: state} = scope.DOMTreeState;
     const {

@@ -1,3 +1,4 @@
+// @ts-nocheck
 (function(scope) {
     const {
         INDENT_DEPTH_LIMIT,
