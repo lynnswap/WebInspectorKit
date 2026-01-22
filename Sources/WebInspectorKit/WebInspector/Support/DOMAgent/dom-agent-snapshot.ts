@@ -4,6 +4,7 @@ import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./dom-agent
 const MAX_PENDING_MUTATIONS = 1500;
 const MAX_LAYOUT_INFO_RECORDS = 400;
 const MAX_LAYOUT_INFO_NODES = 200;
+const MIN_LAYOUT_INFO_NODES = 40;
 const COMPACT_EVENT_LIMIT = 600;
 const COMPACT_SNAPSHOT_DEPTH = 2;
 
@@ -182,9 +183,14 @@ function buildDomMutationEvents(records, maxDepth) {
     var layoutInfoCache = new Map();
     var descriptorDepth = Math.min(1, Math.max(0, typeof maxDepth === "number" ? maxDepth : 1));
     var eventLimit = COMPACT_EVENT_LIMIT;
-    var includeLayoutInfo = records.length <= MAX_LAYOUT_INFO_RECORDS;
     var eventCount = 0;
     var layoutInfoBudget = MAX_LAYOUT_INFO_NODES;
+    if (records.length > MAX_LAYOUT_INFO_RECORDS) {
+        layoutInfoBudget = Math.max(
+            MIN_LAYOUT_INFO_NODES,
+            Math.floor((MAX_LAYOUT_INFO_NODES * MAX_LAYOUT_INFO_RECORDS) / records.length)
+        );
+    }
 
     function bumpEventCount() {
         eventCount += 1;
@@ -198,9 +204,6 @@ function buildDomMutationEvents(records, maxDepth) {
     }
 
     function getLayoutInfo(nodeId) {
-        if (!includeLayoutInfo) {
-            return null;
-        }
         if (layoutInfoCache.has(nodeId)) {
             return layoutInfoCache.get(nodeId);
         }
