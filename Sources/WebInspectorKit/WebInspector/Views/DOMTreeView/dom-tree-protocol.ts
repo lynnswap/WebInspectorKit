@@ -54,7 +54,13 @@ export function updateConfig(partial: ProtocolConfig | null | undefined): void {
 /** Send a raw protocol message to the backend */
 export function sendProtocolMessage(message: string | object): void {
     const payload = typeof message === "string" ? message : JSON.stringify(message);
-    window.webkit?.messageHandlers?.webInspectorProtocol?.postMessage(payload);
+    const handler = window.webkit?.messageHandlers?.webInspectorProtocol;
+    if (!handler || typeof handler.postMessage !== "function") {
+        const error = new Error("webInspectorProtocol handler unavailable");
+        reportInspectorError("protocol-handler", error);
+        throw error;
+    }
+    handler.postMessage(payload);
 }
 
 /** Send a protocol command and await the response */
