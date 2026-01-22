@@ -3,7 +3,7 @@ import {
     configureNetwork,
     installNetworkObserver,
     getBody
-} from "./NetworkAgent/NetworkAgentCore.js";
+} from "./NetworkAgent/NetworkAgentCore";
 
 if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed)) {
     installNetworkObserver();

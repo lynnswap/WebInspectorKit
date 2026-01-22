@@ -1,4 +1,7 @@
+import OSLog
 import WebKit
+
+private let domTreeViewLogger = Logger(subsystem: "WebInspectorKit", category: "DOMTreeView")
 
 @MainActor
 final class WIWebView: WKWebView {
@@ -8,6 +11,7 @@ final class WIWebView: WKWebView {
     
     override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
+        Self.installDOMTreeViewScriptsIfNeeded(on: configuration.userContentController)
         applyInspectorDefaults()
     }
     
@@ -20,7 +24,24 @@ final class WIWebView: WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.writingToolsBehavior = .none
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.userContentController = makeInspectorContentController()
         return configuration
+    }
+
+    private static func makeInspectorContentController() -> WKUserContentController {
+        let controller = WKUserContentController()
+        installDOMTreeViewScriptsIfNeeded(on: controller)
+        return controller
+    }
+
+    private static func installDOMTreeViewScriptsIfNeeded(on controller: WKUserContentController) {
+        let existingSources = Set(controller.userScripts.map(\.source))
+        for script in DOMTreeViewScriptSource.userScripts() {
+            if existingSources.contains(script.source) {
+                continue
+            }
+            controller.addUserScript(script)
+        }
     }
     
     private func applyInspectorDefaults() {
@@ -48,4 +69,28 @@ final class WIWebView: WKWebView {
     
     }
 #endif
+}
+
+private enum DOMTreeViewScriptSource {
+    private static let scriptNames = [
+        "DOMTreeState",
+        "DOMTreeUtilities",
+        "DOMTreeProtocol",
+        "DOMTreeModel",
+        "DOMTreeViewSupport",
+        "DOMTreeUpdates",
+        "DOMTreeSnapshot",
+        "DOMTreeView"
+    ]
+
+    @MainActor
+    static func userScripts() -> [WKUserScript] {
+        scriptNames.compactMap { name in
+            guard let source = WIScriptBundle.source(named: name) else {
+                domTreeViewLogger.error("missing DOMTreeView script: \(name, privacy: .public)")
+                return nil
+            }
+            return WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        }
+    }
 }
