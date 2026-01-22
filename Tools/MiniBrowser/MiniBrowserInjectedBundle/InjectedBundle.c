@@ -3,9 +3,7 @@
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <dlfcn.h>
-#include <fcntl.h>
 #include <libkern/OSCacheControl.h>
-#include <limits.h>
 #include <mach/mach.h>
 #include <os/log.h>
 #include <stdbool.h>
@@ -105,41 +103,6 @@ static os_log_t injected_bundle_log(void)
     return log;
 }
 
-static int injected_bundle_log_fd = -1;
-
-static const char *injected_bundle_log_path(void)
-{
-    static char path[PATH_MAX];
-    if (path[0])
-        return path;
-    const char *tmpdir = getenv("TMPDIR");
-    if (!tmpdir || !tmpdir[0])
-        tmpdir = "/tmp";
-    size_t length = strlen(tmpdir);
-    const char *separator = (length && tmpdir[length - 1] == '/') ? "" : "/";
-    snprintf(path, sizeof(path), "%s%sMiniBrowserInjectedBundle.log", tmpdir, separator);
-    return path;
-}
-
-static void log_to_file(const char *message)
-{
-    if (!message)
-        return;
-    if (injected_bundle_log_fd < 0) {
-        const char *path = injected_bundle_log_path();
-        injected_bundle_log_fd = open(path, O_CREAT | O_APPEND | O_WRONLY, 0644);
-        if (injected_bundle_log_fd < 0)
-            return;
-    }
-    char line[768];
-    int length = snprintf(line, sizeof(line), "MiniBrowserInjectedBundle: %s\n", message);
-    if (length <= 0)
-        return;
-    if (length >= (int)sizeof(line))
-        length = (int)sizeof(line) - 1;
-    (void)write(injected_bundle_log_fd, line, (size_t)length);
-}
-
 static bool should_log(void)
 {
     return true;
@@ -155,7 +118,6 @@ static void log_line_always(const char *message)
 {
     fprintf(stderr, "MiniBrowserInjectedBundle: %s\n", message);
     log_to_unified_log(OS_LOG_TYPE_FAULT, message);
-    log_to_file(message);
     MiniBrowserInjectedBundleSendRemoteLog(message);
 }
 
@@ -165,7 +127,6 @@ static void log_line_if_enabled(const char *message)
         return;
     fprintf(stderr, "MiniBrowserInjectedBundle: %s\n", message);
     log_to_unified_log(OS_LOG_TYPE_FAULT, message);
-    log_to_file(message);
     MiniBrowserInjectedBundleSendRemoteLog(message);
 }
 
@@ -179,7 +140,6 @@ static void log_format_if_enabled(const char *format, ...)
     vsnprintf(buffer, sizeof(buffer), format, args);
     fprintf(stderr, "MiniBrowserInjectedBundle: %s\n", buffer);
     log_to_unified_log(OS_LOG_TYPE_FAULT, buffer);
-    log_to_file(buffer);
     MiniBrowserInjectedBundleSendRemoteLog(buffer);
     va_end(args);
 }
