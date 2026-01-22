@@ -131,9 +131,41 @@ function refreshTreeAfterDomUpdates(
     if (selectedNodeId) {
         const selectedNode = treeState.nodes.get(selectedNodeId);
         if (selectedNode) {
-            const shouldUpdateDetails =
+            let shouldUpdateDetails =
                 nodesToRefresh.has(selectedNodeId) ||
                 (modifiedAttrsByNode && modifiedAttrsByNode.has(selectedNodeId));
+
+            if (!shouldUpdateDetails && Array.isArray(treeState.selectionChain)) {
+                for (const nodeId of treeState.selectionChain) {
+                    if (nodeId === selectedNodeId) {
+                        continue;
+                    }
+                    if (
+                        nodesToRefresh.has(nodeId) ||
+                        (modifiedAttrsByNode && modifiedAttrsByNode.has(nodeId))
+                    ) {
+                        shouldUpdateDetails = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!shouldUpdateDetails) {
+                let current: DOMNode | undefined = selectedNode;
+                let guard = 0;
+                while (current && typeof current.parentId === "number" && guard < 200) {
+                    const parentId = current.parentId;
+                    if (
+                        nodesToRefresh.has(parentId) ||
+                        (modifiedAttrsByNode && modifiedAttrsByNode.has(parentId))
+                    ) {
+                        shouldUpdateDetails = true;
+                        break;
+                    }
+                    current = treeState.nodes.get(parentId);
+                    guard += 1;
+                }
+            }
             if (shouldUpdateDetails) {
                 updateDetails(selectedNode);
             }
