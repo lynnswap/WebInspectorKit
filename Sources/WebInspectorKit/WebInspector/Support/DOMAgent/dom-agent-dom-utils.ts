@@ -1,6 +1,6 @@
-import {inspector} from "./DOMAgentState";
-import {clearHighlight} from "./DOMAgentOverlay";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./DOMAgentSnapshot";
+import {inspector} from "./dom-agent-state";
+import {clearHighlight} from "./dom-agent-overlay";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./dom-agent-snapshot";
 
 function resolveNode(identifier) {
     var map = inspector.map;

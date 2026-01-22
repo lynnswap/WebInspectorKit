@@ -1,4 +1,4 @@
-import {inspector} from "./DOMAgentState";
+import {inspector} from "./dom-agent-state";
 
 export function rememberNode(node) {
     if (!node) {

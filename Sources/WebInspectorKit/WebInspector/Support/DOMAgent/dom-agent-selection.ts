@@ -1,7 +1,7 @@
-import {inspector} from "./DOMAgentState";
-import {computeNodePath} from "./DOMAgentDOMCore";
-import {clearHighlight, highlightSelectionNode} from "./DOMAgentOverlay";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./DOMAgentSnapshot";
+import {inspector} from "./dom-agent-state";
+import {computeNodePath} from "./dom-agent-dom-core";
+import {clearHighlight, highlightSelectionNode} from "./dom-agent-overlay";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
 
 type SelectionState = {
     active: boolean;
