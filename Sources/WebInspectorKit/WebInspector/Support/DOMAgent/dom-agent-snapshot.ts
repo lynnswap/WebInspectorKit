@@ -405,12 +405,12 @@ function sendAutoSnapshotUpdate() {
     }
     var result = buildDomMutationEvents(pending, 0);
     var messages = result.events;
-    if (!messages.length) {
-        sendFullSnapshot("fallback");
-        return;
-    }
     if (result.compactTriggered) {
         sendFullSnapshot("compact", COMPACT_SNAPSHOT_DEPTH);
+        return;
+    }
+    if (!messages.length) {
+        sendFullSnapshot("fallback");
         return;
     }
     var reason = inspector.snapshotAutoUpdateReason || "mutation";
