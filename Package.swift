@@ -24,8 +24,8 @@ let package = Package(
             path: "Sources/WebInspectorKit",
             resources: [
                 .process("Localizable.xcstrings"),
-                .process("WebInspector/Views/DOMTreeView/DOMTreeView.html"),
-                .process("WebInspector/Views/DOMTreeView/DOMTreeView.css"),
+                .process("WebInspector/Views/DOMTreeView/dom-tree-view.html"),
+                .process("WebInspector/Views/DOMTreeView/dom-tree-view.css"),
                 .process("WebInspector/Views/DOMTreeView/DisclosureTriangles.svg")
             ],
             plugins: [

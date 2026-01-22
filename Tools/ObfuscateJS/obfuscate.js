@@ -259,10 +259,16 @@ async function main() {
 
   const scripts = {};
   const entryFiles = collectEntryFiles(inputDir).sort();
+  const entryNames = new Set();
+
   if (entryFiles.length > 0) {
     const esbuild = loadEsbuild();
     for (const entryPath of entryFiles) {
       const name = getScriptName(entryPath);
+      if (entryNames.has(name)) {
+        throw new Error(`Duplicate JS module name: ${name}`);
+      }
+      entryNames.add(name);
       if (Object.prototype.hasOwnProperty.call(scripts, name)) {
         throw new Error(`Duplicate JS module name: ${name}`);
       }
@@ -287,43 +293,46 @@ async function main() {
       }
       scripts[name] = result.code;
     }
-  } else {
-    const files = collectScriptFiles(inputDir);
-    const tsFiles = files.filter((filePath) => filePath.endsWith(".ts"));
-    const ts = tsFiles.length > 0 ? loadTypeScript() : null;
-    for (const filePath of files) {
-      const name = getScriptName(filePath);
-      if (Object.prototype.hasOwnProperty.call(scripts, name)) {
-        throw new Error(`Duplicate JS module name: ${name}`);
-      }
-      let source = fs.readFileSync(filePath, "utf8");
-      if (filePath.endsWith(".ts")) {
-        if (!ts) {
-          throw new Error("TypeScript not available");
-        }
-        source = transpileTypeScript(source, filePath, ts);
-      }
-      source = replaceDebugDefines(source, debugDefine);
-      if (!shouldObfuscate || exclude.has(name) || containsModuleSyntax(source)) {
-        scripts[name] = source;
-        continue;
-      }
-      const result = await terser.minify(source, {
-        compress: true,
-        mangle: {
-          toplevel: true,
-          reserved: reservedNames,
-        },
-        format: {
-          comments: false,
-        },
-      });
-      if (!result || result.error || !result.code) {
-        const error = result && result.error ? result.error : new Error("Unknown terser failure");
-        throw error;
-      }
-      scripts[name] = result.code;
+  }
+
+  const files = collectScriptFiles(inputDir);
+  const tsFiles = files.filter((filePath) => filePath.endsWith(".ts"));
+  const ts = tsFiles.length > 0 ? loadTypeScript() : null;
+  for (const filePath of files) {
+    const name = getScriptName(filePath);
+    if (entryNames.has(name)) {
+      continue;
     }
+    if (Object.prototype.hasOwnProperty.call(scripts, name)) {
+      throw new Error(`Duplicate JS module name: ${name}`);
+    }
+    let source = fs.readFileSync(filePath, "utf8");
+    if (filePath.endsWith(".ts")) {
+      if (!ts) {
+        throw new Error("TypeScript not available");
+      }
+      source = transpileTypeScript(source, filePath, ts);
+    }
+    source = replaceDebugDefines(source, debugDefine);
+    if (!shouldObfuscate || exclude.has(name) || containsModuleSyntax(source)) {
+      scripts[name] = source;
+      continue;
+    }
+    const result = await terser.minify(source, {
+      compress: true,
+      mangle: {
+        toplevel: true,
+        reserved: reservedNames,
+      },
+      format: {
+        comments: false,
+      },
+    });
+    if (!result || result.error || !result.code) {
+      const error = result && result.error ? result.error : new Error("Unknown terser failure");
+      throw error;
+    }
+    scripts[name] = result.code;
   }
 
   const output = renderSwift(scripts);

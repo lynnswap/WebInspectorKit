@@ -73,14 +73,7 @@ final class WIWebView: WKWebView {
 
 private enum DOMTreeViewScriptSource {
     private static let scriptNames = [
-        "DOMTreeState",
-        "DOMTreeUtilities",
-        "DOMTreeProtocol",
-        "DOMTreeModel",
-        "DOMTreeViewSupport",
-        "DOMTreeUpdates",
-        "DOMTreeSnapshot",
-        "DOMTreeView"
+        "dom-tree-view"
     ]
 
     @MainActor
