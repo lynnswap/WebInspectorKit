@@ -33,6 +33,7 @@ private let logger = Logger(
     init(url: URL) {
         currentURL = url
         let configuration = WKWebViewConfiguration()
+        InjectedBundleProcessPool.configure(configuration)
         
 #if os(iOS)
         configuration.allowsPictureInPictureMediaPlayback = true
@@ -41,6 +42,11 @@ private let logger = Logger(
         configuration.allowsAirPlayForMediaPlayback = true
         
         webView = WKWebView(frame: .zero, configuration: configuration)
+#if os(iOS)
+        installInjectedBundleMessageBridgeIfAvailable(for: webView)
+        WebProcessProxyHook.install()
+        IMEUnderlineHook.install()
+#endif
         webView.isInspectable = true
 #if os(iOS)
         webView.scrollView.contentInsetAdjustmentBehavior = .always
@@ -132,6 +138,22 @@ private let logger = Logger(
 #endif
 }
 
+#if os(iOS)
+private var didLogMissingInjectedBundleBridge = false
+
+private func installInjectedBundleMessageBridgeIfAvailable(for webView: WKWebView) {
+    let selector = NSSelectorFromString("minibrowser_installInjectedBundleMessageBridge")
+    guard webView.responds(to: selector) else {
+        if !didLogMissingInjectedBundleBridge {
+            didLogMissingInjectedBundleBridge = true
+            NSLog("InjectedBundleMessageBridge: method not available")
+        }
+        return
+    }
+    _ = webView.perform(selector)
+}
+#endif
+
 extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         logger.debug("\(#function) decide navigation policy (action)")
@@ -158,6 +180,10 @@ extension BrowserViewModel: WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         logger.debug("\(#function) navigation committed")
+#if os(iOS)
+        installInjectedBundleMessageBridgeIfAvailable(for: webView)
+#endif
+        logWebContentPID(webView, label: "didCommit")
     }
     func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?){
         logger.debug("\(#function) authentication challenge")
@@ -225,6 +251,11 @@ extension BrowserViewModel: WKUIDelegate {
 }
 
 private extension BrowserViewModel {
+    func logWebContentPID(_ webView: WKWebView, label: String) {
+        let pid = (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.intValue ?? 0
+        logger.debug("WebContent pid(\(label, privacy: .public))=\(pid, privacy: .public)")
+    }
+
 #if os(iOS)
     @MainActor
     func presentJavaScriptAlert(message: String, webView: WKWebView) async {

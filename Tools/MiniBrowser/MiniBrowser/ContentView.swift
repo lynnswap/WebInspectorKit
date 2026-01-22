@@ -10,13 +10,12 @@ struct ContentView: View {
     var body: some View {
         if let model ,let inspectorModel{
 #if os(macOS)
-//            HSplitView {
-//                NavigationStack{
-//                    ContentWebView(model: model)
-//                }
-//                WebInspectorView(inspectorModel, webView: model.webView)
-//            }
-            WebInspectorView(inspectorModel, webView: model.webView)
+            HSplitView {
+                NavigationStack{
+                    ContentWebView(model: model)
+                }
+                WebInspectorView(inspectorModel, webView: model.webView)
+            }
 #else
             NavigationStack {
                 ContentWebView(model: model)

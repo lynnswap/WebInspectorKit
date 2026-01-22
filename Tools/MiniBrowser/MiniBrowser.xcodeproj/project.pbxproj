@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
+		ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Resources */ = {isa = PBXBuildFile; fileRef = ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,12 +26,20 @@
 			remoteGlobalIDString = ABA353C72EDFF1EC00489A00;
 			remoteInfo = MiniBrowser;
 		};
+		ABA3541C2F00000000489A00 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = ABA353C02EDFF1EC00489A00 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = ABA354132F00000000489A00;
+			remoteInfo = MiniBrowserInjectedBundle;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		ABA353C82EDFF1EC00489A00 /* MiniBrowser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MiniBrowser.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ABA353D52EDFF1ED00489A00 /* MiniBrowserTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MiniBrowserTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		ABA353DF2EDFF1ED00489A00 /* MiniBrowserUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MiniBrowserUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */ = {isa = PBXFileReference; explicitFileType = "wrapper.plug-in"; includeInIndex = 0; path = MiniBrowserInjectedBundle.bundle; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -47,6 +56,11 @@
 		ABA353E22EDFF1ED00489A00 /* MiniBrowserUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = MiniBrowserUITests;
+			sourceTree = "<group>";
+		};
+		ABA354112F00000000489A00 /* MiniBrowserInjectedBundle */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MiniBrowserInjectedBundle;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -74,6 +88,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ABA354182F00000000489A00 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -83,6 +104,7 @@
 				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
 				ABA353D82EDFF1ED00489A00 /* MiniBrowserTests */,
 				ABA353E22EDFF1ED00489A00 /* MiniBrowserUITests */,
+				ABA354112F00000000489A00 /* MiniBrowserInjectedBundle */,
 				ABA353C92EDFF1EC00489A00 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -91,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				ABA353C82EDFF1EC00489A00 /* MiniBrowser.app */,
+				ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */,
 				ABA353D52EDFF1ED00489A00 /* MiniBrowserTests.xctest */,
 				ABA353DF2EDFF1ED00489A00 /* MiniBrowserUITests.xctest */,
 			);
@@ -111,6 +134,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				ABA3541B2F00000000489A00 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
@@ -169,6 +193,28 @@
 			productReference = ABA353DF2EDFF1ED00489A00 /* MiniBrowserUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		ABA354132F00000000489A00 /* MiniBrowserInjectedBundle */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ABA354142F00000000489A00 /* Build configuration list for PBXNativeTarget "MiniBrowserInjectedBundle" */;
+			buildPhases = (
+				ABA354172F00000000489A00 /* Sources */,
+				ABA354182F00000000489A00 /* Frameworks */,
+				ABA354192F00000000489A00 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				ABA354112F00000000489A00 /* MiniBrowserInjectedBundle */,
+			);
+			name = MiniBrowserInjectedBundle;
+			packageProductDependencies = (
+			);
+			productName = MiniBrowserInjectedBundle;
+			productReference = ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */;
+			productType = "com.apple.product-type.bundle";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -189,6 +235,9 @@
 					ABA353DE2EDFF1ED00489A00 = {
 						CreatedOnToolsVersion = 26.1.1;
 						TestTargetID = ABA353C72EDFF1EC00489A00;
+					};
+					ABA354132F00000000489A00 = {
+						CreatedOnToolsVersion = 26.1.1;
 					};
 				};
 			};
@@ -212,6 +261,7 @@
 				ABA353C72EDFF1EC00489A00 /* MiniBrowser */,
 				ABA353D42EDFF1ED00489A00 /* MiniBrowserTests */,
 				ABA353DE2EDFF1ED00489A00 /* MiniBrowserUITests */,
+				ABA354132F00000000489A00 /* MiniBrowserInjectedBundle */,
 			);
 		};
 /* End PBXProject section */
@@ -221,6 +271,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -232,6 +283,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		ABA353DD2EDFF1ED00489A00 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ABA354192F00000000489A00 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -262,6 +320,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		ABA354172F00000000489A00 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -274,6 +339,11 @@
 			isa = PBXTargetDependency;
 			target = ABA353C72EDFF1EC00489A00 /* MiniBrowser */;
 			targetProxy = ABA353E02EDFF1ED00489A00 /* PBXContainerItemProxy */;
+		};
+		ABA3541B2F00000000489A00 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = ABA354132F00000000489A00 /* MiniBrowserInjectedBundle */;
+			targetProxy = ABA3541C2F00000000489A00 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -399,6 +469,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
@@ -413,6 +484,7 @@
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -435,6 +507,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MiniBrowser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
@@ -453,6 +531,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
@@ -467,6 +546,7 @@
 				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
 				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
 				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -489,6 +569,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MiniBrowser;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
@@ -604,6 +690,48 @@
 			};
 			name = Release;
 		};
+		ABA354152F00000000489A00 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 58KPFKMJJW;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MiniBrowserInjectedBundle;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Debug;
+		};
+		ABA354162F00000000489A00 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 58KPFKMJJW;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.MiniBrowserInjectedBundle;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 26.1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -639,6 +767,15 @@
 			buildConfigurations = (
 				ABA353F02EDFF1ED00489A00 /* Debug */,
 				ABA353F12EDFF1ED00489A00 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		ABA354142F00000000489A00 /* Build configuration list for PBXNativeTarget "MiniBrowserInjectedBundle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ABA354152F00000000489A00 /* Debug */,
+				ABA354162F00000000489A00 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

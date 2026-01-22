@@ -9,9 +9,15 @@ import SwiftUI
 
 @main
 struct MiniBrowserApp: App {
+    init() {
+        IMEUnderlineHook.install()
+        WebProcessProxyHook.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .tint(.orange)
         }
     }
 }
