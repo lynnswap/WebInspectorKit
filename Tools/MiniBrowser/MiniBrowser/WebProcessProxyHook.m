@@ -17,6 +17,8 @@ static bool did_log_install_failure;
 static bool did_install_be_swizzle;
 static bool did_log_missing_be_class;
 static bool did_log_missing_be_method;
+// Temporarily disable WebContent.Development override to verify behavior.
+// (Keep the flag around in case we re-enable the override.)
 static bool did_log_development_fallback;
 
 static void log_line(const char *message)
@@ -108,6 +110,7 @@ static void replacement_webContentProcessWithBundleID(id self, SEL _cmd, NSStrin
         return;
     }
 
+#if 0
     __block bool didFallback = false;
     BEWebContentProcessCompletion wrappedCompletion = ^(id process, NSError *error) {
         if (!error || didFallback) {
@@ -124,6 +127,9 @@ static void replacement_webContentProcessWithBundleID(id self, SEL _cmd, NSStrin
     };
 
     original_webContentProcessWithBundleID(self, _cmd, @"com.apple.WebKit.WebContent.Development", interruptionHandler, wrappedCompletion);
+#else
+    original_webContentProcessWithBundleID(self, _cmd, bundleID, interruptionHandler, completion);
+#endif
 }
 
 static void install_be_webcontent_swizzle(void)
