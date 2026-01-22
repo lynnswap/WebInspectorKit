@@ -127,17 +127,25 @@ function refreshTreeAfterDomUpdates(
         }
     });
 
-    if (treeState.selectedNodeId) {
-        const selectedNode = treeState.nodes.get(treeState.selectedNodeId);
+    const selectedNodeId = treeState.selectedNodeId;
+    if (selectedNodeId) {
+        const selectedNode = treeState.nodes.get(selectedNodeId);
         if (selectedNode) {
-            updateDetails(selectedNode);
+            const shouldUpdateDetails =
+                nodesToRefresh.has(selectedNodeId) ||
+                (modifiedAttrsByNode && modifiedAttrsByNode.has(selectedNodeId));
+            if (shouldUpdateDetails) {
+                updateDetails(selectedNode);
+            }
         } else {
             treeState.selectedNodeId = null;
             updateDetails(null);
         }
     }
 
-    applyFilter();
+    if (treeState.filter) {
+        applyFilter();
+    }
 
     if (preservedScrollPosition) {
         restoreTreeScrollPosition(preservedScrollPosition);

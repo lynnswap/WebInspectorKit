@@ -22,6 +22,7 @@ import {
     dom,
     treeState,
     renderState,
+    ensureDomElements,
     childRequestDepth,
     RENDER_BATCH_LIMIT,
     RENDER_TIME_BUDGET,
@@ -39,6 +40,25 @@ import { sendCommand, reportInspectorError } from "./dom-tree-protocol";
 // =============================================================================
 
 let selectorRequestToken = 0;
+let treeEventHandlersInstalled = false;
+let hoveredNodeId: number | null = null;
+
+/** Ensure delegated event handlers are installed */
+export function ensureTreeEventHandlers(): void {
+    if (treeEventHandlersInstalled) {
+        return;
+    }
+    ensureDomElements();
+    if (!dom.tree) {
+        return;
+    }
+    dom.tree.addEventListener("click", handleTreeClick);
+    dom.tree.addEventListener("keydown", handleTreeKeydown);
+    dom.tree.addEventListener("mouseover", handleTreeMouseOver);
+    dom.tree.addEventListener("mouseout", handleTreeMouseOut);
+    dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
+    treeEventHandlersInstalled = true;
+}
 
 // =============================================================================
 // Scroll Position
@@ -99,9 +119,14 @@ export function buildNode(node: DOMNode): HTMLElement {
     container.appendChild(childrenContainer);
     treeState.elements.set(node.id, container);
 
-    renderChildren(childrenContainer, node, { initialRender: true });
-
     const expanded = nodeShouldBeExpanded(node);
+    if (expanded) {
+        renderChildren(childrenContainer, node, { initialRender: true });
+        treeState.deferredChildRenders.delete(node.id);
+    } else {
+        treeState.deferredChildRenders.add(node.id);
+    }
+
     setNodeExpanded(node.id, expanded);
 
     return container;
@@ -114,9 +139,6 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
     row.className = "tree-node__row";
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-level", String((node.depth || 0) + 1));
-    row.addEventListener("click", (event) => handleRowClick(event, node));
-    row.addEventListener("mouseenter", () => handleRowHover(node));
-    row.addEventListener("mouseleave", handleRowLeave);
 
     const hasChildren = Array.isArray(node.children) && node.children.length > 0;
     const isPlaceholder = node.nodeType === 0 && node.childCount > 0;
@@ -126,10 +148,6 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
         disclosure.className = "tree-node__disclosure";
         disclosure.type = "button";
         disclosure.setAttribute("aria-label", "Expand or collapse child nodes");
-        disclosure.addEventListener("click", (event) => {
-            event.stopPropagation();
-            toggleNode(node.id);
-        });
         row.appendChild(disclosure);
     } else {
         const spacer = document.createElement("span");
@@ -144,26 +162,12 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
     if (isPlaceholder) {
         row.classList.add("tree-node__row--placeholder");
 
-        const loadPlaceholder = (event?: Event): void => {
-            if (event) {
-                event.stopPropagation();
-            }
-            requestChildren(node);
-        };
-
         const placeholderButton = document.createElement("button");
         placeholderButton.type = "button";
         placeholderButton.className = "tree-node__placeholder-button";
+        placeholderButton.dataset.role = "load-placeholder";
         placeholderButton.textContent = `… ${node.childCount} more nodes`;
         placeholderButton.setAttribute("aria-label", `Load remaining ${node.childCount} nodes`);
-        placeholderButton.addEventListener("click", loadPlaceholder);
-        placeholderButton.addEventListener("keydown", (event) => {
-            if (event.key !== "Enter" && event.key !== " ") {
-                return;
-            }
-            event.preventDefault();
-            loadPlaceholder(event);
-        });
 
         label.appendChild(placeholderButton);
     } else {
@@ -184,10 +188,7 @@ function createPlaceholderElement(node: DOMNode): HTMLElement {
     placeholderButton.textContent = "Load";
     placeholderButton.className = "control-button";
     placeholderButton.style.width = "auto";
-    placeholderButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        requestChildren(node);
-    });
+    placeholderButton.dataset.role = "load-placeholder";
 
     wrapper.appendChild(placeholderButton);
     return wrapper;
@@ -293,11 +294,17 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
         childrenContainer.className = "tree-node__children";
         element.appendChild(childrenContainer);
     }
+    const expanded = nodeShouldBeExpanded(node);
     if (updateChildren) {
-        renderChildren(childrenContainer, node);
+        if (expanded) {
+            renderChildren(childrenContainer, node);
+            treeState.deferredChildRenders.delete(node.id);
+        } else {
+            treeState.deferredChildRenders.add(node.id);
+        }
     }
 
-    setNodeExpanded(node.id, nodeShouldBeExpanded(node));
+    setNodeExpanded(node.id, expanded);
 }
 
 // =============================================================================
@@ -458,6 +465,15 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
             disclosure.setAttribute("aria-expanded", expanded ? "true" : "false");
         }
     }
+
+    if (expanded && treeState.deferredChildRenders.has(nodeId)) {
+        const node = treeState.nodes.get(nodeId);
+        const childrenContainer = element.querySelector(":scope > .tree-node__children") as HTMLElement | null;
+        if (node && childrenContainer) {
+            renderChildren(childrenContainer, node);
+        }
+        treeState.deferredChildRenders.delete(nodeId);
+    }
 }
 
 /** Toggle node expansion state */
@@ -473,6 +489,122 @@ export function toggleNode(nodeId: number): void {
 // =============================================================================
 // Row Interaction
 // =============================================================================
+
+/** Resolve node for a given event target */
+function resolveNodeFromElement(element: Element | null): DOMNode | null {
+    if (!element) {
+        return null;
+    }
+    const nodeElement = element.closest(".tree-node") as HTMLElement | null;
+    if (!nodeElement) {
+        return null;
+    }
+    const nodeId = Number(nodeElement.dataset.nodeId);
+    if (!Number.isFinite(nodeId)) {
+        return null;
+    }
+    return treeState.nodes.get(nodeId) ?? null;
+}
+
+/** Handle tree click via event delegation */
+function handleTreeClick(event: MouseEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+        return;
+    }
+
+    const disclosure = target.closest(".tree-node__disclosure");
+    if (disclosure) {
+        event.stopPropagation();
+        const node = resolveNodeFromElement(disclosure);
+        if (node) {
+            toggleNode(node.id);
+        }
+        return;
+    }
+
+    const placeholderButton = target.closest("[data-role='load-placeholder']");
+    if (placeholderButton) {
+        event.stopPropagation();
+        const node = resolveNodeFromElement(placeholderButton);
+        if (node) {
+            void requestChildren(node);
+        }
+        return;
+    }
+
+    const row = target.closest(".tree-node__row");
+    if (!row) {
+        return;
+    }
+    const node = resolveNodeFromElement(row);
+    if (!node) {
+        return;
+    }
+    handleRowClick(event, node);
+}
+
+/** Handle delegated placeholder keyboard activation */
+function handleTreeKeydown(event: KeyboardEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+        return;
+    }
+    const placeholderButton = target.closest("[data-role='load-placeholder']");
+    if (!placeholderButton) {
+        return;
+    }
+    if (event.key !== "Enter" && event.key !== " ") {
+        return;
+    }
+    event.preventDefault();
+    const node = resolveNodeFromElement(placeholderButton);
+    if (node) {
+        void requestChildren(node);
+    }
+}
+
+/** Handle delegated row hover */
+function handleTreeMouseOver(event: MouseEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+        return;
+    }
+    const row = target.closest(".tree-node__row");
+    if (!row) {
+        return;
+    }
+    const node = resolveNodeFromElement(row);
+    if (!node || hoveredNodeId === node.id) {
+        return;
+    }
+    hoveredNodeId = node.id;
+    handleRowHover(node);
+}
+
+/** Handle delegated row leave */
+function handleTreeMouseOut(event: MouseEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+        return;
+    }
+    const row = target.closest(".tree-node__row");
+    if (!row) {
+        return;
+    }
+    const related = event.relatedTarget instanceof Element ? event.relatedTarget : null;
+    if (related && row.contains(related)) {
+        return;
+    }
+    hoveredNodeId = null;
+    handleRowLeave();
+}
+
+/** Handle leaving the tree container */
+function handleTreeMouseLeave(): void {
+    hoveredNodeId = null;
+    handleRowLeave();
+}
 
 /** Handle row click */
 function handleRowClick(event: MouseEvent, node: DOMNode): void {
