@@ -9,25 +9,29 @@ enum WIScript {
     @MainActor private static var cachedNetworkScript: String?
     // Inline module sources to avoid CSP blocking external script loads in inspected pages.
     private static let domAgentModuleNames = [
-        "DOMAgent/DOMAgentState",
-        "DOMAgent/DOMAgentDOMCore",
-        "DOMAgent/DOMAgentOverlay",
-        "DOMAgent/DOMAgentSnapshot",
-        "DOMAgent/DOMAgentSelection",
-        "DOMAgent/DOMAgentDOMUtils",
-        "DOMAgent"
+        "DOMAgent/dom-agent-state",
+        "DOMAgent/dom-agent-dom-core",
+        "DOMAgent/dom-agent-overlay",
+        "DOMAgent/dom-agent-snapshot",
+        "DOMAgent/dom-agent-selection",
+        "DOMAgent/dom-agent-dom-utils",
+        "dom-agent"
     ]
     private static let networkModuleNames = [
-        "NetworkAgent/NetworkAgentUtils",
-        "NetworkAgent/NetworkAgentHTTP",
-        "NetworkAgent/NetworkAgentWebSocket",
-        "NetworkAgent/NetworkAgentCore",
-        "NetworkAgent"
+        "NetworkAgent/network-agent-utils",
+        "NetworkAgent/network-agent-http",
+        "NetworkAgent/network-agent-web-socket",
+        "NetworkAgent/network-agent-core",
+        "network-agent"
     ]
 
     @MainActor static func bootstrapDOMAgent() throws -> String {
         if let cachedDOMAgentScript {
             return cachedDOMAgentScript
+        }
+        if let bundled = WIScriptBundle.source(named: "dom-agent"), !bundled.isEmpty {
+            cachedDOMAgentScript = bundled
+            return bundled
         }
         let script = try buildScript(from: domAgentModuleNames)
         cachedDOMAgentScript = script
@@ -37,6 +41,10 @@ enum WIScript {
     @MainActor static func bootstrapNetworkAgent() throws -> String {
         if let cachedNetworkScript {
             return cachedNetworkScript
+        }
+        if let bundled = WIScriptBundle.source(named: "network-agent"), !bundled.isEmpty {
+            cachedNetworkScript = bundled
+            return bundled
         }
         let script = try buildScript(from: networkModuleNames)
         cachedNetworkScript = script

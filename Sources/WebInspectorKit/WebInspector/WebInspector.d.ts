@@ -1,12 +1,26 @@
 export {};
 
+import type {
+    WebInspectorDOMFrontend,
+    ProtocolConfig,
+    ProtocolMessage,
+    MutationBundle,
+    RequestDocumentOptions,
+} from "./Views/DOMTreeView/dom-tree-types";
+
 declare global {
     interface WebInspectorMessageHandler {
-        postMessage: (payload: any) => void;
+        postMessage: (payload: unknown) => void;
     }
 
     interface WebInspectorMessageHandlers {
         [key: string]: WebInspectorMessageHandler | undefined;
+        webInspectorProtocol?: WebInspectorMessageHandler;
+        webInspectorLog?: WebInspectorMessageHandler;
+        webInspectorReady?: WebInspectorMessageHandler;
+        webInspectorDomSelection?: WebInspectorMessageHandler;
+        webInspectorDomSelector?: WebInspectorMessageHandler;
+        webInspectorWSUpdate?: WebInspectorMessageHandler;
     }
 
     interface WebKitBridge {
@@ -14,10 +28,9 @@ declare global {
     }
 
     interface Window {
-        DOMTree?: Record<string, any>;
-        webInspectorDOM?: Record<string, any>;
-        webInspectorDOMFrontend?: Record<string, any>;
-        webInspectorNetworkAgent?: Record<string, any>;
+        webInspectorDOM?: Record<string, unknown>;
+        webInspectorDOMFrontend?: WebInspectorDOMFrontend;
+        webInspectorNetworkAgent?: Record<string, unknown>;
         webkit?: WebKitBridge;
     }
 

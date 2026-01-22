@@ -6,7 +6,7 @@ enum WIAssets {
     private static let inspectorSubdirectory = "WebInspector/Views/DOMTreeView"
 
     static var mainFileURL: URL? {
-        locateResource(named: "DOMTreeView", withExtension: "html")
+        locateResource(named: "dom-tree-view", withExtension: "html")
     }
 
     static var resourcesDirectory: URL? {
