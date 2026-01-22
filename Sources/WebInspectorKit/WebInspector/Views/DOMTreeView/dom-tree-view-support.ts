@@ -473,6 +473,9 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
             renderChildren(childrenContainer, node);
         }
         treeState.deferredChildRenders.delete(nodeId);
+        if (treeState.filter) {
+            applyFilter();
+        }
     }
 }
 
