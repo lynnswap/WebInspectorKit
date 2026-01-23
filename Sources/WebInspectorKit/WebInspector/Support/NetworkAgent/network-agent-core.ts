@@ -1,6 +1,30 @@
 // Core orchestrator: shared helpers live in NetworkAgentUtils.ts
 // This file keeps recording logic and wires sub-patches.
 
+import {
+    NETWORK_EVENT_VERSION,
+    NetworkLoggingMode,
+    bodyCache,
+    buildStoredBodyPayload,
+    clearThrottledEvents,
+    deliverNetworkEvents,
+    enqueueNetworkEvent,
+    enqueueThrottledEvent,
+    generateSessionID,
+    makeBodyPreviewPayload,
+    makeBodyRef,
+    makeNetworkTime,
+    networkState,
+    normalizeHeaders,
+    parseRawHeaders,
+    queuedEvents,
+    setThrottleOptions,
+    shouldThrottleDelivery,
+    trackedRequests
+} from "./network-agent-utils";
+import type { RequestBodyInfo } from "./network-agent-utils";
+import { installFetchPatch, installResourceObserver, installXHRPatch } from "./network-agent-http";
+
 const buildNetworkError = (
     error: unknown,
     requestType: string,
@@ -300,6 +324,10 @@ export {
     configureNetwork,
     getBody,
     installNetworkObserver,
+    recordFailure,
+    recordFinish,
+    recordResponse,
+    recordStart,
     setNetworkLoggingMode,
     setNetworkThrottling
 };

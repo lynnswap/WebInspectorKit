@@ -1081,3 +1081,43 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
         decodedBodySize: decodedSize
     };
 };
+
+export {
+    MAX_INLINE_BODY_LENGTH,
+    NETWORK_EVENT_VERSION,
+    NetworkLoggingMode,
+    bodyCache,
+    buildStoredBodyPayload,
+    bufferEvent,
+    captureContentLength,
+    captureResponseBody,
+    captureXHRResponseBody,
+    clampStringToByteLength,
+    clearThrottledEvents,
+    deliverNetworkEvents,
+    encodeTextToBytes,
+    enqueueNetworkEvent,
+    enqueueThrottledEvent,
+    estimatedEncodedLength,
+    generateSessionID,
+    handleResourceEntry,
+    isActiveLogging,
+    makeBodyPreviewPayload,
+    makeBodyRef,
+    makeNetworkTime,
+    networkState,
+    nextRequestID,
+    normalizeHeaders,
+    now,
+    parseRawHeaders,
+    queuedEvents,
+    serializeRequestBody,
+    setThrottleOptions,
+    shouldQueueNetworkEvent,
+    shouldThrottleDelivery,
+    shouldTrackNetworkEvents,
+    trackedRequests,
+    wallTime
+};
+
+export type { RequestBodyInfo };

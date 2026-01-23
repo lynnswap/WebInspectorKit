@@ -1,3 +1,16 @@
+import {
+    MAX_INLINE_BODY_LENGTH,
+    clampStringToByteLength,
+    encodeTextToBytes,
+    isActiveLogging,
+    networkState,
+    nextRequestID,
+    now,
+    shouldQueueNetworkEvent,
+    shouldTrackNetworkEvents,
+    wallTime
+} from "./network-agent-utils";
+
 const MAX_WS_FRAME_BODY_LENGTH = typeof MAX_INLINE_BODY_LENGTH === "number" ? MAX_INLINE_BODY_LENGTH : 64 * 1024;
 
 declare const enqueueEvent: (event: any) => void;
