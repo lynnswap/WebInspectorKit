@@ -9,10 +9,10 @@
  */
 
 import {
+    DOMEventEntry,
     DOMNode,
     DOMSnapshot,
     MutationBundle,
-    ProtocolMessage,
     RawNodeDescriptor,
     RequestDocumentOptions,
 } from "./dom-tree-types";
@@ -25,7 +25,6 @@ import {
 } from "./dom-tree-state";
 import { safeParseJSON } from "./dom-tree-utilities";
 import {
-    dispatchMessageFromBackend,
     onProtocolEvent,
     reportInspectorError,
     sendCommand,
@@ -47,6 +46,7 @@ import {
     applyFilter,
     buildNode,
     captureTreeScrollPosition,
+    ensureTreeEventHandlers,
     reopenSelectionAncestors,
     restoreTreeScrollPosition,
     scheduleNodeRender,
@@ -114,7 +114,9 @@ export function applyMutationBundle(bundle: string | MutationBundle | null | und
 
     if (parsed.kind === "mutation") {
         const events = Array.isArray(parsed.events) ? parsed.events : [];
-        events.forEach((message) => dispatchMessageFromBackend(message as ProtocolMessage));
+        if (events.length) {
+            domTreeUpdater.enqueueEvents(events as DOMEventEntry[]);
+        }
     }
 }
 
@@ -145,6 +147,7 @@ export function setSnapshot(
 ): void {
     try {
         ensureDomElements();
+        ensureTreeEventHandlers();
         let snapshot: DOMSnapshot | null = null;
 
         if (payload) {
@@ -166,6 +169,7 @@ export function setSnapshot(
         treeState.snapshot = snapshot;
         treeState.nodes.clear();
         treeState.elements.clear();
+        treeState.deferredChildRenders.clear();
         if (!preserveState) {
             treeState.openState.clear();
             treeState.selectionChain = [];
@@ -207,7 +211,9 @@ export function setSnapshot(
         }
 
         treeState.filter = previousFilter;
-        applyFilter();
+        if (treeState.filter) {
+            applyFilter();
+        }
 
         const snapshotData = snapshot as DOMSnapshot & { selectedNodeId?: number; selectedNodePath?: number[] };
         const selectionCandidateId =
@@ -340,7 +346,9 @@ export function applySubtree(payload: string | RawNodeDescriptor | null | undefi
             updateDetails(null);
         }
 
-        applyFilter();
+        if (treeState.filter) {
+            applyFilter();
+        }
     } catch (error) {
         reportInspectorError("applySubtree", error);
         throw error;
@@ -411,7 +419,9 @@ function applySetChildNodes(params: {
         updateDetails(null);
     }
 
-    applyFilter();
+    if (treeState.filter) {
+        applyFilter();
+    }
 }
 
 // =============================================================================

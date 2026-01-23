@@ -1,6 +1,13 @@
 import {inspector} from "./dom-agent-state";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./dom-agent-dom-core";
 
+const MAX_PENDING_MUTATIONS = 1500;
+const MAX_LAYOUT_INFO_RECORDS = 400;
+const MAX_LAYOUT_INFO_NODES = 200;
+const MIN_LAYOUT_INFO_NODES = 40;
+const COMPACT_EVENT_LIMIT = 600;
+const COMPACT_SNAPSHOT_DEPTH = 2;
+
 function autoSnapshotHandler() {
     return window?.webkit?.messageHandlers?.webInspectorDOMSnapshot || null;
 }
@@ -30,8 +37,17 @@ function ensureAutoSnapshotObserver() {
         if (!Array.isArray(queue)) {
             queue = inspector.pendingMutations = [];
         }
-        for (var i = 0; i < mutations.length; ++i)
+        var overflow = false;
+        for (var i = 0; i < mutations.length; ++i) {
+            if (queue.length >= MAX_PENDING_MUTATIONS) {
+                overflow = true;
+                break;
+            }
             queue.push(mutations[i]);
+        }
+        if (overflow) {
+            inspector.snapshotAutoUpdateOverflow = true;
+        }
         scheduleSnapshotAutoUpdate("mutation");
     });
     return inspector.snapshotAutoUpdateObserver;
@@ -128,18 +144,22 @@ export function scheduleSnapshotAutoUpdate(reason) {
     }, delay);
 }
 
-function sendFullSnapshot(reason) {
+function sendFullSnapshot(reason, maxDepthOverride) {
     var handler = autoSnapshotHandler();
     if (!handler) {
         return;
     }
     try {
-        var snapshot = captureDOM(inspector.snapshotAutoUpdateMaxDepth || 4);
+        var maxDepth = inspector.snapshotAutoUpdateMaxDepth || 4;
+        if (typeof maxDepthOverride === "number" && maxDepthOverride > 0) {
+            maxDepth = Math.min(maxDepth, maxDepthOverride);
+        }
+        var snapshot = captureDOM(maxDepth);
         var payload = {
             version: 1,
             kind: "snapshot",
             reason: reason || inspector.snapshotAutoUpdateReason || "mutation",
-            depth: inspector.snapshotAutoUpdateMaxDepth || 4,
+            depth: maxDepth,
             documentURL: document.URL || "",
             snapshot: snapshot
         };
@@ -156,10 +176,58 @@ function buildDomMutationEvents(records, maxDepth) {
         return {events: [], compactTriggered: false};
     }
     var events = [];
+    var attributeUpdates = new Map();
+    var characterDataUpdates = new Map();
     var childCountUpdates = new Map();
+    var nodeCache = new Map();
+    var layoutInfoCache = new Map();
     var descriptorDepth = Math.min(1, Math.max(0, typeof maxDepth === "number" ? maxDepth : 1));
-    var eventLimit = 600;
-    var compactMode = false;
+    var eventLimit = COMPACT_EVENT_LIMIT;
+    var eventCount = 0;
+    var layoutInfoBudget = MAX_LAYOUT_INFO_NODES;
+    if (records.length > MAX_LAYOUT_INFO_RECORDS) {
+        layoutInfoBudget = Math.max(
+            MIN_LAYOUT_INFO_NODES,
+            Math.floor((MAX_LAYOUT_INFO_NODES * MAX_LAYOUT_INFO_RECORDS) / records.length)
+        );
+    }
+
+    function bumpEventCount() {
+        eventCount += 1;
+        return eventCount > eventLimit;
+    }
+
+    function cacheNode(nodeId, node) {
+        if (!nodeCache.has(nodeId)) {
+            nodeCache.set(nodeId, node);
+        }
+    }
+
+    function getLayoutInfo(nodeId) {
+        if (layoutInfoCache.has(nodeId)) {
+            return layoutInfoCache.get(nodeId);
+        }
+        if (layoutInfoBudget <= 0) {
+            return null;
+        }
+        var node = nodeCache.get(nodeId);
+        if (!node) {
+            return null;
+        }
+        var info = layoutInfoForNode(node);
+        layoutInfoCache.set(nodeId, info);
+        layoutInfoBudget -= 1;
+        return info;
+    }
+
+    function appendLayoutInfo(params, layoutInfo) {
+        if (!layoutInfo) {
+            return params;
+        }
+        params.layoutFlags = layoutInfo.layoutFlags;
+        params.isRendered = layoutInfo.isRendered;
+        return params;
+    }
     for (var i = 0; i < records.length; ++i) {
         var record = records[i];
         if (!record || !record.target) {
@@ -169,50 +237,42 @@ function buildDomMutationEvents(records, maxDepth) {
         if (!targetId) {
             continue;
         }
-        var layoutInfo = layoutInfoForNode(record.target);
+        cacheNode(targetId, record.target);
         switch (record.type) {
-        case "attributes":
+        case "attributes": {
             var attrName = record.attributeName || "";
             if (!attrName) {
                 break;
             }
             var attrValue = record.target.getAttribute(attrName);
+            var nodeAttributes = attributeUpdates.get(targetId);
+            if (!nodeAttributes) {
+                nodeAttributes = new Map();
+                attributeUpdates.set(targetId, nodeAttributes);
+            }
+            if (!nodeAttributes.has(attrName)) {
+                if (bumpEventCount()) {
+                    return {events: [], compactTriggered: true};
+                }
+            }
             if (attrValue === null || typeof attrValue === "undefined") {
-                events.push({
-                    method: "DOM.attributeRemoved",
-                    params: {
-                        nodeId: targetId,
-                        name: attrName,
-                        layoutFlags: layoutInfo.layoutFlags,
-                        isRendered: layoutInfo.isRendered
-                    }
-                });
+                nodeAttributes.set(attrName, null);
             } else {
-                events.push({
-                    method: "DOM.attributeModified",
-                    params: {
-                        nodeId: targetId,
-                        name: attrName,
-                        value: String(attrValue),
-                        layoutFlags: layoutInfo.layoutFlags,
-                        isRendered: layoutInfo.isRendered
-                    }
-                });
+                nodeAttributes.set(attrName, String(attrValue));
             }
             break;
-        case "characterData":
-            events.push({
-                method: "DOM.characterDataModified",
-                params: {
-                    nodeId: targetId,
-                    characterData: record.target.textContent || "",
-                    layoutFlags: layoutInfo.layoutFlags,
-                    isRendered: layoutInfo.isRendered
+        }
+        case "characterData": {
+            if (!characterDataUpdates.has(targetId)) {
+                if (bumpEventCount()) {
+                    return {events: [], compactTriggered: true};
                 }
-            });
+            }
+            characterDataUpdates.set(targetId, record.target.textContent || "");
             break;
-        case "childList":
-            if (!compactMode && record.removedNodes && record.removedNodes.length) {
+        }
+        case "childList": {
+            if (record.removedNodes && record.removedNodes.length) {
                 for (var r = 0; r < record.removedNodes.length; ++r) {
                     var removedNodeId = rememberNode(record.removedNodes[r]);
                     if (!removedNodeId) {
@@ -225,9 +285,12 @@ function buildDomMutationEvents(records, maxDepth) {
                             nodeId: removedNodeId
                         }
                     });
+                    if (bumpEventCount()) {
+                        return {events: [], compactTriggered: true};
+                    }
                 }
             }
-            if (!compactMode && record.addedNodes && record.addedNodes.length) {
+            if (record.addedNodes && record.addedNodes.length) {
                 var referenceNode = record.previousSibling || null;
                 for (var a = 0; a < record.addedNodes.length; ++a) {
                     var addedNode = record.addedNodes[a];
@@ -244,64 +307,74 @@ function buildDomMutationEvents(records, maxDepth) {
                             node: descriptor
                         }
                     });
+                    if (bumpEventCount()) {
+                        return {events: [], compactTriggered: true};
+                    }
                     referenceNode = addedNode;
                 }
             }
+            if (!childCountUpdates.has(targetId)) {
+                if (bumpEventCount()) {
+                    return {events: [], compactTriggered: true};
+                }
+            }
             childCountUpdates.set(targetId, {
-                count: record.target.childNodes ? record.target.childNodes.length : 0,
-                layoutFlags: layoutInfo.layoutFlags,
-                isRendered: layoutInfo.isRendered
+                count: record.target.childNodes ? record.target.childNodes.length : 0
             });
             break;
+        }
         default:
             break;
         }
-        if (!compactMode && events.length > eventLimit) {
-            compactMode = true;
-        }
     }
 
-    if (childCountUpdates.size) {
-        childCountUpdates.forEach(function(entry, nodeId) {
+    attributeUpdates.forEach(function(attributes, nodeId) {
+        attributes.forEach(function(value, name) {
+            var layoutInfo = getLayoutInfo(nodeId);
+            if (value === null) {
+                events.push({
+                    method: "DOM.attributeRemoved",
+                    params: appendLayoutInfo({
+                        nodeId: nodeId,
+                        name: name
+                    }, layoutInfo)
+                });
+                return;
+            }
             events.push({
-                method: "DOM.childNodeCountUpdated",
-                params: {
+                method: "DOM.attributeModified",
+                params: appendLayoutInfo({
                     nodeId: nodeId,
-                    childNodeCount: entry.count,
-                    layoutFlags: entry.layoutFlags,
-                    isRendered: entry.isRendered
-                }
+                    name: name,
+                    value: value
+                }, layoutInfo)
             });
         });
-    }
+    });
 
-    if (events.length > eventLimit) {
-        var compact = [];
-        childCountUpdates.forEach(function(entry, nodeId) {
-            compact.push({
-                method: "DOM.childNodeCountUpdated",
-                params: {
-                    nodeId: nodeId,
-                    childNodeCount: entry.count,
-                    layoutFlags: entry.layoutFlags,
-                    isRendered: entry.isRendered
-                }
-            });
+    characterDataUpdates.forEach(function(value, nodeId) {
+        var layoutInfo = getLayoutInfo(nodeId);
+        events.push({
+            method: "DOM.characterDataModified",
+            params: appendLayoutInfo({
+                nodeId: nodeId,
+                characterData: value
+            }, layoutInfo)
         });
-        for (var e = 0; e < events.length; ++e) {
-            var event = events[e];
-            if (!event) {
-                continue;
-            }
-            if (event.method === "DOM.childNodeInserted" || event.method === "DOM.childNodeRemoved" || event.method === "DOM.childNodeCountUpdated") {
-                continue;
-            }
-            compact.push(event);
-        }
-        return {events: compact, compactTriggered: true};
-    }
+    });
 
-    return {events: events, compactTriggered: compactMode};
+    childCountUpdates.forEach(function(entry, nodeId) {
+        var layoutInfo = getLayoutInfo(nodeId);
+        events.push({
+            method: "DOM.childNodeCountUpdated",
+            params: appendLayoutInfo({
+                nodeId: nodeId,
+                childNodeCount: entry.count
+            }, layoutInfo)
+        });
+    });
+
+    return {events: events, compactTriggered: false};
 }
 
 function sendAutoSnapshotUpdate() {
@@ -313,24 +386,31 @@ function sendAutoSnapshotUpdate() {
 
     var pending = Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.slice() : [];
     inspector.pendingMutations = [];
+    var overflow = inspector.snapshotAutoUpdateOverflow === true;
+    inspector.snapshotAutoUpdateOverflow = false;
     var mapSize = inspector.map?.size || 0;
     if (!mapSize) {
         sendFullSnapshot("initial");
         return;
     }
     
+    if (overflow) {
+        sendFullSnapshot("overflow", COMPACT_SNAPSHOT_DEPTH);
+        return;
+    }
+
     if (!pending.length) {
         sendFullSnapshot("mutation");
         return;
     }
     var result = buildDomMutationEvents(pending, 0);
     var messages = result.events;
-    if (!messages.length) {
-        sendFullSnapshot("fallback");
+    if (result.compactTriggered) {
+        sendFullSnapshot("compact", COMPACT_SNAPSHOT_DEPTH);
         return;
     }
-    if (result.compactTriggered) {
-        sendFullSnapshot("compact");
+    if (!messages.length) {
+        sendFullSnapshot("fallback");
         return;
     }
     var reason = inspector.snapshotAutoUpdateReason || "mutation";
@@ -390,6 +470,7 @@ export function enableAutoSnapshot() {
     if (!Array.isArray(inspector.pendingMutations)) {
         inspector.pendingMutations = [];
     }
+    inspector.snapshotAutoUpdateOverflow = false;
     connectAutoSnapshotObserver();
     scheduleSnapshotAutoUpdate("initial");
     return inspector.snapshotAutoUpdateEnabled;
@@ -406,6 +487,7 @@ export function disableAutoSnapshot() {
     }
     inspector.pendingMutations = [];
     inspector.snapshotAutoUpdatePending = false;
+    inspector.snapshotAutoUpdateOverflow = false;
     inspector.snapshotAutoUpdateSuppressedCount = 0;
     inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
     inspector.snapshotAutoUpdatePendingReason = null;

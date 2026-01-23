@@ -349,6 +349,7 @@ export function removeNodeEntry(node: DOMNode | null | undefined): void {
     treeState.nodes.delete(node.id);
     treeState.openState.delete(node.id);
     treeState.elements.delete(node.id);
+    treeState.deferredChildRenders.delete(node.id);
 }
 
 // =============================================================================

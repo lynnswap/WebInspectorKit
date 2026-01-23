@@ -92,6 +92,7 @@ export const treeState: TreeState = {
     pendingRefreshRequests: new Set(),
     refreshAttempts: new Map(),
     selectionChain: [],
+    deferredChildRenders: new Set(),
 };
 
 // =============================================================================

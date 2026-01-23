@@ -22,6 +22,7 @@ export const inspector = {
     snapshotAutoUpdateMaxDepth: 4,
     snapshotAutoUpdateReason: "mutation",
     pendingMutations: [],
+    snapshotAutoUpdateOverflow: false,
     snapshotAutoUpdateSuppressedCount: 0,
     snapshotAutoUpdatePendingWhileSuppressed: false,
     snapshotAutoUpdatePendingReason: null,

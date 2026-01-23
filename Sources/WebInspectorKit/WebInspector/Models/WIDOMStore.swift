@@ -31,6 +31,7 @@ final class WIDOMStore: NSObject {
     private(set) var webView: WIWebView?
     private var isReady = false
     private var pendingBundles: [PendingBundle] = []
+    private var pendingBundleFlushTask: Task<Void, Never>?
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
     private var configuration: WebInspectorConfiguration
@@ -126,6 +127,7 @@ final class WIDOMStore: NSObject {
     private func resetInspectorState() {
         isReady = false
         pendingBundles.removeAll()
+        cancelPendingBundleFlush()
         pendingPreferredDepth = nil
         pendingDocumentRequest = nil
     }
@@ -158,13 +160,44 @@ final class WIDOMStore: NSObject {
     }
 
     private func applyMutationBundle(_ payload: PendingBundle) {
+        pendingBundles.append(payload)
         if isReady {
-            Task {
-                await applyBundleNow(payload)
-            }
-        } else {
-            pendingBundles.append(payload)
+            schedulePendingBundleFlush()
         }
+    }
+
+    private func bundleFlushInterval() -> TimeInterval {
+        let baseInterval = configuration.autoUpdateDebounce / 4
+        return max(0.05, min(0.2, baseInterval))
+    }
+
+    private func schedulePendingBundleFlush() {
+        guard pendingBundleFlushTask == nil else { return }
+        let interval = bundleFlushInterval()
+        pendingBundleFlushTask = Task { @MainActor in
+            let delay = UInt64(interval * 1_000_000_000)
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            await flushPendingBundlesNow()
+        }
+    }
+
+    private func flushPendingBundlesNow() async {
+        pendingBundleFlushTask?.cancel()
+        pendingBundleFlushTask = nil
+        guard isReady else { return }
+        let bundles = pendingBundles
+        pendingBundles.removeAll()
+        if bundles.isEmpty {
+            return
+        }
+        await applyBundlesNow(bundles)
+    }
+
+    private func cancelPendingBundleFlush() {
+        pendingBundleFlushTask?.cancel()
+        pendingBundleFlushTask = nil
     }
 
     private func applyBundlesNow(_ bundles: [PendingBundle]) async {
@@ -178,19 +211,6 @@ final class WIDOMStore: NSObject {
             )
         } catch {
             inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applyBundleNow(_ payload: PendingBundle) async {
-        guard let webView else { return }
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.applyMutationBundle?.(bundle)",
-                arguments: ["bundle": ["bundle": payload.rawJSON, "preserveState": payload.preserveState]],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send mutation bundle failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -285,10 +305,7 @@ private extension WIDOMStore {
             await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
             pendingDocumentRequest = nil
         }
-        if !pendingBundles.isEmpty {
-            await applyBundlesNow(pendingBundles)
-            pendingBundles.removeAll()
-        }
+        await flushPendingBundlesNow()
     }
 
     private func handleProtocolPayload(_ payload: Any?) {

@@ -123,6 +123,7 @@ export interface TreeState {
     pendingRefreshRequests: Set<number>;
     refreshAttempts: Map<number, RefreshAttempt>;
     selectionChain: number[];
+    deferredChildRenders: Set<number>;
 }
 
 /** Refresh attempt tracking */
