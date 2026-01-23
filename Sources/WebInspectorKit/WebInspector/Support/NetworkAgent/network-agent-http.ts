@@ -1,9 +1,27 @@
 // HTTP instrumentation: fetch, XHR, and resource timing.
 
-declare const recordStart: (...args: any[]) => void;
-declare const recordResponse: (...args: any[]) => any;
-declare const recordFinish: (...args: any[]) => void;
-declare const recordFailure: (...args: any[]) => void;
+import {
+    bufferEvent,
+    captureContentLength,
+    captureResponseBody,
+    captureXHRResponseBody,
+    deliverNetworkEvents,
+    enqueueThrottledEvent,
+    estimatedEncodedLength,
+    handleResourceEntry,
+    isActiveLogging,
+    networkState,
+    nextRequestID,
+    normalizeHeaders,
+    now,
+    serializeRequestBody,
+    shouldQueueNetworkEvent,
+    shouldThrottleDelivery,
+    shouldTrackNetworkEvents,
+    wallTime
+} from "./network-agent-utils";
+import type { RequestBodyInfo } from "./network-agent-utils";
+import { recordFailure, recordFinish, recordResponse, recordStart } from "./network-agent-core";
 
 type PatchedFunction<T extends Function> = T & { __wiNetworkPatched?: boolean };
 
@@ -145,13 +163,16 @@ const installXHRPatch = () => {
                         captureContentLength(this as XMLHttpRequest),
                         responseBody
                     );
+                    const mimeType = (this as XMLHttpRequest).getResponseHeader
+                        ? (this as XMLHttpRequest).getResponseHeader("content-type")
+                        : null;
                     recordFinish(
                         requestId,
                         length,
                         "xhr",
                         (this as XMLHttpRequest).status,
                         (this as XMLHttpRequest).statusText,
-                        (this as XMLHttpRequest).getResponseHeader ? (this as XMLHttpRequest).getResponseHeader("content-type") : undefined,
+                        mimeType || "",
                         undefined,
                         undefined,
                         responseBody
@@ -224,3 +245,5 @@ const installResourceObserver = () => {
     } catch {
     }
 };
+
+export { installFetchPatch, installResourceObserver, installXHRPatch };
