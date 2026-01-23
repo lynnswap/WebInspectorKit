@@ -7,19 +7,29 @@ const now = () => {
 
 const wallTime = () => Date.now();
 
-const makeNetworkTime = (monotonicOverride?: number, wallOverride?: number) => {
+type NetworkTime = {
+    monotonicMs: number;
+    wallMs: number;
+};
+
+type NetworkEventPayload = Record<string, any>;
+type HeaderMap = Record<string, string>;
+
+const makeNetworkTime = (monotonicOverride?: number, wallOverride?: number): NetworkTime => {
     const monotonicMs = typeof monotonicOverride === "number" ? monotonicOverride : now();
     const wallMs = typeof wallOverride === "number" ? wallOverride : wallTime();
     return {monotonicMs, wallMs};
 };
 
-const makeNetworkTimeAt = (monotonicMs?: number, nowMonotonic?: number, nowWall?: number) => {
+const makeNetworkTimeAt = (monotonicMs?: number, nowMonotonic?: number, nowWall?: number): NetworkTime => {
     const fallback = makeNetworkTime();
-    if (!Number.isFinite(monotonicMs)) {
+    if (!(typeof monotonicMs === "number" && Number.isFinite(monotonicMs))) {
         return fallback;
     }
-    const referenceMonotonic = Number.isFinite(nowMonotonic) ? nowMonotonic : fallback.monotonicMs;
-    const referenceWall = Number.isFinite(nowWall) ? nowWall : fallback.wallMs;
+    const referenceMonotonic = typeof nowMonotonic === "number" && Number.isFinite(nowMonotonic)
+        ? nowMonotonic
+        : fallback.monotonicMs;
+    const referenceWall = typeof nowWall === "number" && Number.isFinite(nowWall) ? nowWall : fallback.wallMs;
     const delta = referenceMonotonic - monotonicMs;
     return {
         monotonicMs: monotonicMs,
@@ -27,7 +37,7 @@ const makeNetworkTimeAt = (monotonicMs?: number, nowMonotonic?: number, nowWall?
     };
 };
 
-const generateSessionID = () => {
+const generateSessionID = (): string => {
     try {
         if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
             return crypto.randomUUID();
@@ -43,11 +53,24 @@ const NetworkLoggingMode = {
     ACTIVE: "active",
     BUFFERING: "buffering",
     STOPPED: "stopped"
-};
+} as const;
+
+type NetworkLoggingModeValue = typeof NetworkLoggingMode[keyof typeof NetworkLoggingMode];
 
 const NETWORK_EVENT_VERSION = 1;
 
-const networkState = {
+type NetworkState = {
+    mode: NetworkLoggingModeValue;
+    installed: boolean;
+    nextId: number;
+    batchSeq: number;
+    droppedEvents: number;
+    sessionID: string;
+    resourceObserver: PerformanceObserver | null;
+    resourceSeen: Set<string> | null;
+};
+
+const networkState: NetworkState = {
     mode: NetworkLoggingMode.ACTIVE,
     installed: false,
     nextId: 1,
@@ -58,10 +81,10 @@ const networkState = {
     resourceSeen: null
 };
 
-const trackedRequests = new Map();
-const queuedEvents = [];
-const textEncoder = typeof TextEncoder === "function" ? new TextEncoder() : null;
-const trackedResourceTypes = new Set([
+const trackedRequests = new Map<number, { startTime: number; wallTime: number }>();
+const queuedEvents: NetworkEventPayload[] = [];
+const textEncoder: TextEncoder | null = typeof TextEncoder === "function" ? new TextEncoder() : null;
+const trackedResourceTypes = new Set<string>([
     "img",
     "image",
     "media",
@@ -83,7 +106,7 @@ const trackedResourceTypes = new Set([
     "manifest"
 ]);
 
-const encodeTextToBytes = value => {
+const encodeTextToBytes = (value: unknown): Uint8Array | null => {
     if (!textEncoder) {
         return null;
     }
@@ -95,7 +118,7 @@ const encodeTextToBytes = value => {
     return null;
 };
 
-const byteLengthOfString = value => {
+const byteLengthOfString = (value: unknown): number => {
     const stringified = typeof value === "string" ? value : String(value ?? "");
     const encoded = encodeTextToBytes(stringified);
     if (encoded) {
@@ -104,7 +127,7 @@ const byteLengthOfString = value => {
     return stringified.length;
 };
 
-const clampStringToByteLength = (value, byteLimit, preEncodedBytes) => {
+const clampStringToByteLength = (value: unknown, byteLimit: number, preEncodedBytes?: Uint8Array | null) => {
     const stringified = typeof value === "string" ? value : String(value ?? "");
     if (!Number.isFinite(byteLimit) || byteLimit === Infinity) {
         return {text: stringified, truncated: false};
@@ -132,7 +155,7 @@ const clampStringToByteLength = (value, byteLimit, preEncodedBytes) => {
     return {text: decoded, truncated: true};
 };
 
-const clampBytes = (bytes, limit) => {
+const clampBytes = (bytes: Uint8Array | null, limit: number) => {
     if (!(bytes instanceof Uint8Array)) {
         return {bytes: null, truncated: false};
     }
@@ -142,7 +165,7 @@ const clampBytes = (bytes, limit) => {
     return {bytes: bytes.slice(0, limit), truncated: true};
 };
 
-const byteLengthOfText = value => {
+const byteLengthOfText = (value: unknown): number => {
     if (typeof value !== "string") {
         return 0;
     }
@@ -153,7 +176,7 @@ const byteLengthOfText = value => {
     return value.length;
 };
 
-const bytesToBase64 = bytes => {
+const bytesToBase64 = (bytes: Uint8Array | null): string => {
     if (!(bytes instanceof Uint8Array)) {
         return "";
     }
@@ -170,7 +193,7 @@ const bytesToBase64 = bytes => {
     const chunkSize = 0x8000;
     for (let i = 0; i < bytes.length; i += chunkSize) {
         const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-        binary += String.fromCharCode.apply(null, chunk);
+        binary += String.fromCharCode.apply(null, Array.from(chunk));
     }
     try {
         return btoa(binary);
@@ -179,7 +202,12 @@ const bytesToBase64 = bytes => {
     return "";
 };
 
-const serializeBase64Body = (bytes, reportedSize, inlineLimit = MAX_INLINE_BODY_LENGTH, storageLimit = MAX_CAPTURE_BODY_LENGTH) => {
+const serializeBase64Body = (
+    bytes: Uint8Array | null,
+    reportedSize?: number,
+    inlineLimit = MAX_INLINE_BODY_LENGTH,
+    storageLimit = MAX_CAPTURE_BODY_LENGTH
+) => {
     if (!(bytes instanceof Uint8Array)) {
         return serializeBinaryBodySummary(reportedSize, "Binary body");
     }
@@ -187,8 +215,8 @@ const serializeBase64Body = (bytes, reportedSize, inlineLimit = MAX_INLINE_BODY_
     const base64 = bytesToBase64(storage.bytes || bytes);
     const inlineTruncated = base64.length > inlineLimit;
     const body = inlineTruncated ? base64.slice(0, inlineLimit) : base64;
-    const size = Number.isFinite(reportedSize) ? reportedSize : bytes.byteLength;
-    const truncated = inlineTruncated || storage.truncated || (Number.isFinite(size) && size > inlineLimit);
+    const size = typeof reportedSize === "number" && Number.isFinite(reportedSize) ? reportedSize : bytes.byteLength;
+    const truncated = inlineTruncated || storage.truncated || size > inlineLimit;
     return {
         kind: "binary",
         body: body,
@@ -199,7 +227,7 @@ const serializeBase64Body = (bytes, reportedSize, inlineLimit = MAX_INLINE_BODY_
     };
 };
 
-const decodeBytesWithEncoding = (bytes, encodingLabel) => {
+const decodeBytesWithEncoding = (bytes: Uint8Array | null, encodingLabel?: string | null) => {
     if (!(bytes instanceof Uint8Array)) {
         return null;
     }
@@ -220,7 +248,7 @@ const decodeBytesWithEncoding = (bytes, encodingLabel) => {
     return null;
 };
 
-const parseCharsetFromMimeType = mimeType => {
+const parseCharsetFromMimeType = (mimeType?: string | null) => {
     if (!mimeType || typeof mimeType !== "string") {
         return null;
     }
@@ -231,11 +259,11 @@ const parseCharsetFromMimeType = mimeType => {
     return null;
 };
 
-const makeBodyRef = (role, requestId) => {
+const makeBodyRef = (role: string, requestId: number) => {
     return `${role}:${requestId}`;
 };
 
-const buildStoredBodyPayload = bodyInfo => {
+const buildStoredBodyPayload = (bodyInfo: RequestBodyInfo | null | undefined) => {
     if (!bodyInfo) {
         return null;
     }
@@ -266,7 +294,7 @@ const buildStoredBodyPayload = bodyInfo => {
     return payload;
 };
 
-const makeBodyPreviewPayload = (bodyInfo, ref) => {
+const makeBodyPreviewPayload = (bodyInfo: RequestBodyInfo | null | undefined, ref?: string | null) => {
     if (!bodyInfo) {
         return undefined;
     }
@@ -329,17 +357,17 @@ class BodyCache {
     usedBytes: number;
     entries: Map<string, { body: any; size: number }>;
 
-    constructor(maxBytes) {
+    constructor(maxBytes: number) {
         this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? maxBytes : Infinity;
         this.usedBytes = 0;
-        this.entries = new Map();
+        this.entries = new Map<string, { body: any; size: number }>();
     }
 
-    key(ref) {
+    key(ref: string | null | undefined) {
         return String(ref || "");
     }
 
-    estimateBytes(bodyInfo) {
+    estimateBytes(bodyInfo: Record<string, any>) {
         if (!bodyInfo) {
             return 0;
         }
@@ -358,7 +386,7 @@ class BodyCache {
         return 0;
     }
 
-    evictUntilFits(additionalBytes) {
+    evictUntilFits(additionalBytes: number) {
         if (!Number.isFinite(additionalBytes) || additionalBytes <= 0) {
             return;
         }
@@ -375,7 +403,7 @@ class BodyCache {
         }
     }
 
-    store(ref, bodyInfo) {
+    store(ref: string, bodyInfo: Record<string, any>) {
         if (!ref || !bodyInfo) {
             return false;
         }
@@ -397,7 +425,7 @@ class BodyCache {
         return true;
     }
 
-    take(ref) {
+    take(ref: string) {
         const key = this.key(ref);
         if (!this.entries.has(key)) {
             return null;
@@ -418,21 +446,28 @@ class BodyCache {
 
 const bodyCache = new BodyCache(MAX_BODY_CACHE_BYTES);
 
-const throttleState = {
+type ThrottleState = {
+    intervalMs: number;
+    maxQueuedEvents: number;
+    queue: NetworkEventPayload[];
+    timer: ReturnType<typeof setTimeout> | null;
+};
+
+const throttleState: ThrottleState = {
     intervalMs: DEFAULT_THROTTLE_INTERVAL_MS,
     maxQueuedEvents: MAX_QUEUED_EVENTS,
     queue: [],
     timer: null
 };
 
-const recordDroppedEvents = count => {
+const recordDroppedEvents = (count: number) => {
     if (!Number.isFinite(count) || count <= 0) {
         return;
     }
     networkState.droppedEvents += count;
 };
 
-const bufferEvent = event => {
+const bufferEvent = (event: NetworkEventPayload) => {
     if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
         queuedEvents.shift();
         recordDroppedEvents(1);
@@ -448,7 +483,7 @@ const clearThrottledEvents = () => {
     }
 };
 
-const deliverNetworkEvents = events => {
+const deliverNetworkEvents = (events: NetworkEventPayload[]) => {
     if (!Array.isArray(events) || !events.length) {
         return;
     }
@@ -464,7 +499,7 @@ const deliverNetworkEvents = events => {
     }
     try {
         networkState.batchSeq += 1;
-        window.webkit.messageHandlers.webInspectorNetworkEvents.postMessage(payload);
+        window.webkit?.messageHandlers?.webInspectorNetworkEvents?.postMessage(payload);
     } catch {
     }
 };
@@ -495,7 +530,7 @@ const scheduleThrottledFlush = () => {
     }, throttleState.intervalMs);
 };
 
-const enqueueThrottledEvent = event => {
+const enqueueThrottledEvent = (event: NetworkEventPayload) => {
     if (throttleState.queue.length >= throttleState.maxQueuedEvents) {
         throttleState.queue.shift();
         recordDroppedEvents(1);
@@ -504,9 +539,13 @@ const enqueueThrottledEvent = event => {
     scheduleThrottledFlush();
 };
 
-const setThrottleOptions = options => {
-    const interval = options && Number.isFinite(options.intervalMs) ? options.intervalMs : DEFAULT_THROTTLE_INTERVAL_MS;
-    const limit = options && Number.isFinite(options.maxQueuedEvents) ? options.maxQueuedEvents : MAX_QUEUED_EVENTS;
+const setThrottleOptions = (options: { intervalMs?: number; maxQueuedEvents?: number } | null | undefined) => {
+    const interval = typeof options?.intervalMs === "number" && Number.isFinite(options.intervalMs)
+        ? options.intervalMs
+        : DEFAULT_THROTTLE_INTERVAL_MS;
+    const limit = typeof options?.maxQueuedEvents === "number" && Number.isFinite(options.maxQueuedEvents)
+        ? options.maxQueuedEvents
+        : MAX_QUEUED_EVENTS;
     throttleState.intervalMs = interval >= 0 ? interval : 0;
     throttleState.maxQueuedEvents = limit > 0 ? limit : MAX_QUEUED_EVENTS;
     if (throttleState.intervalMs === 0 && throttleState.queue.length) {
@@ -520,7 +559,7 @@ const isActiveLogging = () => networkState.mode === NetworkLoggingMode.ACTIVE;
 const shouldTrackNetworkEvents = () => networkState.mode !== NetworkLoggingMode.STOPPED;
 const shouldQueueNetworkEvent = () => networkState.mode === NetworkLoggingMode.BUFFERING;
 
-const enqueueNetworkEvent = event => {
+const enqueueNetworkEvent = (event: NetworkEventPayload) => {
     if (!isActiveLogging()) {
         if (shouldQueueNetworkEvent()) {
             bufferEvent(event);
@@ -540,8 +579,8 @@ const nextRequestID = () => {
     return requestId;
 };
 
-const normalizeHeaders = headers => {
-    const result = {};
+const normalizeHeaders = (headers: Headers | Array<[string, string]> | Record<string, unknown> | null | undefined): HeaderMap => {
+    const result: HeaderMap = {};
     if (!headers) {
         return result;
     }
@@ -564,7 +603,7 @@ const normalizeHeaders = headers => {
         }
         if (typeof headers === "object") {
             Object.keys(headers).forEach(key => {
-                result[String(key).toLowerCase()] = String(headers[key]);
+                result[String(key).toLowerCase()] = String((headers as Record<string, unknown>)[key]);
             });
         }
     } catch {
@@ -572,8 +611,8 @@ const normalizeHeaders = headers => {
     return result;
 };
 
-const parseRawHeaders = raw => {
-    const headers = {};
+const parseRawHeaders = (raw: string | null | undefined): HeaderMap => {
+    const headers: HeaderMap = {};
     if (!raw || typeof raw !== "string") {
         return headers;
     }
@@ -592,14 +631,19 @@ const parseRawHeaders = raw => {
 };
 
 /** @returns {RequestBodyInfo} */
-const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedSize?: number, storageLimit = Infinity): RequestBodyInfo => {
+const serializeTextBody = (
+    text: unknown,
+    inlineLimit = MAX_INLINE_BODY_LENGTH,
+    reportedSize?: number,
+    storageLimit = Infinity
+): RequestBodyInfo => {
     const stringified = typeof text === "string" ? text : String(text ?? "");
     const encoded = encodeTextToBytes(stringified);
     const measuredSize = encoded ? encoded.byteLength : stringified.length;
-    const size = Number.isFinite(reportedSize) ? reportedSize : measuredSize;
+    const size = typeof reportedSize === "number" && Number.isFinite(reportedSize) ? reportedSize : measuredSize;
     const inlineClamped = clampStringToByteLength(stringified, inlineLimit, encoded);
     const storageClamped = clampStringToByteLength(stringified, storageLimit, encoded);
-    const truncated = inlineClamped.truncated || storageClamped.truncated || (Number.isFinite(size) && size > inlineLimit);
+    const truncated = inlineClamped.truncated || storageClamped.truncated || size > inlineLimit;
     return {
         kind: "text",
         body: inlineClamped.text,
@@ -611,8 +655,8 @@ const serializeTextBody = (text, inlineLimit = MAX_INLINE_BODY_LENGTH, reportedS
 };
 
 /** @returns {RequestBodyInfo} */
-const serializeBinaryBodySummary = (size, label): RequestBodyInfo => {
-    const knownSize = Number.isFinite(size) && size >= 0 ? size : undefined;
+const serializeBinaryBodySummary = (size?: number, label?: string): RequestBodyInfo => {
+    const knownSize = typeof size === "number" && Number.isFinite(size) && size >= 0 ? size : undefined;
     const description = label || "Binary body";
     const summary = knownSize != null ? description + " (" + knownSize + " bytes)" : description;
     const truncated = knownSize != null ? knownSize > MAX_INLINE_BODY_LENGTH : true;
@@ -628,12 +672,12 @@ const serializeBinaryBodySummary = (size, label): RequestBodyInfo => {
 };
 
 /** @returns {RequestBodyInfo|null} */
-const serializeFormDataBody = (formData, storageLimit = Infinity): RequestBodyInfo | null => {
+const serializeFormDataBody = (formData: FormData, storageLimit = Infinity): RequestBodyInfo | null => {
     try {
         if (typeof formData.forEach !== "function") {
             return null;
         }
-        const entries = [];
+        const entries: string[] = [];
         let size = 0;
         let sizeKnown = true;
         formData.forEach((value, key) => {
@@ -690,7 +734,7 @@ const serializeFormDataBody = (formData, storageLimit = Infinity): RequestBodyIn
     return null;
 };
 
-const serializeRequestBody = (body, storageLimit = MAX_CAPTURE_BODY_LENGTH): RequestBodyInfo | null => {
+const serializeRequestBody = (body: unknown, storageLimit = MAX_CAPTURE_BODY_LENGTH): RequestBodyInfo | null => {
     if (body == null) {
         return null;
     }
@@ -737,7 +781,7 @@ const serializeRequestBody = (body, storageLimit = MAX_CAPTURE_BODY_LENGTH): Req
     return null;
 };
 
-const shouldCaptureResponseBody = mimeType => {
+const shouldCaptureResponseBody = (mimeType?: string | null) => {
     const lower = String(mimeType || "").toLowerCase();
     if (!lower) {
         return false;
@@ -763,22 +807,33 @@ const shouldCaptureResponseBody = mimeType => {
     return false;
 };
 
-const readStreamedTextResponse = async (response, expectedSize, encodingLabel) => {
+type StreamedResponse = {
+    text: string | null;
+    size: number;
+    truncated: boolean;
+    bytes: Uint8Array;
+};
+
+const readStreamedTextResponse = async (
+    response: Response,
+    expectedSize?: number,
+    encodingLabel?: string | null
+): Promise<StreamedResponse | null> => {
     if (!response || !response.body || typeof response.body.getReader !== "function") {
         return null;
     }
-    const sizeHint = Number.isFinite(expectedSize) && expectedSize >= 0 ? expectedSize : undefined;
+    const sizeHint = typeof expectedSize === "number" && Number.isFinite(expectedSize) && expectedSize >= 0 ? expectedSize : undefined;
     if (sizeHint === 0) {
         return {text: "", size: 0, truncated: false, bytes: new Uint8Array()};
     }
     const byteLimit = sizeHint != null ? Math.min(MAX_CAPTURE_BODY_LENGTH, sizeHint) : MAX_CAPTURE_BODY_LENGTH;
-    let reader;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
         reader = response.body.getReader();
     } catch {
         return null;
     }
-    const chunks = [];
+    const chunks: Uint8Array[] = [];
     let total = 0;
     let truncated = false;
     let limitReached = false;
@@ -832,14 +887,14 @@ const readStreamedTextResponse = async (response, expectedSize, encodingLabel) =
             offset += chunks[i].length;
         }
         const text = decodeBytesWithEncoding(merged, encodingLabel);
-        const reportedSize = Number.isFinite(sizeHint) ? sizeHint : (limitReached ? Math.max(total, byteLimit + 1) : total);
+        const reportedSize = typeof sizeHint === "number" ? sizeHint : (limitReached ? Math.max(total, byteLimit + 1) : total);
         return {text: text, size: reportedSize, truncated: truncated, bytes: merged};
     } catch {
     }
     return null;
 };
 
-const captureResponseBody = async (response, mimeType) => {
+const captureResponseBody = async (response: Response, mimeType?: string | null): Promise<RequestBodyInfo | null> => {
     if (!response) {
         return null;
     }
@@ -849,7 +904,7 @@ const captureResponseBody = async (response, mimeType) => {
     }
     const charset = parseCharsetFromMimeType(mimeType);
     const contentLength = captureContentLength(response);
-    const expectedSize = Number.isFinite(contentLength) ? contentLength : undefined;
+    const expectedSize = typeof contentLength === "number" && Number.isFinite(contentLength) ? contentLength : undefined;
     try {
         if (typeof response.clone !== "function") {
             return null;
@@ -884,7 +939,7 @@ const captureResponseBody = async (response, mimeType) => {
     return null;
 };
 
-const captureXHRResponseBody = xhr => {
+const captureXHRResponseBody = (xhr: XMLHttpRequest) => {
     if (!xhr) {
         return null;
     }
@@ -911,12 +966,12 @@ const captureXHRResponseBody = xhr => {
     return null;
 };
 
-const captureContentLength = response => {
+const captureContentLength = (response: Response | XMLHttpRequest) => {
     try {
         let value = null;
-        if (response && response.headers && typeof response.headers.get === "function") {
+        if (response && "headers" in response && response.headers && typeof response.headers.get === "function") {
             value = response.headers.get("content-length");
-        } else if (response && typeof response.getResponseHeader === "function") {
+        } else if (response && "getResponseHeader" in response && typeof response.getResponseHeader === "function") {
             value = response.getResponseHeader("content-length");
         }
         if (!value) {
@@ -931,21 +986,22 @@ const captureContentLength = response => {
     return undefined;
 };
 
-const estimatedEncodedLength = (explicitLength, bodyInfo) => {
-    if (Number.isFinite(explicitLength)) {
+const estimatedEncodedLength = (explicitLength?: number, bodyInfo?: RequestBodyInfo | null) => {
+    if (typeof explicitLength === "number" && Number.isFinite(explicitLength)) {
         return explicitLength;
     }
-    if (bodyInfo && Number.isFinite(bodyInfo.size)) {
+    if (bodyInfo && typeof bodyInfo.size === "number" && Number.isFinite(bodyInfo.size)) {
         return bodyInfo.size;
     }
     return undefined;
 };
 
-const shouldTrackResourceEntry = entry => {
+const shouldTrackResourceEntry = (entry: PerformanceEntry): entry is PerformanceResourceTiming => {
     if (!entry) {
         return false;
     }
-    const initiator = String(entry.initiatorType || "").toLowerCase();
+    const resourceEntry = entry as PerformanceResourceTiming;
+    const initiator = String(resourceEntry.initiatorType || "").toLowerCase();
     if (!initiator) {
         return false;
     }
@@ -956,8 +1012,8 @@ const shouldTrackResourceEntry = entry => {
         return true;
     }
     if (initiator === "other") {
-        if (typeof entry.name === "string") {
-            const lower = entry.name.toLowerCase();
+        if (typeof resourceEntry.name === "string") {
+            const lower = resourceEntry.name.toLowerCase();
             if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.endsWith(".m4v")) {
                 return true;
             }
@@ -966,47 +1022,55 @@ const shouldTrackResourceEntry = entry => {
     return false;
 };
 
-const handleResourceEntry = entry => {
+const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | null => {
     if (!shouldTrackResourceEntry(entry)) {
         return null;
     }
+    const resourceEntry = entry as PerformanceResourceTiming;
     if (!networkState.resourceSeen) {
-        networkState.resourceSeen = new Set();
+        networkState.resourceSeen = new Set<string>();
     }
-    const key = String(entry.name || "") + "::" + entry.startTime;
-    if (networkState.resourceSeen.has(key)) {
+    const resourceSeen = networkState.resourceSeen;
+    if (!resourceSeen) {
         return null;
     }
-    networkState.resourceSeen.add(key);
+    const key = String(resourceEntry.name || "") + "::" + resourceEntry.startTime;
+    if (resourceSeen.has(key)) {
+        return null;
+    }
+    resourceSeen.add(key);
 
     const requestId = nextRequestID();
-    const startTime = typeof entry.startTime === "number" ? entry.startTime : now();
-    const duration = typeof entry.duration === "number" && entry.duration >= 0 ? entry.duration : 0;
+    const startTime = typeof resourceEntry.startTime === "number" ? resourceEntry.startTime : now();
+    const duration = typeof resourceEntry.duration === "number" && resourceEntry.duration >= 0 ? resourceEntry.duration : 0;
     const endTime = startTime + duration;
-    const requestType = entry.initiatorType || "resource";
+    const requestType = resourceEntry.initiatorType || "resource";
 
     const nowMonotonic = now();
     const nowWall = wallTime();
     const startTimePayload = makeNetworkTimeAt(startTime, nowMonotonic, nowWall);
     const endTimePayload = makeNetworkTimeAt(endTime, nowMonotonic, nowWall);
 
-    let encoded = entry.encodedBodySize;
+    let encoded: number | undefined = resourceEntry.encodedBodySize;
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
-        encoded = entry.transferSize;
+        encoded = resourceEntry.transferSize;
     }
     if (!(Number.isFinite(encoded) && encoded >= 0)) {
         encoded = undefined;
     }
-    const decodedSize = Number.isFinite(entry.decodedBodySize) && entry.decodedBodySize >= 0 ? entry.decodedBodySize : undefined;
-    let status = undefined;
-    if (typeof entry.responseStatus === "number") {
-        status = entry.responseStatus;
+    const decodedSize = Number.isFinite(resourceEntry.decodedBodySize) && resourceEntry.decodedBodySize >= 0
+        ? resourceEntry.decodedBodySize
+        : undefined;
+    let status: number | undefined = undefined;
+    if (typeof resourceEntry.responseStatus === "number") {
+        status = resourceEntry.responseStatus;
     }
-    const method = typeof entry.requestMethod === "string" ? entry.requestMethod.toUpperCase() : undefined;
+    const requestMethod = (resourceEntry as { requestMethod?: string }).requestMethod;
+    const method = typeof requestMethod === "string" ? requestMethod.toUpperCase() : undefined;
     return {
         kind: "resourceTiming",
         requestId: requestId,
-        url: entry.name || "",
+        url: resourceEntry.name || "",
         method: method,
         status: status,
         mimeType: "",

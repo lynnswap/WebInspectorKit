@@ -1,4 +1,4 @@
-import {inspector} from "./dom-agent-state";
+import {inspector, type AnyNode} from "./dom-agent-state";
 import {nodeIsRendered, rectForNode} from "./dom-agent-dom-core";
 
 function ensureOverlay() {
@@ -10,7 +10,7 @@ function ensureOverlay() {
     overlay.style.position = "fixed";
     overlay.style.background = "rgba(0, 122, 255, 0.25)";
     overlay.style.border = "2px solid rgba(0, 122, 255, 0.9)";
-    overlay.style.zIndex = 2147483647;
+    overlay.style.zIndex = "2147483647";
     overlay.style.pointerEvents = "none";
     overlay.style.boxSizing = "border-box";
     overlay.style.display = "none";
@@ -112,7 +112,7 @@ function scheduleOverlayUpdate() {
     });
 }
 
-export function setOverlayTarget(node) {
+export function setOverlayTarget(node: AnyNode | null) {
     if (inspector.overlayTarget === node) {
         scheduleOverlayUpdate();
         return;
@@ -138,7 +138,7 @@ function viewportMetrics() {
     return {top: top, left: left, width: width, height: height};
 }
 
-function scrollRectIntoViewIfNeeded(rect) {
+function scrollRectIntoViewIfNeeded(rect: DOMRect | null) {
     if (!rect) {
         return false;
     }
@@ -172,7 +172,7 @@ function scrollRectIntoViewIfNeeded(rect) {
     return true;
 }
 
-export function highlightDOMNode(identifier) {
+export function highlightDOMNode(identifier: number) {
     var map = inspector.map;
     if (!map || !map.size) {
         return false;
@@ -197,6 +197,6 @@ export function clearHighlight() {
     setOverlayTarget(null);
 }
 
-export function highlightSelectionNode(node) {
+export function highlightSelectionNode(node: AnyNode | null) {
     setOverlayTarget(node || null);
 }

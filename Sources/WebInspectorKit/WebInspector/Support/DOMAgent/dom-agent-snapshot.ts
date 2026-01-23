@@ -1,4 +1,4 @@
-import {inspector} from "./dom-agent-state";
+import {inspector, type AnyNode} from "./dom-agent-state";
 import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./dom-agent-dom-core";
 
 const MAX_PENDING_MUTATIONS = 1500;
@@ -8,11 +8,28 @@ const MIN_LAYOUT_INFO_NODES = 40;
 const COMPACT_EVENT_LIMIT = 600;
 const COMPACT_SNAPSHOT_DEPTH = 2;
 
-function autoSnapshotHandler() {
+type MessageHandler = {
+    postMessage: (message: any) => void;
+};
+
+type AutoSnapshotOptions = {
+    enabled?: boolean;
+    maxDepth?: number;
+    debounce?: number;
+};
+
+type LayoutInfo = ReturnType<typeof layoutInfoForNode>;
+
+type MutationEvent = {
+    method: string;
+    params: Record<string, any>;
+};
+
+function autoSnapshotHandler(): MessageHandler | null {
     return window?.webkit?.messageHandlers?.webInspectorDOMSnapshot || null;
 }
 
-function mutationUpdateHandler() {
+function mutationUpdateHandler(): MessageHandler | null {
     return window?.webkit?.messageHandlers?.webInspectorDOMMutations || null;
 }
 
@@ -22,14 +39,14 @@ export function enableAutoSnapshotIfSupported() {
     }
 }
 
-function ensureAutoSnapshotObserver() {
+function ensureAutoSnapshotObserver(): MutationObserver | null {
     if (inspector.snapshotAutoUpdateObserver) {
         return inspector.snapshotAutoUpdateObserver;
     }
     if (typeof MutationObserver === "undefined") {
         return null;
     }
-    inspector.snapshotAutoUpdateObserver = new MutationObserver(function(mutations) {
+    inspector.snapshotAutoUpdateObserver = new MutationObserver(function(mutations: MutationRecord[]) {
         if (!mutations || !mutations.length) {
             return;
         }
@@ -73,7 +90,7 @@ function disconnectAutoSnapshotObserver() {
     observer.disconnect();
 }
 
-export function suppressSnapshotAutoUpdate(reason) {
+export function suppressSnapshotAutoUpdate(reason: string) {
     if (!inspector) {
         return;
     }
@@ -93,7 +110,7 @@ export function suppressSnapshotAutoUpdate(reason) {
     }
 }
 
-export function resumeSnapshotAutoUpdate(reason) {
+export function resumeSnapshotAutoUpdate(reason: string) {
     if (!inspector) {
         return;
     }
@@ -115,7 +132,7 @@ export function resumeSnapshotAutoUpdate(reason) {
     }
 }
 
-export function scheduleSnapshotAutoUpdate(reason) {
+export function scheduleSnapshotAutoUpdate(reason: string) {
     if (!inspector.snapshotAutoUpdateEnabled) {
         return;
     }
@@ -144,7 +161,7 @@ export function scheduleSnapshotAutoUpdate(reason) {
     }, delay);
 }
 
-function sendFullSnapshot(reason, maxDepthOverride) {
+function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
     var handler = autoSnapshotHandler();
     if (!handler) {
         return;
@@ -171,16 +188,16 @@ function sendFullSnapshot(reason, maxDepthOverride) {
     }
 }
 
-function buildDomMutationEvents(records, maxDepth) {
+function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { events: MutationEvent[]; compactTriggered: boolean } {
     if (!Array.isArray(records) || !records.length) {
         return {events: [], compactTriggered: false};
     }
-    var events = [];
-    var attributeUpdates = new Map();
-    var characterDataUpdates = new Map();
-    var childCountUpdates = new Map();
-    var nodeCache = new Map();
-    var layoutInfoCache = new Map();
+    var events: MutationEvent[] = [];
+    var attributeUpdates = new Map<number, Map<string, string | null>>();
+    var characterDataUpdates = new Map<number, string>();
+    var childCountUpdates = new Map<number, { count: number }>();
+    var nodeCache = new Map<number, AnyNode>();
+    var layoutInfoCache = new Map<number, LayoutInfo>();
     var descriptorDepth = Math.min(1, Math.max(0, typeof maxDepth === "number" ? maxDepth : 1));
     var eventLimit = COMPACT_EVENT_LIMIT;
     var eventCount = 0;
@@ -197,15 +214,15 @@ function buildDomMutationEvents(records, maxDepth) {
         return eventCount > eventLimit;
     }
 
-    function cacheNode(nodeId, node) {
+    function cacheNode(nodeId: number, node: AnyNode) {
         if (!nodeCache.has(nodeId)) {
             nodeCache.set(nodeId, node);
         }
     }
 
-    function getLayoutInfo(nodeId) {
+    function getLayoutInfo(nodeId: number): LayoutInfo | null {
         if (layoutInfoCache.has(nodeId)) {
-            return layoutInfoCache.get(nodeId);
+            return layoutInfoCache.get(nodeId) || null;
         }
         if (layoutInfoBudget <= 0) {
             return null;
@@ -220,7 +237,7 @@ function buildDomMutationEvents(records, maxDepth) {
         return info;
     }
 
-    function appendLayoutInfo(params, layoutInfo) {
+    function appendLayoutInfo(params: Record<string, any>, layoutInfo: LayoutInfo | null) {
         if (!layoutInfo) {
             return params;
         }
@@ -233,21 +250,21 @@ function buildDomMutationEvents(records, maxDepth) {
         if (!record || !record.target) {
             continue;
         }
-        var targetId = rememberNode(record.target);
+        var targetId = rememberNode(record.target as AnyNode);
         if (!targetId) {
             continue;
         }
-        cacheNode(targetId, record.target);
+        cacheNode(targetId, record.target as AnyNode);
         switch (record.type) {
         case "attributes": {
             var attrName = record.attributeName || "";
             if (!attrName) {
                 break;
             }
-            var attrValue = record.target.getAttribute(attrName);
+            var attrValue = (record.target as Element).getAttribute(attrName);
             var nodeAttributes = attributeUpdates.get(targetId);
             if (!nodeAttributes) {
-                nodeAttributes = new Map();
+                nodeAttributes = new Map<string, string | null>();
                 attributeUpdates.set(targetId, nodeAttributes);
             }
             if (!nodeAttributes.has(attrName)) {
@@ -274,7 +291,7 @@ function buildDomMutationEvents(records, maxDepth) {
         case "childList": {
             if (record.removedNodes && record.removedNodes.length) {
                 for (var r = 0; r < record.removedNodes.length; ++r) {
-                    var removedNodeId = rememberNode(record.removedNodes[r]);
+                    var removedNodeId = rememberNode(record.removedNodes[r] as AnyNode);
                     if (!removedNodeId) {
                         continue;
                     }
@@ -294,11 +311,11 @@ function buildDomMutationEvents(records, maxDepth) {
                 var referenceNode = record.previousSibling || null;
                 for (var a = 0; a < record.addedNodes.length; ++a) {
                     var addedNode = record.addedNodes[a];
-                    var descriptor = describe(addedNode, 0, descriptorDepth, null);
+                    var descriptor = describe(addedNode as AnyNode, 0, descriptorDepth, null);
                     if (!descriptor) {
                         continue;
                     }
-                    var previousNodeId = referenceNode ? rememberNode(referenceNode) : 0;
+                    var previousNodeId = referenceNode ? rememberNode(referenceNode as AnyNode) : 0;
                     events.push({
                         method: "DOM.childNodeInserted",
                         params: {
@@ -380,7 +397,8 @@ function buildDomMutationEvents(records, maxDepth) {
 function sendAutoSnapshotUpdate() {
     var mutationHandler = mutationUpdateHandler();
     if (!mutationHandler) {
-        window?.webInspectorDOM?.detach();
+        const webInspectorDOM = window.webInspectorDOM as { detach?: () => void } | undefined;
+        webInspectorDOM?.detach?.();
         return;
     }
 
@@ -433,7 +451,7 @@ function sendAutoSnapshotUpdate() {
     }
 }
 
-function configureAutoSnapshotOptions(options) {
+function configureAutoSnapshotOptions(options: AutoSnapshotOptions | null) {
     if (!options) {
         return;
     }
@@ -445,7 +463,7 @@ function configureAutoSnapshotOptions(options) {
     }
 }
 
-export function configureAutoSnapshot(options) {
+export function configureAutoSnapshot(options: AutoSnapshotOptions | null) {
     if (!options || typeof options !== "object") {
         return;
     }
@@ -458,7 +476,7 @@ export function configureAutoSnapshot(options) {
     }
 }
 
-export function setAutoSnapshotOptions(options) {
+export function setAutoSnapshotOptions(options: AutoSnapshotOptions | null) {
     configureAutoSnapshotOptions(options || null);
 }
 
@@ -495,6 +513,6 @@ export function disableAutoSnapshot() {
     return inspector.snapshotAutoUpdateEnabled;
 }
 
-export function triggerSnapshotUpdate(reason) {
+export function triggerSnapshotUpdate(reason: string) {
     scheduleSnapshotAutoUpdate(reason || "manual");
 }

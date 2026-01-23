@@ -7,6 +7,15 @@ declare const recordFailure: (...args: any[]) => void;
 
 type PatchedFunction<T extends Function> = T & { __wiNetworkPatched?: boolean };
 
+type XHRWithNetwork = XMLHttpRequest & {
+    __wiNetwork?: {
+        method: string;
+        url: string;
+        headers: Record<string, string>;
+        requestBody?: RequestBodyInfo | null;
+    };
+};
+
 const installFetchPatch = () => {
     if (typeof window.fetch !== "function") {
         return;
@@ -15,14 +24,14 @@ const installFetchPatch = () => {
     if (nativeFetch.__wiNetworkPatched) {
         return;
     }
-    const patched = (async function() {
+    const patched = (async function(...args: Parameters<typeof window.fetch>) {
         const shouldTrack = shouldTrackNetworkEvents();
-        const args = Array.from(arguments);
         const [input, init = {}] = args;
-        const method = init.method || (input && input.method) || "GET";
+        const request = input as Request;
+        const method = init.method || (request && request.method) || "GET";
         const requestId = shouldTrack ? nextRequestID() : null;
-        const url = typeof input === "string" ? input : (input && input.url) || "";
-        const headers = normalizeHeaders(init.headers || (input && input.headers));
+        const url = typeof input === "string" ? input : (request && request.url) || "";
+        const headers = normalizeHeaders(init.headers || (request && request.headers));
         const requestBodyInfo = serializeRequestBody(init.body);
 
         if (shouldTrack && requestId != null) {
@@ -39,7 +48,7 @@ const installFetchPatch = () => {
         }
 
         try {
-            const response = await nativeFetch.apply(window, args);
+            const response = await nativeFetch.call(window, ...args);
             let mimeType;
             let responseBodyInfo = null;
             if (shouldTrack && requestId != null) {
@@ -90,27 +99,30 @@ const installXHRPatch = () => {
     }
 
     XMLHttpRequest.prototype.open = function(method, url) {
-        this.__wiNetwork = {
+        const xhr = this as XHRWithNetwork;
+        xhr.__wiNetwork = {
             method: String(method || "GET").toUpperCase(),
             url: String(url || ""),
             headers: {}
         };
-        return originalOpen.apply(this, arguments);
+        return originalOpen.apply(this, arguments as unknown as Parameters<typeof XMLHttpRequest.prototype.open>);
     };
 
     XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-        if (this.__wiNetwork) {
-            this.__wiNetwork.headers[String(name || "").toLowerCase()] = String(value || "");
+        const xhr = this as XHRWithNetwork;
+        if (xhr.__wiNetwork) {
+            xhr.__wiNetwork.headers[String(name || "").toLowerCase()] = String(value || "");
         }
-        return originalSetRequestHeader.apply(this, arguments);
+        return originalSetRequestHeader.apply(this, arguments as unknown as Parameters<typeof XMLHttpRequest.prototype.setRequestHeader>);
     };
 
     XMLHttpRequest.prototype.send = function() {
-        const shouldTrack = shouldTrackNetworkEvents() && !!this.__wiNetwork;
+        const xhr = this as XHRWithNetwork;
+        const shouldTrack = shouldTrackNetworkEvents() && !!xhr.__wiNetwork;
         const requestId = shouldTrack ? nextRequestID() : null;
-        const info = this.__wiNetwork;
+        const info = xhr.__wiNetwork;
         if (shouldTrack && requestId != null && info) {
-            info.requestBody = serializeRequestBody(arguments[0]);
+            info.requestBody = serializeRequestBody((arguments as IArguments)[0]);
             recordStart(
                 requestId,
                 info.url,
@@ -121,48 +133,49 @@ const installXHRPatch = () => {
                 wallTime(),
                 info.requestBody
             );
-            this.addEventListener("readystatechange", function() {
-                if (this.readyState === 2 && requestId != null) {
-                    recordResponse(requestId, this, "xhr");
+            xhr.addEventListener("readystatechange", function() {
+                if ((this as XMLHttpRequest).readyState === 2 && requestId != null) {
+                    recordResponse(requestId, this as XMLHttpRequest, "xhr");
                 }
             }, false);
-            this.addEventListener("load", function() {
+            xhr.addEventListener("load", function() {
                 if (requestId != null) {
-                    const responseBody = captureXHRResponseBody(this);
+                    const responseBody = captureXHRResponseBody(this as XMLHttpRequest);
                     const length = estimatedEncodedLength(
-                        captureContentLength(this),
+                        captureContentLength(this as XMLHttpRequest),
                         responseBody
                     );
                     recordFinish(
                         requestId,
                         length,
                         "xhr",
-                        this.status,
-                        this.statusText,
-                        this.getResponseHeader ? this.getResponseHeader("content-type") : undefined,
+                        (this as XMLHttpRequest).status,
+                        (this as XMLHttpRequest).statusText,
+                        (this as XMLHttpRequest).getResponseHeader ? (this as XMLHttpRequest).getResponseHeader("content-type") : undefined,
                         undefined,
                         undefined,
                         responseBody
                     );
                 }
             }, false);
-            this.addEventListener("error", function(event) {
+            xhr.addEventListener("error", function(event) {
                 if (requestId != null) {
-                    recordFailure(requestId, event && event.error ? event.error : "Network error", "xhr");
+                    const failure = event && (event as { error?: unknown }).error ? (event as { error?: unknown }).error : "Network error";
+                    recordFailure(requestId, failure, "xhr");
                 }
             }, false);
-            this.addEventListener("abort", function() {
+            xhr.addEventListener("abort", function() {
                 if (requestId != null) {
                     recordFailure(requestId, "Request aborted", "xhr", {isCanceled: true});
                 }
             }, false);
-            this.addEventListener("timeout", function() {
+            xhr.addEventListener("timeout", function() {
                 if (requestId != null) {
                     recordFailure(requestId, "Request timeout", "xhr", {isTimeout: true});
                 }
             }, false);
         }
-        return originalSend.apply(this, arguments);
+        return originalSend.apply(this, arguments as unknown as Parameters<typeof XMLHttpRequest.prototype.send>);
     };
 
     originalOpen.__wiNetworkPatched = true;
@@ -206,7 +219,7 @@ const installResourceObserver = () => {
         observer.observe({type: "resource", buffered: true});
         networkState.resourceObserver = observer;
         if (!networkState.resourceSeen) {
-            networkState.resourceSeen = new Set();
+            networkState.resourceSeen = new Set<string>();
         }
     } catch {
     }
