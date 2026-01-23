@@ -1,10 +1,15 @@
 // Core orchestrator: shared helpers live in NetworkAgentUtils.ts
 // This file keeps recording logic and wires sub-patches.
 
-const buildNetworkError = (error, requestType, options: { isCanceled?: boolean; isTimeout?: boolean } = {}) => {
+const buildNetworkError = (
+    error: unknown,
+    requestType: string,
+    options: { isCanceled?: boolean; isTimeout?: boolean } = {}
+) => {
     let message = "";
-    if (error && typeof error.message === "string" && error.message) {
-        message = error.message;
+    const errorRecord = typeof error === "object" && error ? (error as { message?: string; name?: string }) : null;
+    if (errorRecord && typeof errorRecord.message === "string" && errorRecord.message) {
+        message = errorRecord.message;
     } else if (typeof error === "string" && error) {
         message = error;
     } else if (error) {
@@ -14,8 +19,8 @@ const buildNetworkError = (error, requestType, options: { isCanceled?: boolean; 
     }
 
     let code = null;
-    if (error && typeof error.name === "string" && error.name) {
-        code = error.name;
+    if (errorRecord && typeof errorRecord.name === "string" && errorRecord.name) {
+        code = errorRecord.name;
     }
 
     let domain = "other";
@@ -47,7 +52,7 @@ const buildNetworkError = (error, requestType, options: { isCanceled?: boolean; 
     return payload;
 };
 
-const storeBodyForRole = (role, requestId, bodyInfo) => {
+const storeBodyForRole = (role: string, requestId: number, bodyInfo: RequestBodyInfo | null | undefined) => {
     const stored = buildStoredBodyPayload(bodyInfo);
     if (!stored) {
         return null;
@@ -60,14 +65,14 @@ const storeBodyForRole = (role, requestId, bodyInfo) => {
 };
 
 const recordStart = (
-    requestId,
-    url,
-    method,
-    requestHeaders,
-    requestType,
-    startTimeOverride,
-    wallTimeOverride,
-    requestBody
+    requestId: number,
+    url: string,
+    method: string,
+    requestHeaders: Record<string, string>,
+    requestType: string,
+    startTimeOverride?: number,
+    wallTimeOverride?: number,
+    requestBody?: RequestBodyInfo | null
 ) => {
     const time = makeNetworkTime(startTimeOverride, wallTimeOverride);
     trackedRequests.set(requestId, {startTime: time.monotonicMs, wallTime: time.wallMs});
@@ -85,18 +90,18 @@ const recordStart = (
     });
 };
 
-const recordResponse = (requestId, response, requestType) => {
+const recordResponse = (requestId: number, response: Response | XMLHttpRequest | null, requestType: string) => {
     let mimeType = "";
-    let headers = {};
+    let headers: Record<string, string> = {};
     try {
-        if (response && response.headers) {
+        if (response && "headers" in response && response.headers) {
             mimeType = response.headers.get("content-type") || "";
             headers = normalizeHeaders(response.headers);
         }
-        if (!mimeType && response && typeof response.getResponseHeader === "function") {
+        if (!mimeType && response && "getResponseHeader" in response && typeof response.getResponseHeader === "function") {
             mimeType = response.getResponseHeader("content-type") || "";
         }
-        if ((!headers || !Object.keys(headers).length) && response && typeof response.getAllResponseHeaders === "function") {
+        if ((!headers || !Object.keys(headers).length) && response && "getAllResponseHeaders" in response && typeof response.getAllResponseHeaders === "function") {
             headers = parseRawHeaders(response.getAllResponseHeaders());
         }
     } catch {
@@ -120,15 +125,15 @@ const recordResponse = (requestId, response, requestType) => {
 };
 
 const recordFinish = (
-    requestId,
-    encodedBodyLength,
-    requestType,
-    status,
-    statusText,
-    mimeType,
-    endTimeOverride,
-    wallTimeOverride,
-    responseBody
+    requestId: number,
+    encodedBodyLength: number | undefined,
+    requestType: string,
+    status: number | undefined,
+    statusText: string | undefined,
+    mimeType: string,
+    endTimeOverride?: number,
+    wallTimeOverride?: number,
+    responseBody?: RequestBodyInfo | null
 ) => {
     const time = makeNetworkTime(endTimeOverride, wallTimeOverride);
     const bodyRef = storeBodyForRole("res", requestId, responseBody);
@@ -147,7 +152,12 @@ const recordFinish = (
     trackedRequests.delete(requestId);
 };
 
-const recordFailure = (requestId, error, requestType, options: { isCanceled?: boolean; isTimeout?: boolean } = {}) => {
+const recordFailure = (
+    requestId: number,
+    error: unknown,
+    requestType: string,
+    options: { isCanceled?: boolean; isTimeout?: boolean } = {}
+) => {
     const time = makeNetworkTime();
     enqueueNetworkEvent({
         kind: "loadingFailed",
@@ -175,7 +185,7 @@ const flushQueuedEvents = () => {
 
 const postNetworkReset = () => {
     try {
-        window.webkit.messageHandlers.webInspectorNetworkReset.postMessage({
+        window.webkit?.messageHandlers?.webInspectorNetworkReset?.postMessage({
             version: NETWORK_EVENT_VERSION,
             sessionId: networkState.sessionID
         });
@@ -194,8 +204,9 @@ const resetNetworkState = () => {
     trackedRequests.clear();
     bodyCache.clear();
     clearThrottledEvents();
-    if (networkState.resourceSeen) {
-        networkState.resourceSeen.clear();
+    const resourceSeen = networkState.resourceSeen;
+    if (resourceSeen) {
+        resourceSeen.clear();
     }
     networkState.sessionID = generateSessionID();
     networkState.nextId = 1;
@@ -216,7 +227,7 @@ const ensureInstalled = () => {
     networkState.installed = true;
 };
 
-const normalizeLoggingMode = mode => {
+const normalizeLoggingMode = (mode: string) => {
     if (mode === NetworkLoggingMode.BUFFERING) {
         return NetworkLoggingMode.BUFFERING;
     }
@@ -226,7 +237,7 @@ const normalizeLoggingMode = mode => {
     return NetworkLoggingMode.ACTIVE;
 };
 
-const setNetworkLoggingMode = mode => {
+const setNetworkLoggingMode = (mode: string) => {
     const previousMode = networkState.mode;
     const resolvedMode = normalizeLoggingMode(mode);
     networkState.mode = resolvedMode;
@@ -241,8 +252,9 @@ const setNetworkLoggingMode = mode => {
 
 const clearNetworkRecords = () => {
     trackedRequests.clear();
-    if (networkState.resourceSeen) {
-        networkState.resourceSeen.clear();
+    const resourceSeen = networkState.resourceSeen;
+    if (resourceSeen) {
+        resourceSeen.clear();
     }
     bodyCache.clear();
     clearThrottledEvents();
@@ -256,29 +268,30 @@ const installNetworkObserver = () => {
     ensureInstalled();
 };
 
-const getBody = ref => {
+const getBody = (ref: string | null | undefined) => {
     if (!ref || typeof ref !== "string") {
         return null;
     }
     return bodyCache.take(ref);
 };
 
-const configureNetwork = options => {
+const configureNetwork = (options: { mode?: string; throttle?: unknown; clear?: boolean } | null | undefined) => {
     if (!options || typeof options !== "object") {
         return;
     }
     if (Object.prototype.hasOwnProperty.call(options, "mode")) {
-        setNetworkLoggingMode(options.mode);
+        const mode = typeof options.mode === "string" ? options.mode : "";
+        setNetworkLoggingMode(mode);
     }
     if (Object.prototype.hasOwnProperty.call(options, "throttle")) {
-        setNetworkThrottling(options.throttle);
+        setNetworkThrottling(options.throttle as { intervalMs?: number; maxQueuedEvents?: number } | null | undefined);
     }
     if (options.clear === true) {
         clearNetworkRecords();
     }
 };
 
-const setNetworkThrottling = options => {
+const setNetworkThrottling = (options: { intervalMs?: number; maxQueuedEvents?: number } | null | undefined) => {
     setThrottleOptions(options);
 };
 

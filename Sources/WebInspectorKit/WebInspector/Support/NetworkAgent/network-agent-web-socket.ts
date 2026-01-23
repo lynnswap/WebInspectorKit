@@ -2,7 +2,14 @@ const MAX_WS_FRAME_BODY_LENGTH = typeof MAX_INLINE_BODY_LENGTH === "number" ? MA
 
 declare const enqueueEvent: (event: any) => void;
 
-const serializeFramePayload = async data => {
+type FramePayload = {
+    payload: string;
+    base64: boolean;
+    size: number;
+    truncated: boolean;
+};
+
+const serializeFramePayload = async (data: unknown): Promise<FramePayload> => {
     if (data == null) {
         return {payload: "", base64: false, size: 0, truncated: false};
     }
@@ -39,7 +46,7 @@ const installWebSocketPatch = () => {
         return;
     }
     const OriginalWebSocket = WebSocket as any;
-    function WrappedWebSocket(url, protocols) {
+    function WrappedWebSocket(url: string | URL, protocols?: string | string[]) {
         const socket = new OriginalWebSocket(url, protocols);
         if (!shouldTrackNetworkEvents()) {
             return socket;
@@ -100,7 +107,7 @@ const installWebSocketPatch = () => {
         });
 
         const originalSend = socket.send;
-        socket.send = async function(data) {
+        socket.send = async function(data: unknown) {
             if (!shouldTrackNetworkEvents()) {
                 return originalSend.apply(this, arguments);
             }
@@ -164,7 +171,7 @@ const installWebSocketPatch = () => {
     window.WebSocket = WrappedWebSocket as any;
 };
 
-const postWebSocketEvent = payload => {
+const postWebSocketEvent = (payload: Record<string, any>) => {
     if (!isActiveLogging()) {
         if (shouldQueueNetworkEvent()) {
             enqueueEvent({kind: "websocket", payload});
@@ -172,7 +179,7 @@ const postWebSocketEvent = payload => {
         return;
     }
     try {
-        window.webkit.messageHandlers.webInspectorWSUpdate.postMessage(payload);
+        window.webkit?.messageHandlers?.webInspectorWSUpdate?.postMessage(payload);
     } catch {
     }
 };

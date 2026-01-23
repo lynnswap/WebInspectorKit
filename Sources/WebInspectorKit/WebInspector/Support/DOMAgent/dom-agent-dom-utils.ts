@@ -1,8 +1,8 @@
-import {inspector} from "./dom-agent-state";
+import {inspector, type AnyNode} from "./dom-agent-state";
 import {clearHighlight} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./dom-agent-snapshot";
 
-function resolveNode(identifier) {
+function resolveNode(identifier: number) {
     var map = inspector.map;
     if (!map || !map.size) {
         return null;
@@ -10,11 +10,11 @@ function resolveNode(identifier) {
     return map.get(identifier) || null;
 }
 
-function classNames(element) {
+function classNames(element: Element | null) {
     if (!element || !element.classList) {
         return [];
     }
-    var names = [];
+    var names: string[] = [];
     element.classList.forEach(function(name) {
         if (name) {
             names.push(name);
@@ -23,7 +23,7 @@ function classNames(element) {
     return names;
 }
 
-function escapedClassSelector(element) {
+function escapedClassSelector(element: Element | null) {
     var names = classNames(element);
     if (!names.length) {
         return "";
@@ -36,14 +36,15 @@ function escapedClassSelector(element) {
     }).join(".");
 }
 
-function cssPathComponent(node) {
+function cssPathComponent(node: AnyNode | null) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return null;
     }
 
-    var nodeName = node.tagName ? node.tagName.toLowerCase() : (node.nodeName || "").toLowerCase();
+    var element = node as Element;
+    var nodeName = element.tagName ? element.tagName.toLowerCase() : (element.nodeName || "").toLowerCase();
 
-    var parent = node.parentElement;
+    var parent = element.parentElement;
     if (!parent || parent.nodeType === Node.DOCUMENT_NODE) {
         return {value: nodeName, done: true};
     }
@@ -53,15 +54,15 @@ function cssPathComponent(node) {
         return {value: nodeName, done: true};
     }
 
-    if (node.id) {
+    if (element.id) {
         var escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function"
-            ? CSS.escape(node.id)
-            : node.id.replace(/([\\.\\[\\]\\+\\*\\~\\>\\:\\(\\)\\$\\^\\=\\|\\{\\}\\#])/g, "\\$1");
+            ? CSS.escape(element.id)
+            : element.id.replace(/([\\.\\[\\]\\+\\*\\~\\>\\:\\(\\)\\$\\^\\=\\|\\{\\}\\#])/g, "\\$1");
         return {value: "#" + escapedId, done: true};
     }
 
     var nthChildIndex = -1;
-    var uniqueClasses = new Set(classNames(node));
+    var uniqueClasses = new Set(classNames(element));
     var hasUniqueTagName = true;
     var elementIndex = 0;
 
@@ -73,7 +74,7 @@ function cssPathComponent(node) {
         }
 
         elementIndex++;
-        if (sibling === node) {
+        if (sibling === element) {
             nthChildIndex = elementIndex;
             continue;
         }
@@ -89,12 +90,12 @@ function cssPathComponent(node) {
     }
 
     var selector = nodeName;
-    if (nodeName === "input" && node.getAttribute && node.getAttribute("type") && !uniqueClasses.size) {
-        selector += '[type="' + node.getAttribute("type") + '"]';
+    if (nodeName === "input" && element.getAttribute && element.getAttribute("type") && !uniqueClasses.size) {
+        selector += '[type="' + element.getAttribute("type") + '"]';
     }
     if (!hasUniqueTagName) {
         if (uniqueClasses.size) {
-            selector += escapedClassSelector(node);
+            selector += escapedClassSelector(element);
         } else if (nthChildIndex > 0) {
             selector += ":nth-child(" + nthChildIndex + ")";
         }
@@ -103,13 +104,13 @@ function cssPathComponent(node) {
     return {value: selector, done: false};
 }
 
-function cssPath(node) {
+function cssPath(node: AnyNode | null) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return "";
     }
 
     var components = [];
-    var current = node;
+    var current: AnyNode | null = node;
     while (current) {
         var component = cssPathComponent(current);
         if (!component) {
@@ -126,7 +127,7 @@ function cssPath(node) {
     return components.map(function(entry) { return entry.value; }).join(" > ");
 }
 
-function xpathIndex(node) {
+function xpathIndex(node: AnyNode) {
     if (!node || !node.parentNode) {
         return 0;
     }
@@ -136,7 +137,7 @@ function xpathIndex(node) {
         return 0;
     }
 
-    function isSimilarNode(a, b) {
+    function isSimilarNode(a: AnyNode, b: AnyNode) {
         if (a === b) {
             return true;
         }
@@ -187,7 +188,7 @@ function xpathIndex(node) {
     return foundIndex > 0 ? foundIndex : 0;
 }
 
-function xpathComponent(node) {
+function xpathComponent(node: AnyNode) {
     if (!node) {
         return null;
     }
@@ -232,7 +233,7 @@ function xpathComponent(node) {
     return {value: value, done: false};
 }
 
-function xpath(node) {
+function xpath(node: AnyNode | null) {
     if (!node) {
         return "";
     }
@@ -242,7 +243,7 @@ function xpath(node) {
     }
 
     var components = [];
-    var current = node;
+    var current: AnyNode | null = node;
     while (current) {
         var component = xpathComponent(current);
         if (!component) {
@@ -252,7 +253,7 @@ function xpath(node) {
         if (component.done) {
             break;
         }
-        current = current.parentNode;
+        current = current.parentNode as AnyNode | null;
     }
 
     components.reverse();
@@ -260,7 +261,7 @@ function xpath(node) {
     return prefix + components.map(function(entry) { return entry.value; }).join("/");
 }
 
-function serializedDoctype(doctype) {
+function serializedDoctype(doctype: DocumentType | null) {
     if (!doctype) {
         return "";
     }
@@ -269,7 +270,7 @@ function serializedDoctype(doctype) {
     return "<!DOCTYPE " + (doctype.name || "html") + publicId + systemId + ">";
 }
 
-export function outerHTMLForNode(identifier) {
+export function outerHTMLForNode(identifier: number) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -289,7 +290,7 @@ export function outerHTMLForNode(identifier) {
         var html = root && root.outerHTML ? root.outerHTML : "";
         return docType + html;
     case Node.DOCUMENT_TYPE_NODE:
-        return serializedDoctype(node);
+        return serializedDoctype(node as DocumentType);
     default:
         try {
             return (new XMLSerializer()).serializeToString(node);
@@ -299,7 +300,7 @@ export function outerHTMLForNode(identifier) {
     }
 }
 
-export function selectorPathForNode(identifier) {
+export function selectorPathForNode(identifier: number) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -307,7 +308,7 @@ export function selectorPathForNode(identifier) {
     return cssPath(node);
 }
 
-export function xpathForNode(identifier) {
+export function xpathForNode(identifier: number) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -315,7 +316,7 @@ export function xpathForNode(identifier) {
     return xpath(node);
 }
 
-export function removeNode(identifier) {
+export function removeNode(identifier: number) {
     var node = resolveNode(identifier);
     if (!node) {
         return false;
@@ -348,7 +349,7 @@ export function removeNode(identifier) {
     return removed;
 }
 
-export function setAttributeForNode(identifier, name, value) {
+export function setAttributeForNode(identifier: number, name: string | null | undefined, value: string | null | undefined) {
     var node = resolveNode(identifier);
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;
@@ -368,7 +369,7 @@ export function setAttributeForNode(identifier, name, value) {
     return true;
 }
 
-export function removeAttributeForNode(identifier, name) {
+export function removeAttributeForNode(identifier: number, name: string | null | undefined) {
     var node = resolveNode(identifier);
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;

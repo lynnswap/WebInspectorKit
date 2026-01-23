@@ -1,14 +1,14 @@
-import {inspector} from "./dom-agent-state";
+import {inspector, type AnyNode, type SelectionState} from "./dom-agent-state";
 import {computeNodePath} from "./dom-agent-dom-core";
 import {clearHighlight, highlightSelectionNode} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
 
-type SelectionState = {
-    active: boolean;
-    latestTarget: any;
-    bindings: Array<[string, EventListenerOrEventListenerObject]>;
-    cancel?: () => void;
+type SelectionResult = {
+    cancelled: boolean;
+    requiredDepth: number;
 };
+
+type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
 
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {
@@ -26,7 +26,7 @@ function enableSelectionCursor() {
 }
 
 function restoreSelectionCursor() {
-    var backup = inspector.cursorBackup || {};
+    var backup = inspector.cursorBackup || {html: "", body: ""};
     if (document.documentElement) {
         document.documentElement.style.cursor = backup.html || "";
     }
@@ -36,7 +36,7 @@ function restoreSelectionCursor() {
     inspector.cursorBackup = null;
 }
 
-function interceptEvent(event) {
+function interceptEvent(event: Event | null | undefined) {
     if (!event) {
         return;
     }
@@ -54,7 +54,7 @@ function installWindowClickBlocker() {
         return;
     }
     inspector.windowClickBlockerPendingRelease = false;
-    var handler = function(event) {
+    var handler = function(event: Event) {
         interceptEvent(event);
         if (!inspector.selectionState && inspector.windowClickBlockerPendingRelease) {
             uninstallWindowClickBlocker();
@@ -92,7 +92,7 @@ function scheduleWindowClickBlockerRelease() {
 
 export function startElementSelection() {
     cancelElementSelection();
-    return new Promise(function(resolve) {
+    return new Promise<SelectionResult>(function(resolve) {
         var state: SelectionState = {
             active: true,
             latestTarget: null,
@@ -106,7 +106,7 @@ export function startElementSelection() {
 
         var listenerOptions = {capture: true, passive: false};
 
-        function bind(type, handler) {
+        function bind(type: string, handler: EventListenerOrEventListenerObject) {
             document.addEventListener(type, handler, listenerOptions);
             state.bindings.push([type, handler]);
         }
@@ -119,7 +119,7 @@ export function startElementSelection() {
             state.bindings = [];
         }
 
-        function finish(payload) {
+        function finish(payload: SelectionResult) {
             if (!state.active) {
                 return;
             }
@@ -140,7 +140,7 @@ export function startElementSelection() {
 
         state.cancel = cancelSelection;
 
-        function selectTarget(target) {
+        function selectTarget(target: AnyNode | null) {
             var node = target || state.latestTarget;
             if (!node) {
                 cancelSelection();
@@ -156,28 +156,31 @@ export function startElementSelection() {
             finish({ cancelled: false, requiredDepth: path.length });
         }
 
-        function resolveEventTarget(event) {
+        function resolveEventTarget(event: Event | null) {
             if (!event) {
                 return null;
             }
-            if (event.touches && event.touches.length) {
-                var touch = event.touches[event.touches.length - 1];
+            if ("touches" in event && (event as TouchEvent).touches && (event as TouchEvent).touches.length) {
+                var touch = (event as TouchEvent).touches[(event as TouchEvent).touches.length - 1];
                 var candidate = document.elementFromPoint(touch.clientX, touch.clientY);
-                return candidate || event.target || null;
+                return (candidate as AnyNode | null) || (event.target as AnyNode | null) || null;
             }
-            if (event.changedTouches && event.changedTouches.length) {
-                var changed = event.changedTouches[event.changedTouches.length - 1];
+            if ("changedTouches" in event && (event as TouchEvent).changedTouches && (event as TouchEvent).changedTouches.length) {
+                var changed = (event as TouchEvent).changedTouches[(event as TouchEvent).changedTouches.length - 1];
                 var fallback = document.elementFromPoint(changed.clientX, changed.clientY);
-                return fallback || event.target || null;
+                return (fallback as AnyNode | null) || (event.target as AnyNode | null) || null;
             }
-            if (typeof event.clientX === "number" && typeof event.clientY === "number") {
-                var pointTarget = document.elementFromPoint(event.clientX, event.clientY);
-                return pointTarget || event.target || null;
+            if ("clientX" in event && "clientY" in event) {
+                const pointerEvent = event as MouseEvent | PointerEvent;
+                if (typeof pointerEvent.clientX === "number" && typeof pointerEvent.clientY === "number") {
+                    var pointTarget = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+                    return (pointTarget as AnyNode | null) || (event.target as AnyNode | null) || null;
+                }
             }
-            return event.target || null;
+            return (event.target as AnyNode | null) || null;
         }
 
-        function updateLatestTarget(event) {
+        function updateLatestTarget(event: Event) {
             var target = resolveEventTarget(event);
             if (!target) {
                 return;
@@ -186,34 +189,34 @@ export function startElementSelection() {
             highlightSelectionNode(target);
         }
 
-        function handlePointerLikeMove(event) {
+        function handlePointerLikeMove(event: Event) {
             interceptEvent(event);
             updateLatestTarget(event);
         }
 
-        function handlePointerLikeDown(event) {
+        function handlePointerLikeDown(event: Event) {
             interceptEvent(event);
             updateLatestTarget(event);
         }
 
-        function handlePointerLikeUp(event) {
+        function handlePointerLikeUp(event: Event) {
             interceptEvent(event);
             selectTarget(resolveEventTarget(event));
         }
 
-        function handleTouchCancel(event) {
+        function handleTouchCancel(event: Event) {
             interceptEvent(event);
             cancelSelection();
         }
 
-        function handleKeyDown(event) {
-            if (event.key === "Escape") {
+        function handleKeyDown(event: Event) {
+            if ((event as KeyboardEvent).key === "Escape") {
                 interceptEvent(event);
                 cancelSelection();
             }
         }
 
-        function preventDefaultHandler(event) {
+        function preventDefaultHandler(event: Event) {
             interceptEvent(event);
         }
 

@@ -1,6 +1,18 @@
-import {inspector} from "./dom-agent-state";
+import {inspector, type AnyNode} from "./dom-agent-state";
 
-export function rememberNode(node) {
+type DOMNodeDescriptor = {
+    nodeId?: number;
+    children: DOMNodeDescriptor[];
+    [key: string]: any;
+};
+
+type RenderedElement = Element & {
+    offsetWidth?: number;
+    offsetHeight?: number;
+    getBBox?: () => DOMRect;
+};
+
+export function rememberNode(node: AnyNode | null) {
     if (!node) {
         return 0;
     }
@@ -12,8 +24,10 @@ export function rememberNode(node) {
     }
     if (inspector.nodeMap.has(node)) {
         var existingId = inspector.nodeMap.get(node);
-        inspector.map.set(existingId, node);
-        return existingId;
+        if (typeof existingId === "number") {
+            inspector.map.set(existingId, node);
+            return existingId;
+        }
     }
     var id = inspector.nextId++;
     inspector.map.set(id, node);
@@ -21,7 +35,7 @@ export function rememberNode(node) {
     return id;
 }
 
-export function layoutInfoForNode(node) {
+export function layoutInfoForNode(node: AnyNode | null) {
     var rendered = nodeIsRendered(node);
     return {
         layoutFlags: rendered ? ["rendered"] : [],
@@ -29,14 +43,14 @@ export function layoutInfoForNode(node) {
     };
 }
 
-export function nodeIsRendered(node) {
+export function nodeIsRendered(node: AnyNode | null) {
     if (!node) {
         return false;
     }
 
     switch (node.nodeType) {
     case Node.ELEMENT_NODE:
-        return elementIsRendered(node);
+        return elementIsRendered(node as RenderedElement);
     case Node.TEXT_NODE:
         return textNodeIsRendered(node);
     case Node.DOCUMENT_NODE:
@@ -47,7 +61,7 @@ export function nodeIsRendered(node) {
     }
 }
 
-export function elementIsRendered(element) {
+export function elementIsRendered(element: RenderedElement | null) {
     if (!element || !element.isConnected) {
         return false;
     }
@@ -104,7 +118,7 @@ export function elementIsRendered(element) {
     return style ? style.display !== "none" : true;
 }
 
-export function textNodeIsRendered(node) {
+export function textNodeIsRendered(node: AnyNode | null) {
     if (!node || !node.parentNode || !node.nodeValue) {
         return false;
     }
@@ -120,7 +134,7 @@ export function textNodeIsRendered(node) {
     return rect && (rect.width || rect.height);
 }
 
-export function describe(node: any, depth: number, maxDepth: number, selectionPath: number[] | null, childLimit?: number) {
+export function describe(node: AnyNode | null, depth: number, maxDepth: number, selectionPath: number[] | null, childLimit?: number): DOMNodeDescriptor | null {
     if (!node) {
         return null;
     }
@@ -130,7 +144,7 @@ export function describe(node: any, depth: number, maxDepth: number, selectionPa
         return null;
     }
 
-    var descriptor: Record<string, any> = {
+    var descriptor: DOMNodeDescriptor = {
         nodeId: identifier,
         nodeType: node.nodeType || 0,
         nodeName: node.nodeName || "",
@@ -167,7 +181,7 @@ export function describe(node: any, depth: number, maxDepth: number, selectionPa
     }
 
     if (depth < maxDepth && node.childNodes && node.childNodes.length) {
-        var limit = Number.isFinite(childLimit) ? childLimit : 150;
+        var limit = typeof childLimit === "number" && Number.isFinite(childLimit) ? childLimit : 150;
         var selectionIndex = Array.isArray(selectionPath) && selectionPath.length > depth ? selectionPath[depth] : -1;
         for (var childIndex = 0; childIndex < node.childNodes.length; ++childIndex) {
             var childNode = node.childNodes[childIndex];
@@ -175,7 +189,7 @@ export function describe(node: any, depth: number, maxDepth: number, selectionPa
             if (descriptor.children.length >= limit && !mustInclude) {
                 break;
             }
-            var childDescriptor = describe(childNode, depth + 1, maxDepth, selectionPath, childLimit);
+            var childDescriptor = describe(childNode as AnyNode, depth + 1, maxDepth, selectionPath, childLimit);
             if (childDescriptor) {
                 descriptor.children.push(childDescriptor);
             }
@@ -185,16 +199,16 @@ export function describe(node: any, depth: number, maxDepth: number, selectionPa
     return descriptor;
 }
 
-export function findNodeByPath(tree, path) {
+export function findNodeByPath(tree: DOMNodeDescriptor | null, path: number[]) {
     if (!tree || !Array.isArray(path)) {
         return null;
     }
     if (!path.length) {
         return tree;
     }
-    var current = tree;
+    var current: DOMNodeDescriptor | undefined | null = tree;
     for (var i = 0; i < path.length; ++i) {
-        if (!Array.isArray(current.children)) {
+        if (!current || !Array.isArray(current.children)) {
             return null;
         }
         var index = path[i];
@@ -206,7 +220,7 @@ export function findNodeByPath(tree, path) {
     return current;
 }
 
-export function computeNodePath(node) {
+export function computeNodePath(node: AnyNode | null) {
     if (!node) {
         return null;
     }
@@ -215,7 +229,7 @@ export function computeNodePath(node) {
         return null;
     }
     var current = node;
-    var path = [];
+    var path: number[] = [];
     while (current && current !== root) {
         var parent = current.parentNode;
         if (!parent) {
@@ -234,7 +248,7 @@ export function computeNodePath(node) {
     return path;
 }
 
-export function rectForNode(node) {
+export function rectForNode(node: AnyNode | null) {
     if (!node) {
         return null;
     }
@@ -256,7 +270,7 @@ export function rectForNode(node) {
     return null;
 }
 
-export function captureDOM(maxDepth) {
+export function captureDOM(maxDepth?: number) {
     var currentURL = document.URL || "";
     var shouldReset = inspector.documentURL && inspector.documentURL !== currentURL;
     if (!inspector.map || shouldReset) {
@@ -276,12 +290,12 @@ export function captureDOM(maxDepth) {
 
     var rootCandidate = document.documentElement || document.body;
     var tree = rootCandidate ? describe(rootCandidate, 0, effectiveDepth, selectionPath) : null;
-    var selectedNodeId = null;
+    var selectedNodeId: number | null = null;
     if (tree && Array.isArray(selectionPath)) {
         var selectedNode = findNodeByPath(tree, selectionPath);
         selectedNodeId = selectedNode ? (selectedNode.nodeId || null) : null;
     }
-    var selectedNodePath = Array.isArray(selectionPath) ? selectionPath : null;
+    var selectedNodePath: number[] | null = Array.isArray(selectionPath) ? selectionPath : null;
     inspector.pendingSelectionPath = null;
 
     return JSON.stringify({
@@ -291,7 +305,7 @@ export function captureDOM(maxDepth) {
     });
 }
 
-export function captureDOMSubtree(identifier, maxDepth) {
+export function captureDOMSubtree(identifier: number, maxDepth?: number) {
     var map = inspector.map;
     if (!map || !map.size) {
         return "";
