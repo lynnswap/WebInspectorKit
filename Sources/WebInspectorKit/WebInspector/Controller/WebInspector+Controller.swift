@@ -18,6 +18,7 @@ extension WebInspector {
         private var tabs: [Tab] = []
         private var activationByTabID: [Tab.ID: Tab.Activation] = [:]
         private var configuredRequirements: Tab.FeatureRequirements?
+        private weak var connectedPageWebView: WKWebView?
 
         public init(configuration: Configuration = .init()) {
             self.dom = DOMInspector(session: DOMSession(configuration: configuration.dom))
@@ -25,6 +26,7 @@ extension WebInspector {
         }
 
         public func connect(to webView: WKWebView?) {
+            connectedPageWebView = webView
             guard let webView else {
                 suspend()
                 return
@@ -47,11 +49,13 @@ extension WebInspector {
         }
 
         public func suspend() {
+            connectedPageWebView = nil
             dom.suspend()
             network.suspend()
         }
 
         public func disconnect() {
+            connectedPageWebView = nil
             dom.detach()
             network.detach()
             selectedTabID = nil
@@ -86,6 +90,13 @@ extension WebInspector {
                 self.selectedTabID = tabs.first?.id
             } else {
                 applyTabActivation(for: selectedTabID)
+            }
+
+            // When tabs are state-driven and change while a controller is already connected, re-apply
+            // the current attachment to ensure newly required sessions attach and removed requirements
+            // suspend their sessions.
+            if let webView = connectedPageWebView {
+                connect(to: webView)
             }
         }
 

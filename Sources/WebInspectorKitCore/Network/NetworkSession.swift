@@ -30,8 +30,8 @@ public final class NetworkSession: PageSession {
     }
 
     public func suspend() {
-        mode = .buffering
-        pageAgent.detachPageWebView(preparing: .buffering)
+        mode = .stopped
+        pageAgent.detachPageWebView(preparing: .stopped)
     }
 
     public func detach() {

@@ -15,6 +15,7 @@ struct ControllerActivationTests {
 
         #expect(controller.dom.session.lastPageWebView === webView)
         #expect(controller.network.session.lastPageWebView == nil)
+        #expect(controller.network.session.mode == .stopped)
     }
 
     @Test
@@ -74,6 +75,20 @@ struct ControllerActivationTests {
         controller.connect(to: nil)
         #expect(controller.dom.session.hasPageWebView == false)
         #expect(controller.dom.session.lastPageWebView === webView)
+        #expect(controller.network.session.lastPageWebView === webView)
+        #expect(controller.network.session.mode == .stopped)
+    }
+
+    @Test
+    func configureTabsWhileConnectedReconnectsNewlyRequiredSessions() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([.dom(), .element()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.network.session.lastPageWebView == nil)
+
+        controller.configureTabs([.dom(), .network()])
         #expect(controller.network.session.lastPageWebView === webView)
     }
 
