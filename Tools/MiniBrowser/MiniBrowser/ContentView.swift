@@ -3,20 +3,19 @@ import WebInspectorKit
 
 struct ContentView: View {
     @State private var model: BrowserViewModel?
-    @State private var inspectorModel: WebInspectorModel?
+    @State private var inspectorController: WebInspector.Controller?
     @State private var isShowingInspector = false
    
     
     var body: some View {
-        if let model ,let inspectorModel{
+        if let model, let inspectorController {
 #if os(macOS)
-//            HSplitView {
-//                NavigationStack{
-//                    ContentWebView(model: model)
-//                }
-//                WebInspectorView(inspectorModel, webView: model.webView)
-//            }
-            WebInspectorView(inspectorModel, webView: model.webView)
+            HSplitView {
+                NavigationStack {
+                    ContentWebView(model: model)
+                }
+                WebInspector.Panel(inspectorController, webView: model.webView)
+            }
 #else
             NavigationStack {
                 ContentWebView(model: model)
@@ -32,7 +31,7 @@ struct ContentView: View {
                     .sheet(isPresented: $isShowingInspector) {
                         InspectorSheetView(
                             model:model,
-                            inspectorModel: inspectorModel
+                            inspectorController: inspectorController
                         )
                         .presentationBackgroundInteraction(.enabled)
                         .presentationDetents([.medium, .large])
@@ -44,7 +43,7 @@ struct ContentView: View {
             Color.clear
                 .onAppear {
                     model = BrowserViewModel(url: URL(string: "https://www.google.com")!)
-                    inspectorModel = WebInspectorModel()
+                    inspectorController = WebInspector.Controller()
                 }
         }
     }

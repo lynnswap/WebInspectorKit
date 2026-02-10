@@ -11,7 +11,7 @@ struct WebInspectorKitObfuscatePlugin: BuildToolPlugin {
         let packageDir = context.package.directoryURL
         let scriptsDir = packageDir
             .appendingPathComponent("Sources")
-            .appendingPathComponent("WebInspectorKit")
+            .appendingPathComponent("WebInspectorKitCore")
             .appendingPathComponent("WebInspector")
         let configPath = packageDir
             .appendingPathComponent("Tools")

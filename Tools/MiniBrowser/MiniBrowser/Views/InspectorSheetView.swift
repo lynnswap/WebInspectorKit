@@ -4,13 +4,13 @@ import WebInspectorKit
 
 struct InspectorSheetView: View {
     var model: BrowserViewModel
-    var inspectorModel: WebInspectorModel
+    var inspectorController: WebInspector.Controller
     
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        WebInspectorView(inspectorModel, webView: model.webView)
+        WebInspector.Panel(inspectorController, webView: model.webView)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {

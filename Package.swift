@@ -7,34 +7,51 @@ let package = Package(
     name: "WebInspectorKit",
     defaultLocalization: "en",
     platforms: [
-        .iOS(.v18),.macOS(.v15)
+        .iOS(.v18), .macOS(.v15)
     ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
+        .library(
+            name: "WebInspectorKitCore",
+            targets: ["WebInspectorKitCore"]
+        ),
         .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
-        ),
+        )
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
+        .target(
+            name: "WebInspectorKitCore",
+            path: "Sources/WebInspectorKitCore",
+            plugins: [
+                .plugin(name: "WebInspectorKitObfuscatePlugin")
+            ]
+        ),
         .target(
             name: "WebInspectorKit",
+            dependencies: [
+                "WebInspectorKitCore"
+            ],
             path: "Sources/WebInspectorKit",
             resources: [
                 .process("Localizable.xcstrings"),
                 .process("WebInspector/Views/DOMTreeView/dom-tree-view.html"),
                 .process("WebInspector/Views/DOMTreeView/dom-tree-view.css"),
                 .process("WebInspector/Views/DOMTreeView/DisclosureTriangles.svg")
-            ],
-            plugins: [
-                .plugin(name: "WebInspectorKitObfuscatePlugin")
             ]
         ),
         .testTarget(
-            name: "WebInspectorKitTests",
-            dependencies: ["WebInspectorKit"]
+            name: "WebInspectorKitCoreTests",
+            dependencies: ["WebInspectorKitCore"],
+            path: "Tests/WebInspectorKitCoreTests"
+        ),
+        .testTarget(
+            name: "WebInspectorKitUITests",
+            dependencies: [
+                "WebInspectorKit",
+                "WebInspectorKitCore"
+            ],
+            path: "Tests/WebInspectorKitUITests"
         ),
         .plugin(
             name: "WebInspectorKitObfuscatePlugin",
