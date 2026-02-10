@@ -90,7 +90,17 @@ extension WebInspector {
         }
 
         internal func applyTabActivation(_ tab: Tab?) {
-            let activation = tab.flatMap { activationByTabID[$0.id] } ?? .init()
+            let activation: Tab.Activation
+            if let tab, let tabActivation = activationByTabID[tab.id] {
+                activation = tabActivation
+            } else if configuredRequirements == nil {
+                // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
+                // there is no way to select/activate the Network tab. Default to active logging so
+                // `network.store` receives live events for controller-only integrations.
+                activation = .init(networkLiveLogging: true)
+            } else {
+                activation = .init()
+            }
             let requirements = effectiveRequirements
 
             if requirements.contains(.dom) {

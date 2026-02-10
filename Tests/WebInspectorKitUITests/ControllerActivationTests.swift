@@ -18,6 +18,17 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func connectWithoutPanelDefaultsNetworkSessionToActiveLogging() {
+        let controller = WebInspector.Controller()
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+
+        #expect(controller.network.session.lastPageWebView === webView)
+        #expect(controller.network.session.mode == .active)
+    }
+
+    @Test
     func selectedTabSwitchesNetworkModeBetweenBufferingAndActive() {
         let controller = WebInspector.Controller()
         controller.configureTabs([.dom(), .network()])
@@ -73,4 +84,3 @@ struct ControllerActivationTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 }
-
