@@ -61,7 +61,23 @@ public final class NetworkStore {
             return
         }
 
-        pruneIfNeeded(adding: staged.count)
+        if let maxEntries = maxEntriesStorage, maxEntries > 0 {
+            let totalAfterAppend = entries.count + staged.count
+            let excess = totalAfterAppend - maxEntries
+            if excess > 0 {
+                if excess < entries.count {
+                    entries.removeFirst(excess)
+                    rebuildIndexAndBuckets()
+                } else {
+                    let existingCount = entries.count
+                    reset()
+                    let dropFromStaged = excess - existingCount
+                    if dropFromStaged > 0 {
+                        staged.removeFirst(min(dropFromStaged, staged.count))
+                    }
+                }
+            }
+        }
 
         let bucket = bucket(for: batch.sessionID)
         let startIndex = entries.count
@@ -323,4 +339,3 @@ private final class SessionBucket {
         entriesByRequestID[requestID] = WeakEntry(value: entry)
     }
 }
-

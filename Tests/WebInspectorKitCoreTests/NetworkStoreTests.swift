@@ -198,6 +198,67 @@ struct NetworkStoreTests {
     }
 
     @Test
+    func batchedInsertionsRespectMaxEntriesEvenWhenBatchExceedsCap() throws {
+        let store = NetworkStore()
+        store.maxEntries = 3
+
+        for requestID in 1...2 {
+            let start = try NetworkTestHelpers.decodeEvent([
+                "kind": "requestWillBeSent",
+                "requestId": requestID,
+                "url": "https://example.com/\(requestID)",
+                "method": "GET",
+                "time": NetworkTestHelpers.timePayload(
+                    monotonicMs: 1_000.0 + Double(requestID),
+                    wallMs: 1_700_000_000_000.0 + Double(requestID)
+                )
+            ], sessionID: "batch-session")
+            store.applyEvent(start)
+        }
+
+        var events: [[String: Any]] = []
+        events.reserveCapacity(8)
+        for requestID in 3...10 {
+            events.append([
+                "kind": "resourceTiming",
+                "requestId": requestID,
+                "startTime": NetworkTestHelpers.timePayload(
+                    monotonicMs: 2_000.0 + Double(requestID),
+                    wallMs: 1_700_000_001_000.0 + Double(requestID)
+                ),
+                "endTime": NetworkTestHelpers.timePayload(
+                    monotonicMs: 2_010.0 + Double(requestID),
+                    wallMs: 1_700_000_001_010.0 + Double(requestID)
+                )
+            ])
+        }
+
+        let payload: [String: Any] = [
+            "version": 1,
+            "sessionId": "batch-session",
+            "seq": 1,
+            "events": events
+        ]
+
+        let batchCandidate = NetworkEventBatch.decode(from: payload)
+        let batch = try #require(batchCandidate)
+
+        store.applyBatchedInsertions(batch)
+
+        #expect(store.entries.count == 3)
+        #expect(store.entries.map(\.requestID) == [8, 9, 10])
+        #expect(store.entry(forRequestID: 1, sessionID: "batch-session") == nil)
+        #expect(store.entry(forRequestID: 2, sessionID: "batch-session") == nil)
+        #expect(store.entry(forRequestID: 8, sessionID: "batch-session")?.requestID == 8)
+        #expect(store.entry(forRequestID: 9, sessionID: "batch-session")?.requestID == 9)
+        #expect(store.entry(forRequestID: 10, sessionID: "batch-session")?.requestID == 10)
+
+        for entry in store.entries {
+            #expect(store.entry(forEntryID: entry.id) === entry)
+        }
+    }
+
+    @Test
     func maxEntriesPrunesOldEntriesAndKeepsLookupConsistent() throws {
         let store = NetworkStore()
         store.maxEntries = 2
