@@ -29,7 +29,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
     }
 
     private func syncSelection(into tabBarController: UITabBarController, uiTabs: [UITab]) {
-        let currentSelectedID = (tabBarController.selectedTab?.identifier as? String)
+        let currentSelectedID = tabBarController.selectedTab?.identifier
         let desiredID = controller.selectedTabID
 
         guard uiTabs.isEmpty == false else {
@@ -42,7 +42,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
             if currentSelectedID == desiredID {
                 return
             }
-            if let tab = uiTabs.first(where: { ($0.identifier as? String) == desiredID }) {
+            if let tab = uiTabs.first(where: { $0.identifier == desiredID }) {
                 tabBarController.selectedTab = tab
                 return
             }
@@ -50,7 +50,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
             // If the desired ID doesn't exist anymore, fall back to the first tab.
             let first = uiTabs[0]
             tabBarController.selectedTab = first
-            controller.selectedTabID = first.identifier as? String
+            controller.selectedTabID = first.identifier
             return
         }
 
@@ -63,7 +63,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
         // No desired selection and no native selection: select the first tab.
         let first = uiTabs[0]
         tabBarController.selectedTab = first
-        controller.selectedTabID = first.identifier as? String
+        controller.selectedTabID = first.identifier
     }
 
     @MainActor
@@ -92,7 +92,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
             previousTab: UITab?
         ) {
             guard let controller else { return }
-            controller.selectedTabID = selectedTab.identifier as? String
+            controller.selectedTabID = selectedTab.identifier
         }
     }
 }
