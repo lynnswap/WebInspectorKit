@@ -72,7 +72,6 @@ public final class DOMSession {
         suspend()
         selection.clear()
         lastPageWebView = nil
-        bundleSink = nil
     }
 
     public func reloadPage() {
