@@ -8,6 +8,9 @@ extension WebInspector {
     public final class Controller {
         public var selectedTabID: Tab.ID? {
             didSet {
+                if suppressTabActivation {
+                    return
+                }
                 applyTabActivation(for: selectedTabID)
             }
         }
@@ -18,6 +21,7 @@ extension WebInspector {
         private var tabs: [Tab] = []
         private var activationByTabID: [Tab.ID: Tab.Activation] = [:]
         private var configuredRequirements: Tab.FeatureRequirements?
+        private var suppressTabActivation = false
         private weak var connectedPageWebView: WKWebView?
 
         public init(configuration: Configuration = .init()) {
@@ -58,6 +62,8 @@ extension WebInspector {
             connectedPageWebView = nil
             dom.detach()
             network.detach()
+            suppressTabActivation = true
+            defer { suppressTabActivation = false }
             selectedTabID = nil
         }
 

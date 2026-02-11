@@ -108,6 +108,21 @@ struct ControllerActivationTests {
         #expect(controller.dom.selection.preview == "<div id='selected'>")
     }
 
+    @Test
+    func disconnectKeepsNetworkStoppedForControllerOnlyUsage() {
+        let controller = WebInspector.Controller()
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.network.session.mode == .active)
+
+        controller.disconnect()
+
+        #expect(controller.selectedTabID == nil)
+        #expect(controller.network.session.mode == .stopped)
+        #expect(controller.network.session.lastPageWebView == nil)
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
