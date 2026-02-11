@@ -87,10 +87,10 @@ extension WebInspector {
                 return
             }
 
-            await fetchBody(body)
+            await fetchBody(for: entry, body: body)
         }
 
-        private func fetchBody(_ body: NetworkBody) async {
+        private func fetchBody(for entry: NetworkEntry, body: NetworkBody) async {
             guard body.fetchState != .fetching else {
                 return
             }
@@ -104,10 +104,10 @@ extension WebInspector {
                 body.markFailed(.unavailable)
                 return
             }
-            applyFetchedBody(fetched, to: body)
+            applyFetchedBody(fetched, to: body, entry: entry)
         }
 
-        private func applyFetchedBody(_ fetched: NetworkBody, to target: NetworkBody) {
+        func applyFetchedBody(_ fetched: NetworkBody, to target: NetworkBody, entry: NetworkEntry) {
             if let fullText = fetched.full ?? fetched.preview, !fullText.isEmpty {
                 target.applyFullBody(
                     fullText,
@@ -127,6 +127,7 @@ extension WebInspector {
             if let size = target.size ?? target.full?.count ?? target.preview?.count {
                 target.size = size
             }
+            entry.applyFetchedBodySizeMetadata(from: target)
         }
 
         public var isShowingDetail: Binding<Bool> {

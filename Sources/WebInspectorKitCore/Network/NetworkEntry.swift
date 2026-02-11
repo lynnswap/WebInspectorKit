@@ -158,6 +158,19 @@ public class NetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
+    public func applyFetchedBodySizeMetadata(from body: NetworkBody) {
+        guard let resolvedSize = body.size ?? body.full?.count ?? body.preview?.count else {
+            return
+        }
+
+        switch body.role {
+        case .request:
+            requestBodyBytesSent = resolvedSize
+        case .response:
+            decodedBodyLength = resolvedSize
+        }
+    }
+
     func refreshFileTypeLabel() {
         fileTypeLabel = Self.makeFileTypeLabel(
             mimeType: mimeType,
@@ -356,4 +369,3 @@ public final class NetworkWebSocketInfo: Identifiable, Equatable, Hashable {
         }
     }
 }
-
