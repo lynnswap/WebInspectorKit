@@ -106,10 +106,11 @@ extension WebInspector {
                 applyTabActivation(for: selectedTabID)
             }
 
-            // Only re-attach when tab requirements changed while connected. Re-attaching with the
-            // same requirements clears DOM selection via DOMSession.attach().
+            // Reflect requirement deltas without full reconnect. Full reconnect clears DOM selection.
             if let webView = connectedPageWebView, previousRequirements != configuredRequirements {
-                connect(to: webView)
+                let previous = previousRequirements ?? [.dom, .network]
+                let current = configuredRequirements ?? [.dom, .network]
+                applyRequirementTransition(from: previous, to: current, using: webView)
             }
         }
 
@@ -150,5 +151,31 @@ private extension WebInspector.Controller {
             return
         }
         applyTabActivation(tabs.first(where: { $0.id == tabID }))
+    }
+
+    func applyRequirementTransition(
+        from previous: WebInspector.Tab.FeatureRequirements,
+        to current: WebInspector.Tab.FeatureRequirements,
+        using webView: WKWebView
+    ) {
+        let hadDOM = previous.contains(.dom)
+        let hasDOM = current.contains(.dom)
+        if hadDOM != hasDOM {
+            if hasDOM {
+                dom.attach(to: webView)
+            } else {
+                dom.suspend()
+            }
+        }
+
+        let hadNetwork = previous.contains(.network)
+        let hasNetwork = current.contains(.network)
+        if hadNetwork != hasNetwork {
+            if hasNetwork {
+                network.attach(to: webView)
+            } else {
+                network.suspend()
+            }
+        }
     }
 }

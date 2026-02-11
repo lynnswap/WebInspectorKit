@@ -193,7 +193,7 @@ private extension NetworkEntry {
         let candidates = [
             url,
             method,
-            statusCode.map(String.init) ?? phase.rawValue,
+            statusLabel,
             statusText,
             fileTypeLabel
         ]
