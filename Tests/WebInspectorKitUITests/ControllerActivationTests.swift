@@ -92,6 +92,22 @@ struct ControllerActivationTests {
         #expect(controller.network.session.lastPageWebView === webView)
     }
 
+    @Test
+    func configureTabsWhileConnectedWithSameRequirementsKeepsDOMSelection() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([.dom(), .element()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        controller.dom.selection.nodeId = 42
+        controller.dom.selection.preview = "<div id='selected'>"
+
+        controller.configureTabs([.dom(title: "DOM"), .element(title: "Elements")])
+
+        #expect(controller.dom.selection.nodeId == 42)
+        #expect(controller.dom.selection.preview == "<div id='selected'>")
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

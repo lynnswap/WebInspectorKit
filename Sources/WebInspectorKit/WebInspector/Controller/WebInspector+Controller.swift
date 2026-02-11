@@ -62,6 +62,7 @@ extension WebInspector {
         }
 
         internal func configureTabs(_ tabs: [Tab]) {
+            let previousRequirements = configuredRequirements
             self.tabs = tabs
             configuredRequirements = tabs.reduce(into: Tab.FeatureRequirements()) { partialResult, tab in
                 partialResult.formUnion(tab.requires)
@@ -92,10 +93,9 @@ extension WebInspector {
                 applyTabActivation(for: selectedTabID)
             }
 
-            // When tabs are state-driven and change while a controller is already connected, re-apply
-            // the current attachment to ensure newly required sessions attach and removed requirements
-            // suspend their sessions.
-            if let webView = connectedPageWebView {
+            // Only re-attach when tab requirements changed while connected. Re-attaching with the
+            // same requirements clears DOM selection via DOMSession.attach().
+            if let webView = connectedPageWebView, previousRequirements != configuredRequirements {
                 connect(to: webView)
             }
         }
