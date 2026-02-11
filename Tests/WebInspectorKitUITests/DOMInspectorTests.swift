@@ -30,6 +30,23 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func attachSwitchingPageClearsPendingMutationBundles() {
+        let controller = WebInspector.Controller()
+        let inspector = controller.dom
+        let firstWebView = makeTestWebView()
+        let secondWebView = makeTestWebView()
+
+        inspector.attach(to: firstWebView)
+        inspector.frontendStore.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
+        #expect(inspector.frontendStore.pendingMutationBundleCount == 1)
+
+        inspector.attach(to: secondWebView)
+
+        #expect(inspector.session.lastPageWebView === secondWebView)
+        #expect(inspector.frontendStore.pendingMutationBundleCount == 0)
+    }
+
+    @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
         let controller = WebInspector.Controller()
         let inspector = controller.dom

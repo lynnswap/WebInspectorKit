@@ -34,6 +34,9 @@ extension WebInspector {
 
         func attach(to webView: WKWebView) {
             resetInteractionState()
+            if let previousPageWebView = session.lastPageWebView, previousPageWebView !== webView {
+                frontendStore.clearPendingMutationBundles()
+            }
             let outcome = session.attach(to: webView)
             if outcome.shouldReload {
                 Task {

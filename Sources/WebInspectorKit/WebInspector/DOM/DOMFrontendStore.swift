@@ -69,6 +69,15 @@ final class DOMFrontendStore: NSObject {
         applyMutationBundle(payload)
     }
 
+    func clearPendingMutationBundles() {
+        pendingBundles.removeAll()
+        cancelPendingBundleFlush()
+    }
+
+    var pendingMutationBundleCount: Int {
+        pendingBundles.count
+    }
+
     func setPreferredDepth(_ depth: Int) {
         pendingPreferredDepth = depth
         if isReady {
