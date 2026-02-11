@@ -10,7 +10,7 @@ public final class NetworkSession: PageSession {
         }
     }
 
-    private(set) var mode: NetworkLoggingMode = .buffering
+    private(set) var mode: NetworkLoggingMode = .active
 
     public let store: NetworkStore
     public private(set) weak var lastPageWebView: WKWebView?
@@ -25,6 +25,7 @@ public final class NetworkSession: PageSession {
     }
 
     public func attach(pageWebView webView: WKWebView) {
+        pageAgent.setMode(mode)
         pageAgent.attachPageWebView(webView)
         lastPageWebView = webView
     }
