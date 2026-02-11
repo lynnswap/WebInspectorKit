@@ -1,33 +1,52 @@
 import SwiftUI
 
+@MainActor
+private struct WebInspectorTabDefinition: Equatable {
+    let id: WebInspector.Tab.ID
+    let title: LocalizedStringResource
+    let systemImage: String
+    let role: WebInspector.Tab.Role
+    let requires: WebInspector.Tab.FeatureRequirements
+    let activation: WebInspector.Tab.Activation
+
+    init(_ tab: WebInspector.Tab) {
+        id = tab.id
+        title = tab.title
+        systemImage = tab.systemImage
+        role = tab.role
+        requires = tab.requires
+        activation = tab.activation
+    }
+}
+
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
-    struct WebInspectorTabContainer: UIViewControllerRepresentable {
-        let controller: WebInspector.Controller
-        let tabs: [WebInspector.Tab]
+struct WebInspectorTabContainer: UIViewControllerRepresentable {
+    let controller: WebInspector.Controller
+    let tabs: [WebInspector.Tab]
 
-        func makeCoordinator() -> Coordinator {
-            Coordinator(controller: controller, tabs: tabs)
-        }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(controller: controller, tabs: tabs)
+    }
 
-        func makeUIViewController(context: Context) -> UITabBarController {
-            let tabBarController = UITabBarController()
-            tabBarController.setTabs(context.coordinator.uiTabs, animated: false)
-            tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
-            tabBarController.view.backgroundColor = .clear
-            tabBarController.delegate = context.coordinator
+    func makeUIViewController(context: Context) -> UITabBarController {
+        let tabBarController = UITabBarController()
+        tabBarController.setTabs(context.coordinator.uiTabs, animated: false)
+        tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
+        tabBarController.view.backgroundColor = .clear
+        tabBarController.delegate = context.coordinator
 
-            syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
-            return tabBarController
-        }
+        syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
+        return tabBarController
+    }
 
-        func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
-            context.coordinator.updateTabsIfNeeded(tabs, controller: controller, tabBarController: tabBarController)
-            // Keep the native selection in sync with the observable `Controller`.
-            syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
-        }
+    func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
+        context.coordinator.updateTabsIfNeeded(tabs, controller: controller, tabBarController: tabBarController)
+        // Keep the native selection in sync with the observable `Controller`.
+        syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
+    }
 
     private func syncSelection(into tabBarController: UITabBarController, uiTabs: [UITab]) {
         let currentSelectedID = tabBarController.selectedTab?.identifier
@@ -70,36 +89,68 @@ import UIKit
     @MainActor
     final class Coordinator: NSObject, UITabBarControllerDelegate {
         private weak var controller: WebInspector.Controller?
-        private var tabIDs: [WebInspector.Tab.ID]
+        private var tabDefinitions: [WebInspectorTabDefinition]
+        private var hostingControllers: [UIHostingController<AnyView>]
         private(set) var uiTabs: [UITab]
+        private typealias UITabState = (
+            definitions: [WebInspectorTabDefinition],
+            hostingControllers: [UIHostingController<AnyView>],
+            uiTabs: [UITab]
+        )
 
         init(controller: WebInspector.Controller, tabs: [WebInspector.Tab]) {
             self.controller = controller
-            self.tabIDs = tabs.map(\.id)
-            self.uiTabs = Self.makeUITabs(from: tabs, controller: controller)
+            let tabState = Self.makeUITabState(from: tabs, controller: controller)
+            self.tabDefinitions = tabState.definitions
+            self.hostingControllers = tabState.hostingControllers
+            self.uiTabs = tabState.uiTabs
         }
 
         func updateTabsIfNeeded(_ tabs: [WebInspector.Tab], controller: WebInspector.Controller, tabBarController: UITabBarController) {
             self.controller = controller
-            let newTabIDs = tabs.map(\.id)
-            guard newTabIDs != tabIDs else {
+            let newDefinitions = tabs.map(WebInspectorTabDefinition.init)
+            guard newDefinitions != tabDefinitions else {
+                guard hostingControllers.count == tabs.count else {
+                    let tabState = Self.makeUITabState(from: tabs, controller: controller)
+                    tabDefinitions = tabState.definitions
+                    hostingControllers = tabState.hostingControllers
+                    uiTabs = tabState.uiTabs
+                    tabBarController.setTabs(uiTabs, animated: false)
+                    return
+                }
+                for (index, tab) in tabs.enumerated() {
+                    hostingControllers[index].rootView = tab.view(controller: controller)
+                }
                 return
             }
-            tabIDs = newTabIDs
-            uiTabs = Self.makeUITabs(from: tabs, controller: controller)
+
+            let tabState = Self.makeUITabState(from: tabs, controller: controller)
+            tabDefinitions = tabState.definitions
+            hostingControllers = tabState.hostingControllers
+            uiTabs = tabState.uiTabs
             tabBarController.setTabs(uiTabs, animated: false)
         }
 
-        private static func makeUITabs(from tabs: [WebInspector.Tab], controller: WebInspector.Controller) -> [UITab] {
-            tabs.map { tab in
+        private static func makeUITabState(from tabs: [WebInspector.Tab], controller: WebInspector.Controller) -> UITabState {
+            var definitions: [WebInspectorTabDefinition] = []
+            var hostingControllers: [UIHostingController<AnyView>] = []
+            var uiTabs: [UITab] = []
+
+            for tab in tabs {
                 let host = UIHostingController(rootView: tab.view(controller: controller))
                 host.view.backgroundColor = .clear
-                return UITab(
+                let uiTab = UITab(
                     title: String(localized: tab.title),
                     image: UIImage(systemName: tab.systemImage),
                     identifier: tab.id
                 ) { _ in host }
+
+                definitions.append(WebInspectorTabDefinition(tab))
+                hostingControllers.append(host)
+                uiTabs.append(uiTab)
             }
+
+            return (definitions, hostingControllers, uiTabs)
         }
 
         func tabBarController(
@@ -126,8 +177,28 @@ struct WebInspectorTabContainer: NSViewControllerRepresentable {
         tabController.tabStyle = .segmentedControlOnTop
         tabController.webInspectorController = controller
         tabController.tabs = tabs
+        tabController.tabViewItems = makeTabViewItems(for: tabs, controller: controller)
 
-        tabController.tabViewItems = tabs.map { tab in
+        syncSelection(into: tabController)
+        return tabController
+    }
+
+    func updateNSViewController(_ tabController: WebInspectorTabViewController, context: Context) {
+        let currentDefinitions = tabController.tabs.map(WebInspectorTabDefinition.init)
+        let newDefinitions = tabs.map(WebInspectorTabDefinition.init)
+
+        tabController.webInspectorController = controller
+        tabController.tabs = tabs
+        if currentDefinitions != newDefinitions {
+            tabController.tabViewItems = makeTabViewItems(for: tabs, controller: controller)
+        } else {
+            refreshTabContent(in: tabController)
+        }
+        syncSelection(into: tabController)
+    }
+
+    private func makeTabViewItems(for tabs: [WebInspector.Tab], controller: WebInspector.Controller) -> [NSTabViewItem] {
+        tabs.map { tab in
             let host = NSHostingController(rootView: tab.view(controller: controller))
             let item = NSTabViewItem(viewController: host)
             item.identifier = tab.id
@@ -135,27 +206,21 @@ struct WebInspectorTabContainer: NSViewControllerRepresentable {
             item.image = NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil)
             return item
         }
-
-        syncSelection(into: tabController)
-        return tabController
     }
 
-    func updateNSViewController(_ controller: WebInspectorTabViewController, context: Context) {
-        controller.webInspectorController = self.controller
-        controller.tabs = tabs
-        let currentTabIDs = controller.tabViewItems.compactMap { $0.identifier as? String }
-        let newTabIDs = tabs.map(\.id)
-        if currentTabIDs != newTabIDs {
-            controller.tabViewItems = tabs.map { tab in
-                let host = NSHostingController(rootView: tab.view(controller: self.controller))
-                let item = NSTabViewItem(viewController: host)
-                item.identifier = tab.id
-                item.label = String(localized: tab.title)
-                item.image = NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil)
-                return item
-            }
+    private func refreshTabContent(in tabController: WebInspectorTabViewController) {
+        guard tabController.tabViewItems.count == tabs.count else {
+            tabController.tabViewItems = makeTabViewItems(for: tabs, controller: controller)
+            return
         }
-        syncSelection(into: controller)
+
+        for (index, tab) in tabs.enumerated() {
+            guard let host = tabController.tabViewItems[index].viewController as? NSHostingController<AnyView> else {
+                tabController.tabViewItems = makeTabViewItems(for: tabs, controller: controller)
+                return
+            }
+            host.rootView = tab.view(controller: controller)
+        }
     }
 
     private func syncSelection(into tabController: WebInspectorTabViewController) {
