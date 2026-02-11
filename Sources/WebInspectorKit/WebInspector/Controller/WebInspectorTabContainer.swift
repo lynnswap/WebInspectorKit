@@ -4,29 +4,30 @@ import SwiftUI
 import UIKit
 
 @MainActor
-struct WebInspectorTabContainer: UIViewControllerRepresentable {
-    let controller: WebInspector.Controller
-    let tabs: [WebInspector.Tab]
+    struct WebInspectorTabContainer: UIViewControllerRepresentable {
+        let controller: WebInspector.Controller
+        let tabs: [WebInspector.Tab]
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(controller: controller, tabs: tabs)
-    }
+        func makeCoordinator() -> Coordinator {
+            Coordinator(controller: controller, tabs: tabs)
+        }
 
-    func makeUIViewController(context: Context) -> UITabBarController {
-        let tabBarController = UITabBarController()
-        tabBarController.setTabs(context.coordinator.uiTabs, animated: false)
-        tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
-        tabBarController.view.backgroundColor = .clear
-        tabBarController.delegate = context.coordinator
+        func makeUIViewController(context: Context) -> UITabBarController {
+            let tabBarController = UITabBarController()
+            tabBarController.setTabs(context.coordinator.uiTabs, animated: false)
+            tabBarController.tabBar.scrollEdgeAppearance = tabBarController.tabBar.standardAppearance
+            tabBarController.view.backgroundColor = .clear
+            tabBarController.delegate = context.coordinator
 
-        syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
-        return tabBarController
-    }
+            syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
+            return tabBarController
+        }
 
-    func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
-        // Keep the native selection in sync with the observable `Controller`.
-        syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
-    }
+        func updateUIViewController(_ tabBarController: UITabBarController, context: Context) {
+            context.coordinator.updateTabsIfNeeded(tabs, controller: controller, tabBarController: tabBarController)
+            // Keep the native selection in sync with the observable `Controller`.
+            syncSelection(into: tabBarController, uiTabs: context.coordinator.uiTabs)
+        }
 
     private func syncSelection(into tabBarController: UITabBarController, uiTabs: [UITab]) {
         let currentSelectedID = tabBarController.selectedTab?.identifier
@@ -69,13 +70,28 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
     @MainActor
     final class Coordinator: NSObject, UITabBarControllerDelegate {
         private weak var controller: WebInspector.Controller?
-        let tabs: [WebInspector.Tab]
-        let uiTabs: [UITab]
+        private var tabIDs: [WebInspector.Tab.ID]
+        private(set) var uiTabs: [UITab]
 
         init(controller: WebInspector.Controller, tabs: [WebInspector.Tab]) {
             self.controller = controller
-            self.tabs = tabs
-            self.uiTabs = tabs.map { tab in
+            self.tabIDs = tabs.map(\.id)
+            self.uiTabs = Self.makeUITabs(from: tabs, controller: controller)
+        }
+
+        func updateTabsIfNeeded(_ tabs: [WebInspector.Tab], controller: WebInspector.Controller, tabBarController: UITabBarController) {
+            self.controller = controller
+            let newTabIDs = tabs.map(\.id)
+            guard newTabIDs != tabIDs else {
+                return
+            }
+            tabIDs = newTabIDs
+            uiTabs = Self.makeUITabs(from: tabs, controller: controller)
+            tabBarController.setTabs(uiTabs, animated: false)
+        }
+
+        private static func makeUITabs(from tabs: [WebInspector.Tab], controller: WebInspector.Controller) -> [UITab] {
+            tabs.map { tab in
                 let host = UIHostingController(rootView: tab.view(controller: controller))
                 host.view.backgroundColor = .clear
                 return UITab(
@@ -125,6 +141,20 @@ struct WebInspectorTabContainer: NSViewControllerRepresentable {
     }
 
     func updateNSViewController(_ controller: WebInspectorTabViewController, context: Context) {
+        controller.webInspectorController = self.controller
+        controller.tabs = tabs
+        let currentTabIDs = controller.tabViewItems.compactMap { $0.identifier as? String }
+        let newTabIDs = tabs.map(\.id)
+        if currentTabIDs != newTabIDs {
+            controller.tabViewItems = tabs.map { tab in
+                let host = NSHostingController(rootView: tab.view(controller: self.controller))
+                let item = NSTabViewItem(viewController: host)
+                item.identifier = tab.id
+                item.label = String(localized: tab.title)
+                item.image = NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil)
+                return item
+            }
+        }
         syncSelection(into: controller)
     }
 
