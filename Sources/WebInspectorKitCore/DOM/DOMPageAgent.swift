@@ -6,6 +6,8 @@ private let domLogger = Logger(subsystem: "WebInspectorKit", category: "DOMPageA
 private let domAgentPresenceProbeScript: String = """
 (function() { /* webInspectorDOM */ })();
 """
+private let autoSnapshotConfigureRetryCount = 20
+private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
@@ -218,11 +220,10 @@ public extension DOMPageAgent {
             "enabled": enabled,
         ]
         do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM.configureAutoSnapshot(options)",
-                arguments: ["options": options],
-                contentWorld: .page
-            )
+            let didConfigure = try await configureAutoSnapshotWhenReady(on: webView, options: options)
+            if !didConfigure {
+                domLogger.error("configure auto snapshot skipped: DOM agent is not ready")
+            }
         } catch {
             domLogger.error("configure auto snapshot failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -254,6 +255,34 @@ extension DOMPageAgent {
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func configureAutoSnapshotWhenReady(
+        on webView: WKWebView,
+        options: [String: Any]
+    ) async throws -> Bool {
+        for attempt in 0..<autoSnapshotConfigureRetryCount {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                if (!window.webInspectorDOM || typeof window.webInspectorDOM.configureAutoSnapshot !== "function") {
+                    return false;
+                }
+                window.webInspectorDOM.configureAutoSnapshot(options);
+                return true;
+                """,
+                arguments: ["options": options],
+                in: nil,
+                contentWorld: .page
+            )
+            let didConfigure = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
+            if didConfigure {
+                return true
+            }
+            if attempt < autoSnapshotConfigureRetryCount - 1 {
+                try? await Task.sleep(nanoseconds: autoSnapshotConfigureRetryDelayNanoseconds)
+            }
+        }
+        return false
+    }
+
     func registerMessageHandlers(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {

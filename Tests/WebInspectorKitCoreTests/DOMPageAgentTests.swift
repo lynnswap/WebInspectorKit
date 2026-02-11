@@ -118,6 +118,35 @@ struct DOMSessionTests {
         #expect(installed == true)
     }
 
+    @Test
+    func setAutoSnapshotAfterAttachEventuallyConfiguresAgent() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 7, subtreeDepth: 2, autoUpdateDebounce: 0.2))
+        let (webView, _) = makeTestWebView()
+
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        session.attach(to: webView)
+        session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        let rawStatus = try await webView.evaluateJavaScript(
+            "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
+            in: nil,
+            contentWorld: .page
+        )
+        let status = rawStatus as? [String: Any]
+        let enabled = (status?["snapshotAutoUpdateEnabled"] as? Bool)
+            ?? (status?["snapshotAutoUpdateEnabled"] as? NSNumber)?.boolValue
+            ?? false
+        let maxDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+            ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+        let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+            ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+
+        #expect(enabled == true)
+        #expect(maxDepth == 7)
+        #expect(debounce == 200)
+    }
+
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
         let controller = RecordingUserContentController()
         let configuration = WKWebViewConfiguration()
@@ -135,6 +164,21 @@ struct DOMSessionTests {
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private func waitForAutoSnapshotEnabled(on webView: WKWebView) async {
+        for _ in 0..<100 {
+            let raw = try? await webView.evaluateJavaScript(
+                "(() => Boolean(window.webInspectorDOM?.debugStatus?.().snapshotAutoUpdateEnabled))();",
+                in: nil,
+                contentWorld: .page
+            )
+            let enabled = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
+            if enabled {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
 }
