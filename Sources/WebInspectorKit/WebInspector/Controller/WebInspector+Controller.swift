@@ -67,6 +67,13 @@ extension WebInspector {
             selectedTabID = nil
         }
 
+        internal func synchronizeSelectedTabFromNativeUI(_ tabID: Tab.ID?) {
+            guard connectedPageWebView != nil else {
+                return
+            }
+            selectedTabID = tabID
+        }
+
         internal func configureTabs(_ tabs: [Tab]) {
             let previousRequirements = configuredRequirements
             self.tabs = tabs

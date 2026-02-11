@@ -76,14 +76,14 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
 
         // No desired selection: keep the current native selection if it exists.
         if let currentSelectedID {
-            controller.selectedTabID = currentSelectedID
+            controller.synchronizeSelectedTabFromNativeUI(currentSelectedID)
             return
         }
 
         // No desired selection and no native selection: select the first tab.
         let first = uiTabs[0]
         tabBarController.selectedTab = first
-        controller.selectedTabID = first.identifier
+        controller.synchronizeSelectedTabFromNativeUI(first.identifier)
     }
 
     @MainActor
@@ -159,7 +159,7 @@ struct WebInspectorTabContainer: UIViewControllerRepresentable {
             previousTab: UITab?
         ) {
             guard let controller else { return }
-            controller.selectedTabID = selectedTab.identifier
+            controller.synchronizeSelectedTabFromNativeUI(selectedTab.identifier)
         }
     }
 }
@@ -238,7 +238,7 @@ struct WebInspectorTabContainer: NSViewControllerRepresentable {
             if tabController.selectedTabViewItemIndex != 0 {
                 tabController.selectedTabViewItemIndex = 0
             }
-            controller.selectedTabID = tabs[0].id
+            controller.synchronizeSelectedTabFromNativeUI(tabs[0].id)
         }
     }
 }
@@ -254,7 +254,7 @@ final class WebInspectorTabViewController: NSTabViewController {
         guard let id = tabViewItem?.identifier as? String else {
             return
         }
-        webInspectorController?.selectedTabID = id
+        webInspectorController?.synchronizeSelectedTabFromNativeUI(id)
     }
 }
 

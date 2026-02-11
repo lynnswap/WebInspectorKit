@@ -123,6 +123,23 @@ struct ControllerActivationTests {
         #expect(controller.network.session.lastPageWebView == nil)
     }
 
+    @Test
+    func nativeSelectionSyncAfterDisconnectKeepsSessionsStopped() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.network.session.mode == .buffering)
+
+        controller.disconnect()
+        controller.synchronizeSelectedTabFromNativeUI("wi_network")
+
+        #expect(controller.selectedTabID == nil)
+        #expect(controller.network.session.mode == .stopped)
+        #expect(controller.network.session.lastPageWebView == nil)
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
