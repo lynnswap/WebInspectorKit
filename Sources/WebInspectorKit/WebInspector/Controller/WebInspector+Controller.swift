@@ -37,6 +37,11 @@ extension WebInspector {
             }
 
             let requirements = effectiveRequirements
+            if requirements.contains(.network) {
+                let activation = resolvedActivationForTabID(selectedTabID)
+                network.session.setMode(activation.networkLiveLogging ? .active : .buffering)
+            }
+
             if requirements.contains(.dom) {
                 dom.attach(to: webView)
             } else {
@@ -115,17 +120,7 @@ extension WebInspector {
         }
 
         internal func applyTabActivation(_ tab: Tab?) {
-            let activation: Tab.Activation
-            if let tab, let tabActivation = activationByTabID[tab.id] {
-                activation = tabActivation
-            } else if configuredRequirements == nil {
-                // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
-                // there is no way to select/activate the Network tab. Default to active logging so
-                // `network.store` receives live events for controller-only integrations.
-                activation = .init(networkLiveLogging: true)
-            } else {
-                activation = .init()
-            }
+            let activation = resolvedActivation(for: tab)
             let requirements = effectiveRequirements
 
             if requirements.contains(.dom) {
@@ -139,6 +134,26 @@ extension WebInspector {
 }
 
 private extension WebInspector.Controller {
+    func resolvedActivationForTabID(_ tabID: WebInspector.Tab.ID?) -> WebInspector.Tab.Activation {
+        guard let tabID else {
+            return resolvedActivation(for: nil)
+        }
+        return resolvedActivation(for: tabs.first(where: { $0.id == tabID }))
+    }
+
+    func resolvedActivation(for tab: WebInspector.Tab?) -> WebInspector.Tab.Activation {
+        if let tab, let tabActivation = activationByTabID[tab.id] {
+            return tabActivation
+        }
+        if configuredRequirements == nil {
+            // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
+            // there is no way to select/activate the Network tab. Default to active logging so
+            // `network.store` receives live events for controller-only integrations.
+            return .init(networkLiveLogging: true)
+        }
+        return .init()
+    }
+
     var effectiveRequirements: WebInspector.Tab.FeatureRequirements {
         // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
         // default to enabling both feature sets.
