@@ -169,9 +169,7 @@ extension NetworkPageAgent: WKScriptMessageHandler {
             // TODO: Surface dropped event counts in the store/UI.
             networkLogger.debug("network batch dropped events: \(dropped, privacy: .public)")
         }
-        for event in batch.events {
-            store.applyHTTPEvent(event)
-        }
+        store.applyNetworkBatch(batch)
     }
     
     private func handleNetworkReset() {

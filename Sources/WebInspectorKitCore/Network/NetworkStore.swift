@@ -29,6 +29,38 @@ public final class NetworkStore {
         applyWSEvent(event)
     }
 
+    func applyNetworkBatch(_ batch: NetworkEventBatch) {
+        guard isRecording else { return }
+        guard !batch.events.isEmpty else { return }
+
+        var pendingResourceTimingEvents: [HTTPNetworkEvent] = []
+        pendingResourceTimingEvents.reserveCapacity(batch.events.count)
+
+        func flushPendingResourceTimingEvents() {
+            guard !pendingResourceTimingEvents.isEmpty else { return }
+            let resourceTimingBatch = NetworkEventBatch(
+                version: batch.version,
+                sessionID: batch.sessionID,
+                seq: batch.seq,
+                events: pendingResourceTimingEvents,
+                dropped: nil
+            )
+            applyBatchedInsertions(resourceTimingBatch)
+            pendingResourceTimingEvents.removeAll(keepingCapacity: true)
+        }
+
+        for event in batch.events {
+            if event.kind == .resourceTiming {
+                pendingResourceTimingEvents.append(event)
+                continue
+            }
+            flushPendingResourceTimingEvents()
+            applyHTTPEvent(event)
+        }
+
+        flushPendingResourceTimingEvents()
+    }
+
     func applyBatchedInsertions(_ batch: NetworkEventBatch) {
         guard isRecording else { return }
 

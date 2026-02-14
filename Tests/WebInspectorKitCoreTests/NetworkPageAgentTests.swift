@@ -54,6 +54,63 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func modeTransitionsPreserveBatchApplicationBoundaries() throws {
+        let agent = NetworkPageAgent()
+        let firstBatch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": "mode-session",
+            "seq": 1,
+            "events": [[
+                "kind": "resourceTiming",
+                "requestId": 30,
+                "url": "https://example.com/first",
+                "startTime": NetworkTestHelpers.timePayload(monotonicMs: 2_000.0, wallMs: 1_700_000_001_000.0),
+                "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_010.0, wallMs: 1_700_000_001_010.0)
+            ]]
+        ])
+
+        agent.setMode(.buffering)
+        agent.store.applyNetworkBatch(firstBatch)
+        #expect(agent.store.entry(forRequestID: 30, sessionID: "mode-session") != nil)
+
+        let secondBatch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": "mode-session",
+            "seq": 2,
+            "events": [[
+                "kind": "resourceTiming",
+                "requestId": 31,
+                "url": "https://example.com/second",
+                "startTime": NetworkTestHelpers.timePayload(monotonicMs: 2_020.0, wallMs: 1_700_000_001_020.0),
+                "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_030.0, wallMs: 1_700_000_001_030.0)
+            ]]
+        ])
+        agent.setMode(.active)
+        agent.store.applyNetworkBatch(secondBatch)
+        #expect(agent.store.entry(forRequestID: 31, sessionID: "mode-session") != nil)
+
+        let beforeStoppedCount = agent.store.entries.count
+        agent.setMode(.stopped)
+        let thirdBatch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": "mode-session",
+            "seq": 3,
+            "events": [[
+                "kind": "resourceTiming",
+                "requestId": 32,
+                "url": "https://example.com/stopped",
+                "startTime": NetworkTestHelpers.timePayload(monotonicMs: 2_040.0, wallMs: 1_700_000_001_040.0),
+                "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_050.0, wallMs: 1_700_000_001_050.0)
+            ]]
+        ])
+        agent.store.applyNetworkBatch(thirdBatch)
+
+        #expect(beforeStoppedCount > 0)
+        #expect(agent.store.entries.count == 0)
+        #expect(agent.store.entry(forRequestID: 32, sessionID: "mode-session") == nil)
+    }
+
+    @Test
     func clearNetworkLogsResetsEntriesAndSelection() throws {
         let agent = NetworkPageAgent()
         let store = agent.store

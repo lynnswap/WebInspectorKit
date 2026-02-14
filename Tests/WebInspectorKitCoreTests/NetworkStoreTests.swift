@@ -369,4 +369,57 @@ struct NetworkStoreTests {
         #expect(store.entry(forRequestID: 1, sessionID: sessionID)?.url == "https://example.com/existing")
         #expect(store.entry(forRequestID: 2, sessionID: sessionID)?.phase == .completed)
     }
+
+    @Test
+    func applyNetworkBatchProcessesMixedEventsAndBatchesResourceTiming() throws {
+        let store = NetworkStore()
+        let sessionID = "mixed-session"
+
+        let payload: [String: Any] = [
+            "version": 1,
+            "sessionId": sessionID,
+            "seq": 7,
+            "events": [
+                [
+                    "kind": "requestWillBeSent",
+                    "requestId": 1,
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+                ],
+                [
+                    "kind": "responseReceived",
+                    "requestId": 1,
+                    "status": 200,
+                    "statusText": "OK",
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_050.0, wallMs: 1_700_000_000_050.0)
+                ],
+                [
+                    "kind": "loadingFinished",
+                    "requestId": 1,
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_100.0, wallMs: 1_700_000_000_100.0)
+                ],
+                [
+                    "kind": "resourceTiming",
+                    "requestId": 2,
+                    "startTime": NetworkTestHelpers.timePayload(monotonicMs: 2_000.0, wallMs: 1_700_000_001_000.0),
+                    "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_010.0, wallMs: 1_700_000_001_010.0)
+                ],
+                [
+                    "kind": "resourceTiming",
+                    "requestId": 2,
+                    "startTime": NetworkTestHelpers.timePayload(monotonicMs: 2_020.0, wallMs: 1_700_000_001_020.0),
+                    "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_030.0, wallMs: 1_700_000_001_030.0)
+                ]
+            ]
+        ]
+        let batch = try NetworkTestHelpers.decodeBatch(payload)
+
+        store.applyNetworkBatch(batch)
+
+        #expect(store.entries.map(\.requestID) == [1, 2])
+        #expect(store.entry(forRequestID: 1, sessionID: sessionID)?.phase == .completed)
+        #expect(store.entry(forRequestID: 1, sessionID: sessionID)?.statusCode == 200)
+        #expect(store.entry(forRequestID: 2, sessionID: sessionID)?.phase == .completed)
+    }
 }
