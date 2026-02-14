@@ -21,5 +21,10 @@
     "isolatedModules": true,
     "esModuleInterop": true
   },
-  "include": ["Sources/WebInspectorKit/WebInspector/**/*.ts"]
+  "include": [
+    "Sources/WebInspectorKitCore/WebInspector/**/*.ts",
+    "Sources/WebInspectorKit/WebInspector/**/*.ts",
+    "Tests/TypeScript/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

@@ -147,6 +147,66 @@ struct DOMSessionTests {
         #expect(debounce == 200)
     }
 
+    @Test
+    func setAutoSnapshotBeforeAttachEventuallyConfiguresAgent() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 2, autoUpdateDebounce: 0.3))
+        let (webView, _) = makeTestWebView()
+
+        session.setAutoSnapshot(enabled: true)
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        session.attach(to: webView)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        let status = await autoSnapshotStatus(on: webView)
+        let maxDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+            ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+        let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+            ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+
+        #expect(maxDepth == 5)
+        #expect(debounce == 300)
+    }
+
+    @Test
+    func updateConfigurationWhileAutoSnapshotEnabledEventuallyReconfiguresAgent() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 4, subtreeDepth: 2, autoUpdateDebounce: 0.2))
+        let (webView, _) = makeTestWebView()
+
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        session.attach(to: webView)
+        session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        session.updateConfiguration(.init(snapshotDepth: 9, subtreeDepth: 2, autoUpdateDebounce: 0.12))
+        await waitForAutoSnapshotConfiguration(on: webView, maxDepth: 9, debounce: 120)
+
+        let status = await autoSnapshotStatus(on: webView)
+        let maxDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+            ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+        let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+            ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+
+        #expect(maxDepth == 9)
+        #expect(debounce == 120)
+    }
+
+    @Test
+    func autoSnapshotDebounceHasMinimumClamp() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 4, subtreeDepth: 2, autoUpdateDebounce: 0.01))
+        let (webView, _) = makeTestWebView()
+
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        session.attach(to: webView)
+        session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        let status = await autoSnapshotStatus(on: webView)
+        let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+            ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+
+        #expect(debounce == 50)
+    }
+
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
         let controller = RecordingUserContentController()
         let configuration = WKWebViewConfiguration()
@@ -180,6 +240,33 @@ struct DOMSessionTests {
             }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    private func waitForAutoSnapshotConfiguration(
+        on webView: WKWebView,
+        maxDepth: Int,
+        debounce: Int
+    ) async {
+        for _ in 0..<100 {
+            let status = await autoSnapshotStatus(on: webView)
+            let currentDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+                ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+            let currentDebounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+                ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+            if currentDepth == maxDepth, currentDebounce == debounce {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    private func autoSnapshotStatus(on webView: WKWebView) async -> [String: Any]? {
+        let rawStatus = try? await webView.evaluateJavaScript(
+            "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
+            in: nil,
+            contentWorld: .page
+        )
+        return rawStatus as? [String: Any]
     }
 }
 
