@@ -625,6 +625,50 @@ function selectorContainsSlottedPseudo(selectorText: string): boolean {
     return false;
 }
 
+function matchesShadowIncludingInclusiveAncestors(element: Element, selectorText: string): boolean {
+    let current: Element | null = element;
+    while (current) {
+        try {
+            if (current.matches(selectorText)) {
+                return true;
+            }
+        } catch {
+            return false;
+        }
+
+        if (current.parentElement) {
+            current = current.parentElement;
+            continue;
+        }
+        const rootNode = current.getRootNode();
+        if (rootNode instanceof ShadowRoot) {
+            current = rootNode.host;
+            continue;
+        }
+
+        current = null;
+    }
+    return false;
+}
+
+function matchesSelectorRelativeToElement(element: Element, selectorText: string): boolean {
+    const trimmedSelector = selectorText.trim();
+    if (!trimmedSelector) {
+        return true;
+    }
+
+    const firstCharacter = trimmedSelector[0];
+    const isLeadingCombinator = firstCharacter === ">" || firstCharacter === "+" || firstCharacter === "~" || firstCharacter === "|";
+    const normalizedSelector = isLeadingCombinator
+        ? `:scope ${trimmedSelector}`
+        : trimmedSelector;
+    try {
+        return element.matches(normalizedSelector);
+    } catch {
+        return false;
+    }
+}
+
 function hostSelectorVariantMatchesHostElement(selectorText: string, host: Element): boolean {
     const parsedHostContext = parseLeadingHostPseudo(selectorText, "host-context");
     if (parsedHostContext) {
@@ -632,12 +676,7 @@ function hostSelectorVariantMatchesHostElement(selectorText: string, host: Eleme
         if (!contextSelector) {
             return false;
         }
-        let contextMatched = false;
-        try {
-            contextMatched = host.matches(contextSelector) || host.closest(contextSelector) !== null;
-        } catch {
-            contextMatched = false;
-        }
+        const contextMatched = matchesShadowIncludingInclusiveAncestors(host, contextSelector);
         if (!contextMatched) {
             return false;
         }
@@ -705,6 +744,64 @@ function hostSelectorMatchesHostElement(selectorText: string, host: Element): bo
     return false;
 }
 
+function slottedPrefixMatchesSlot(prefix: string, slot: HTMLSlotElement): boolean {
+    if (!prefix) {
+        return true;
+    }
+
+    const rootNode = slot.getRootNode();
+    const host = rootNode instanceof ShadowRoot ? rootNode.host : null;
+    for (const expandedPrefix of expandLeadingFunctionalSelectors(prefix)) {
+        const trimmedExpandedPrefix = expandedPrefix.trim();
+        if (!trimmedExpandedPrefix) {
+            return true;
+        }
+
+        const parsedHostContext = parseLeadingHostPseudo(trimmedExpandedPrefix, "host-context");
+        if (parsedHostContext) {
+            if (!host) {
+                continue;
+            }
+            const contextSelector = parsedHostContext.argument?.trim();
+            if (!contextSelector) {
+                continue;
+            }
+            if (!matchesShadowIncludingInclusiveAncestors(host, contextSelector)) {
+                continue;
+            }
+
+            const remainder = trimmedExpandedPrefix.slice(parsedHostContext.consumedLength);
+            if (matchesSelectorRelativeToElement(slot, remainder)) {
+                return true;
+            }
+            continue;
+        }
+
+        const parsedHost = parseLeadingHostPseudo(trimmedExpandedPrefix, "host");
+        if (parsedHost) {
+            if (!host) {
+                continue;
+            }
+            const hostCondition = parsedHost.argument?.trim();
+            if (hostCondition && !matchesSelectorRelativeToElement(host, `*${hostCondition}`)) {
+                continue;
+            }
+
+            const remainder = trimmedExpandedPrefix.slice(parsedHost.consumedLength);
+            if (matchesSelectorRelativeToElement(slot, remainder)) {
+                return true;
+            }
+            continue;
+        }
+
+        if (matchesSelectorRelativeToElement(slot, trimmedExpandedPrefix)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function slottedSelectorMatchesElement(
     selectorText: string,
     element: Element,
@@ -740,15 +837,8 @@ function slottedSelectorMatchesElement(
         }
 
         for (const slot of slots) {
-            if (!parsedSlotted.prefix) {
+            if (slottedPrefixMatchesSlot(parsedSlotted.prefix, slot)) {
                 return true;
-            }
-            try {
-                if (slot.matches(parsedSlotted.prefix)) {
-                    return true;
-                }
-            } catch {
-                continue;
             }
         }
     }

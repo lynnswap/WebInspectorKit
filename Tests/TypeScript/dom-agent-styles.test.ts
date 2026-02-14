@@ -246,6 +246,42 @@ describe("dom-agent-styles", () => {
         expect(slottedRules.length).toBe(2);
     });
 
+    it("matches ::slotted rules gated by :host selectors", () => {
+        document.body.innerHTML = "<section id=\"host\" class=\"enabled\"><span id=\"target\" slot=\"entry\" class=\"slot-target\"></span></section>";
+        const host = document.getElementById("host");
+        const target = document.getElementById("target");
+        expect(host).not.toBeNull();
+        expect(target).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const slotElement = document.createElement("slot");
+        slotElement.setAttribute("name", "entry");
+        shadowRoot.appendChild(slotElement);
+        Object.defineProperty(target as Element & { assignedSlot?: HTMLSlotElement | null }, "assignedSlot", {
+            configurable: true,
+            value: slotElement
+        });
+
+        const shadowStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(":host(.enabled) ::slotted(.slot-target)", [["color", "red"]]),
+                makeStyleRule(":host(.enabled) slot[name=\"entry\"]::slotted(.slot-target)", [["margin", "0"]]),
+                makeStyleRule(":host(.disabled) ::slotted(.slot-target)", [["padding", "2px"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [shadowStyleSheet]
+        });
+
+        const nodeId = registerNode(target!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.enabled) ::slotted(.slot-target)")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.enabled) slot[name=\"entry\"]::slotted(.slot-target)")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.disabled) ::slotted(.slot-target)")).toBe(false);
+    });
+
     it("skips inactive media-scoped stylesheets", () => {
         const originalMatchMedia = window.matchMedia;
         const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
@@ -498,6 +534,36 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ":host-context(:not(.outside))")).toBe(true);
         expect(payload.rules.some((rule) => rule.selectorText === ":host[data-token=\"a::b\"]")).toBe(true);
         expect(payload.rules.some((rule) => rule.selectorText === ".inside")).toBe(false);
+    });
+
+    it("matches :host-context selectors across shadow-including ancestors", () => {
+        document.body.innerHTML = "<section id=\"outer-host\" class=\"theme-dark\"></section>";
+        const outerHost = document.getElementById("outer-host");
+        expect(outerHost).not.toBeNull();
+
+        const outerShadowRoot = outerHost!.attachShadow({ mode: "open" });
+        const innerHost = document.createElement("section");
+        innerHost.id = "inner-host";
+        innerHost.className = "component-host";
+        outerShadowRoot.appendChild(innerHost);
+
+        const innerShadowRoot = innerHost.attachShadow({ mode: "open" });
+        const innerStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(":host-context(.theme-dark)", [["color", "red"]]),
+                makeStyleRule(":host-context(.theme-light)", [["display", "block"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(innerShadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [innerStyleSheet]
+        });
+
+        const nodeId = registerNode(innerHost);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ":host-context(.theme-dark)")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host-context(.theme-light)")).toBe(false);
     });
 
     it("includes host selectors wrapped in :is/:where functions", () => {
