@@ -1,4 +1,5 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
+import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
 
 const DEFAULT_MAX_RULES = Number.MAX_SAFE_INTEGER;
 const MAX_SCANNED_RULES = 25000;
@@ -1055,7 +1056,10 @@ function evaluateContainerRuleActivityWithProbe(
     ].join("; ");
     probeElement.setAttribute("aria-hidden", "true");
 
+    let didSuppressSnapshotAutoUpdate = false;
     try {
+        suppressSnapshotAutoUpdate("matched-styles-container-probe");
+        didSuppressSnapshotAutoUpdate = true;
         styleHost.appendChild(styleElement);
         parentElement.insertBefore(probeElement, element.nextSibling);
         const computedStyle = ownerDocument.defaultView?.getComputedStyle(probeElement);
@@ -1066,6 +1070,9 @@ function evaluateContainerRuleActivityWithProbe(
     } finally {
         probeElement.remove();
         styleElement.remove();
+        if (didSuppressSnapshotAutoUpdate) {
+            resumeSnapshotAutoUpdate("matched-styles-container-probe");
+        }
     }
 }
 

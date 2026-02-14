@@ -237,11 +237,15 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
             }
             const node = typeof entry.nodeId === "number" ? treeState.nodes.get(entry.nodeId) : undefined;
             const attributeName = entry.name.toLowerCase();
+            const tagName = nodeTagName(node);
+            if (tagName === "link") {
+                if (attributeName === "rel") {
+                    return true;
+                }
+                return isStylesheetLinkNode(node) && STYLE_RELEVANT_LINK_ATTRIBUTES.has(attributeName);
+            }
             if (isStyleElementNode(node)) {
                 return STYLE_RELEVANT_STYLE_ATTRIBUTES.has(attributeName);
-            }
-            if (isStylesheetLinkNode(node)) {
-                return STYLE_RELEVANT_LINK_ATTRIBUTES.has(attributeName);
             }
             return false;
         }
@@ -362,6 +366,10 @@ function refreshTreeAfterDomUpdates(
                 }
             }
             if (shouldUpdateDetails) {
+                if (!styleContextDidChange) {
+                    treeState.styleRevision += 1;
+                    styleContextDidChange = true;
+                }
                 updateDetails(selectedNode);
             }
         } else {

@@ -33,6 +33,7 @@ function resetTreeState() {
     treeState.elements.clear();
     treeState.openState.clear();
     treeState.selectedNodeId = null;
+    treeState.styleRevision = 0;
     treeState.filter = "";
     treeState.pendingRefreshRequests.clear();
     treeState.refreshAttempts.clear();
@@ -111,5 +112,77 @@ describe("dom-tree-updates", () => {
         vi.advanceTimersByTime(16);
         expect(treeState.selectedNodeId).toBeNull();
         expect(treeState.nodes.has(2)).toBe(false);
+    });
+
+    it("increments style revision when a link rel changes to stylesheet", () => {
+        const selectedNode = makeNode(2);
+        const stylesheetLinkNode = makeNode(3);
+        stylesheetLinkNode.nodeName = "LINK";
+        stylesheetLinkNode.displayName = "link";
+        stylesheetLinkNode.attributes = [
+            { name: "rel", value: "preload" },
+            { name: "href", value: "/assets/app.css" }
+        ];
+        selectedNode.parentId = 1;
+        selectedNode.depth = 1;
+        selectedNode.childIndex = 0;
+        stylesheetLinkNode.parentId = 1;
+        stylesheetLinkNode.depth = 1;
+        stylesheetLinkNode.childIndex = 1;
+        const root = makeNode(1, [selectedNode, stylesheetLinkNode]);
+
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+        treeState.nodes.set(2, selectedNode);
+        treeState.nodes.set(3, stylesheetLinkNode);
+        treeState.selectedNodeId = 2;
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.attributeModified",
+            params: {
+                nodeId: 3,
+                name: "rel",
+                value: "stylesheet"
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
+
+    it("increments style revision when selected node style context changes structurally", () => {
+        const selectedNode = makeNode(2);
+        selectedNode.parentId = 1;
+        selectedNode.depth = 1;
+        selectedNode.childIndex = 0;
+        const root = makeNode(1, [selectedNode]);
+        root.childCount = 1;
+
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+        treeState.nodes.set(2, selectedNode);
+        treeState.selectedNodeId = 2;
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeInserted",
+            params: {
+                parentNodeId: 1,
+                previousNodeId: 2,
+                node: {
+                    nodeId: 4,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: [],
+                    childNodeCount: 0,
+                    children: []
+                }
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
     });
 });

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inspector } from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-state";
+import * as domAgentSnapshot from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-snapshot";
 import {
     collectStyleSheetsWithScope,
     matchedStylesForNode
@@ -494,6 +495,48 @@ describe("dom-agent-styles", () => {
                 rule.atRuleContext.some((context) => context.includes("@container (width > 1000px)"))
             );
             expect(hasInactiveContainerContext).toBe(false);
+        } finally {
+            if (descriptor) {
+                Object.defineProperty(document, "styleSheets", descriptor);
+            } else {
+                const mutableDocument = document as unknown as { styleSheets?: StyleSheetList };
+                delete mutableDocument.styleSheets;
+            }
+        }
+    });
+
+    it("suppresses snapshot auto-update during container-query probe evaluation", () => {
+        const suppressSpy = vi.spyOn(domAgentSnapshot, "suppressSnapshotAutoUpdate");
+        const resumeSpy = vi.spyOn(domAgentSnapshot, "resumeSnapshotAutoUpdate");
+
+        document.body.innerHTML = "<section id=\"container\"><div id=\"target\" class=\"container-target\"></div></section>";
+        const target = document.getElementById("target");
+        expect(target).not.toBeNull();
+        const nodeId = registerNode(target!);
+
+        const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
+        const containerRuleType = (CSSRule as typeof CSSRule & { CONTAINER_RULE?: number }).CONTAINER_RULE ?? 0;
+        const containerRule = {
+            type: containerRuleType,
+            cssText: "@container (width > 100px) { .container-target { color: blue; } }",
+            containerQuery: "(width > 100px)",
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(".container-target", [["color", "blue"]])
+            ])
+        } as unknown as CSSRule;
+        const styleSheet = {
+            cssRules: cssRuleListFromRules([containerRule])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(document, "styleSheets", {
+            configurable: true,
+            value: styleSheetListFromSheets([styleSheet])
+        });
+
+        try {
+            matchedStylesForNode(nodeId, { maxRules: 20 });
+            expect(suppressSpy).toHaveBeenCalledWith("matched-styles-container-probe");
+            expect(resumeSpy).toHaveBeenCalledWith("matched-styles-container-probe");
+            expect(resumeSpy.mock.calls.length).toBeGreaterThanOrEqual(suppressSpy.mock.calls.length);
         } finally {
             if (descriptor) {
                 Object.defineProperty(document, "styleSheets", descriptor);
