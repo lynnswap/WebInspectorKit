@@ -207,4 +207,71 @@ describe("hotspot quantitative acceptance", () => {
             });
         }
     });
+
+    it("skips response body capture when mode switches to buffering before fetch resolves", async () => {
+        const responseBody = JSON.stringify({
+            items: Array.from({ length: 160 }, (_, index) => `late-response-item-${index}`)
+        });
+        const originalWindowFetch = window.fetch;
+        const originalGlobalFetch = globalThis.fetch;
+
+        let resolveFetch: (value: Response) => void = () => {
+            throw new Error("fetch resolver was not initialized");
+        };
+        const pendingFetch = new Promise<Response>(resolve => {
+            resolveFetch = resolve;
+        });
+        const nativeFetch = vi.fn(() => pendingFetch);
+
+        Object.defineProperty(window, "fetch", {
+            configurable: true,
+            writable: true,
+            value: nativeFetch
+        });
+        Object.defineProperty(globalThis, "fetch", {
+            configurable: true,
+            writable: true,
+            value: nativeFetch
+        });
+
+        try {
+            installFetchPatch();
+            networkState.mode = NetworkLoggingMode.ACTIVE;
+
+            const inFlight = window.fetch("https://example.com/in-flight", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ payload: "request" })
+            });
+
+            networkState.mode = NetworkLoggingMode.BUFFERING;
+            resolveFetch(new Response(responseBody, {
+                status: 200,
+                statusText: "OK",
+                headers: {
+                    "content-type": "application/json",
+                    "content-length": String(responseBody.length)
+                }
+            }));
+            await inFlight;
+
+            const loadingFinished = (queuedEvents as Array<Record<string, any>>).find(event => {
+                return event.kind === "loadingFinished";
+            });
+            expect(loadingFinished).toBeDefined();
+            expect(loadingFinished?.decodedBodySize).toBeUndefined();
+            expect(loadingFinished?.body).toBeUndefined();
+        } finally {
+            Object.defineProperty(window, "fetch", {
+                configurable: true,
+                writable: true,
+                value: originalWindowFetch
+            });
+            Object.defineProperty(globalThis, "fetch", {
+                configurable: true,
+                writable: true,
+                value: originalGlobalFetch
+            });
+        }
+    });
 });

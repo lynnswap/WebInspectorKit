@@ -45,14 +45,14 @@ const installFetchPatch = () => {
     }
     const patched = (async function(...args: Parameters<typeof window.fetch>) {
         const shouldTrack = shouldTrackNetworkEvents();
-        const shouldCaptureBodies = shouldCaptureNetworkBodies();
+        const shouldCaptureRequestBodies = shouldCaptureNetworkBodies();
         const [input, init = {}] = args;
         const request = input as Request;
         const method = init.method || (request && request.method) || "GET";
         const requestId = shouldTrack ? nextRequestID() : null;
         const url = typeof input === "string" ? input : (request && request.url) || "";
         const headers = normalizeHeaders(init.headers || (request && request.headers));
-        const requestBodyInfo = shouldCaptureBodies ? serializeRequestBody(init.body) : null;
+        const requestBodyInfo = shouldCaptureRequestBodies ? serializeRequestBody(init.body) : null;
 
         if (shouldTrack && requestId != null) {
             recordStart(
@@ -73,7 +73,8 @@ const installFetchPatch = () => {
             let responseBodyInfo = null;
             if (shouldTrack && requestId != null) {
                 mimeType = recordResponse(requestId, response, "fetch");
-                if (shouldCaptureBodies) {
+                // Re-check capture mode after async boundaries to honor runtime mode transitions.
+                if (shouldCaptureNetworkBodies()) {
                     try {
                         responseBodyInfo = await captureResponseBody(response, mimeType);
                     } catch {
@@ -141,11 +142,11 @@ const installXHRPatch = () => {
     XMLHttpRequest.prototype.send = function() {
         const xhr = this as XHRWithNetwork;
         const shouldTrack = shouldTrackNetworkEvents() && !!xhr.__wiNetwork;
-        const shouldCaptureBodies = shouldCaptureNetworkBodies();
+        const shouldCaptureRequestBodies = shouldCaptureNetworkBodies();
         const requestId = shouldTrack ? nextRequestID() : null;
         const info = xhr.__wiNetwork;
         if (shouldTrack && requestId != null && info) {
-            if (shouldCaptureBodies) {
+            if (shouldCaptureRequestBodies) {
                 info.requestBody = serializeRequestBody((arguments as IArguments)[0]);
             } else {
                 info.requestBody = null;
@@ -167,7 +168,8 @@ const installXHRPatch = () => {
             }, false);
             xhr.addEventListener("load", function() {
                 if (requestId != null) {
-                    const responseBody = shouldCaptureBodies
+                    // Re-check capture mode at load-time for in-flight requests.
+                    const responseBody = shouldCaptureNetworkBodies()
                         ? captureXHRResponseBody(this as XMLHttpRequest)
                         : null;
                     const length = estimatedEncodedLength(
