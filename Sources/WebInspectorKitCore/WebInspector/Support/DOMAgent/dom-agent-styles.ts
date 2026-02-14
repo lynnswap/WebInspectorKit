@@ -266,7 +266,7 @@ export function walkRulesRecursively(
 
 function scopeCanApplyToElement(scopeRoot: Document | ShadowRoot, element: Element): boolean {
     if (scopeRoot.nodeType === Node.DOCUMENT_NODE) {
-        return true;
+        return element.getRootNode() === scopeRoot;
     }
     return element.getRootNode() === scopeRoot;
 }

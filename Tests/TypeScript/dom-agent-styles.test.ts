@@ -143,4 +143,24 @@ describe("dom-agent-styles", () => {
 
         expect(payload.rules.some((rule) => rule.selectorText === ".shadow-only")).toBe(false);
     });
+
+    it("does not apply document stylesheets to elements inside shadow root", () => {
+        document.head.innerHTML = "<style>.doc-only { color: red; }</style>";
+        document.body.innerHTML = "<section id=\"host\"></section>";
+        const host = document.getElementById("host");
+        expect(host).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        shadowRoot.innerHTML = `
+            <style>.shadow-only { color: blue; }</style>
+            <div id="target" class="doc-only shadow-only"></div>
+        `;
+
+        const target = shadowRoot.getElementById("target");
+        expect(target).not.toBeNull();
+        const nodeId = registerNode(target!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 10 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ".doc-only")).toBe(false);
+    });
 });
