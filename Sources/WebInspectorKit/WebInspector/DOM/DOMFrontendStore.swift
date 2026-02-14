@@ -306,6 +306,7 @@ private extension DOMFrontendStore {
             let previousPreview = session.selection.preview
             let previousPath = session.selection.path
             let previousAttributes = session.selection.attributes
+            let previousStyleRevision = session.selection.styleRevision
             session.selection.applySnapshot(from: dictionary)
             if let nodeId = session.selection.nodeId {
                 let didSelectNewNode = previousNodeId != nodeId
@@ -313,6 +314,7 @@ private extension DOMFrontendStore {
                     previousPreview != session.selection.preview
                         || previousPath != session.selection.path
                         || previousAttributes != session.selection.attributes
+                        || previousStyleRevision != session.selection.styleRevision
                 )
                 let shouldRefetchForCurrentNode = !session.selection.isLoadingMatchedStyles
                     && session.selection.matchedStyles.isEmpty

@@ -88,6 +88,7 @@ export const treeState: TreeState = {
     elements: new Map(),
     openState: new Map(),
     selectedNodeId: null,
+    styleRevision: 0,
     filter: "",
     pendingRefreshRequests: new Set(),
     refreshAttempts: new Map(),

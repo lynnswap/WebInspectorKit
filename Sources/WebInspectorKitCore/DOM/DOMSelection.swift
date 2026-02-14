@@ -7,6 +7,7 @@ struct DOMSelectionSnapshot {
     let attributes: [DOMAttribute]
     let path: [String]
     let selectorPath: String
+    let styleRevision: Int
 
     init?(dictionary: [String: Any]) {
         let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
@@ -19,6 +20,14 @@ struct DOMSelectionSnapshot {
         }
         let path = dictionary["path"] as? [String] ?? []
         let selectorPath = dictionary["selectorPath"] as? String ?? ""
+        let styleRevision: Int
+        if let revision = dictionary["styleRevision"] as? Int {
+            styleRevision = revision
+        } else if let revision = dictionary["styleRevision"] as? NSNumber {
+            styleRevision = revision.intValue
+        } else {
+            styleRevision = 0
+        }
 
         if preview.isEmpty && attributes.isEmpty && path.isEmpty && selectorPath.isEmpty && nodeId == nil {
             return nil
@@ -29,6 +38,7 @@ struct DOMSelectionSnapshot {
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath
+        self.styleRevision = styleRevision
     }
 }
 
@@ -58,6 +68,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
     public var attributes: [DOMAttribute]
     public var path: [String]
     public var selectorPath: String
+    public var styleRevision: Int
     public var matchedStyles: [DOMMatchedStyleRule]
     public var isLoadingMatchedStyles: Bool
     public var matchedStylesTruncated: Bool
@@ -69,6 +80,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         attributes: [DOMAttribute] = [],
         path: [String] = [],
         selectorPath: String = "",
+        styleRevision: Int = 0,
         matchedStyles: [DOMMatchedStyleRule] = [],
         isLoadingMatchedStyles: Bool = false,
         matchedStylesTruncated: Bool = false,
@@ -79,6 +91,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath
+        self.styleRevision = styleRevision
         self.matchedStyles = matchedStyles
         self.isLoadingMatchedStyles = isLoadingMatchedStyles
         self.matchedStylesTruncated = matchedStylesTruncated
@@ -101,6 +114,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         attributes = snapshot.attributes
         path = snapshot.path
         selectorPath = snapshot.selectorPath
+        styleRevision = snapshot.styleRevision
         if previousNodeId != snapshot.nodeId {
             clearMatchedStyles()
         }
@@ -112,6 +126,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         attributes = []
         path = []
         selectorPath = ""
+        styleRevision = 0
         clearMatchedStyles()
     }
 
