@@ -446,6 +446,40 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ".inside")).toBe(false);
     });
 
+    it("includes host selectors wrapped in :is/:where functions", () => {
+        document.body.innerHTML = "<section id=\"host\" class=\"component-host\"></section>";
+        const host = document.getElementById("host");
+        expect(host).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const shadowStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(":is(:host(.component-host))", [["color", "red"]]),
+                makeStyleRule(":where(:host(.component-host))", [["display", "block"]]),
+                makeStyleRule(":is(:where(:host(.component-host)))", [["padding", "1px"]]),
+                makeStyleRule(":is(.inside, :host(.component-host))", [["border", "1px solid red"]]),
+                makeStyleRule(":where(:host-context(:not(.outside)))", [["margin", "0"]]),
+                makeStyleRule(":is(:host(.missing), .inside)", [["font-size", "12px"]]),
+                makeStyleRule(":where(.inside)", [["line-height", "1.5"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [shadowStyleSheet]
+        });
+
+        const nodeId = registerNode(host!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ":is(:host(.component-host))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":where(:host(.component-host))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":is(:where(:host(.component-host)))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":is(.inside, :host(.component-host))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":where(:host-context(:not(.outside)))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":is(:host(.missing), .inside)")).toBe(false);
+        expect(payload.rules.some((rule) => rule.selectorText === ":where(.inside)")).toBe(false);
+    });
+
     it("collects stylesheets from relevant scopes only", () => {
         document.body.innerHTML = "<section id=\"host-a\"></section><section id=\"host-b\"></section>";
         const hostA = document.getElementById("host-a");
