@@ -690,7 +690,7 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ":host-context(.theme-light)")).toBe(false);
     });
 
-    it("includes host selectors wrapped in :is/:where functions", () => {
+    it("includes host selectors wrapped in :is/:where/:not functions", () => {
         document.body.innerHTML = "<section id=\"host\" class=\"component-host\"></section>";
         const host = document.getElementById("host");
         expect(host).not.toBeNull();
@@ -703,6 +703,9 @@ describe("dom-agent-styles", () => {
                 makeStyleRule(":is(:where(:host(.component-host)))", [["padding", "1px"]]),
                 makeStyleRule(":is(.inside, :host(.component-host))", [["border", "1px solid red"]]),
                 makeStyleRule(":where(:host-context(:not(.outside)))", [["margin", "0"]]),
+                makeStyleRule(":not(:host(.disabled))", [["opacity", "1"]]),
+                makeStyleRule(":not(:host(.component-host))", [["opacity", "0"]]),
+                makeStyleRule(":not(:host(.disabled), .component-host)", [["outline", "none"]]),
                 makeStyleRule(":is(:host(.missing), .inside)", [["font-size", "12px"]]),
                 makeStyleRule(":where(.inside)", [["line-height", "1.5"]])
             ])
@@ -720,6 +723,9 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ":is(:where(:host(.component-host)))")).toBe(true);
         expect(payload.rules.some((rule) => rule.selectorText === ":is(.inside, :host(.component-host))")).toBe(true);
         expect(payload.rules.some((rule) => rule.selectorText === ":where(:host-context(:not(.outside)))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":not(:host(.disabled))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":not(:host(.component-host))")).toBe(false);
+        expect(payload.rules.some((rule) => rule.selectorText === ":not(:host(.disabled), .component-host)")).toBe(false);
         expect(payload.rules.some((rule) => rule.selectorText === ":is(:host(.missing), .inside)")).toBe(false);
         expect(payload.rules.some((rule) => rule.selectorText === ":where(.inside)")).toBe(false);
     });

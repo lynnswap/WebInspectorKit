@@ -542,26 +542,30 @@ function parseLeadingHostPseudo(selectorText: string, pseudoName: "host" | "host
 }
 
 type ParsedLeadingFunctionalPseudo = {
+    pseudoName: "where" | "is" | "not";
     argumentsText: string;
     consumedLength: number;
 };
 
 function parseLeadingFunctionalPseudo(selectorText: string): ParsedLeadingFunctionalPseudo | null {
-    const marker = selectorText.startsWith(":where(")
-        ? ":where"
+    const parsedMarker = selectorText.startsWith(":where(")
+        ? { marker: ":where", pseudoName: "where" as const }
         : selectorText.startsWith(":is(")
-            ? ":is"
-            : null;
-    if (!marker) {
+            ? { marker: ":is", pseudoName: "is" as const }
+            : selectorText.startsWith(":not(")
+                ? { marker: ":not", pseudoName: "not" as const }
+                : null;
+    if (!parsedMarker) {
         return null;
     }
 
-    const parsedArgument = readParenthesizedArgument(selectorText, marker.length);
+    const parsedArgument = readParenthesizedArgument(selectorText, parsedMarker.marker.length);
     if (!parsedArgument) {
         return null;
     }
 
     return {
+        pseudoName: parsedMarker.pseudoName,
         argumentsText: parsedArgument.argument,
         consumedLength: parsedArgument.endIndex
     };
@@ -574,6 +578,9 @@ function expandLeadingFunctionalSelectors(selectorText: string, depth = 0): stri
 
     const parsedLeadingFunctional = parseLeadingFunctionalPseudo(selectorText);
     if (!parsedLeadingFunctional) {
+        return [selectorText];
+    }
+    if (parsedLeadingFunctional.pseudoName === "not") {
         return [selectorText];
     }
 
@@ -591,6 +598,39 @@ function expandLeadingFunctionalSelectors(selectorText: string, depth = 0): stri
     return expandedSelectors.length ? expandedSelectors : [selectorText];
 }
 
+function selectorVariantContainsHostPseudo(selectorText: string, depth = 0): boolean {
+    if (depth > 8) {
+        return false;
+    }
+    const trimmedSelector = selectorText.trim();
+    if (!trimmedSelector) {
+        return false;
+    }
+    if (parseLeadingHostPseudo(trimmedSelector, "host-context")
+        || parseLeadingHostPseudo(trimmedSelector, "host")) {
+        return true;
+    }
+
+    const parsedLeadingFunctional = parseLeadingFunctionalPseudo(trimmedSelector);
+    if (!parsedLeadingFunctional) {
+        return false;
+    }
+
+    const selectorTail = trimmedSelector.slice(parsedLeadingFunctional.consumedLength);
+    if (selectorVariantContainsHostPseudo(selectorTail, depth + 1)) {
+        return true;
+    }
+
+    const functionalArguments = splitSelectorList(parsedLeadingFunctional.argumentsText);
+    for (const argumentSelector of functionalArguments) {
+        if (selectorVariantContainsHostPseudo(argumentSelector, depth + 1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function selectorContainsHostPseudo(selectorText: string): boolean {
     const selectorList = splitSelectorList(selectorText);
     for (const selector of selectorList) {
@@ -598,15 +638,8 @@ function selectorContainsHostPseudo(selectorText: string): boolean {
         if (!trimmedSelector) {
             continue;
         }
-        for (const expandedSelector of expandLeadingFunctionalSelectors(trimmedSelector)) {
-            const trimmedExpandedSelector = expandedSelector.trim();
-            if (!trimmedExpandedSelector) {
-                continue;
-            }
-            if (parseLeadingHostPseudo(trimmedExpandedSelector, "host-context")
-                || parseLeadingHostPseudo(trimmedExpandedSelector, "host")) {
-                return true;
-            }
+        if (selectorVariantContainsHostPseudo(trimmedSelector)) {
+            return true;
         }
     }
     return false;
@@ -708,8 +741,69 @@ function matchesSelectorRelativeToHostScope(slot: HTMLSlotElement, selectorText:
     return matchesSelectorRelativeToElement(slot, trimmedSelector);
 }
 
-function hostSelectorVariantMatchesHostElement(selectorText: string, host: Element): boolean {
-    const parsedHostContext = parseLeadingHostPseudo(selectorText, "host-context");
+function hostSelectorVariantMatchesHostElement(
+    selectorText: string,
+    host: Element,
+    depth = 0,
+    allowPlainSelectorFallback = false
+): boolean {
+    if (depth > 8) {
+        return false;
+    }
+
+    const trimmedSelector = selectorText.trim();
+    if (!trimmedSelector) {
+        return false;
+    }
+
+    const parsedLeadingFunctional = parseLeadingFunctionalPseudo(trimmedSelector);
+    if (parsedLeadingFunctional) {
+        const functionalArguments = splitSelectorList(parsedLeadingFunctional.argumentsText);
+        const selectorTail = trimmedSelector.slice(parsedLeadingFunctional.consumedLength);
+
+        if (parsedLeadingFunctional.pseudoName === "not") {
+            if (!selectorTailTargetsHost(selectorTail)) {
+                return false;
+            }
+            const tailSelector = selectorTail.trim();
+            if (tailSelector) {
+                try {
+                    if (!host.matches(`*${tailSelector}`)) {
+                        return false;
+                    }
+                } catch {
+                    return false;
+                }
+            }
+
+            let sawArgument = false;
+            for (const argumentSelector of functionalArguments) {
+                const trimmedArgumentSelector = argumentSelector.trim();
+                if (!trimmedArgumentSelector) {
+                    continue;
+                }
+                sawArgument = true;
+                if (hostSelectorVariantMatchesHostElement(trimmedArgumentSelector, host, depth + 1, true)) {
+                    return false;
+                }
+            }
+            return sawArgument;
+        }
+
+        for (const argumentSelector of functionalArguments) {
+            const trimmedArgumentSelector = argumentSelector.trim();
+            if (!trimmedArgumentSelector) {
+                continue;
+            }
+            const nextSelector = `${trimmedArgumentSelector}${selectorTail}`;
+            if (hostSelectorVariantMatchesHostElement(nextSelector, host, depth + 1, allowPlainSelectorFallback)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    const parsedHostContext = parseLeadingHostPseudo(trimmedSelector, "host-context");
     if (parsedHostContext) {
         const contextSelector = parsedHostContext.argument?.trim();
         if (!contextSelector) {
@@ -719,7 +813,7 @@ function hostSelectorVariantMatchesHostElement(selectorText: string, host: Eleme
         if (!contextMatched) {
             return false;
         }
-        const tail = selectorText.slice(parsedHostContext.consumedLength);
+        const tail = trimmedSelector.slice(parsedHostContext.consumedLength);
         if (!selectorTailTargetsHost(tail)) {
             return false;
         }
@@ -734,8 +828,15 @@ function hostSelectorVariantMatchesHostElement(selectorText: string, host: Eleme
         }
     }
 
-    const parsedHost = parseLeadingHostPseudo(selectorText, "host");
+    const parsedHost = parseLeadingHostPseudo(trimmedSelector, "host");
     if (!parsedHost) {
+        if (allowPlainSelectorFallback) {
+            try {
+                return host.matches(trimmedSelector);
+            } catch {
+                return false;
+            }
+        }
         return false;
     }
     const hostCondition = parsedHost.argument?.trim();
@@ -748,7 +849,7 @@ function hostSelectorVariantMatchesHostElement(selectorText: string, host: Eleme
             return false;
         }
     }
-    const tail = selectorText.slice(parsedHost.consumedLength);
+    const tail = trimmedSelector.slice(parsedHost.consumedLength);
     if (!selectorTailTargetsHost(tail)) {
         return false;
     }
@@ -770,14 +871,8 @@ function hostSelectorMatchesHostElement(selectorText: string, host: Element): bo
         if (!trimmedSelector) {
             continue;
         }
-        for (const expandedSelector of expandLeadingFunctionalSelectors(trimmedSelector)) {
-            const trimmedExpandedSelector = expandedSelector.trim();
-            if (!trimmedExpandedSelector) {
-                continue;
-            }
-            if (hostSelectorVariantMatchesHostElement(trimmedExpandedSelector, host)) {
-                return true;
-            }
+        if (hostSelectorVariantMatchesHostElement(trimmedSelector, host)) {
+            return true;
         }
     }
     return false;

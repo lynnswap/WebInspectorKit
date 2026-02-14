@@ -268,6 +268,10 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
         case "childNodeInserted": {
             const entry = params as ChildNodeInsertedParams;
             const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
+            if (typeof parentId !== "number" || !treeState.nodes.has(parentId)) {
+                // Shallow snapshots can omit insertion parents; conservatively treat as style-affecting.
+                return true;
+            }
             if (nodeOrAncestorIsStyleElement(parentId)) {
                 return true;
             }

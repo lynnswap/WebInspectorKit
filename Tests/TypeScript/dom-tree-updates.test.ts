@@ -249,6 +249,30 @@ describe("dom-tree-updates", () => {
         expect(treeState.styleRevision).toBe(1);
     });
 
+    it("increments style revision for unknown child inserts in shallow snapshots", () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeInserted",
+            params: {
+                parentNodeId: 999,
+                node: {
+                    nodeId: 1001,
+                    nodeType: 3,
+                    nodeName: "#text",
+                    localName: "#text",
+                    nodeValue: ".changed { color: red; }"
+                }
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
+
     it("increments style revision for unknown text mutations in shallow snapshots", () => {
         const root = makeNode(1);
         treeState.snapshot = { root };
