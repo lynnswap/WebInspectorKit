@@ -7,7 +7,8 @@ import {
     networkState,
     queuedEvents,
     serializeRequestBody,
-    setThrottleOptions
+    setThrottleOptions,
+    shouldCaptureNetworkBodies
 } from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-utils";
 
 type WebKitMockHandler = {
@@ -105,5 +106,13 @@ describe("network-agent-utils", () => {
         expect(serialized?.body?.length).toBe(512);
         expect(serialized?.truncated).toBe(true);
         expect(serialized?.size).toBe(800);
+    });
+
+    it("disables body capture while buffering and re-enables it on active mode", () => {
+        networkState.mode = NetworkLoggingMode.BUFFERING;
+        expect(shouldCaptureNetworkBodies()).toBe(false);
+
+        networkState.mode = NetworkLoggingMode.ACTIVE;
+        expect(shouldCaptureNetworkBodies()).toBe(true);
     });
 });

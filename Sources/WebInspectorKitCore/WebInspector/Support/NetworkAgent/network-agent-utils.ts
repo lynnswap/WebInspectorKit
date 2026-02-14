@@ -556,6 +556,7 @@ const setThrottleOptions = (options: { intervalMs?: number; maxQueuedEvents?: nu
 const shouldThrottleDelivery = () => throttleState.intervalMs != null && throttleState.intervalMs > 0;
 
 const isActiveLogging = () => networkState.mode === NetworkLoggingMode.ACTIVE;
+const shouldCaptureNetworkBodies = () => networkState.mode === NetworkLoggingMode.ACTIVE;
 const shouldTrackNetworkEvents = () => networkState.mode !== NetworkLoggingMode.STOPPED;
 const shouldQueueNetworkEvent = () => networkState.mode === NetworkLoggingMode.BUFFERING;
 
@@ -1113,6 +1114,7 @@ export {
     queuedEvents,
     serializeRequestBody,
     setThrottleOptions,
+    shouldCaptureNetworkBodies,
     shouldQueueNetworkEvent,
     shouldThrottleDelivery,
     shouldTrackNetworkEvents,
