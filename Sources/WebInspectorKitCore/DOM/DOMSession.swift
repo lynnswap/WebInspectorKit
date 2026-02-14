@@ -99,6 +99,10 @@ public extension DOMSession {
     func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
         try await pageAgent.captureSubtree(nodeId: nodeId, maxDepth: maxDepth)
     }
+
+    func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
+        try await pageAgent.matchedStyles(nodeId: nodeId, maxRules: maxRules)
+    }
 }
 
 // MARK: - Selection / Highlight

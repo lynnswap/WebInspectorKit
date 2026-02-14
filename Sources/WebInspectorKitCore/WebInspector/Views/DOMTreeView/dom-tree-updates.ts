@@ -10,6 +10,7 @@
 
 import {
     DOMNode,
+    RawNodeDescriptor,
     DOMEventEntry,
     ChildNodeInsertedParams,
     ChildNodeRemovedParams,
@@ -64,6 +65,286 @@ function triggerReload(reason: string): void {
     }
 }
 
+const STYLE_RELEVANT_LINK_ATTRIBUTES = new Set([
+    "rel",
+    "href",
+    "media",
+    "disabled",
+    "title",
+    "type",
+]);
+
+const STYLE_RELEVANT_STYLE_ATTRIBUTES = new Set([
+    "media",
+    "disabled",
+    "title",
+    "type",
+]);
+
+const STYLE_RELEVANT_MUTATION_ATTRIBUTES = new Set([
+    ...STYLE_RELEVANT_LINK_ATTRIBUTES,
+    ...STYLE_RELEVANT_STYLE_ATTRIBUTES,
+]);
+
+function nodeTagName(node: DOMNode | null | undefined): string {
+    if (!node) {
+        return "";
+    }
+    if (typeof node.displayName === "string" && node.displayName) {
+        return node.displayName.toLowerCase();
+    }
+    if (typeof node.nodeName === "string" && node.nodeName) {
+        return node.nodeName.toLowerCase();
+    }
+    return "";
+}
+
+function nodeAttributeValue(node: DOMNode | null | undefined, name: string): string {
+    if (!node || !Array.isArray(node.attributes)) {
+        return "";
+    }
+    const target = name.toLowerCase();
+    for (const attribute of node.attributes) {
+        if (attribute && typeof attribute.name === "string" && attribute.name.toLowerCase() === target) {
+            return typeof attribute.value === "string" ? attribute.value : "";
+        }
+    }
+    return "";
+}
+
+function isStyleElementNode(node: DOMNode | null | undefined): boolean {
+    return nodeTagName(node) === "style";
+}
+
+function isStylesheetLinkNode(node: DOMNode | null | undefined): boolean {
+    if (nodeTagName(node) !== "link") {
+        return false;
+    }
+    const relValue = nodeAttributeValue(node, "rel").toLowerCase();
+    if (!relValue) {
+        return false;
+    }
+    return relValue.split(/\s+/).includes("stylesheet");
+}
+
+function isStylesheetHostNode(node: DOMNode | null | undefined): boolean {
+    return isStyleElementNode(node) || isStylesheetLinkNode(node);
+}
+
+function rawDescriptorTagName(descriptor: RawNodeDescriptor | null | undefined): string {
+    if (!descriptor) {
+        return "";
+    }
+    if (typeof descriptor.localName === "string" && descriptor.localName) {
+        return descriptor.localName.toLowerCase();
+    }
+    if (typeof descriptor.nodeName === "string" && descriptor.nodeName) {
+        return descriptor.nodeName.toLowerCase();
+    }
+    return "";
+}
+
+function rawDescriptorAttributeValue(descriptor: RawNodeDescriptor | null | undefined, name: string): string {
+    if (!descriptor || !Array.isArray(descriptor.attributes)) {
+        return "";
+    }
+    const target = name.toLowerCase();
+    for (let index = 0; index < descriptor.attributes.length; index += 2) {
+        const entryName = descriptor.attributes[index];
+        if (typeof entryName !== "string" || entryName.toLowerCase() !== target) {
+            continue;
+        }
+        const entryValue = descriptor.attributes[index + 1];
+        return typeof entryValue === "string" ? entryValue : "";
+    }
+    return "";
+}
+
+function rawDescriptorIsStylesheetHost(descriptor: RawNodeDescriptor | null | undefined): boolean {
+    const tagName = rawDescriptorTagName(descriptor);
+    if (tagName === "style") {
+        return true;
+    }
+    if (tagName !== "link") {
+        return false;
+    }
+    const relValue = rawDescriptorAttributeValue(descriptor, "rel").toLowerCase();
+    if (!relValue) {
+        return false;
+    }
+    return relValue.split(/\s+/).includes("stylesheet");
+}
+
+function rawDescriptorContainsStylesheetHost(descriptor: RawNodeDescriptor | null | undefined): boolean {
+    if (!descriptor) {
+        return false;
+    }
+    if (rawDescriptorIsStylesheetHost(descriptor)) {
+        return true;
+    }
+    if (!Array.isArray(descriptor.children)) {
+        return false;
+    }
+    for (const child of descriptor.children) {
+        if (rawDescriptorContainsStylesheetHost(child)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function nodeOrAncestorIsStyleElement(nodeId: number | undefined): boolean {
+    if (typeof nodeId !== "number") {
+        return false;
+    }
+    let current: DOMNode | undefined = treeState.nodes.get(nodeId);
+    let guard = 0;
+    while (current && guard < 200) {
+        if (isStyleElementNode(current)) {
+            return true;
+        }
+        if (typeof current.parentId !== "number") {
+            break;
+        }
+        current = treeState.nodes.get(current.parentId);
+        guard += 1;
+    }
+    return false;
+}
+
+function knownChildCount(node: DOMNode | null | undefined): number {
+    return Array.isArray(node?.children) ? node.children.length : 0;
+}
+
+function reportedChildCount(node: DOMNode | null | undefined): number {
+    if (typeof node?.childCount === "number") {
+        return node.childCount;
+    }
+    return knownChildCount(node);
+}
+
+function updatedChildCount(entry: ChildCountUpdatedParams): number | null {
+    if (typeof entry.childNodeCount === "number") {
+        return entry.childNodeCount;
+    }
+    if (typeof entry.childCount === "number") {
+        return entry.childCount;
+    }
+    return null;
+}
+
+function childCountUpdateCanAffectStylesheets(entry: ChildCountUpdatedParams): boolean {
+    if (typeof entry.nodeId !== "number") {
+        return false;
+    }
+
+    const parentNode = treeState.nodes.get(entry.nodeId);
+    if (!parentNode) {
+        // When the parent is not indexed, we cannot know whether hidden children include style/link nodes.
+        return true;
+    }
+
+    const knownChildren = knownChildCount(parentNode);
+    const previousReportedCount = reportedChildCount(parentNode);
+    const nextReportedCount = updatedChildCount(entry);
+
+    if (isStyleElementNode(parentNode)) {
+        return true;
+    }
+
+    if (previousReportedCount !== knownChildren) {
+        return true;
+    }
+
+    if (typeof nextReportedCount === "number" && nextReportedCount !== knownChildren) {
+        return true;
+    }
+
+    return false;
+}
+
+function mutationCanAffectStylesheets(method: string, params: Record<string, unknown>): boolean {
+    switch (method) {
+        case "childNodeInserted": {
+            const entry = params as ChildNodeInsertedParams;
+            const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
+            if (typeof parentId !== "number" || !treeState.nodes.has(parentId)) {
+                // Shallow snapshots can omit insertion parents; conservatively treat as style-affecting.
+                return true;
+            }
+            if (nodeOrAncestorIsStyleElement(parentId)) {
+                return true;
+            }
+            return rawDescriptorContainsStylesheetHost(entry.node);
+        }
+        case "childNodeRemoved": {
+            const entry = params as ChildNodeRemovedParams;
+            const removedNode = typeof entry.nodeId === "number" ? treeState.nodes.get(entry.nodeId) : undefined;
+            if (isStylesheetHostNode(removedNode)) {
+                return true;
+            }
+            if (nodeOrAncestorIsStyleElement(entry.nodeId)) {
+                return true;
+            }
+            const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
+            if (nodeOrAncestorIsStyleElement(parentId)) {
+                return true;
+            }
+            if (!removedNode) {
+                if (typeof parentId !== "number" || !treeState.nodes.has(parentId)) {
+                    // Shallow snapshots can omit removed nodes/parents; conservatively treat as style-affecting.
+                    return true;
+                }
+                const parentNode = treeState.nodes.get(parentId);
+                if (parentNode && reportedChildCount(parentNode) !== knownChildCount(parentNode)) {
+                    // A known parent with incomplete children can still lose off-tree stylesheet hosts.
+                    return true;
+                }
+            }
+            return false;
+        }
+        case "attributeModified":
+        case "attributeRemoved": {
+            const entry = params as AttributeModifiedParams;
+            if (typeof entry.name !== "string") {
+                return false;
+            }
+            const attributeName = entry.name.toLowerCase();
+            if (!STYLE_RELEVANT_MUTATION_ATTRIBUTES.has(attributeName)) {
+                return false;
+            }
+            const node = typeof entry.nodeId === "number" ? treeState.nodes.get(entry.nodeId) : undefined;
+            if (!node) {
+                // Unknown nodes can still be off-tree style/link elements when snapshots are shallow.
+                return true;
+            }
+            const tagName = nodeTagName(node);
+            if (tagName === "link") {
+                if (attributeName === "rel") {
+                    return true;
+                }
+                return isStylesheetLinkNode(node) && STYLE_RELEVANT_LINK_ATTRIBUTES.has(attributeName);
+            }
+            if (isStyleElementNode(node)) {
+                return STYLE_RELEVANT_STYLE_ATTRIBUTES.has(attributeName);
+            }
+            return false;
+        }
+        case "childNodeCountUpdated":
+            return childCountUpdateCanAffectStylesheets(params as ChildCountUpdatedParams);
+        case "characterDataModified": {
+            const entry = params as CharacterDataModifiedParams;
+            if (typeof entry.nodeId === "number" && !treeState.nodes.has(entry.nodeId)) {
+                // Shallow snapshots may omit text nodes under <style>; conservatively mark as style-affecting.
+                return true;
+            }
+            return nodeOrAncestorIsStyleElement(entry.nodeId);
+        }
+        default:
+            return false;
+    }
+}
+
 // =============================================================================
 // Node Refresh
 // =============================================================================
@@ -112,27 +393,32 @@ export async function requestNodeRefresh(
 /** Refresh tree after DOM updates */
 function refreshTreeAfterDomUpdates(
     nodesToRefresh: Map<number, NodeRefreshEntry> | null | undefined,
-    modifiedAttrsByNode: Map<number, Set<string | symbol>> = new Map()
+    modifiedAttrsByNode: Map<number, Set<string | symbol>> = new Map(),
+    styleContextDidChange = false
 ): void {
-    if (!nodesToRefresh || !nodesToRefresh.size) {
+    const hasNodeRefreshes = !!nodesToRefresh && nodesToRefresh.size > 0;
+    if (!hasNodeRefreshes && !styleContextDidChange) {
         return;
     }
 
-    const preservedScrollPosition = captureTreeScrollPosition();
+    const preservedScrollPosition = hasNodeRefreshes ? captureTreeScrollPosition() : null;
 
-    nodesToRefresh.forEach((entry) => {
-        if (entry && entry.node) {
-            const modifiedAttributes = modifiedAttrsByNode ? modifiedAttrsByNode.get(entry.node.id) : null;
-            scheduleNodeRender(entry.node, { updateChildren: entry.updateChildren, modifiedAttributes });
-        }
-    });
+    if (hasNodeRefreshes && nodesToRefresh) {
+        nodesToRefresh.forEach((entry) => {
+            if (entry && entry.node) {
+                const modifiedAttributes = modifiedAttrsByNode ? modifiedAttrsByNode.get(entry.node.id) : null;
+                scheduleNodeRender(entry.node, { updateChildren: entry.updateChildren, modifiedAttributes });
+            }
+        });
+    }
 
     const selectedNodeId = treeState.selectedNodeId;
     if (selectedNodeId) {
         const selectedNode = treeState.nodes.get(selectedNodeId);
         if (selectedNode) {
             let shouldUpdateDetails =
-                nodesToRefresh.has(selectedNodeId) ||
+                styleContextDidChange ||
+                (!!nodesToRefresh && nodesToRefresh.has(selectedNodeId)) ||
                 (modifiedAttrsByNode && modifiedAttrsByNode.has(selectedNodeId));
 
             if (!shouldUpdateDetails && Array.isArray(treeState.selectionChain)) {
@@ -141,7 +427,7 @@ function refreshTreeAfterDomUpdates(
                         continue;
                     }
                     if (
-                        nodesToRefresh.has(nodeId) ||
+                        (!!nodesToRefresh && nodesToRefresh.has(nodeId)) ||
                         (modifiedAttrsByNode && modifiedAttrsByNode.has(nodeId))
                     ) {
                         shouldUpdateDetails = true;
@@ -156,7 +442,7 @@ function refreshTreeAfterDomUpdates(
                 while (current && typeof current.parentId === "number" && guard < 200) {
                     const parentId = current.parentId;
                     if (
-                        nodesToRefresh.has(parentId) ||
+                        (!!nodesToRefresh && nodesToRefresh.has(parentId)) ||
                         (modifiedAttrsByNode && modifiedAttrsByNode.has(parentId))
                     ) {
                         shouldUpdateDetails = true;
@@ -167,6 +453,10 @@ function refreshTreeAfterDomUpdates(
                 }
             }
             if (shouldUpdateDetails) {
+                if (!styleContextDidChange) {
+                    treeState.styleRevision += 1;
+                    styleContextDidChange = true;
+                }
                 updateDetails(selectedNode);
             }
         } else {
@@ -175,11 +465,11 @@ function refreshTreeAfterDomUpdates(
         }
     }
 
-    if (treeState.filter) {
+    if (hasNodeRefreshes && treeState.filter) {
         applyFilter();
     }
 
-    if (preservedScrollPosition) {
+    if (hasNodeRefreshes && preservedScrollPosition) {
         restoreTreeScrollPosition(preservedScrollPosition);
     }
 }
@@ -364,6 +654,7 @@ export class DOMTreeUpdater {
 
         const nodesToRefresh = new Map<number, NodeRefreshEntry>();
         let requiresReload = false;
+        let didMutateStylesheets = false;
         const pending = this.pendingEvents;
         let index = 0;
         let processed = 0;
@@ -374,6 +665,9 @@ export class DOMTreeUpdater {
             index += 1;
             if (!entry || typeof entry.method !== "string") {
                 continue;
+            }
+            if (mutationCanAffectStylesheets(entry.method, entry.params || {})) {
+                didMutateStylesheets = true;
             }
             if (!this.handleDomEvent(entry.method, entry.params || {}, nodesToRefresh)) {
                 requiresReload = true;
@@ -393,13 +687,17 @@ export class DOMTreeUpdater {
         this.recentlyModifiedNodes.clear();
         this.recentlyModifiedAttributes.clear();
 
+        if (didMutateStylesheets) {
+            treeState.styleRevision += 1;
+        }
+
         if (requiresReload) {
             this.pendingEvents = [];
             triggerReload("dom-sync");
             return;
         }
 
-        refreshTreeAfterDomUpdates(nodesToRefresh, modifiedAttrsByNode);
+        refreshTreeAfterDomUpdates(nodesToRefresh, modifiedAttrsByNode, didMutateStylesheets);
 
         if (index < pending.length) {
             this.pendingEvents = pending.slice(index);

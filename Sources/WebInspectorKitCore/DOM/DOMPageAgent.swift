@@ -139,6 +139,23 @@ public extension DOMPageAgent {
         }
         return String(decoding: data, as: UTF8.self)
     }
+
+    func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
+        guard let webView else {
+            throw WebInspectorCoreError.scriptUnavailable
+        }
+        let rawResult = try await webView.callAsyncJavaScript(
+            "return window.webInspectorDOM.matchedStylesForNode(identifier, options)",
+            arguments: [
+                "identifier": nodeId,
+                "options": ["maxRules": maxRules],
+            ],
+            in: nil,
+            contentWorld: .page
+        )
+        let data = try serializePayload(rawResult)
+        return try JSONDecoder().decode(DOMMatchedStylesPayload.self, from: data)
+    }
 }
 
 // MARK: - DOM Mutations

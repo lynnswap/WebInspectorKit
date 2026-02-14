@@ -1039,6 +1039,7 @@ function notifyNativeSelection(node: DOMNode | null): void {
                     }))
                   : [],
               path: buildSelectionPath(node),
+              styleRevision: treeState.styleRevision,
           }
         : null;
     try {

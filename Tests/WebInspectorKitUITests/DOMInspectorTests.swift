@@ -97,6 +97,32 @@ struct DOMInspectorTests {
         #expect(inspector.errorMessage == nil)
     }
 
+    @Test
+    func detachClearsMatchedStylesState() {
+        let controller = WebInspector.Controller()
+        let inspector = controller.dom
+        inspector.selection.nodeId = 11
+        inspector.selection.matchedStyles = [
+            DOMMatchedStyleRule(
+                origin: .author,
+                selectorText: ".target",
+                declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                sourceLabel: "inline"
+            )
+        ]
+        inspector.selection.isLoadingMatchedStyles = true
+        inspector.selection.matchedStylesTruncated = true
+        inspector.selection.blockedStylesheetCount = 3
+
+        inspector.detach()
+
+        #expect(inspector.selection.nodeId == nil)
+        #expect(inspector.selection.matchedStyles.isEmpty)
+        #expect(inspector.selection.isLoadingMatchedStyles == false)
+        #expect(inspector.selection.matchedStylesTruncated == false)
+        #expect(inspector.selection.blockedStylesheetCount == 0)
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

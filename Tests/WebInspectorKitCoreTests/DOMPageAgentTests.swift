@@ -12,6 +12,17 @@ struct DOMSessionTests {
         session.selection.attributes = [DOMAttribute(nodeId: 42, name: "class", value: "title")]
         session.selection.path = ["html", "body", "div"]
         session.selection.selectorPath = "#title"
+        session.selection.matchedStyles = [
+            DOMMatchedStyleRule(
+                origin: .author,
+                selectorText: ".title",
+                declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                sourceLabel: "inline"
+            )
+        ]
+        session.selection.isLoadingMatchedStyles = true
+        session.selection.matchedStylesTruncated = true
+        session.selection.blockedStylesheetCount = 2
 
         session.detach()
 
@@ -20,6 +31,10 @@ struct DOMSessionTests {
         #expect(session.selection.attributes.isEmpty)
         #expect(session.selection.path.isEmpty)
         #expect(session.selection.selectorPath.isEmpty)
+        #expect(session.selection.matchedStyles.isEmpty)
+        #expect(session.selection.isLoadingMatchedStyles == false)
+        #expect(session.selection.matchedStylesTruncated == false)
+        #expect(session.selection.blockedStylesheetCount == 0)
     }
 
     @Test
@@ -59,6 +74,22 @@ struct DOMSessionTests {
         let session = DOMSession(configuration: .init())
         do {
             _ = try await session.selectionCopyText(nodeId: 1, kind: .html)
+            #expect(Bool(false))
+        } catch let error as WebInspectorCoreError {
+            guard case .scriptUnavailable = error else {
+                #expect(Bool(false))
+                return
+            }
+        } catch {
+            #expect(Bool(false))
+        }
+    }
+
+    @Test
+    func matchedStylesWithoutWebViewThrows() async {
+        let session = DOMSession(configuration: .init())
+        do {
+            _ = try await session.matchedStyles(nodeId: 1)
             #expect(Bool(false))
         } catch let error as WebInspectorCoreError {
             guard case .scriptUnavailable = error else {
@@ -207,6 +238,39 @@ struct DOMSessionTests {
         #expect(debounce == 50)
     }
 
+    @Test
+    func matchedStylesReturnsInlineAndMatchedRules() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 6, subtreeDepth: 4))
+        let (webView, _) = makeTestWebView()
+        let html = """
+        <html>
+            <head>
+                <style>
+                    .match-target { color: rgb(255, 0, 0); }
+                    div { margin: 0; }
+                </style>
+            </head>
+            <body>
+                <div id="target" class="match-target" style="display: inline; color: blue !important;">Hello</div>
+            </body>
+        </html>
+        """
+
+        session.attach(to: webView)
+        await loadHTML(html, in: webView)
+        let snapshot = try await session.captureSnapshot(maxDepth: 6)
+        guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target nodeId was not found in snapshot")
+            return
+        }
+
+        let payload = try await session.matchedStyles(nodeId: nodeId)
+
+        #expect(payload.nodeId == nodeId)
+        #expect(payload.rules.contains(where: { $0.origin == .inline && $0.selectorText == "element.style" }))
+        #expect(payload.rules.contains(where: { $0.selectorText == ".match-target" }))
+    }
+
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
         let controller = RecordingUserContentController()
         let configuration = WKWebViewConfiguration()
@@ -267,6 +331,48 @@ struct DOMSessionTests {
             contentWorld: .page
         )
         return rawStatus as? [String: Any]
+    }
+
+    private func findNodeId(
+        inSnapshotJSON snapshotJSON: String,
+        attributeName: String,
+        attributeValue: String
+    ) -> Int? {
+        guard
+            let data = snapshotJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let root = object["root"] as? [String: Any]
+        else {
+            return nil
+        }
+        return findNodeId(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
+    }
+
+    private func findNodeId(
+        inNode node: [String: Any],
+        attributeName: String,
+        attributeValue: String
+    ) -> Int? {
+        if let attributes = node["attributes"] as? [String] {
+            var index = 0
+            while index + 1 < attributes.count {
+                let currentName = attributes[index]
+                let currentValue = attributes[index + 1]
+                if currentName == attributeName, currentValue == attributeValue {
+                    return node["nodeId"] as? Int
+                }
+                index += 2
+            }
+        }
+
+        if let children = node["children"] as? [[String: Any]] {
+            for child in children {
+                if let nodeId = findNodeId(inNode: child, attributeName: attributeName, attributeValue: attributeValue) {
+                    return nodeId
+                }
+            }
+        }
+        return nil
     }
 }
 

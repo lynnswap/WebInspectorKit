@@ -119,6 +119,7 @@ export interface TreeState {
     elements: Map<number, HTMLElement>;
     openState: Map<number, boolean>;
     selectedNodeId: number | null;
+    styleRevision: number;
     filter: string;
     pendingRefreshRequests: Set<number>;
     refreshAttempts: Map<number, RefreshAttempt>;
@@ -275,6 +276,7 @@ export interface SelectionPayload {
     preview: string;
     attributes: NodeAttribute[];
     path: string[];
+    styleRevision: number;
 }
 
 /** Selector path response */

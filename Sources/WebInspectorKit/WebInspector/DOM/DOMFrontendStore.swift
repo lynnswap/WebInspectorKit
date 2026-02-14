@@ -35,6 +35,8 @@ final class DOMFrontendStore: NSObject {
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
     private var configuration: DOMConfiguration
+    private var matchedStylesTask: Task<Void, Never>?
+    private var matchedStylesRequestToken = 0
 
     init(session: DOMSession) {
         self.session = session
@@ -137,6 +139,7 @@ final class DOMFrontendStore: NSObject {
     }
 
     private func resetInspectorState() {
+        cancelMatchedStylesRequest()
         isReady = false
         pendingBundles.removeAll()
         cancelPendingBundleFlush()
@@ -166,6 +169,7 @@ final class DOMFrontendStore: NSObject {
     }
 
     @MainActor deinit {
+        cancelMatchedStylesRequest()
         if let webView {
             detachMessageHandlers(from: webView)
         }
@@ -298,8 +302,31 @@ private extension DOMFrontendStore {
 
     private func handleDOMSelectionMessage(_ payload: Any) {
         if let dictionary = payload as? [String: Any], !dictionary.isEmpty {
+            let previousNodeId = session.selection.nodeId
+            let previousPreview = session.selection.preview
+            let previousPath = session.selection.path
+            let previousAttributes = session.selection.attributes
+            let previousStyleRevision = session.selection.styleRevision
             session.selection.applySnapshot(from: dictionary)
+            if let nodeId = session.selection.nodeId {
+                let didSelectNewNode = previousNodeId != nodeId
+                let didStyleRelevantSnapshotChange = !didSelectNewNode && (
+                    previousPreview != session.selection.preview
+                        || previousPath != session.selection.path
+                        || previousAttributes != session.selection.attributes
+                        || previousStyleRevision != session.selection.styleRevision
+                )
+                let shouldRefetchForCurrentNode = !session.selection.isLoadingMatchedStyles
+                    && session.selection.matchedStyles.isEmpty
+                if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchForCurrentNode {
+                    startMatchedStylesRequest(nodeId: nodeId)
+                }
+            } else {
+                cancelMatchedStylesRequest()
+                session.selection.clearMatchedStyles()
+            }
         } else {
+            cancelMatchedStylesRequest()
             session.selection.clear()
         }
     }
@@ -324,6 +351,35 @@ private extension DOMFrontendStore {
             pendingDocumentRequest = nil
         }
         await flushPendingBundlesNow()
+    }
+
+    private func startMatchedStylesRequest(nodeId: Int) {
+        cancelMatchedStylesRequest()
+        let requestToken = matchedStylesRequestToken
+        session.selection.beginMatchedStylesLoading(for: nodeId)
+
+        matchedStylesTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let payload = try await self.session.matchedStyles(nodeId: nodeId)
+                guard !Task.isCancelled else { return }
+                guard requestToken == self.matchedStylesRequestToken else { return }
+                guard self.session.selection.nodeId == nodeId else { return }
+                self.session.selection.applyMatchedStyles(payload, for: nodeId)
+            } catch {
+                guard !Task.isCancelled else { return }
+                guard requestToken == self.matchedStylesRequestToken else { return }
+                guard self.session.selection.nodeId == nodeId else { return }
+                self.session.selection.clearMatchedStyles()
+                inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func cancelMatchedStylesRequest() {
+        matchedStylesTask?.cancel()
+        matchedStylesTask = nil
+        matchedStylesRequestToken += 1
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
@@ -450,6 +506,14 @@ extension DOMFrontendStore {
 
     func testSetReady(_ ready: Bool) {
         isReady = ready
+    }
+
+    var testMatchedStylesRequestToken: Int {
+        matchedStylesRequestToken
+    }
+
+    func testHandleDOMSelectionMessage(_ payload: Any) {
+        handleDOMSelectionMessage(payload)
     }
 }
 #endif

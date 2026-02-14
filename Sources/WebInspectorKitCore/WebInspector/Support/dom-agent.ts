@@ -16,6 +16,7 @@ import {
     setAttributeForNode,
     xpathForNode
 } from "./DOMAgent/dom-agent-dom-utils";
+import {matchedStylesForNode} from "./DOMAgent/dom-agent-styles";
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();
@@ -37,6 +38,7 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         outerHTMLForNode: outerHTMLForNode,
         selectorPathForNode: selectorPathForNode,
         xpathForNode: xpathForNode,
+        matchedStylesForNode: matchedStylesForNode,
         removeNode: removeNode,
         setAttributeForNode: setAttributeForNode,
         removeAttributeForNode: removeAttributeForNode,
