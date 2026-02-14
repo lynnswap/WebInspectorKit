@@ -37,6 +37,51 @@ function styleSheetListFromSheets(items: CSSStyleSheet[]): StyleSheetList {
     return list as unknown as StyleSheetList;
 }
 
+function cssRuleListFromRules(items: CSSRule[]): CSSRuleList {
+    const list: Record<number, CSSRule> & {
+        length: number;
+        item: (index: number) => CSSRule | null;
+    } = {
+        length: items.length,
+        item: (index: number): CSSRule | null => items[index] ?? null
+    };
+
+    items.forEach((item, index) => {
+        list[index] = item;
+    });
+    return list as unknown as CSSRuleList;
+}
+
+type MockDeclaration = [name: string, value: string, important?: boolean];
+
+function styleDeclarationFromEntries(entries: MockDeclaration[]): CSSStyleDeclaration {
+    const names = entries.map(([name]) => name);
+    const valueByName = new Map(entries.map(([name, value]) => [name, value]));
+    const priorityByName = new Map(entries.map(([name, _value, important]) => [name, important ? "important" : ""]));
+    const declaration: Record<number | string, unknown> & {
+        length: number;
+        getPropertyValue: (name: string) => string;
+        getPropertyPriority: (name: string) => string;
+    } = {
+        length: names.length,
+        getPropertyValue: (name: string): string => valueByName.get(name) ?? "",
+        getPropertyPriority: (name: string): string => priorityByName.get(name) ?? ""
+    };
+
+    names.forEach((name, index) => {
+        declaration[index] = name;
+    });
+    return declaration as unknown as CSSStyleDeclaration;
+}
+
+function makeStyleRule(selectorText: string, declarations: MockDeclaration[]): CSSStyleRule {
+    return {
+        type: CSSRule.STYLE_RULE,
+        selectorText,
+        style: styleDeclarationFromEntries(declarations)
+    } as unknown as CSSStyleRule;
+}
+
 describe("dom-agent-styles", () => {
     beforeEach(() => {
         resetInspectorState();
@@ -247,6 +292,38 @@ describe("dom-agent-styles", () => {
                 });
             }
         }
+    });
+
+    it("includes host selectors when selected element is the shadow host", () => {
+        document.body.innerHTML = "<section id=\"host\" class=\"component-host\" data-token=\"a::b\"></section>";
+        const host = document.getElementById("host");
+        expect(host).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const shadowStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(":host", [["color", "red"]]),
+                makeStyleRule(":host(.component-host)", [["display", "block"]]),
+                makeStyleRule(":host(:not(.missing))", [["padding", "1px"]]),
+                makeStyleRule(":host-context(:not(.outside))", [["border", "1px solid red"]]),
+                makeStyleRule(":host[data-token=\"a::b\"]", [["font-size", "12px"]]),
+                makeStyleRule(".inside", [["margin", "0"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [shadowStyleSheet]
+        });
+
+        const nodeId = registerNode(host!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ":host")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.component-host)")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(:not(.missing))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host-context(:not(.outside))")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host[data-token=\"a::b\"]")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ".inside")).toBe(false);
     });
 
     it("keeps per-scope entries for shared adopted stylesheets", () => {

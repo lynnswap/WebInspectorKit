@@ -186,9 +186,330 @@ export function collectStyleSheetsWithScope(element: Element): ScopedStyleSheet[
     return output;
 }
 
-function selectorMatchesElement(element: Element, selectorText: string): boolean {
+function splitSelectorList(selectorText: string): string[] {
+    const selectors: string[] = [];
+    let start = 0;
+    let bracketDepth = 0;
+    let parenthesisDepth = 0;
+    let quoteChar: "\"" | "'" | null = null;
+    let escaping = false;
+
+    for (let index = 0; index < selectorText.length; index += 1) {
+        const character = selectorText[index];
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (character === "\\") {
+            escaping = true;
+            continue;
+        }
+        if (quoteChar) {
+            if (character === quoteChar) {
+                quoteChar = null;
+            }
+            continue;
+        }
+        if (character === "\"" || character === "'") {
+            quoteChar = character;
+            continue;
+        }
+        if (character === "[") {
+            bracketDepth += 1;
+            continue;
+        }
+        if (character === "]" && bracketDepth > 0) {
+            bracketDepth -= 1;
+            continue;
+        }
+        if (character === "(") {
+            parenthesisDepth += 1;
+            continue;
+        }
+        if (character === ")" && parenthesisDepth > 0) {
+            parenthesisDepth -= 1;
+            continue;
+        }
+        if (character === "," && bracketDepth === 0 && parenthesisDepth === 0) {
+            const selector = selectorText.slice(start, index).trim();
+            if (selector) {
+                selectors.push(selector);
+            }
+            start = index + 1;
+        }
+    }
+
+    const tail = selectorText.slice(start).trim();
+    if (tail) {
+        selectors.push(tail);
+    }
+    return selectors;
+}
+
+function hasTopLevelPseudoElement(selectorText: string): boolean {
+    let bracketDepth = 0;
+    let parenthesisDepth = 0;
+    let quoteChar: "\"" | "'" | null = null;
+    let escaping = false;
+
+    for (let index = 0; index < selectorText.length; index += 1) {
+        const character = selectorText[index];
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (character === "\\") {
+            escaping = true;
+            continue;
+        }
+        if (quoteChar) {
+            if (character === quoteChar) {
+                quoteChar = null;
+            }
+            continue;
+        }
+        if (character === "\"" || character === "'") {
+            quoteChar = character;
+            continue;
+        }
+        if (character === "[") {
+            bracketDepth += 1;
+            continue;
+        }
+        if (character === "]" && bracketDepth > 0) {
+            bracketDepth -= 1;
+            continue;
+        }
+        if (character === "(") {
+            parenthesisDepth += 1;
+            continue;
+        }
+        if (character === ")" && parenthesisDepth > 0) {
+            parenthesisDepth -= 1;
+            continue;
+        }
+        if (character === ":"
+            && selectorText[index + 1] === ":"
+            && bracketDepth === 0
+            && parenthesisDepth === 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function selectorTailTargetsHost(tail: string): boolean {
+    if (!tail) {
+        return true;
+    }
+    const firstCharacter = tail[0];
+    if (/\s/.test(firstCharacter)) {
+        return false;
+    }
+    if (firstCharacter === ">" || firstCharacter === "+" || firstCharacter === "~" || firstCharacter === "|") {
+        return false;
+    }
+    return !hasTopLevelPseudoElement(tail);
+}
+
+type ParsedLeadingHostPseudo = {
+    argument: string | null;
+    consumedLength: number;
+};
+
+function parseLeadingHostPseudo(selectorText: string, pseudoName: "host" | "host-context"): ParsedLeadingHostPseudo | null {
+    const prefix = `:${pseudoName}`;
+    if (!selectorText.startsWith(prefix)) {
+        return null;
+    }
+    let cursor = prefix.length;
+    if (selectorText[cursor] !== "(") {
+        if (pseudoName === "host") {
+            const nextCharacter = selectorText[cursor];
+            if (typeof nextCharacter === "undefined") {
+                return {
+                    argument: null,
+                    consumedLength: cursor
+                };
+            }
+            if (nextCharacter === "-") {
+                return null;
+            }
+            if (/\s/.test(nextCharacter)
+                || nextCharacter === ","
+                || nextCharacter === ">"
+                || nextCharacter === "+"
+                || nextCharacter === "~"
+                || nextCharacter === "|"
+                || nextCharacter === ":"
+                || nextCharacter === "["
+                || nextCharacter === "#"
+                || nextCharacter === ".") {
+                return {
+                    argument: null,
+                    consumedLength: cursor
+                };
+            }
+            return null;
+        }
+        return null;
+    }
+
+    cursor += 1;
+    const argumentStart = cursor;
+    let depth = 1;
+    let quoteChar: "\"" | "'" | null = null;
+    let escaping = false;
+
+    while (cursor < selectorText.length) {
+        const character = selectorText[cursor];
+        if (escaping) {
+            escaping = false;
+            cursor += 1;
+            continue;
+        }
+        if (character === "\\") {
+            escaping = true;
+            cursor += 1;
+            continue;
+        }
+        if (quoteChar) {
+            if (character === quoteChar) {
+                quoteChar = null;
+            }
+            cursor += 1;
+            continue;
+        }
+        if (character === "\"" || character === "'") {
+            quoteChar = character;
+            cursor += 1;
+            continue;
+        }
+        if (character === "(") {
+            depth += 1;
+            cursor += 1;
+            continue;
+        }
+        if (character === ")") {
+            depth -= 1;
+            cursor += 1;
+            if (depth === 0) {
+                const argument = selectorText.slice(argumentStart, cursor - 1).trim();
+                return {
+                    argument,
+                    consumedLength: cursor
+                };
+            }
+            continue;
+        }
+        cursor += 1;
+    }
+
+    return null;
+}
+
+function selectorContainsHostPseudo(selectorText: string): boolean {
+    const selectorList = splitSelectorList(selectorText);
+    for (const selector of selectorList) {
+        const trimmedSelector = selector.trim();
+        if (!trimmedSelector) {
+            continue;
+        }
+        if (parseLeadingHostPseudo(trimmedSelector, "host-context")
+            || parseLeadingHostPseudo(trimmedSelector, "host")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hostSelectorMatchesHostElement(selectorText: string, host: Element): boolean {
+    const selectorList = splitSelectorList(selectorText);
+    for (const selector of selectorList) {
+        const trimmedSelector = selector.trim();
+        if (!trimmedSelector || !selectorContainsHostPseudo(trimmedSelector)) {
+            continue;
+        }
+
+        const parsedHostContext = parseLeadingHostPseudo(trimmedSelector, "host-context");
+        if (parsedHostContext) {
+            const contextSelector = parsedHostContext.argument?.trim();
+            if (!contextSelector) {
+                continue;
+            }
+            let contextMatched = false;
+            try {
+                contextMatched = host.matches(contextSelector) || host.closest(contextSelector) !== null;
+            } catch {
+                contextMatched = false;
+            }
+            if (!contextMatched) {
+                continue;
+            }
+            const tail = trimmedSelector.slice(parsedHostContext.consumedLength);
+            if (!selectorTailTargetsHost(tail)) {
+                continue;
+            }
+            const tailSelector = tail.trim();
+            if (!tailSelector) {
+                return true;
+            }
+            try {
+                if (host.matches(`*${tailSelector}`)) {
+                    return true;
+                }
+            } catch {
+                continue;
+            }
+            continue;
+        }
+
+        const parsedHost = parseLeadingHostPseudo(trimmedSelector, "host");
+        if (!parsedHost) {
+            continue;
+        }
+        const hostCondition = parsedHost.argument?.trim();
+        if (hostCondition) {
+            try {
+                if (!host.matches(`*${hostCondition}`)) {
+                    continue;
+                }
+            } catch {
+                continue;
+            }
+        }
+        const tail = trimmedSelector.slice(parsedHost.consumedLength);
+        if (!selectorTailTargetsHost(tail)) {
+            continue;
+        }
+        const tailSelector = tail.trim();
+        if (!tailSelector) {
+            return true;
+        }
+        try {
+            if (host.matches(`*${tailSelector}`)) {
+                return true;
+            }
+        } catch {
+            continue;
+        }
+    }
+    return false;
+}
+
+function selectorMatchesElement(
+    element: Element,
+    selectorText: string,
+    scopeRoot: Document | ShadowRoot
+): boolean {
     if (!selectorText) {
         return false;
+    }
+    const isShadowHostScope = scopeRoot.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+        && (scopeRoot as ShadowRoot).host === element;
+    if (isShadowHostScope && selectorContainsHostPseudo(selectorText)) {
+        return hostSelectorMatchesHostElement(selectorText, element);
     }
     try {
         return element.matches(selectorText);
@@ -326,7 +647,11 @@ function scopeCanApplyToElement(scopeRoot: Document | ShadowRoot, element: Eleme
     if (scopeRoot.nodeType === Node.DOCUMENT_NODE) {
         return element.getRootNode() === scopeRoot;
     }
-    return element.getRootNode() === scopeRoot;
+    if (element.getRootNode() === scopeRoot) {
+        return true;
+    }
+    const shadowRoot = scopeRoot as ShadowRoot;
+    return shadowRoot.host === element;
 }
 
 export function matchedStylesForNode(
@@ -362,6 +687,8 @@ export function matchedStylesForNode(
         if (!scopeCanApplyToElement(scopedStyleSheet.scopeRoot, element)) {
             continue;
         }
+        const isShadowHostSelection = scopedStyleSheet.scopeRoot.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+            && (scopedStyleSheet.scopeRoot as ShadowRoot).host === element;
 
         let cssRules: CSSRuleList;
         try {
@@ -379,7 +706,13 @@ export function matchedStylesForNode(
             }
 
             const selectorText = trimValue(styleRule.selectorText);
-            if (!selectorText || !selectorMatchesElement(element, selectorText)) {
+            if (!selectorText) {
+                return true;
+            }
+            if (isShadowHostSelection && !selectorContainsHostPseudo(selectorText)) {
+                return true;
+            }
+            if (!selectorMatchesElement(element, selectorText, scopedStyleSheet.scopeRoot)) {
                 return true;
             }
 
