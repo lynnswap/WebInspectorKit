@@ -81,6 +81,11 @@ const STYLE_RELEVANT_STYLE_ATTRIBUTES = new Set([
     "type",
 ]);
 
+const STYLE_RELEVANT_MUTATION_ATTRIBUTES = new Set([
+    ...STYLE_RELEVANT_LINK_ATTRIBUTES,
+    ...STYLE_RELEVANT_STYLE_ATTRIBUTES,
+]);
+
 function nodeTagName(node: DOMNode | null | undefined): string {
     if (!node) {
         return "";
@@ -207,6 +212,57 @@ function nodeOrAncestorIsStyleElement(nodeId: number | undefined): boolean {
     return false;
 }
 
+function knownChildCount(node: DOMNode | null | undefined): number {
+    return Array.isArray(node?.children) ? node.children.length : 0;
+}
+
+function reportedChildCount(node: DOMNode | null | undefined): number {
+    if (typeof node?.childCount === "number") {
+        return node.childCount;
+    }
+    return knownChildCount(node);
+}
+
+function updatedChildCount(entry: ChildCountUpdatedParams): number | null {
+    if (typeof entry.childNodeCount === "number") {
+        return entry.childNodeCount;
+    }
+    if (typeof entry.childCount === "number") {
+        return entry.childCount;
+    }
+    return null;
+}
+
+function childCountUpdateCanAffectStylesheets(entry: ChildCountUpdatedParams): boolean {
+    if (typeof entry.nodeId !== "number") {
+        return false;
+    }
+
+    const parentNode = treeState.nodes.get(entry.nodeId);
+    if (!parentNode) {
+        // When the parent is not indexed, we cannot know whether hidden children include style/link nodes.
+        return true;
+    }
+
+    const knownChildren = knownChildCount(parentNode);
+    const previousReportedCount = reportedChildCount(parentNode);
+    const nextReportedCount = updatedChildCount(entry);
+
+    if (isStyleElementNode(parentNode)) {
+        return true;
+    }
+
+    if (previousReportedCount !== knownChildren) {
+        return true;
+    }
+
+    if (typeof nextReportedCount === "number" && nextReportedCount !== knownChildren) {
+        return true;
+    }
+
+    return false;
+}
+
 function mutationCanAffectStylesheets(method: string, params: Record<string, unknown>): boolean {
     switch (method) {
         case "childNodeInserted": {
@@ -235,8 +291,15 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
             if (typeof entry.name !== "string") {
                 return false;
             }
-            const node = typeof entry.nodeId === "number" ? treeState.nodes.get(entry.nodeId) : undefined;
             const attributeName = entry.name.toLowerCase();
+            if (!STYLE_RELEVANT_MUTATION_ATTRIBUTES.has(attributeName)) {
+                return false;
+            }
+            const node = typeof entry.nodeId === "number" ? treeState.nodes.get(entry.nodeId) : undefined;
+            if (!node) {
+                // Unknown nodes can still be off-tree style/link elements when snapshots are shallow.
+                return true;
+            }
             const tagName = nodeTagName(node);
             if (tagName === "link") {
                 if (attributeName === "rel") {
@@ -249,6 +312,8 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
             }
             return false;
         }
+        case "childNodeCountUpdated":
+            return childCountUpdateCanAffectStylesheets(params as ChildCountUpdatedParams);
         case "characterDataModified": {
             const entry = params as CharacterDataModifiedParams;
             return nodeOrAncestorIsStyleElement(entry.nodeId);

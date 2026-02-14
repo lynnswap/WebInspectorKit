@@ -185,4 +185,49 @@ describe("dom-tree-updates", () => {
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
     });
+
+    it("increments style revision for childNodeCountUpdated when parent children are incomplete", () => {
+        const knownChild = makeNode(2);
+        knownChild.parentId = 1;
+        knownChild.depth = 1;
+        knownChild.childIndex = 0;
+
+        const root = makeNode(1, [knownChild]);
+        root.childCount = 2;
+
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+        treeState.nodes.set(2, knownChild);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeCountUpdated",
+            params: {
+                nodeId: 1,
+                childNodeCount: 3
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
+
+    it("increments style revision for style-relevant attribute changes on unknown nodes", () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.attributeModified",
+            params: {
+                nodeId: 999,
+                name: "href",
+                value: "/assets/theme.css"
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
 });
