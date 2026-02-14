@@ -2,6 +2,8 @@ import {inspector, type AnyNode} from "./dom-agent-state";
 
 const DEFAULT_MAX_RULES = Number.MAX_SAFE_INTEGER;
 const MAX_SCANNED_RULES = 25000;
+const CONTAINER_QUERY_PROBE_PROPERTY = "--webkit-matched-styles-container-query-active";
+let containerQueryProbeCounter = 0;
 
 type MatchedStyleOrigin = "inline" | "author";
 
@@ -885,7 +887,126 @@ function isSupportsConditionActive(conditionText: string | null | undefined): bo
     }
 }
 
-function isRuleConditionActive(rule: CSSRule): boolean {
+type RuleConditionContext = {
+    element: Element;
+    containerRuleActivityByRule: Map<CSSRule, boolean>;
+};
+
+function isContainerRule(rule: CSSRule): rule is CSSRule & {
+    containerName?: string;
+    containerQuery?: string;
+    conditionText?: string;
+    matches?: boolean;
+} {
+    const containerRuleType = (CSSRule as typeof CSSRule & { CONTAINER_RULE?: number }).CONTAINER_RULE;
+    if (typeof containerRuleType === "number" && rule.type === containerRuleType) {
+        return true;
+    }
+
+    const candidate = rule as CSSRule & { containerQuery?: unknown };
+    if (typeof candidate.containerQuery === "string") {
+        return true;
+    }
+
+    return rule.cssText.startsWith("@container");
+}
+
+function makeContainerProbeClassName(): string {
+    containerQueryProbeCounter += 1;
+    return `__webkitContainerQueryProbe${containerQueryProbeCounter}`;
+}
+
+function evaluateContainerRuleActivityWithProbe(
+    element: Element,
+    containerName: string,
+    containerQuery: string
+): boolean {
+    const ownerDocument = element.ownerDocument;
+    if (!ownerDocument) {
+        return true;
+    }
+
+    const parentElement = element.parentElement;
+    if (!parentElement) {
+        return true;
+    }
+
+    const rootNode = element.getRootNode();
+    const styleHost = rootNode instanceof ShadowRoot
+        ? rootNode
+        : (ownerDocument.head || ownerDocument.documentElement);
+    if (!styleHost) {
+        return true;
+    }
+
+    const probeClassName = makeContainerProbeClassName();
+    const containerPrelude = containerName ? `${containerName} ${containerQuery}` : containerQuery;
+    const styleElement = ownerDocument.createElement("style");
+    styleElement.textContent = `
+        .${probeClassName} {
+            ${CONTAINER_QUERY_PROBE_PROPERTY}: 0;
+        }
+        @container ${containerPrelude} {
+            .${probeClassName} {
+                ${CONTAINER_QUERY_PROBE_PROPERTY}: 1;
+            }
+        }
+    `;
+
+    const probeElement = ownerDocument.createElement("div");
+    probeElement.className = probeClassName;
+    probeElement.style.cssText = [
+        "position: absolute",
+        "visibility: hidden",
+        "pointer-events: none",
+        "width: 0",
+        "height: 0",
+        "overflow: hidden"
+    ].join("; ");
+    probeElement.setAttribute("aria-hidden", "true");
+
+    try {
+        styleHost.appendChild(styleElement);
+        parentElement.insertBefore(probeElement, element.nextSibling);
+        const computedStyle = ownerDocument.defaultView?.getComputedStyle(probeElement);
+        const probeValue = trimValue(computedStyle?.getPropertyValue(CONTAINER_QUERY_PROBE_PROPERTY) ?? "");
+        return probeValue === "1";
+    } catch {
+        return true;
+    } finally {
+        probeElement.remove();
+        styleElement.remove();
+    }
+}
+
+function isContainerRuleActive(rule: CSSRule, element: Element): boolean {
+    const containerRule = rule as CSSRule & {
+        containerName?: unknown;
+        containerQuery?: unknown;
+        conditionText?: unknown;
+        matches?: unknown;
+    };
+
+    if (typeof containerRule.matches === "boolean") {
+        return containerRule.matches;
+    }
+
+    const containerQuery = typeof containerRule.containerQuery === "string"
+        ? containerRule.containerQuery.trim()
+        : typeof containerRule.conditionText === "string"
+            ? containerRule.conditionText.trim()
+            : "";
+    if (!containerQuery) {
+        return true;
+    }
+
+    const containerName = typeof containerRule.containerName === "string"
+        ? containerRule.containerName.trim()
+        : "";
+    return evaluateContainerRuleActivityWithProbe(element, containerName, containerQuery);
+}
+
+function isRuleConditionActive(rule: CSSRule, ruleConditionContext: RuleConditionContext | null): boolean {
     if (rule.type === CSSRule.MEDIA_RULE) {
         const mediaRule = rule as CSSMediaRule;
         return isMediaQueryActive(mediaRule.conditionText || mediaRule.media?.mediaText);
@@ -903,13 +1024,26 @@ function isRuleConditionActive(rule: CSSRule): boolean {
         return isMediaQueryActive(importRule.media?.mediaText);
     }
 
+    if (isContainerRule(rule)) {
+        if (!ruleConditionContext) {
+            return true;
+        }
+        if (ruleConditionContext.containerRuleActivityByRule.has(rule)) {
+            return ruleConditionContext.containerRuleActivityByRule.get(rule) ?? true;
+        }
+        const isActive = isContainerRuleActive(rule, ruleConditionContext.element);
+        ruleConditionContext.containerRuleActivityByRule.set(rule, isActive);
+        return isActive;
+    }
+
     return true;
 }
 
 export function walkRulesRecursively(
     rules: CSSRuleList,
     atRuleContext: string[],
-    visitor: (rule: CSSStyleRule, atRuleContext: string[]) => boolean
+    visitor: (rule: CSSStyleRule, atRuleContext: string[]) => boolean,
+    ruleConditionContext: RuleConditionContext | null = null
 ): boolean {
     for (let index = 0; index < rules.length; index += 1) {
         const rule = typeof rules.item === "function"
@@ -930,13 +1064,13 @@ export function walkRulesRecursively(
         if (!nested) {
             continue;
         }
-        if (!isRuleConditionActive(rule)) {
+        if (!isRuleConditionActive(rule, ruleConditionContext)) {
             continue;
         }
 
         const label = atRuleLabel(rule);
         const nextContext = label ? [...atRuleContext, label] : atRuleContext;
-        if (!walkRulesRecursively(nested, nextContext, visitor)) {
+        if (!walkRulesRecursively(nested, nextContext, visitor, ruleConditionContext)) {
             return false;
         }
     }
@@ -972,6 +1106,10 @@ export function matchedStylesForNode(
 
     const assignedSlotsByScope = collectAssignedSlotsByScope(element);
     const scopedStyleSheets = collectStyleSheetsWithScope(element, assignedSlotsByScope);
+    const ruleConditionContext: RuleConditionContext = {
+        element,
+        containerRuleActivityByRule: new Map<CSSRule, boolean>()
+    };
     let scannedRuleCount = 0;
 
     for (const scopedStyleSheet of scopedStyleSheets) {
@@ -1049,7 +1187,7 @@ export function matchedStylesForNode(
             }
 
             return true;
-        });
+        }, ruleConditionContext);
 
         if (!didComplete || payload.truncated) {
             break;

@@ -414,6 +414,60 @@ describe("dom-agent-styles", () => {
         }
     });
 
+    it("skips inactive container-query rules", () => {
+        document.body.innerHTML = "<section id=\"container\"><div id=\"target\" class=\"container-target\"></div></section>";
+        const target = document.getElementById("target");
+        expect(target).not.toBeNull();
+        const nodeId = registerNode(target!);
+
+        const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
+        const containerRuleType = (CSSRule as typeof CSSRule & { CONTAINER_RULE?: number }).CONTAINER_RULE ?? 0;
+        const inactiveContainerRule = {
+            type: containerRuleType,
+            cssText: "@container (width > 1000px) { .container-target { color: red; } }",
+            containerQuery: "(width > 1000px)",
+            matches: false,
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(".container-target", [["color", "red"]])
+            ])
+        } as unknown as CSSRule;
+        const activeContainerRule = {
+            type: containerRuleType,
+            cssText: "@container (width > 100px) { .container-target { color: blue; } }",
+            containerQuery: "(width > 100px)",
+            matches: true,
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(".container-target", [["color", "blue"]])
+            ])
+        } as unknown as CSSRule;
+        const styleSheet = {
+            cssRules: cssRuleListFromRules([inactiveContainerRule, activeContainerRule])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(document, "styleSheets", {
+            configurable: true,
+            value: styleSheetListFromSheets([styleSheet])
+        });
+
+        try {
+            const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+            const matchedRules = payload.rules.filter((rule) => rule.selectorText === ".container-target");
+
+            expect(matchedRules.length).toBe(1);
+            expect(matchedRules[0]?.declarations[0]?.value).toBe("blue");
+            const hasInactiveContainerContext = payload.rules.some((rule) =>
+                rule.atRuleContext.some((context) => context.includes("@container (width > 1000px)"))
+            );
+            expect(hasInactiveContainerContext).toBe(false);
+        } finally {
+            if (descriptor) {
+                Object.defineProperty(document, "styleSheets", descriptor);
+            } else {
+                const mutableDocument = document as unknown as { styleSheets?: StyleSheetList };
+                delete mutableDocument.styleSheets;
+            }
+        }
+    });
+
     it("includes host selectors when selected element is the shadow host", () => {
         document.body.innerHTML = "<section id=\"host\" class=\"component-host\" data-token=\"a::b\"></section>";
         const host = document.getElementById("host");
