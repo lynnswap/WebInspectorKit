@@ -302,9 +302,23 @@ private extension DOMFrontendStore {
 
     private func handleDOMSelectionMessage(_ payload: Any) {
         if let dictionary = payload as? [String: Any], !dictionary.isEmpty {
+            let previousNodeId = session.selection.nodeId
+            let previousPreview = session.selection.preview
+            let previousPath = session.selection.path
+            let previousAttributes = session.selection.attributes
             session.selection.applySnapshot(from: dictionary)
             if let nodeId = session.selection.nodeId {
-                startMatchedStylesRequest(nodeId: nodeId)
+                let didSelectNewNode = previousNodeId != nodeId
+                let didStyleRelevantSnapshotChange = !didSelectNewNode && (
+                    previousPreview != session.selection.preview
+                        || previousPath != session.selection.path
+                        || previousAttributes != session.selection.attributes
+                )
+                let shouldRefetchForCurrentNode = !session.selection.isLoadingMatchedStyles
+                    && session.selection.matchedStyles.isEmpty
+                if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchForCurrentNode {
+                    startMatchedStylesRequest(nodeId: nodeId)
+                }
             } else {
                 cancelMatchedStylesRequest()
                 session.selection.clearMatchedStyles()
@@ -490,6 +504,14 @@ extension DOMFrontendStore {
 
     func testSetReady(_ ready: Bool) {
         isReady = ready
+    }
+
+    var testMatchedStylesRequestToken: Int {
+        matchedStylesRequestToken
+    }
+
+    func testHandleDOMSelectionMessage(_ payload: Any) {
+        handleDOMSelectionMessage(payload)
     }
 }
 #endif

@@ -35,6 +35,8 @@ type ScopedStyleSheet = {
     scopeRoot: Document | ShadowRoot;
 };
 
+type ScopeMatchMode = "same-root" | "host" | "slotted" | "none";
+
 function resolveNode(identifier: number): AnyNode | null {
     const map = inspector.map;
     if (!map || !map.size) {
@@ -149,38 +151,74 @@ function addAdoptedStyleSheets(
     addStyleSheetsFromList(candidate, root, seenByScope, output);
 }
 
-function collectOpenShadowRoots(root: ParentNode): ShadowRoot[] {
-    const roots: ShadowRoot[] = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    let current = walker.nextNode();
+function collectAssignedSlotsByScope(element: Element): Map<ShadowRoot, HTMLSlotElement[]> {
+    const assignedSlotsByScope = new Map<ShadowRoot, HTMLSlotElement[]>();
+    const visitedSlots = new Set<HTMLSlotElement>();
+    let currentSlot = (element as Element & { assignedSlot?: HTMLSlotElement | null }).assignedSlot ?? null;
 
-    while (current) {
-        if (current instanceof Element) {
-            const shadowRoot = current.shadowRoot;
-            if (shadowRoot && shadowRoot.mode === "open") {
-                roots.push(shadowRoot);
-                const nestedRoots = collectOpenShadowRoots(shadowRoot);
-                roots.push(...nestedRoots);
-            }
+    while (currentSlot && !visitedSlots.has(currentSlot)) {
+        visitedSlots.add(currentSlot);
+        const slotRoot = currentSlot.getRootNode();
+        if (slotRoot instanceof ShadowRoot && slotRoot.mode === "open") {
+            const slots = assignedSlotsByScope.get(slotRoot) ?? [];
+            slots.push(currentSlot);
+            assignedSlotsByScope.set(slotRoot, slots);
         }
-        current = walker.nextNode();
+        currentSlot = (currentSlot as Element & { assignedSlot?: HTMLSlotElement | null }).assignedSlot ?? null;
+    }
+
+    return assignedSlotsByScope;
+}
+
+function collectRelevantScopeRoots(
+    element: Element,
+    assignedSlotsByScope: Map<ShadowRoot, HTMLSlotElement[]>
+): Array<Document | ShadowRoot> {
+    const roots: Array<Document | ShadowRoot> = [];
+    const seen = new Set<Document | ShadowRoot>();
+    const ownerDocument = element.ownerDocument || document;
+    const elementRoot = element.getRootNode();
+
+    const addRoot = (root: Document | ShadowRoot): void => {
+        if (!seen.has(root)) {
+            seen.add(root);
+            roots.push(root);
+        }
+    };
+
+    if (elementRoot === ownerDocument) {
+        addRoot(ownerDocument);
+    } else if (elementRoot instanceof ShadowRoot && elementRoot.mode === "open") {
+        addRoot(elementRoot);
+    }
+
+    const ownShadowRoot = element.shadowRoot;
+    if (ownShadowRoot && ownShadowRoot.mode === "open") {
+        addRoot(ownShadowRoot);
+    }
+
+    for (const scopeRoot of assignedSlotsByScope.keys()) {
+        addRoot(scopeRoot);
+    }
+
+    if (roots.length === 0) {
+        addRoot(ownerDocument);
     }
 
     return roots;
 }
 
-export function collectStyleSheetsWithScope(element: Element): ScopedStyleSheet[] {
-    const ownerDocument = element.ownerDocument || document;
+export function collectStyleSheetsWithScope(
+    element: Element,
+    assignedSlotsByScope: Map<ShadowRoot, HTMLSlotElement[]> = collectAssignedSlotsByScope(element)
+): ScopedStyleSheet[] {
     const seenByScope = new Map<Document | ShadowRoot, Set<CSSStyleSheet>>();
     const output: ScopedStyleSheet[] = [];
 
-    addStyleSheetsFromList(ownerDocument.styleSheets, ownerDocument, seenByScope, output);
-    addAdoptedStyleSheets(ownerDocument, seenByScope, output);
-
-    const shadowRoots = collectOpenShadowRoots(ownerDocument);
-    for (const shadowRoot of shadowRoots) {
-        addStyleSheetsFromList(shadowRoot.styleSheets, shadowRoot, seenByScope, output);
-        addAdoptedStyleSheets(shadowRoot, seenByScope, output);
+    const scopeRoots = collectRelevantScopeRoots(element, assignedSlotsByScope);
+    for (const scopeRoot of scopeRoots) {
+        addStyleSheetsFromList(scopeRoot.styleSheets, scopeRoot, seenByScope, output);
+        addAdoptedStyleSheets(scopeRoot, seenByScope, output);
     }
 
     return output;
@@ -246,6 +284,68 @@ function splitSelectorList(selectorText: string): string[] {
     return selectors;
 }
 
+type ParsedParenthesizedArgument = {
+    argument: string;
+    endIndex: number;
+};
+
+function readParenthesizedArgument(selectorText: string, openParenIndex: number): ParsedParenthesizedArgument | null {
+    if (selectorText[openParenIndex] !== "(") {
+        return null;
+    }
+
+    let cursor = openParenIndex + 1;
+    const argumentStart = cursor;
+    let depth = 1;
+    let quoteChar: "\"" | "'" | null = null;
+    let escaping = false;
+
+    while (cursor < selectorText.length) {
+        const character = selectorText[cursor];
+        if (escaping) {
+            escaping = false;
+            cursor += 1;
+            continue;
+        }
+        if (character === "\\") {
+            escaping = true;
+            cursor += 1;
+            continue;
+        }
+        if (quoteChar) {
+            if (character === quoteChar) {
+                quoteChar = null;
+            }
+            cursor += 1;
+            continue;
+        }
+        if (character === "\"" || character === "'") {
+            quoteChar = character;
+            cursor += 1;
+            continue;
+        }
+        if (character === "(") {
+            depth += 1;
+            cursor += 1;
+            continue;
+        }
+        if (character === ")") {
+            depth -= 1;
+            cursor += 1;
+            if (depth === 0) {
+                return {
+                    argument: selectorText.slice(argumentStart, cursor - 1),
+                    endIndex: cursor
+                };
+            }
+            continue;
+        }
+        cursor += 1;
+    }
+
+    return null;
+}
+
 function hasTopLevelPseudoElement(selectorText: string): boolean {
     let bracketDepth = 0;
     let parenthesisDepth = 0;
@@ -297,6 +397,79 @@ function hasTopLevelPseudoElement(selectorText: string): boolean {
     }
 
     return false;
+}
+
+type ParsedSlottedSelector = {
+    prefix: string;
+    argument: string;
+    tail: string;
+};
+
+function parseSlottedSelector(selectorText: string): ParsedSlottedSelector | null {
+    const slottedMarker = "::slotted";
+    let bracketDepth = 0;
+    let parenthesisDepth = 0;
+    let quoteChar: "\"" | "'" | null = null;
+    let escaping = false;
+
+    for (let index = 0; index < selectorText.length; index += 1) {
+        const character = selectorText[index];
+        if (escaping) {
+            escaping = false;
+            continue;
+        }
+        if (character === "\\") {
+            escaping = true;
+            continue;
+        }
+        if (quoteChar) {
+            if (character === quoteChar) {
+                quoteChar = null;
+            }
+            continue;
+        }
+        if (character === "\"" || character === "'") {
+            quoteChar = character;
+            continue;
+        }
+        if (character === "[") {
+            bracketDepth += 1;
+            continue;
+        }
+        if (character === "]" && bracketDepth > 0) {
+            bracketDepth -= 1;
+            continue;
+        }
+        if (character === "(") {
+            parenthesisDepth += 1;
+            continue;
+        }
+        if (character === ")" && parenthesisDepth > 0) {
+            parenthesisDepth -= 1;
+            continue;
+        }
+        if (character === ":"
+            && selectorText.startsWith(slottedMarker, index)
+            && bracketDepth === 0
+            && parenthesisDepth === 0) {
+            const argumentStart = index + slottedMarker.length;
+            const parsedArgument = readParenthesizedArgument(selectorText, argumentStart);
+            if (!parsedArgument) {
+                return null;
+            }
+            const argument = parsedArgument.argument.trim();
+            if (!argument) {
+                return null;
+            }
+            return {
+                prefix: selectorText.slice(0, index).trim(),
+                argument,
+                tail: selectorText.slice(parsedArgument.endIndex).trim()
+            };
+        }
+    }
+
+    return null;
 }
 
 function selectorTailTargetsHost(tail: string): boolean {
@@ -355,58 +528,14 @@ function parseLeadingHostPseudo(selectorText: string, pseudoName: "host" | "host
         }
         return null;
     }
-
-    cursor += 1;
-    const argumentStart = cursor;
-    let depth = 1;
-    let quoteChar: "\"" | "'" | null = null;
-    let escaping = false;
-
-    while (cursor < selectorText.length) {
-        const character = selectorText[cursor];
-        if (escaping) {
-            escaping = false;
-            cursor += 1;
-            continue;
-        }
-        if (character === "\\") {
-            escaping = true;
-            cursor += 1;
-            continue;
-        }
-        if (quoteChar) {
-            if (character === quoteChar) {
-                quoteChar = null;
-            }
-            cursor += 1;
-            continue;
-        }
-        if (character === "\"" || character === "'") {
-            quoteChar = character;
-            cursor += 1;
-            continue;
-        }
-        if (character === "(") {
-            depth += 1;
-            cursor += 1;
-            continue;
-        }
-        if (character === ")") {
-            depth -= 1;
-            cursor += 1;
-            if (depth === 0) {
-                const argument = selectorText.slice(argumentStart, cursor - 1).trim();
-                return {
-                    argument,
-                    consumedLength: cursor
-                };
-            }
-            continue;
-        }
-        cursor += 1;
+    const parsedArgument = readParenthesizedArgument(selectorText, cursor);
+    if (!parsedArgument) {
+        return null;
     }
-
-    return null;
+    return {
+        argument: parsedArgument.argument.trim(),
+        consumedLength: parsedArgument.endIndex
+    };
 }
 
 function selectorContainsHostPseudo(selectorText: string): boolean {
@@ -424,11 +553,25 @@ function selectorContainsHostPseudo(selectorText: string): boolean {
     return false;
 }
 
+function selectorContainsSlottedPseudo(selectorText: string): boolean {
+    const selectorList = splitSelectorList(selectorText);
+    for (const selector of selectorList) {
+        const trimmedSelector = selector.trim();
+        if (!trimmedSelector) {
+            continue;
+        }
+        if (parseSlottedSelector(trimmedSelector)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function hostSelectorMatchesHostElement(selectorText: string, host: Element): boolean {
     const selectorList = splitSelectorList(selectorText);
     for (const selector of selectorList) {
         const trimmedSelector = selector.trim();
-        if (!trimmedSelector || !selectorContainsHostPseudo(trimmedSelector)) {
+        if (!trimmedSelector) {
             continue;
         }
 
@@ -498,18 +641,97 @@ function hostSelectorMatchesHostElement(selectorText: string, host: Element): bo
     return false;
 }
 
+function slottedSelectorMatchesElement(
+    selectorText: string,
+    element: Element,
+    slots: HTMLSlotElement[]
+): boolean {
+    if (!slots.length) {
+        return false;
+    }
+    const selectorList = splitSelectorList(selectorText);
+    for (const selector of selectorList) {
+        const trimmedSelector = selector.trim();
+        if (!trimmedSelector) {
+            continue;
+        }
+        const parsedSlotted = parseSlottedSelector(trimmedSelector);
+        if (!parsedSlotted) {
+            continue;
+        }
+        if (!selectorTailTargetsHost(parsedSlotted.tail)) {
+            continue;
+        }
+        const slottedArgumentSelector = parsedSlotted.tail
+            ? `${parsedSlotted.argument}${parsedSlotted.tail}`
+            : parsedSlotted.argument;
+        let matchesSlottedArgument = false;
+        try {
+            matchesSlottedArgument = element.matches(slottedArgumentSelector);
+        } catch {
+            matchesSlottedArgument = false;
+        }
+        if (!matchesSlottedArgument) {
+            continue;
+        }
+
+        for (const slot of slots) {
+            if (!parsedSlotted.prefix) {
+                return true;
+            }
+            try {
+                if (slot.matches(parsedSlotted.prefix)) {
+                    return true;
+                }
+            } catch {
+                continue;
+            }
+        }
+    }
+
+    return false;
+}
+
+function scopeMatchModeForElement(
+    scopeRoot: Document | ShadowRoot,
+    element: Element,
+    assignedSlotsByScope: Map<ShadowRoot, HTMLSlotElement[]>
+): ScopeMatchMode {
+    if (scopeRoot.nodeType === Node.DOCUMENT_NODE) {
+        return element.getRootNode() === scopeRoot ? "same-root" : "none";
+    }
+    const shadowRoot = scopeRoot as ShadowRoot;
+    if (element.getRootNode() === shadowRoot) {
+        return "same-root";
+    }
+    if (shadowRoot.host === element) {
+        return "host";
+    }
+    if ((assignedSlotsByScope.get(shadowRoot)?.length ?? 0) > 0) {
+        return "slotted";
+    }
+    return "none";
+}
+
 function selectorMatchesElement(
     element: Element,
     selectorText: string,
-    scopeRoot: Document | ShadowRoot
+    scopeRoot: Document | ShadowRoot,
+    matchMode: ScopeMatchMode,
+    assignedSlotsByScope: Map<ShadowRoot, HTMLSlotElement[]>
 ): boolean {
     if (!selectorText) {
         return false;
     }
-    const isShadowHostScope = scopeRoot.nodeType === Node.DOCUMENT_FRAGMENT_NODE
-        && (scopeRoot as ShadowRoot).host === element;
-    if (isShadowHostScope && selectorContainsHostPseudo(selectorText)) {
+    if (matchMode === "host") {
         return hostSelectorMatchesHostElement(selectorText, element);
+    }
+    if (matchMode === "slotted") {
+        if (!(scopeRoot instanceof ShadowRoot)) {
+            return false;
+        }
+        const slots = assignedSlotsByScope.get(scopeRoot) ?? [];
+        return slottedSelectorMatchesElement(selectorText, element, slots);
     }
     try {
         return element.matches(selectorText);
@@ -568,6 +790,23 @@ function isMediaQueryActive(mediaText: string | null | undefined): boolean {
     } catch {
         return false;
     }
+}
+
+function isStyleSheetMediaActive(styleSheet: CSSStyleSheet): boolean {
+    return isMediaQueryActive(styleSheet.media?.mediaText);
+}
+
+function isStyleSheetEnabled(styleSheet: CSSStyleSheet): boolean {
+    if ((styleSheet as CSSStyleSheet & { disabled?: boolean }).disabled) {
+        return false;
+    }
+    const ownerNode = styleSheet.ownerNode as (HTMLLinkElement | HTMLStyleElement | null);
+    if (ownerNode && "disabled" in ownerNode) {
+        if ((ownerNode as HTMLLinkElement & { disabled?: boolean }).disabled) {
+            return false;
+        }
+    }
+    return true;
 }
 
 function isSupportsConditionActive(conditionText: string | null | undefined): boolean {
@@ -643,17 +882,6 @@ export function walkRulesRecursively(
     return true;
 }
 
-function scopeCanApplyToElement(scopeRoot: Document | ShadowRoot, element: Element): boolean {
-    if (scopeRoot.nodeType === Node.DOCUMENT_NODE) {
-        return element.getRootNode() === scopeRoot;
-    }
-    if (element.getRootNode() === scopeRoot) {
-        return true;
-    }
-    const shadowRoot = scopeRoot as ShadowRoot;
-    return shadowRoot.host === element;
-}
-
 export function matchedStylesForNode(
     identifier: number,
     options: MatchedStylesOptions = {}
@@ -680,15 +908,25 @@ export function matchedStylesForNode(
         return payload;
     }
 
-    const scopedStyleSheets = collectStyleSheetsWithScope(element);
+    const assignedSlotsByScope = collectAssignedSlotsByScope(element);
+    const scopedStyleSheets = collectStyleSheetsWithScope(element, assignedSlotsByScope);
     let scannedRuleCount = 0;
 
     for (const scopedStyleSheet of scopedStyleSheets) {
-        if (!scopeCanApplyToElement(scopedStyleSheet.scopeRoot, element)) {
+        const scopeMatchMode = scopeMatchModeForElement(
+            scopedStyleSheet.scopeRoot,
+            element,
+            assignedSlotsByScope
+        );
+        if (scopeMatchMode === "none") {
             continue;
         }
-        const isShadowHostSelection = scopedStyleSheet.scopeRoot.nodeType === Node.DOCUMENT_FRAGMENT_NODE
-            && (scopedStyleSheet.scopeRoot as ShadowRoot).host === element;
+        if (!isStyleSheetEnabled(scopedStyleSheet.styleSheet)) {
+            continue;
+        }
+        if (!isStyleSheetMediaActive(scopedStyleSheet.styleSheet)) {
+            continue;
+        }
 
         let cssRules: CSSRuleList;
         try {
@@ -709,10 +947,19 @@ export function matchedStylesForNode(
             if (!selectorText) {
                 return true;
             }
-            if (isShadowHostSelection && !selectorContainsHostPseudo(selectorText)) {
+            if (scopeMatchMode === "host" && !selectorContainsHostPseudo(selectorText)) {
                 return true;
             }
-            if (!selectorMatchesElement(element, selectorText, scopedStyleSheet.scopeRoot)) {
+            if (scopeMatchMode === "slotted" && !selectorContainsSlottedPseudo(selectorText)) {
+                return true;
+            }
+            if (!selectorMatchesElement(
+                element,
+                selectorText,
+                scopedStyleSheet.scopeRoot,
+                scopeMatchMode,
+                assignedSlotsByScope
+            )) {
                 return true;
             }
 

@@ -212,6 +212,126 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ".doc-only")).toBe(false);
     });
 
+    it("matches ::slotted rules for assigned light-dom nodes", () => {
+        document.body.innerHTML = "<section id=\"host\"><span id=\"target\" slot=\"entry\" class=\"slot-target\"></span></section>";
+        const host = document.getElementById("host");
+        const target = document.getElementById("target");
+        expect(host).not.toBeNull();
+        expect(target).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const slotElement = document.createElement("slot");
+        slotElement.setAttribute("name", "entry");
+        shadowRoot.appendChild(slotElement);
+        Object.defineProperty(target as Element & { assignedSlot?: HTMLSlotElement | null }, "assignedSlot", {
+            configurable: true,
+            value: slotElement
+        });
+
+        const shadowStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule("::slotted(.slot-target)", [["color", "red"]]),
+                makeStyleRule("slot[name=\"entry\"]::slotted(.slot-target)", [["margin", "0"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [shadowStyleSheet]
+        });
+
+        const nodeId = registerNode(target!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+        const slottedRules = payload.rules.filter((rule) => rule.selectorText.includes("::slotted(.slot-target)"));
+
+        expect(slottedRules.length).toBe(2);
+    });
+
+    it("skips inactive media-scoped stylesheets", () => {
+        const originalMatchMedia = window.matchMedia;
+        const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
+        Object.defineProperty(window, "matchMedia", {
+            configurable: true,
+            value: (query: string): MediaQueryList => ({
+                matches: !query.includes("print"),
+                media: query,
+                onchange: null,
+                addListener: () => undefined,
+                removeListener: () => undefined,
+                addEventListener: () => undefined,
+                removeEventListener: () => undefined,
+                dispatchEvent: () => false
+            })
+        });
+
+        try {
+            document.body.innerHTML = "<div id=\"target\" class=\"media-target\"></div>";
+            const target = document.getElementById("target");
+            expect(target).not.toBeNull();
+            const nodeId = registerNode(target!);
+
+            const inactiveSheet = {
+                media: { mediaText: "print" },
+                cssRules: cssRuleListFromRules([
+                    makeStyleRule(".media-target", [["color", "red"]])
+                ])
+            } as unknown as CSSStyleSheet;
+            const activeSheet = {
+                media: { mediaText: "screen" },
+                cssRules: cssRuleListFromRules([
+                    makeStyleRule(".media-target", [["color", "blue"]])
+                ])
+            } as unknown as CSSStyleSheet;
+            Object.defineProperty(document, "styleSheets", {
+                configurable: true,
+                value: styleSheetListFromSheets([inactiveSheet, activeSheet])
+            });
+
+            const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+            const matchedRules = payload.rules.filter((rule) => rule.selectorText === ".media-target");
+
+            expect(matchedRules.length).toBe(1);
+        } finally {
+            if (descriptor) {
+                Object.defineProperty(document, "styleSheets", descriptor);
+            } else {
+                const mutableDocument = document as unknown as { styleSheets?: StyleSheetList };
+                delete mutableDocument.styleSheets;
+            }
+            Object.defineProperty(window, "matchMedia", {
+                configurable: true,
+                value: originalMatchMedia
+            });
+        }
+    });
+
+    it("skips disabled stylesheets", () => {
+        const activeStyle = document.createElement("style");
+        activeStyle.textContent = ".disabled-target { color: blue; }";
+        document.head.appendChild(activeStyle);
+
+        const disabledStyle = document.createElement("style");
+        disabledStyle.textContent = ".disabled-target { color: red; }";
+        document.head.appendChild(disabledStyle);
+
+        const disabledSheet = disabledStyle.sheet as (CSSStyleSheet & { disabled?: boolean }) | null;
+        if (disabledSheet) {
+            Object.defineProperty(disabledSheet, "disabled", {
+                configurable: true,
+                value: true
+            });
+        }
+
+        document.body.innerHTML = "<div id=\"target\" class=\"disabled-target\"></div>";
+        const target = document.getElementById("target");
+        expect(target).not.toBeNull();
+        const nodeId = registerNode(target!);
+
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+        const matchedRules = payload.rules.filter((rule) => rule.selectorText === ".disabled-target");
+
+        expect(matchedRules.length).toBe(1);
+    });
+
     it("skips inactive conditional at-rules", () => {
         const globalWithCSS = globalThis as typeof globalThis & {
             CSS?: { supports?: (conditionText: string) => boolean };
@@ -326,7 +446,7 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ".inside")).toBe(false);
     });
 
-    it("keeps per-scope entries for shared adopted stylesheets", () => {
+    it("collects stylesheets from relevant scopes only", () => {
         document.body.innerHTML = "<section id=\"host-a\"></section><section id=\"host-b\"></section>";
         const hostA = document.getElementById("host-a");
         const hostB = document.getElementById("host-b");
@@ -353,8 +473,8 @@ describe("dom-agent-styles", () => {
         const scopedStyleSheets = collectStyleSheetsWithScope(target!);
         const sharedEntries = scopedStyleSheets.filter((entry) => entry.styleSheet === sharedStyle);
 
-        expect(sharedEntries.length).toBe(2);
-        expect(sharedEntries.some((entry) => entry.scopeRoot === rootA)).toBe(true);
+        expect(sharedEntries.length).toBe(1);
+        expect(sharedEntries.some((entry) => entry.scopeRoot === rootA)).toBe(false);
         expect(sharedEntries.some((entry) => entry.scopeRoot === rootB)).toBe(true);
     });
 });

@@ -95,12 +95,15 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
             clear()
             return
         }
+        let previousNodeId = nodeId
         nodeId = snapshot.nodeId
         preview = snapshot.preview
         attributes = snapshot.attributes
         path = snapshot.path
         selectorPath = snapshot.selectorPath
-        clearMatchedStyles()
+        if previousNodeId != snapshot.nodeId {
+            clearMatchedStyles()
+        }
     }
 
     package func clear() {
