@@ -230,4 +230,22 @@ describe("dom-tree-updates", () => {
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
     });
+
+    it("increments style revision for unknown child removals in shallow snapshots", () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeRemoved",
+            params: {
+                parentNodeId: 999,
+                nodeId: 1000
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
 });

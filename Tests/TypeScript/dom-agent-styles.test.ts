@@ -283,6 +283,40 @@ describe("dom-agent-styles", () => {
         expect(payload.rules.some((rule) => rule.selectorText === ":host(.disabled) ::slotted(.slot-target)")).toBe(false);
     });
 
+    it("matches ::slotted rules when :host prefix uses child combinators", () => {
+        document.body.innerHTML = "<section id=\"host\" class=\"enabled\"><span id=\"target\" slot=\"entry\" class=\"slot-target\"></span></section>";
+        const host = document.getElementById("host");
+        const target = document.getElementById("target");
+        expect(host).not.toBeNull();
+        expect(target).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const slotElement = document.createElement("slot");
+        slotElement.setAttribute("name", "entry");
+        shadowRoot.appendChild(slotElement);
+        Object.defineProperty(target as Element & { assignedSlot?: HTMLSlotElement | null }, "assignedSlot", {
+            configurable: true,
+            value: slotElement
+        });
+
+        const shadowStyleSheet = {
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(":host(.enabled) > slot[name=\"entry\"]::slotted(.slot-target)", [["color", "red"]]),
+                makeStyleRule(":host(.disabled) > slot[name=\"entry\"]::slotted(.slot-target)", [["padding", "2px"]])
+            ])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [shadowStyleSheet]
+        });
+
+        const nodeId = registerNode(target!);
+        const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.enabled) > slot[name=\"entry\"]::slotted(.slot-target)")).toBe(true);
+        expect(payload.rules.some((rule) => rule.selectorText === ":host(.disabled) > slot[name=\"entry\"]::slotted(.slot-target)")).toBe(false);
+    });
+
     it("skips inactive media-scoped stylesheets", () => {
         const originalMatchMedia = window.matchMedia;
         const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
@@ -537,6 +571,53 @@ describe("dom-agent-styles", () => {
             expect(suppressSpy).toHaveBeenCalledWith("matched-styles-container-probe");
             expect(resumeSpy).toHaveBeenCalledWith("matched-styles-container-probe");
             expect(resumeSpy.mock.calls.length).toBeGreaterThanOrEqual(suppressSpy.mock.calls.length);
+        } finally {
+            if (descriptor) {
+                Object.defineProperty(document, "styleSheets", descriptor);
+            } else {
+                const mutableDocument = document as unknown as { styleSheets?: StyleSheetList };
+                delete mutableDocument.styleSheets;
+            }
+        }
+    });
+
+    it("probes container rules for shadow-root top-level elements", () => {
+        document.body.innerHTML = "<section id=\"host\"></section>";
+        const host = document.getElementById("host");
+        expect(host).not.toBeNull();
+
+        const shadowRoot = host!.attachShadow({ mode: "open" });
+        const target = document.createElement("div");
+        target.id = "target";
+        target.className = "container-target";
+        shadowRoot.appendChild(target);
+
+        const nodeId = registerNode(target);
+        const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
+        const containerRuleType = (CSSRule as typeof CSSRule & { CONTAINER_RULE?: number }).CONTAINER_RULE ?? 0;
+        const containerRule = {
+            type: containerRuleType,
+            cssText: "@container (width > 1000px) { .container-target { color: red; } }",
+            containerQuery: "(width > 1000px)",
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(".container-target", [["color", "red"]])
+            ])
+        } as unknown as CSSRule;
+        const styleSheet = {
+            cssRules: cssRuleListFromRules([containerRule])
+        } as unknown as CSSStyleSheet;
+        Object.defineProperty(shadowRoot as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [styleSheet]
+        });
+        Object.defineProperty(document, "styleSheets", {
+            configurable: true,
+            value: styleSheetListFromSheets([])
+        });
+
+        try {
+            const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+            expect(payload.rules.some((rule) => rule.selectorText === ".container-target")).toBe(false);
         } finally {
             if (descriptor) {
                 Object.defineProperty(document, "styleSheets", descriptor);

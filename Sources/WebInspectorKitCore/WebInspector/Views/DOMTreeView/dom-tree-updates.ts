@@ -283,7 +283,16 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
                 return true;
             }
             const parentId = typeof entry.parentId === "number" ? entry.parentId : entry.parentNodeId;
-            return nodeOrAncestorIsStyleElement(parentId);
+            if (nodeOrAncestorIsStyleElement(parentId)) {
+                return true;
+            }
+            if (!removedNode) {
+                if (typeof parentId !== "number" || !treeState.nodes.has(parentId)) {
+                    // Shallow snapshots can omit removed nodes/parents; conservatively treat as style-affecting.
+                    return true;
+                }
+            }
+            return false;
         }
         case "attributeModified":
         case "attributeRemoved": {

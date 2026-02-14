@@ -670,6 +670,44 @@ function matchesSelectorRelativeToElement(element: Element, selectorText: string
     }
 }
 
+function matchesSelectorRelativeToHostScope(slot: HTMLSlotElement, selectorText: string): boolean {
+    const trimmedSelector = selectorText.trim();
+    if (!trimmedSelector) {
+        return true;
+    }
+
+    const rootNode = slot.getRootNode();
+    if (!(rootNode instanceof ShadowRoot)) {
+        return matchesSelectorRelativeToElement(slot, trimmedSelector);
+    }
+
+    const firstCharacter = trimmedSelector[0];
+    const isLeadingCombinator = firstCharacter === ">" || firstCharacter === "+" || firstCharacter === "~" || firstCharacter === "|";
+    const normalizedSelector = isLeadingCombinator
+        ? `:scope ${trimmedSelector}`
+        : trimmedSelector;
+
+    try {
+        const matchedElements = rootNode.querySelectorAll(normalizedSelector);
+        for (const matchedElement of matchedElements) {
+            if (matchedElement === slot) {
+                return true;
+            }
+        }
+    } catch {
+        // Fall through to compatibility fallback path below.
+    }
+
+    if (isLeadingCombinator && firstCharacter === ">") {
+        if (slot.parentNode !== rootNode) {
+            return false;
+        }
+        return matchesSelectorRelativeToElement(slot, trimmedSelector.slice(1));
+    }
+
+    return matchesSelectorRelativeToElement(slot, trimmedSelector);
+}
+
 function hostSelectorVariantMatchesHostElement(selectorText: string, host: Element): boolean {
     const parsedHostContext = parseLeadingHostPseudo(selectorText, "host-context");
     if (parsedHostContext) {
@@ -772,7 +810,7 @@ function slottedPrefixMatchesSlot(prefix: string, slot: HTMLSlotElement): boolea
             }
 
             const remainder = trimmedExpandedPrefix.slice(parsedHostContext.consumedLength);
-            if (matchesSelectorRelativeToElement(slot, remainder)) {
+            if (matchesSelectorRelativeToHostScope(slot, remainder)) {
                 return true;
             }
             continue;
@@ -789,7 +827,7 @@ function slottedPrefixMatchesSlot(prefix: string, slot: HTMLSlotElement): boolea
             }
 
             const remainder = trimmedExpandedPrefix.slice(parsedHost.consumedLength);
-            if (matchesSelectorRelativeToElement(slot, remainder)) {
+            if (matchesSelectorRelativeToHostScope(slot, remainder)) {
                 return true;
             }
             continue;
@@ -1017,8 +1055,8 @@ function evaluateContainerRuleActivityWithProbe(
         return true;
     }
 
-    const parentElement = element.parentElement;
-    if (!parentElement) {
+    const parentContainer = element.parentNode;
+    if (!(parentContainer instanceof Element || parentContainer instanceof ShadowRoot)) {
         return true;
     }
 
@@ -1061,7 +1099,7 @@ function evaluateContainerRuleActivityWithProbe(
         suppressSnapshotAutoUpdate("matched-styles-container-probe");
         didSuppressSnapshotAutoUpdate = true;
         styleHost.appendChild(styleElement);
-        parentElement.insertBefore(probeElement, element.nextSibling);
+        parentContainer.insertBefore(probeElement, element.nextSibling);
         const computedStyle = ownerDocument.defaultView?.getComputedStyle(probeElement);
         const probeValue = trimValue(computedStyle?.getPropertyValue(CONTAINER_QUERY_PROBE_PROPERTY) ?? "");
         return probeValue === "1";
