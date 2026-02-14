@@ -29,6 +29,48 @@ extension WebInspector {
                         }
 
                         Section {
+                            if inspector.selection.isLoadingMatchedStyles {
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                    Text(LocalizedStringResource("dom.element.styles.loading", bundle: .module))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .listRowSeparator(.hidden)
+                            } else {
+                                if inspector.selection.matchedStyles.isEmpty {
+                                    Text(LocalizedStringResource("dom.element.styles.empty", bundle: .module))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .listRowSeparator(.hidden)
+                                } else {
+                                    ForEach(Array(inspector.selection.matchedStyles.enumerated()), id: \.offset) { _, rule in
+                                        styleRuleView(rule)
+                                    }
+                                }
+
+                                if inspector.selection.matchedStylesTruncated {
+                                    Text(LocalizedStringResource("dom.element.styles.truncated", bundle: .module))
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .listRowSeparator(.hidden)
+                                }
+
+                                if inspector.selection.blockedStylesheetCount > 0 {
+                                    Text(
+                                        "\(inspector.selection.blockedStylesheetCount) "
+                                            + String(localized: "dom.element.styles.blocked_stylesheets", bundle: .module)
+                                    )
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .listRowSeparator(.hidden)
+                                }
+                            }
+                        } header: {
+                            Text(LocalizedStringResource("dom.element.section.styles", bundle: .module))
+                        }
+
+                        Section {
                             if inspector.selection.attributes.isEmpty {
                                 Text(LocalizedStringResource("dom.element.attributes.empty", bundle: .module))
                                     .font(.subheadline)
@@ -124,6 +166,39 @@ extension WebInspector {
                     Image(systemName: "trash")
                 }
             }
+        }
+
+        @ViewBuilder
+        private func styleRuleView(_ rule: DOMMatchedStyleRule) -> some View {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(rule.selectorText)
+                    .font(.subheadline.weight(.semibold))
+                    .textSelection(.enabled)
+
+                if !rule.sourceLabel.isEmpty {
+                    Text(rule.sourceLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                if !rule.atRuleContext.isEmpty {
+                    Text(rule.atRuleContext.joined(separator: "\n"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                selectionText(styleDeclarationText(rule))
+            }
+            .listRowStyle()
+        }
+
+        private func styleDeclarationText(_ rule: DOMMatchedStyleRule) -> String {
+            rule.declarations.map { declaration in
+                let importantSuffix = declaration.important ? " !important" : ""
+                return "\(declaration.name): \(declaration.value)\(importantSuffix);"
+            }.joined(separator: "\n")
         }
     }
 }

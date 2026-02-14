@@ -58,19 +58,31 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
     public var attributes: [DOMAttribute]
     public var path: [String]
     public var selectorPath: String
+    public var matchedStyles: [DOMMatchedStyleRule]
+    public var isLoadingMatchedStyles: Bool
+    public var matchedStylesTruncated: Bool
+    public var blockedStylesheetCount: Int
 
     public init(
         nodeId: Int? = nil,
         preview: String = "",
         attributes: [DOMAttribute] = [],
         path: [String] = [],
-        selectorPath: String = ""
+        selectorPath: String = "",
+        matchedStyles: [DOMMatchedStyleRule] = [],
+        isLoadingMatchedStyles: Bool = false,
+        matchedStylesTruncated: Bool = false,
+        blockedStylesheetCount: Int = 0
     ) {
         self.nodeId = nodeId
         self.preview = preview
         self.attributes = attributes
         self.path = path
         self.selectorPath = selectorPath
+        self.matchedStyles = matchedStyles
+        self.isLoadingMatchedStyles = isLoadingMatchedStyles
+        self.matchedStylesTruncated = matchedStylesTruncated
+        self.blockedStylesheetCount = blockedStylesheetCount
     }
 
     package func applySnapshot(from dictionary: [String: Any]) {
@@ -88,6 +100,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         attributes = snapshot.attributes
         path = snapshot.path
         selectorPath = snapshot.selectorPath
+        clearMatchedStyles()
     }
 
     package func clear() {
@@ -96,6 +109,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         attributes = []
         path = []
         selectorPath = ""
+        clearMatchedStyles()
     }
 
     package func updateAttributeValue(nodeId: Int?, name: String, value: String) {
@@ -108,5 +122,32 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
     package func removeAttribute(nodeId: Int?, name: String) {
         guard nodeId == self.nodeId else { return }
         attributes.removeAll { $0.name == name }
+    }
+
+    package func beginMatchedStylesLoading(for nodeId: Int) {
+        guard self.nodeId == nodeId else {
+            return
+        }
+        isLoadingMatchedStyles = true
+        matchedStyles = []
+        matchedStylesTruncated = false
+        blockedStylesheetCount = 0
+    }
+
+    package func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for nodeId: Int) {
+        guard self.nodeId == nodeId, payload.nodeId == nodeId else {
+            return
+        }
+        matchedStyles = payload.rules
+        matchedStylesTruncated = payload.truncated
+        blockedStylesheetCount = payload.blockedStylesheetCount
+        isLoadingMatchedStyles = false
+    }
+
+    package func clearMatchedStyles() {
+        matchedStyles = []
+        matchedStylesTruncated = false
+        blockedStylesheetCount = 0
+        isLoadingMatchedStyles = false
     }
 }
