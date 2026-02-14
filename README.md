@@ -2,41 +2,57 @@
 
 ![WebInspectorKit preview](Resources/preview.webp)
 
-iOS-ready Web inspector, SwiftUI-friendly and easy to add.
+SwiftUI-first Web Inspector for `WKWebView` (iOS / macOS).
+
+## Products
+
+- `WebInspectorKit` (UI): SwiftUI panel + tab container + DOMTreeView frontend assets.
+- `WebInspectorKitCore` (Core): DOM/Network engines + bundled inspector scripts (no SwiftUI).
+
+`WebInspectorKit` depends on `WebInspectorKitCore`. There is no compatibility layer; expect breaking API changes.
 
 ## Features
-- DOM tree browsing with selection highlights and node deletion
-- Attribute editing/removal plus copying HTML, CSS selector, and XPath
-- Configurable tabs via a SwiftUI-style result builder (DOM and Detail tabs included)
-- Dedicated view models for DOM / Detail / Network views so each view can run standalone
-- Network tab for fetch/XHR requests with recording/clearing controls (status, headers, timing)
-- Automatic DOM snapshot reloads with debounce and adjustable depth
-- Selection mode toggle to start/stop element picking and highlighting
-- Lifecycle handled by `WebInspectorView` (`attach`, `suspend`, `detach`)
-- Lightweight: SwiftUI and WebKit only, no extra dependencies
+
+- DOM tree browsing (WebView frontend) with element picking, highlights, deletion, and attribute editing
+- Network request logging (fetch/XHR/WebSocket) with buffering when the Network tab is not selected
+- Configurable tabs via `WebInspector.Tab` + `WebInspector.TabBuilder`
+- Explicit lifecycle via `WebInspector.Controller` (`connect(to:)`, `suspend()`, `disconnect()`)
+  - `WebInspector.Panel` wires this up automatically for SwiftUI
 
 This repository is under active development, and future updates may introduce major changes to the API or behavior.
 
 ## Requirements
+
 - Swift 6.2+
 - iOS 18 / macOS 15+
 - WKWebView with JavaScript enabled
 
 ## Installation
-Add WebInspectorKit as a Swift Package dependency in Xcode (Package Dependencies). Use a local path or your repository URL as appropriate.
 
-## Inspect an existing WKWebView
+Add this repository as a Swift Package dependency in Xcode (Package Dependencies).
+Choose one or both products depending on your use case:
+
+- `WebInspectorKit` (recommended for most apps)
+- `WebInspectorKitCore` (headless / custom UI)
+
+## Quick Start (Inspect an Existing WKWebView)
+
 ```swift
+import SwiftUI
+import WebKit
+import WebInspectorKit
+
 struct ContentView: View {
-    @State private var inspector = WebInspectorModel()
+    @State private var inspector = WebInspector.Controller()
     @State private var isInspectorPresented = false
+
     let pageWebView: WKWebView // your app's WKWebView that renders the page
 
     var body: some View {
         NavigationStack {
             YourPageView(webView: pageWebView) // your page UI that hosts the WKWebView
                 .sheet(isPresented: $isInspectorPresented) {
-                    WebInspectorView(inspector, webView: pageWebView)
+                    WebInspector.Panel(inspector, webView: pageWebView)
                         .presentationDetents([.medium, .large])
                 }
                 .toolbar {
@@ -47,17 +63,19 @@ struct ContentView: View {
         }
     }
 }
-
 ```
-For a more complete preview setup, see [`Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift`](Sources/WebInspectorKit/WebInspector/Views/WebInspectorView.swift) (`#Preview`).
 
-## Customize tabs
+For a working example, see `Tools/MiniBrowser`.
+
+## Customize Tabs
+
 ```swift
-WebInspectorView(inspector, webView: pageWebView) {
-    WITab.dom()
-    WITab.element()
-    WITab("Custom", systemImage: "folder") {
-        NavigationStack{
+WebInspector.Panel(inspector, webView: pageWebView) {
+    WebInspector.Tab.dom()
+    WebInspector.Tab.element()
+
+    WebInspector.Tab(LocalizedStringResource("Custom"), systemImage: "folder") { _ in
+        NavigationStack {
             List {
                 Text("Custom tab content")
             }
@@ -66,14 +84,18 @@ WebInspectorView(inspector, webView: pageWebView) {
 }
 ```
 
-## How it works
-- `DOMAgent.js` is injected into the page WKWebView to stream DOM snapshots and mutation bundles.
-- `NetworkAgent.js` observes network activity in the inspected page when recording is enabled.
+Tip: If you omit the Network tab (`WebInspector.Tab.network()`), network scripts are never installed.
+
+## How It Works
+
+- `DOMAgent` is injected into the inspected page to stream DOM snapshots and mutation bundles.
+- `NetworkAgent` observes network activity in the inspected page.
+  - When the Network tab is not selected, the agent buffers; selecting the tab switches it to active logging.
 
 ## Limitations
+
 - WKWebView only; JavaScript must be enabled.
 - Console features are not implemented.
-- Documentation is in progress; fuller docs are coming soon.
 
 ## Apps Using
 
@@ -82,4 +104,6 @@ WebInspectorView(inspector, webView: pageWebView) {
 </p>
 
 ## License
+
 See [LICENSE](LICENSE).
+
