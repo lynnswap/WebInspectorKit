@@ -437,3 +437,19 @@ extension DOMFrontendStore: WKNavigationDelegate {
         inspectorLogger.error("inspector load failed: \(error.localizedDescription, privacy: .public)")
     }
 }
+
+#if DEBUG
+extension DOMFrontendStore {
+    var testBundleFlushInterval: TimeInterval {
+        bundleFlushInterval()
+    }
+
+    var testHasPendingBundleFlushTask: Bool {
+        pendingBundleFlushTask != nil
+    }
+
+    func testSetReady(_ ready: Bool) {
+        isReady = ready
+    }
+}
+#endif

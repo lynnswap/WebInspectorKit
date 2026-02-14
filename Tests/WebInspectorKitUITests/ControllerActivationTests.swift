@@ -80,6 +80,25 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func reconnectAfterSuspendRestoresModeForSelectedTab() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.network.session.mode == .buffering)
+
+        controller.selectedTabID = "wi_network"
+        #expect(controller.network.session.mode == .active)
+
+        controller.connect(to: nil)
+        #expect(controller.network.session.mode == .stopped)
+
+        controller.connect(to: webView)
+        #expect(controller.network.session.mode == .active)
+    }
+
+    @Test
     func configureTabsWhileConnectedReconnectsNewlyRequiredSessions() {
         let controller = WebInspector.Controller()
         controller.configureTabs([.dom(), .element()])

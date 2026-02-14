@@ -27,6 +27,19 @@ This repository is under active development, and future updates may introduce ma
 - iOS 18 / macOS 15+
 - WKWebView with JavaScript enabled
 
+## Testing
+
+Run both layers to cover Swift and in-page TypeScript hot paths.
+
+```bash
+swift test
+npm run test:ts
+```
+
+Notes:
+- `npm run test:ts` uses `vitest + jsdom` and validates DOM/Network hotspot pipelines.
+- CI is currently staged as non-blocking and can be tightened to required checks after stability is confirmed.
+
 ## Installation
 
 Add this repository as a Swift Package dependency in Xcode (Package Dependencies).
@@ -106,4 +119,3 @@ Tip: If you omit the Network tab (`WebInspector.Tab.network()`), network scripts
 ## License
 
 See [LICENSE](LICENSE).
-

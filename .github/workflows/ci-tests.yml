@@ -1,0 +1,40 @@
+name: CI Tests (Staged Non-Blocking)
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  swift-tests:
+    name: Swift Tests
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Swift tests
+        run: swift test
+
+  typescript-tests:
+    name: TypeScript Tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript tests
+        run: npm run test:ts

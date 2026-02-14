@@ -16,6 +16,44 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func setModeStoppedClearsExistingEntriesImmediately() throws {
+        let agent = NetworkPageAgent()
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 12,
+            "url": "https://example.com/live",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_100.0, wallMs: 1_700_000_000_100.0)
+        ])
+        agent.store.applyEvent(start)
+        #expect(agent.store.entries.count == 1)
+
+        agent.setMode(.stopped)
+
+        #expect(agent.store.entries.isEmpty)
+        #expect(agent.store.isRecording == false)
+    }
+
+    @Test
+    func setModeBufferingKeepsExistingEntriesAndRecordingEnabled() throws {
+        let agent = NetworkPageAgent()
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 13,
+            "url": "https://example.com/buffer",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_120.0, wallMs: 1_700_000_000_120.0)
+        ])
+        agent.store.applyEvent(start)
+        #expect(agent.store.entries.count == 1)
+
+        agent.setMode(.buffering)
+
+        #expect(agent.store.entries.count == 1)
+        #expect(agent.store.isRecording == true)
+    }
+
+    @Test
     func clearNetworkLogsResetsEntriesAndSelection() throws {
         let agent = NetworkPageAgent()
         let store = agent.store
