@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+    disableAutoSnapshot,
+    enableAutoSnapshot,
     setAutoSnapshotOptions,
     triggerSnapshotUpdate
 } from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-snapshot";
@@ -166,5 +168,21 @@ describe("dom-agent-snapshot", () => {
 
         expect(snapshotHandler().postMessage).not.toHaveBeenCalled();
         expect(mutationHandler().postMessage).not.toHaveBeenCalled();
+    });
+
+    it("emits initial full snapshot when auto updates are re-enabled with no pending mutations", () => {
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.pendingMutations = [];
+
+        disableAutoSnapshot();
+        enableAutoSnapshot();
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
+        const payload = parseBundleCall(snapshotHandler());
+        expect(payload.kind).toBe("snapshot");
+        expect(payload.reason).toBe("initial");
     });
 });

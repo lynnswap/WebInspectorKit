@@ -439,7 +439,11 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
         return;
     }
 
+    var reason = reasonOverride || inspector.snapshotAutoUpdateReason || "mutation";
     if (!pending.length) {
+        if (reason === "initial") {
+            sendFullSnapshot("initial");
+        }
         return;
     }
     var result = buildDomMutationEvents(pending, 0);
@@ -451,7 +455,6 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
     if (!messages.length) {
         return;
     }
-    var reason = reasonOverride || inspector.snapshotAutoUpdateReason || "mutation";
     var chunkSize = 200;
     try {
         for (var offset = 0; offset < messages.length; offset += chunkSize) {
