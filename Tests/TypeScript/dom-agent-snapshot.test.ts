@@ -35,6 +35,7 @@ function resetInspectorState() {
     inspector.snapshotAutoUpdateEnabled = true;
     inspector.snapshotAutoUpdatePending = false;
     inspector.snapshotAutoUpdateTimer = null;
+    inspector.snapshotAutoUpdateFrame = null;
     inspector.snapshotAutoUpdateDebounce = 600;
     inspector.snapshotAutoUpdateMaxDepth = 4;
     inspector.snapshotAutoUpdateReason = "mutation";
@@ -54,18 +55,33 @@ describe("dom-agent-snapshot", () => {
     });
 
     it("debounce is clamped to the 50ms minimum", () => {
+        const node = document.createElement("div");
+        node.setAttribute("class", "ready");
+        document.body.appendChild(node);
+
         inspector.map = new Map([[1, document.documentElement]]);
         inspector.snapshotAutoUpdateDebounce = 10;
+        inspector.pendingMutations = [{
+            type: "attributes",
+            target: node,
+            attributeName: "class",
+            addedNodes: [] as unknown as NodeList,
+            removedNodes: [] as unknown as NodeList,
+            previousSibling: null
+        } as unknown as MutationRecord];
         setAutoSnapshotOptions({ debounce: 10 });
 
         triggerSnapshotUpdate("mutation");
 
         vi.advanceTimersByTime(49);
-        expect(snapshotHandler().postMessage).not.toHaveBeenCalled();
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
 
         vi.advanceTimersByTime(1);
-        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
-        expect(parseBundleCall(snapshotHandler()).reason).toBe("mutation");
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(16);
+        expect(mutationHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(parseBundleCall(mutationHandler()).reason).toBe("mutation");
     });
 
     it("uses compact-depth full snapshot when overflow is detected", () => {
@@ -75,7 +91,7 @@ describe("dom-agent-snapshot", () => {
         setAutoSnapshotOptions({ debounce: 50 });
 
         triggerSnapshotUpdate("mutation");
-        vi.advanceTimersByTime(50);
+        vi.advanceTimersByTime(66);
 
         expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
         const payload = parseBundleCall(snapshotHandler());
@@ -101,7 +117,7 @@ describe("dom-agent-snapshot", () => {
         inspector.snapshotAutoUpdateDebounce = 50;
 
         triggerSnapshotUpdate("mutation");
-        vi.advanceTimersByTime(50);
+        vi.advanceTimersByTime(66);
 
         expect(mutationHandler().postMessage).toHaveBeenCalledTimes(1);
         expect(snapshotHandler().postMessage).not.toHaveBeenCalled();
@@ -132,12 +148,23 @@ describe("dom-agent-snapshot", () => {
         inspector.snapshotAutoUpdateDebounce = 50;
 
         triggerSnapshotUpdate("mutation");
-        vi.advanceTimersByTime(50);
+        vi.advanceTimersByTime(66);
 
         expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
         const payload = parseBundleCall(snapshotHandler());
         expect(payload.kind).toBe("snapshot");
         expect(payload.reason).toBe("compact");
         expect(payload.depth).toBe(2);
+    });
+
+    it("does not emit snapshot or mutation payload when no pending mutations exist", () => {
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+
+        triggerSnapshotUpdate("mutation");
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).not.toHaveBeenCalled();
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
     });
 });

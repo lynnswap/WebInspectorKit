@@ -32,6 +32,7 @@ export type InspectorState = {
     snapshotAutoUpdateEnabled: boolean;
     snapshotAutoUpdatePending: boolean;
     snapshotAutoUpdateTimer: ReturnType<typeof setTimeout> | null;
+    snapshotAutoUpdateFrame: number | null;
     snapshotAutoUpdateDebounce: number;
     snapshotAutoUpdateMaxDepth: number;
     snapshotAutoUpdateReason: string;
@@ -63,6 +64,7 @@ export const inspector: InspectorState = {
     snapshotAutoUpdateEnabled: false,
     snapshotAutoUpdatePending: false,
     snapshotAutoUpdateTimer: null,
+    snapshotAutoUpdateFrame: null,
     snapshotAutoUpdateDebounce: 600,
     snapshotAutoUpdateMaxDepth: 4,
     snapshotAutoUpdateReason: "mutation",
