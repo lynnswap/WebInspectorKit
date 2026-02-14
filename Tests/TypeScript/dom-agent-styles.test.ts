@@ -119,6 +119,51 @@ describe("dom-agent-styles", () => {
         expect(mediaRule?.atRuleContext[0]?.startsWith("@media")).toBe(true);
     });
 
+    it("respects @scope roots when matching nested selectors", () => {
+        document.body.innerHTML = `
+            <section class="component">
+                <h2 id="inside" class="title"></h2>
+            </section>
+            <h2 id="outside" class="title"></h2>
+        `;
+        const inside = document.getElementById("inside");
+        const outside = document.getElementById("outside");
+        expect(inside).not.toBeNull();
+        expect(outside).not.toBeNull();
+
+        const scopeRuleType = (CSSRule as typeof CSSRule & { SCOPE_RULE?: number }).SCOPE_RULE ?? 99999;
+        const scopedRule = {
+            type: scopeRuleType,
+            cssText: "@scope (.component)",
+            cssRules: cssRuleListFromRules([
+                makeStyleRule(".title", [["color", "red"]])
+            ])
+        } as unknown as CSSRule;
+        const scopedStyleSheet = {
+            cssRules: cssRuleListFromRules([scopedRule])
+        } as unknown as CSSStyleSheet;
+        const descriptor = Object.getOwnPropertyDescriptor(document, "styleSheets");
+        Object.defineProperty(document, "styleSheets", {
+            configurable: true,
+            value: styleSheetListFromSheets([scopedStyleSheet])
+        });
+
+        try {
+            const insidePayload = matchedStylesForNode(registerNode(inside!), { maxRules: 10 });
+            const outsidePayload = matchedStylesForNode(registerNode(outside!), { maxRules: 10 });
+
+            expect(insidePayload.rules.some((rule) => rule.selectorText === ".title")).toBe(true);
+            expect(outsidePayload.rules.some((rule) => rule.selectorText === ".title")).toBe(false);
+        } finally {
+            if (descriptor) {
+                Object.defineProperty(document, "styleSheets", descriptor);
+            } else {
+                const mutableDocument = document as unknown as { styleSheets?: StyleSheetList };
+                delete mutableDocument.styleSheets;
+            }
+        }
+    });
+
     it("counts blocked stylesheets when cssRules access throws", () => {
         document.head.innerHTML = "<style>.safe-rule { color: green; }</style>";
         document.body.innerHTML = "<div id=\"target\" class=\"safe-rule\"></div>";

@@ -1113,7 +1113,9 @@ function isSupportsConditionActive(conditionText: string | null | undefined): bo
 
 type RuleConditionContext = {
     element: Element;
+    scopeMatchMode: ScopeMatchMode;
     containerRuleActivityByRule: Map<CSSRule, boolean>;
+    scopeRuleActivityByRule: Map<CSSRule, boolean>;
 };
 
 function isContainerRule(rule: CSSRule): rule is CSSRule & {
@@ -1133,6 +1135,139 @@ function isContainerRule(rule: CSSRule): rule is CSSRule & {
     }
 
     return rule.cssText.startsWith("@container");
+}
+
+function isScopeRule(rule: CSSRule): boolean {
+    const scopeRuleType = (CSSRule as typeof CSSRule & { SCOPE_RULE?: number }).SCOPE_RULE;
+    if (typeof scopeRuleType === "number" && rule.type === scopeRuleType) {
+        return true;
+    }
+    return rule.cssText.startsWith("@scope");
+}
+
+type ParsedScopePrelude = {
+    startSelector: string | null;
+    endSelector: string | null;
+};
+
+function parseScopePrelude(rule: CSSRule): ParsedScopePrelude | null {
+    const scopeLabel = atRuleLabel(rule);
+    if (!scopeLabel.startsWith("@scope")) {
+        return null;
+    }
+
+    let remainder = scopeLabel.slice("@scope".length).trim();
+    if (!remainder) {
+        return {
+            startSelector: null,
+            endSelector: null
+        };
+    }
+
+    let startSelector: string | null = null;
+    let endSelector: string | null = null;
+
+    if (remainder[0] === "(") {
+        const parsedStart = readParenthesizedArgument(remainder, 0);
+        if (!parsedStart) {
+            return null;
+        }
+        startSelector = parsedStart.argument.trim() || null;
+        remainder = remainder.slice(parsedStart.endIndex).trim();
+    }
+
+    if (remainder.startsWith("to")) {
+        remainder = remainder.slice(2).trim();
+        if (remainder[0] !== "(") {
+            return null;
+        }
+        const parsedEnd = readParenthesizedArgument(remainder, 0);
+        if (!parsedEnd) {
+            return null;
+        }
+        endSelector = parsedEnd.argument.trim() || null;
+        remainder = remainder.slice(parsedEnd.endIndex).trim();
+    }
+
+    if (remainder) {
+        return null;
+    }
+
+    return {
+        startSelector,
+        endSelector
+    };
+}
+
+function collectInclusiveAncestorsInSameTree(element: Element): Element[] {
+    const ancestors: Element[] = [];
+    let current: Element | null = element;
+    while (current) {
+        ancestors.push(current);
+        current = current.parentElement;
+    }
+    return ancestors;
+}
+
+function selectorMatchIndices(elements: Element[], selectorText: string): number[] {
+    const indices: number[] = [];
+    for (let index = 0; index < elements.length; index += 1) {
+        try {
+            if (elements[index].matches(selectorText)) {
+                indices.push(index);
+            }
+        } catch {
+            return [];
+        }
+    }
+    return indices;
+}
+
+function matchesScopePreludeForElementInSameTree(
+    element: Element,
+    prelude: ParsedScopePrelude
+): boolean {
+    const ancestors = collectInclusiveAncestorsInSameTree(element);
+    if (!ancestors.length) {
+        return false;
+    }
+
+    const startIndices = prelude.startSelector
+        ? selectorMatchIndices(ancestors, prelude.startSelector)
+        : [ancestors.length - 1];
+    if (!startIndices.length) {
+        return false;
+    }
+    if (!prelude.endSelector) {
+        return true;
+    }
+
+    const endIndices = selectorMatchIndices(ancestors, prelude.endSelector);
+    if (!endIndices.length) {
+        return true;
+    }
+
+    for (const startIndex of startIndices) {
+        const blockedByEndBoundary = endIndices.some((endIndex) => endIndex <= startIndex);
+        if (!blockedByEndBoundary) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isScopeRuleActive(rule: CSSRule, ruleConditionContext: RuleConditionContext): boolean {
+    if (ruleConditionContext.scopeMatchMode !== "same-root") {
+        return true;
+    }
+
+    const prelude = parseScopePrelude(rule);
+    if (!prelude) {
+        return true;
+    }
+
+    return matchesScopePreludeForElementInSameTree(ruleConditionContext.element, prelude);
 }
 
 function makeContainerProbeClassName(): string {
@@ -1266,6 +1401,18 @@ function isRuleConditionActive(rule: CSSRule, ruleConditionContext: RuleConditio
         return isActive;
     }
 
+    if (isScopeRule(rule)) {
+        if (!ruleConditionContext) {
+            return true;
+        }
+        if (ruleConditionContext.scopeRuleActivityByRule.has(rule)) {
+            return ruleConditionContext.scopeRuleActivityByRule.get(rule) ?? true;
+        }
+        const isActive = isScopeRuleActive(rule, ruleConditionContext);
+        ruleConditionContext.scopeRuleActivityByRule.set(rule, isActive);
+        return isActive;
+    }
+
     return true;
 }
 
@@ -1336,10 +1483,6 @@ export function matchedStylesForNode(
 
     const assignedSlotsByScope = collectAssignedSlotsByScope(element);
     const scopedStyleSheets = collectStyleSheetsWithScope(element, assignedSlotsByScope);
-    const ruleConditionContext: RuleConditionContext = {
-        element,
-        containerRuleActivityByRule: new Map<CSSRule, boolean>()
-    };
     let scannedRuleCount = 0;
 
     for (const scopedStyleSheet of scopedStyleSheets) {
@@ -1357,6 +1500,12 @@ export function matchedStylesForNode(
         if (!isStyleSheetMediaActive(scopedStyleSheet.styleSheet)) {
             continue;
         }
+        const ruleConditionContext: RuleConditionContext = {
+            element,
+            scopeMatchMode,
+            containerRuleActivityByRule: new Map<CSSRule, boolean>(),
+            scopeRuleActivityByRule: new Map<CSSRule, boolean>()
+        };
 
         let cssRules: CSSRuleList;
         try {
