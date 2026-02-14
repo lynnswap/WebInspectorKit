@@ -248,4 +248,22 @@ describe("dom-tree-updates", () => {
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
     });
+
+    it("increments style revision for unknown text mutations in shallow snapshots", () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.characterDataModified",
+            params: {
+                nodeId: 1001,
+                characterData: ".changed { color: red; }"
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
 });

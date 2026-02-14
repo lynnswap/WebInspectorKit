@@ -325,6 +325,10 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
             return childCountUpdateCanAffectStylesheets(params as ChildCountUpdatedParams);
         case "characterDataModified": {
             const entry = params as CharacterDataModifiedParams;
+            if (typeof entry.nodeId === "number" && !treeState.nodes.has(entry.nodeId)) {
+                // Shallow snapshots may omit text nodes under <style>; conservatively mark as style-affecting.
+                return true;
+            }
             return nodeOrAncestorIsStyleElement(entry.nodeId);
         }
         default:
