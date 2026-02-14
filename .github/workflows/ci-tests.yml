@@ -16,6 +16,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js for ObfuscateJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: Tools/ObfuscateJS/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install ObfuscateJS dependencies
+        working-directory: Tools/ObfuscateJS
+        run: pnpm install --frozen-lockfile
+
       - name: Setup Swift
         uses: swift-actions/setup-swift@v2
         with:
