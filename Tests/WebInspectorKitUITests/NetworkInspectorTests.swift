@@ -159,6 +159,38 @@ struct NetworkInspectorTests {
         #expect(inspector.selectedEntryID == nil)
     }
 
+    @Test
+    func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
+        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 21,
+            url: "https://example.com/buffered-endpoint",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+        let finish = try decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 21,
+            "initiator": "fetch",
+            "time": [
+                "monotonicMs": 1_120.0,
+                "wallMs": 1_700_000_000_120.0
+            ]
+        ])
+        inspector.store.applyEvent(finish)
+
+        inspector.searchText = "buffered-endpoint"
+        inspector.activeResourceFilters = [.xhrFetch]
+
+        let displayed = inspector.displayEntries
+        #expect(displayed.count == 1)
+        let entry = try #require(displayed.first)
+        #expect(entry.requestID == 21)
+        #expect(entry.requestBody == nil)
+        #expect(entry.responseBody == nil)
+    }
+
     private func makeEntry() -> NetworkEntry {
         NetworkEntry(
             sessionID: "session",
