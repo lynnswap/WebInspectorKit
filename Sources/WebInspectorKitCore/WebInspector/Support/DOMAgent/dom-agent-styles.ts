@@ -111,11 +111,17 @@ function makeInlineRule(element: Element): MatchedStyleRule | null {
 function addStyleSheetsFromList(
     styleSheets: StyleSheetList | CSSStyleSheet[] | null | undefined,
     scopeRoot: Document | ShadowRoot,
-    seen: Set<CSSStyleSheet>,
+    seenByScope: Map<Document | ShadowRoot, Set<CSSStyleSheet>>,
     output: ScopedStyleSheet[]
 ): void {
     if (!styleSheets) {
         return;
+    }
+
+    let scopeSeen = seenByScope.get(scopeRoot);
+    if (!scopeSeen) {
+        scopeSeen = new Set<CSSStyleSheet>();
+        seenByScope.set(scopeRoot, scopeSeen);
     }
 
     const length = Array.isArray(styleSheets) ? styleSheets.length : styleSheets.length;
@@ -123,24 +129,24 @@ function addStyleSheetsFromList(
         const styleSheet = Array.isArray(styleSheets)
             ? styleSheets[index]
             : (styleSheets.item(index) as CSSStyleSheet | null);
-        if (!styleSheet || seen.has(styleSheet)) {
+        if (!styleSheet || scopeSeen.has(styleSheet)) {
             continue;
         }
-        seen.add(styleSheet);
+        scopeSeen.add(styleSheet);
         output.push({styleSheet, scopeRoot});
     }
 }
 
 function addAdoptedStyleSheets(
     root: Document | ShadowRoot,
-    seen: Set<CSSStyleSheet>,
+    seenByScope: Map<Document | ShadowRoot, Set<CSSStyleSheet>>,
     output: ScopedStyleSheet[]
 ): void {
     const candidate = (root as Document & { adoptedStyleSheets?: CSSStyleSheet[] }).adoptedStyleSheets;
     if (!Array.isArray(candidate)) {
         return;
     }
-    addStyleSheetsFromList(candidate, root, seen, output);
+    addStyleSheetsFromList(candidate, root, seenByScope, output);
 }
 
 function collectOpenShadowRoots(root: ParentNode): ShadowRoot[] {
@@ -165,16 +171,16 @@ function collectOpenShadowRoots(root: ParentNode): ShadowRoot[] {
 
 export function collectStyleSheetsWithScope(element: Element): ScopedStyleSheet[] {
     const ownerDocument = element.ownerDocument || document;
-    const seen = new Set<CSSStyleSheet>();
+    const seenByScope = new Map<Document | ShadowRoot, Set<CSSStyleSheet>>();
     const output: ScopedStyleSheet[] = [];
 
-    addStyleSheetsFromList(ownerDocument.styleSheets, ownerDocument, seen, output);
-    addAdoptedStyleSheets(ownerDocument, seen, output);
+    addStyleSheetsFromList(ownerDocument.styleSheets, ownerDocument, seenByScope, output);
+    addAdoptedStyleSheets(ownerDocument, seenByScope, output);
 
     const shadowRoots = collectOpenShadowRoots(ownerDocument);
     for (const shadowRoot of shadowRoots) {
-        addStyleSheetsFromList(shadowRoot.styleSheets, shadowRoot, seen, output);
-        addAdoptedStyleSheets(shadowRoot, seen, output);
+        addStyleSheetsFromList(shadowRoot.styleSheets, shadowRoot, seenByScope, output);
+        addAdoptedStyleSheets(shadowRoot, seenByScope, output);
     }
 
     return output;
@@ -229,6 +235,55 @@ function readNestedRules(rule: CSSRule): CSSRuleList | null {
     return null;
 }
 
+function isMediaQueryActive(mediaText: string | null | undefined): boolean {
+    if (!mediaText || !mediaText.trim() || mediaText.trim() === "all") {
+        return true;
+    }
+    if (typeof window.matchMedia !== "function") {
+        return true;
+    }
+    try {
+        return window.matchMedia(mediaText).matches;
+    } catch {
+        return false;
+    }
+}
+
+function isSupportsConditionActive(conditionText: string | null | undefined): boolean {
+    if (!conditionText || !conditionText.trim()) {
+        return true;
+    }
+    if (typeof CSS === "undefined" || typeof CSS.supports !== "function") {
+        return true;
+    }
+    try {
+        return CSS.supports(conditionText);
+    } catch {
+        return false;
+    }
+}
+
+function isRuleConditionActive(rule: CSSRule): boolean {
+    if (rule.type === CSSRule.MEDIA_RULE) {
+        const mediaRule = rule as CSSMediaRule;
+        return isMediaQueryActive(mediaRule.conditionText || mediaRule.media?.mediaText);
+    }
+
+    // TS DOM lib may not always expose CSSSupportsRule, so inspect conditionText dynamically.
+    if (typeof (rule as CSSRule & { conditionText?: unknown }).conditionText === "string"
+        && (rule.cssText.startsWith("@supports") || rule.type === CSSRule.SUPPORTS_RULE)) {
+        const supportsRule = rule as CSSRule & { conditionText: string };
+        return isSupportsConditionActive(supportsRule.conditionText);
+    }
+
+    if (rule.type === CSSRule.IMPORT_RULE) {
+        const importRule = rule as CSSImportRule;
+        return isMediaQueryActive(importRule.media?.mediaText);
+    }
+
+    return true;
+}
+
 export function walkRulesRecursively(
     rules: CSSRuleList,
     atRuleContext: string[],
@@ -251,6 +306,9 @@ export function walkRulesRecursively(
 
         const nested = readNestedRules(rule);
         if (!nested) {
+            continue;
+        }
+        if (!isRuleConditionActive(rule)) {
             continue;
         }
 

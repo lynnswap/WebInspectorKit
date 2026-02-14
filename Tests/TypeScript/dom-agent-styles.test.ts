@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { inspector } from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-state";
-import { matchedStylesForNode } from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-styles";
+import {
+    collectStyleSheetsWithScope,
+    matchedStylesForNode
+} from "../../Sources/WebInspectorKitCore/WebInspector/Support/DOMAgent/dom-agent-styles";
 
 function resetInspectorState(): void {
     inspector.map = new Map();
@@ -162,5 +165,119 @@ describe("dom-agent-styles", () => {
         const payload = matchedStylesForNode(nodeId, { maxRules: 10 });
 
         expect(payload.rules.some((rule) => rule.selectorText === ".doc-only")).toBe(false);
+    });
+
+    it("skips inactive conditional at-rules", () => {
+        const globalWithCSS = globalThis as typeof globalThis & {
+            CSS?: { supports?: (conditionText: string) => boolean };
+        };
+        const originalMatchMedia = window.matchMedia;
+        const hadCSS = typeof globalWithCSS.CSS !== "undefined";
+        const originalCSSObject = globalWithCSS.CSS;
+        const originalCSSSupports = originalCSSObject?.supports;
+
+        Object.defineProperty(window, "matchMedia", {
+            configurable: true,
+            value: (query: string): MediaQueryList => ({
+                matches: !query.includes("print"),
+                media: query,
+                onchange: null,
+                addListener: () => undefined,
+                removeListener: () => undefined,
+                addEventListener: () => undefined,
+                removeEventListener: () => undefined,
+                dispatchEvent: () => false
+            })
+        });
+
+        if (!hadCSS) {
+            Object.defineProperty(globalWithCSS, "CSS", {
+                configurable: true,
+                value: {
+                    supports: (conditionText: string): boolean => !conditionText.includes("grid")
+                }
+            });
+        } else if (globalWithCSS.CSS) {
+            Object.defineProperty(globalWithCSS.CSS, "supports", {
+                configurable: true,
+                value: (conditionText: string): boolean => !conditionText.includes("grid")
+            });
+        }
+
+        try {
+            document.head.innerHTML = `
+                <style>
+                    @media print { .conditional-target { color: red; } }
+                    @media screen { .conditional-target { color: blue; } }
+                    @supports (display: grid) { .conditional-target { border: 1px solid red; } }
+                    @supports (display: block) { .conditional-target { margin: 0; } }
+                </style>
+            `;
+            document.body.innerHTML = "<div id=\"target\" class=\"conditional-target\"></div>";
+            const target = document.getElementById("target");
+            expect(target).not.toBeNull();
+            const nodeId = registerNode(target!);
+
+            const payload = matchedStylesForNode(nodeId, { maxRules: 20 });
+
+            const selectors = payload.rules.map((rule) => rule.selectorText);
+            expect(selectors.filter((selector) => selector === ".conditional-target").length).toBe(2);
+            const hasPrintContext = payload.rules.some((rule) =>
+                rule.atRuleContext.some((context) => context.includes("@media print"))
+            );
+            const hasGridSupportsContext = payload.rules.some((rule) =>
+                rule.atRuleContext.some((context) => context.includes("@supports (display: grid)"))
+            );
+            expect(hasPrintContext).toBe(false);
+            expect(hasGridSupportsContext).toBe(false);
+        } finally {
+            Object.defineProperty(window, "matchMedia", {
+                configurable: true,
+                value: originalMatchMedia
+            });
+            if (!hadCSS) {
+                Object.defineProperty(globalWithCSS, "CSS", {
+                    configurable: true,
+                    value: undefined
+                });
+            } else if (originalCSSObject) {
+                Object.defineProperty(originalCSSObject, "supports", {
+                    configurable: true,
+                    value: originalCSSSupports
+                });
+            }
+        }
+    });
+
+    it("keeps per-scope entries for shared adopted stylesheets", () => {
+        document.body.innerHTML = "<section id=\"host-a\"></section><section id=\"host-b\"></section>";
+        const hostA = document.getElementById("host-a");
+        const hostB = document.getElementById("host-b");
+        expect(hostA).not.toBeNull();
+        expect(hostB).not.toBeNull();
+
+        const rootA = hostA!.attachShadow({ mode: "open" });
+        const rootB = hostB!.attachShadow({ mode: "open" });
+        rootA.innerHTML = "<div class=\"shared-rule\">A</div>";
+        rootB.innerHTML = "<div id=\"target\" class=\"shared-rule\">B</div>";
+
+        const sharedStyle = {} as CSSStyleSheet;
+        Object.defineProperty(rootA as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [sharedStyle]
+        });
+        Object.defineProperty(rootB as ShadowRoot & { adoptedStyleSheets?: CSSStyleSheet[] }, "adoptedStyleSheets", {
+            configurable: true,
+            value: [sharedStyle]
+        });
+
+        const target = rootB.getElementById("target");
+        expect(target).not.toBeNull();
+        const scopedStyleSheets = collectStyleSheetsWithScope(target!);
+        const sharedEntries = scopedStyleSheets.filter((entry) => entry.styleSheet === sharedStyle);
+
+        expect(sharedEntries.length).toBe(2);
+        expect(sharedEntries.some((entry) => entry.scopeRoot === rootA)).toBe(true);
+        expect(sharedEntries.some((entry) => entry.scopeRoot === rootB)).toBe(true);
     });
 });
