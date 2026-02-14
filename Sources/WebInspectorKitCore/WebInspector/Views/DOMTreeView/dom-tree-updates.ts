@@ -295,6 +295,11 @@ function mutationCanAffectStylesheets(method: string, params: Record<string, unk
                     // Shallow snapshots can omit removed nodes/parents; conservatively treat as style-affecting.
                     return true;
                 }
+                const parentNode = treeState.nodes.get(parentId);
+                if (parentNode && reportedChildCount(parentNode) !== knownChildCount(parentNode)) {
+                    // A known parent with incomplete children can still lose off-tree stylesheet hosts.
+                    return true;
+                }
             }
             return false;
         }

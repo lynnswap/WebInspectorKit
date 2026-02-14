@@ -249,6 +249,33 @@ describe("dom-tree-updates", () => {
         expect(treeState.styleRevision).toBe(1);
     });
 
+    it("increments style revision for unknown child removals under known parents with incomplete children", () => {
+        const shallowParent = makeNode(2);
+        shallowParent.nodeName = "HEAD";
+        shallowParent.displayName = "head";
+        shallowParent.childCount = 3;
+        shallowParent.parentId = 1;
+        shallowParent.depth = 1;
+        shallowParent.childIndex = 0;
+
+        const root = makeNode(1, [shallowParent]);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+        treeState.nodes.set(2, shallowParent);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeRemoved",
+            params: {
+                parentNodeId: 2,
+                nodeId: 1002
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(treeState.styleRevision).toBe(1);
+    });
+
     it("increments style revision for unknown child inserts in shallow snapshots", () => {
         const root = makeNode(1);
         treeState.snapshot = { root };
