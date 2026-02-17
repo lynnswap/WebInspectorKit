@@ -26,16 +26,19 @@ private final class WindowSceneBox {
 
 struct WindowSceneResolverModifier: ViewModifier {
     @State private var box = WindowSceneBox()
+    @State private var windowSceneIdentity: ObjectIdentifier?
 
     func body(content: Content) -> some View {
         content
             .environment(\.windowScene, box.windowScene)
             .background(
                 WindowSceneResolver { window in
-                    guard box.windowScene !== window else {
+                    let nextIdentity = window.map(ObjectIdentifier.init)
+                    guard windowSceneIdentity != nextIdentity else {
                         return
                     }
                     box.windowScene = window
+                    windowSceneIdentity = nextIdentity
                 }
             )
     }
