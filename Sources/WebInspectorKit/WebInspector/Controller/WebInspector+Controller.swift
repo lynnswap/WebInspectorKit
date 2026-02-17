@@ -6,23 +6,27 @@ extension WebInspector {
     @MainActor
     @Observable
     public final class Controller {
-        public var selectedTabID: Tab.ID? {
+        public var selectedTabID: TabDescriptor.ID? {
             didSet {
                 if suppressTabActivation {
                     return
                 }
                 applyTabActivation(for: selectedTabID)
+                onSelectedTabIDChange?(selectedTabID)
             }
         }
 
         public let dom: DOMInspector
         public let network: NetworkInspector
 
-        private var tabs: [Tab] = []
-        private var activationByTabID: [Tab.ID: Tab.Activation] = [:]
-        private var configuredRequirements: Tab.FeatureRequirements?
+        private var tabs: [TabDescriptor] = []
+        private var activationByTabID: [TabDescriptor.ID: TabDescriptor.Activation] = [:]
+        private var configuredRequirements: TabDescriptor.FeatureRequirements?
         private var suppressTabActivation = false
         private weak var connectedPageWebView: WKWebView?
+
+        // Observed by native container to keep selected tab synchronized.
+        var onSelectedTabIDChange: ((TabDescriptor.ID?) -> Void)?
 
         public init(configuration: Configuration = .init()) {
             self.dom = DOMInspector(session: DOMSession(configuration: configuration.dom))
@@ -70,31 +74,33 @@ extension WebInspector {
             suppressTabActivation = true
             defer { suppressTabActivation = false }
             selectedTabID = nil
+            onSelectedTabIDChange?(nil)
         }
 
-        internal func synchronizeSelectedTabFromNativeUI(_ tabID: Tab.ID?) {
+        internal func synchronizeSelectedTabFromNativeUI(_ tabID: TabDescriptor.ID?) {
             guard connectedPageWebView != nil else {
                 return
             }
             selectedTabID = tabID
         }
 
-        internal func configureTabs(_ tabs: [Tab]) {
+        internal func configureTabs(_ tabs: [TabDescriptor]) {
             let previousRequirements = configuredRequirements
             self.tabs = tabs
-            configuredRequirements = tabs.reduce(into: Tab.FeatureRequirements()) { partialResult, tab in
+            configuredRequirements = tabs.reduce(into: TabDescriptor.FeatureRequirements()) { partialResult, tab in
                 partialResult.formUnion(tab.requires)
             }
+
 #if DEBUG
-            var seenIDs = Set<Tab.ID>()
-            var duplicateIDs = Set<Tab.ID>()
+            var seenIDs = Set<TabDescriptor.ID>()
+            var duplicateIDs = Set<TabDescriptor.ID>()
             for tab in tabs {
                 if seenIDs.insert(tab.id).inserted == false {
                     duplicateIDs.insert(tab.id)
                 }
             }
             if duplicateIDs.isEmpty == false {
-                assertionFailure("Duplicate tab ids detected: \(duplicateIDs.sorted())")
+                print("WebInspector.Controller duplicate tab ids detected: \(duplicateIDs.sorted())")
             }
 #endif
 
@@ -111,15 +117,16 @@ extension WebInspector {
                 applyTabActivation(for: selectedTabID)
             }
 
-            // Reflect requirement deltas without full reconnect. Full reconnect clears DOM selection.
             if let webView = connectedPageWebView, previousRequirements != configuredRequirements {
                 let previous = previousRequirements ?? [.dom, .network]
                 let current = configuredRequirements ?? [.dom, .network]
                 applyRequirementTransition(from: previous, to: current, using: webView)
             }
+
+            onSelectedTabIDChange?(selectedTabID)
         }
 
-        internal func applyTabActivation(_ tab: Tab?) {
+        internal func applyTabActivation(_ tab: TabDescriptor?) {
             let activation = resolvedActivation(for: tab)
             let requirements = effectiveRequirements
 
@@ -134,33 +141,28 @@ extension WebInspector {
 }
 
 private extension WebInspector.Controller {
-    func resolvedActivationForTabID(_ tabID: WebInspector.Tab.ID?) -> WebInspector.Tab.Activation {
+    func resolvedActivationForTabID(_ tabID: WebInspector.TabDescriptor.ID?) -> WebInspector.TabDescriptor.Activation {
         guard let tabID else {
             return resolvedActivation(for: nil)
         }
         return resolvedActivation(for: tabs.first(where: { $0.id == tabID }))
     }
 
-    func resolvedActivation(for tab: WebInspector.Tab?) -> WebInspector.Tab.Activation {
+    func resolvedActivation(for tab: WebInspector.TabDescriptor?) -> WebInspector.TabDescriptor.Activation {
         if let tab, let tabActivation = activationByTabID[tab.id] {
             return tabActivation
         }
         if configuredRequirements == nil {
-            // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
-            // there is no way to select/activate the Network tab. Default to active logging so
-            // `network.store` receives live events for controller-only integrations.
             return .init(networkLiveLogging: true)
         }
         return .init()
     }
 
-    var effectiveRequirements: WebInspector.Tab.FeatureRequirements {
-        // If the controller is used without `Panel` (and thus without `configureTabs(_:)`),
-        // default to enabling both feature sets.
+    var effectiveRequirements: WebInspector.TabDescriptor.FeatureRequirements {
         configuredRequirements ?? [.dom, .network]
     }
 
-    func applyTabActivation(for tabID: WebInspector.Tab.ID?) {
+    func applyTabActivation(for tabID: WebInspector.TabDescriptor.ID?) {
         guard let tabID else {
             applyTabActivation(nil)
             return
@@ -169,8 +171,8 @@ private extension WebInspector.Controller {
     }
 
     func applyRequirementTransition(
-        from previous: WebInspector.Tab.FeatureRequirements,
-        to current: WebInspector.Tab.FeatureRequirements,
+        from previous: WebInspector.TabDescriptor.FeatureRequirements,
+        to current: WebInspector.TabDescriptor.FeatureRequirements,
         using webView: WKWebView
     ) {
         let hadDOM = previous.contains(.dom)

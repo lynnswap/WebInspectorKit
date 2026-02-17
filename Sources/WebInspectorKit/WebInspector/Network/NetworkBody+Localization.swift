@@ -1,16 +1,14 @@
-import SwiftUI
 import WebInspectorKitCore
 
 extension NetworkBody.FetchError {
-    var localizedResource: LocalizedStringResource {
+    var localizedDescriptionText: String {
         switch self {
         case .unavailable:
-            return LocalizedStringResource("network.body.fetch.error.unavailable", bundle: .module)
+            return wiLocalized("network.body.fetch.error.unavailable")
         case .decodeFailed:
-            return LocalizedStringResource("network.body.fetch.error.decode_failed", bundle: .module)
+            return wiLocalized("network.body.fetch.error.decode_failed")
         case .unknown:
-            return LocalizedStringResource("network.body.fetch.error.unknown", bundle: .module)
+            return wiLocalized("network.body.fetch.error.unknown")
         }
     }
 }
-

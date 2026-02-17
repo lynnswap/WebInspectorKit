@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 import WebInspectorKitCore
 
 extension NetworkEntry {
@@ -34,26 +33,26 @@ extension NetworkEntry {
         }
     }
 
-    var statusTint: Color {
+    var statusSeverity: NetworkStatusSeverity {
         if phase == .failed {
-            return .red
+            return .error
         }
         if let statusCode {
             if statusCode >= 500 {
-                return .red
+                return .error
             }
             if statusCode >= 400 {
-                return .orange
+                return .warning
             }
             if statusCode >= 300 {
-                return .yellow
+                return .notice
             }
-            return .green
+            return .success
         }
         if phase == .completed {
-            return .green
+            return .success
         }
-        return .secondary
+        return .neutral
     }
 
     func durationText(for value: TimeInterval) -> String {
@@ -70,3 +69,10 @@ extension NetworkEntry {
     }
 }
 
+enum NetworkStatusSeverity {
+    case success
+    case notice
+    case warning
+    case error
+    case neutral
+}

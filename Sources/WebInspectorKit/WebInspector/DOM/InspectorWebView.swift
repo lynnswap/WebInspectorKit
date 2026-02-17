@@ -65,6 +65,8 @@ final class InspectorWebView: WKWebView {
         scrollView.backgroundColor = .clear
         scrollView.isScrollEnabled = true
         scrollView.alwaysBounceVertical = true
+        scrollView.contentInsetAdjustmentBehavior = .automatic
+        scrollView.automaticallyAdjustsScrollIndicatorInsets = true
 #endif
     }
     

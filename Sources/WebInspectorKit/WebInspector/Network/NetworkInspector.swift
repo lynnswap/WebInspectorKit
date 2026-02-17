@@ -1,4 +1,4 @@
-import SwiftUI
+import Foundation
 import Observation
 import WebKit
 import WebInspectorKitCore
@@ -10,7 +10,6 @@ extension WebInspector {
         let session: NetworkSession
 
         public var selectedEntryID: UUID?
-        public var navigationPath = NavigationPath()
         public var searchText: String = ""
 
         public var activeResourceFilters: Set<NetworkResourceFilter> = [] {
@@ -62,14 +61,27 @@ extension WebInspector {
 
         func detach() {
             selectedEntryID = nil
-            navigationPath = NavigationPath()
             session.detach()
         }
 
         public func clear() {
             selectedEntryID = nil
-            navigationPath = NavigationPath()
             session.clearNetworkLogs()
+        }
+
+        public func setResourceFilter(_ filter: NetworkResourceFilter, isEnabled: Bool) {
+            if filter == .all {
+                if isEnabled {
+                    activeResourceFilters.removeAll()
+                }
+                return
+            }
+
+            if isEnabled {
+                activeResourceFilters.insert(filter)
+            } else {
+                activeResourceFilters.remove(filter)
+            }
         }
 
         public func fetchBodyIfNeeded(
@@ -117,7 +129,6 @@ extension WebInspector {
                 )
             }
 
-            // Keep the observable instance stable; update in-place.
             target.summary = fetched.summary ?? target.summary
             target.formEntries = fetched.formEntries
             target.kind = fetched.kind
@@ -128,59 +139,6 @@ extension WebInspector {
                 target.size = size
             }
             entry.applyFetchedBodySizeMetadata(from: target)
-        }
-
-        public var isShowingDetail: Binding<Bool> {
-            Binding(
-                get: { self.selectedEntryID != nil },
-                set: { newValue in
-                    if !newValue {
-                        self.selectedEntryID = nil
-                    }
-                }
-            )
-        }
-
-        public var tableSelection: Binding<Set<NetworkEntry.ID>> {
-            Binding(
-                get: {
-                    guard let selectedEntryID = self.selectedEntryID else {
-                        return Set()
-                    }
-                    return Set([selectedEntryID])
-                },
-                set: { newSelection in
-                    self.selectedEntryID = newSelection.first
-                }
-            )
-        }
-
-        func bindingForAllResourceFilters() -> Binding<Bool> {
-            Binding(
-                get: {
-                    self.effectiveResourceFilters.isEmpty
-                },
-                set: { isOn in
-                    if isOn {
-                        self.activeResourceFilters.removeAll()
-                    }
-                }
-            )
-        }
-
-        func bindingForResourceFilter(_ filter: NetworkResourceFilter) -> Binding<Bool> {
-            Binding(
-                get: {
-                    self.activeResourceFilters.contains(filter)
-                },
-                set: { isOn in
-                    if isOn {
-                        self.activeResourceFilters.insert(filter)
-                    } else {
-                        self.activeResourceFilters.remove(filter)
-                    }
-                }
-            )
         }
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 enum WIAssets {
     private static let searchBundles = [Bundle.module, .main]
@@ -21,9 +20,9 @@ enum WIAssets {
         for bundle in searchBundles {
             if let subdirectory,
                let url = bundle.url(
-                   forResource: name,
-                   withExtension: fileExtension,
-                   subdirectory: subdirectory
+                forResource: name,
+                withExtension: fileExtension,
+                subdirectory: subdirectory
                ) {
                 return url
             }

@@ -180,6 +180,10 @@ export function setSnapshot(
         clearRenderState();
         if (dom.tree) {
             dom.tree.innerHTML = "";
+            if (!preserveState) {
+                dom.tree.scrollTop = 0;
+                dom.tree.scrollLeft = 0;
+            }
         }
 
         if (!snapshot || !snapshot.root) {

@@ -2,24 +2,24 @@
 
 ![WebInspectorKit preview](Resources/preview.webp)
 
-SwiftUI-first Web Inspector for `WKWebView` (iOS / macOS).
+UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit` (UI): SwiftUI panel + tab container + DOMTreeView frontend assets.
-- `WebInspectorKitCore` (Core): DOM/Network engines + bundled inspector scripts (no SwiftUI).
+- `WebInspectorKit` (Native UI): UIKit/AppKit container, default tabs, presenters
+- `WebInspectorKitCore` (Core): DOM/Network engines + bundled inspector scripts
 
-`WebInspectorKit` depends on `WebInspectorKitCore`. There is no compatibility layer; expect breaking API changes.
+`WebInspectorKit` depends on `WebInspectorKitCore`.
 
 ## Features
 
-- DOM tree browsing (WebView frontend) with element picking, highlights, deletion, and attribute editing
+- DOM tree browsing (Web frontend hosted in `WKWebView`) with element picking, highlights, deletion, and attribute editing
 - Network request logging (fetch/XHR/WebSocket) with buffering when the Network tab is not selected
-- Configurable tabs via `WebInspector.Tab` + `WebInspector.TabBuilder`
+- Configurable tabs via `WebInspector.TabDescriptor`
 - Explicit lifecycle via `WebInspector.Controller` (`connect(to:)`, `suspend()`, `disconnect()`)
-  - `WebInspector.Panel` wires this up automatically for SwiftUI
-
-This repository is under active development, and future updates may introduce major changes to the API or behavior.
+- Native presentation helpers:
+  - iOS: `WebInspector.SheetPresenter`
+  - macOS: `WebInspector.WindowPresenter`
 
 ## Requirements
 
@@ -29,92 +29,96 @@ This repository is under active development, and future updates may introduce ma
 
 ## Testing
 
-Run both layers to cover Swift and in-page TypeScript hot paths.
-
 ```bash
 swift test
 npm run test:ts
 ```
-
-Notes:
-- `npm run test:ts` uses `vitest + jsdom` and validates DOM/Network hotspot pipelines.
-- CI is currently staged as non-blocking and can be tightened to required checks after stability is confirmed.
 
 ## Installation
 
 Add this repository as a Swift Package dependency in Xcode (Package Dependencies).
 Choose one or both products depending on your use case:
 
-- `WebInspectorKit` (recommended for most apps)
-- `WebInspectorKitCore` (headless / custom UI)
+- `WebInspectorKit`
+- `WebInspectorKitCore`
 
-## Quick Start (Inspect an Existing WKWebView)
+## Quick Start (iOS)
 
 ```swift
-import SwiftUI
+import UIKit
 import WebKit
 import WebInspectorKit
 
-struct ContentView: View {
-    @State private var inspector = WebInspector.Controller()
-    @State private var isInspectorPresented = false
+final class BrowserViewController: UIViewController {
+    private let pageWebView = WKWebView(frame: .zero)
+    private let inspector = WebInspector.Controller()
 
-    let pageWebView: WKWebView // your app's WKWebView that renders the page
-
-    var body: some View {
-        NavigationStack {
-            YourPageView(webView: pageWebView) // your page UI that hosts the WKWebView
-                .sheet(isPresented: $isInspectorPresented) {
-                    WebInspector.Panel(inspector, webView: pageWebView)
-                        .presentationDetents([.medium, .large])
-                }
-                .toolbar {
-                    Button("Inspect page") {
-                        isInspectorPresented = true
-                    }
-                }
-        }
+    @objc private func presentInspector() {
+        WebInspector.SheetPresenter.shared.present(
+            from: self,
+            inspector: inspector,
+            webView: pageWebView,
+            tabs: [.dom(), .element(), .network()]
+        )
     }
 }
 ```
 
-For a working example, see `Tools/MiniBrowser`.
-
-## Customize Tabs
+## Quick Start (macOS)
 
 ```swift
-WebInspector.Panel(inspector, webView: pageWebView) {
-    WebInspector.Tab.dom()
-    WebInspector.Tab.element()
+import AppKit
+import WebKit
+import WebInspectorKit
 
-    WebInspector.Tab(LocalizedStringResource("Custom"), systemImage: "folder") { _ in
-        NavigationStack {
-            List {
-                Text("Custom tab content")
-            }
-        }
+final class BrowserWindowController: NSWindowController {
+    let pageWebView = WKWebView(frame: .zero)
+    let inspector = WebInspector.Controller()
+
+    @objc func presentInspector() {
+        WebInspector.WindowPresenter.shared.present(
+            parentWindow: window,
+            inspector: inspector,
+            webView: pageWebView,
+            tabs: [.dom(), .element(), .network()]
+        )
     }
 }
 ```
 
-Tip: If you omit the Network tab (`WebInspector.Tab.network()`), network scripts are never installed.
+## Custom Tabs
 
-## How It Works
+```swift
+let customTab = WebInspector.TabDescriptor(
+    id: "my_custom_tab",
+    title: "Custom",
+    systemImage: "folder",
+    role: .other
+) { context in
+    #if canImport(UIKit)
+    return UIViewController()
+    #elseif canImport(AppKit)
+    return NSViewController()
+    #endif
+}
 
-- `DOMAgent` is injected into the inspected page to stream DOM snapshots and mutation bundles.
-- `NetworkAgent` observes network activity in the inspected page.
-  - When the Network tab is not selected, the agent buffers; selecting the tab switches it to active logging.
+let container = WebInspector.ContainerViewController(
+    inspector,
+    webView: pageWebView,
+    tabs: [.dom(), .element(), .network(), customTab]
+)
+```
+
+Tip: If you omit `.network()`, network scripts are never installed.
 
 ## Limitations
 
 - WKWebView only; JavaScript must be enabled.
 - Console features are not implemented.
 
-## Apps Using
+## Migration
 
-<p float="left">
-    <a href="https://apps.apple.com/jp/app/tweetpd/id1671411031"><img src="https://i.imgur.com/AC6eGdx.png" width="65" height="65"></a>
-</p>
+Breaking changes from the SwiftUI-first API are documented in [`MIGRATION.md`](MIGRATION.md).
 
 ## License
 

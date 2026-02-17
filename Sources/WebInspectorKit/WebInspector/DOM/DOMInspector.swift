@@ -1,10 +1,15 @@
 import OSLog
-import WebKit
-import SwiftUI
 import Observation
+import WebKit
 import WebInspectorKitCore
 
-private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMViewModel")
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
+private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspector")
 
 extension WebInspector {
     @MainActor
@@ -59,7 +64,7 @@ extension WebInspector {
 
         public func reloadInspector(preserveState: Bool = false) async {
             guard session.hasPageWebView else {
-                errorMessage = String(localized: "dom.error.webview_unavailable", bundle: .module)
+                errorMessage = wiLocalized("dom.error.webview_unavailable")
                 return
             }
             errorMessage = nil

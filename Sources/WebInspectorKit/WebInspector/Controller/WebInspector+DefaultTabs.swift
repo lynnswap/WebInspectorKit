@@ -1,64 +1,73 @@
-import Observation
-import SwiftUI
+import Foundation
 
-extension WebInspector.Tab {
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
+
+extension WebInspector.TabDescriptor {
     @MainActor
     public static func dom(
-        title: LocalizedStringResource? = nil,
+        title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.Tab {
-        WebInspector.Tab(
-            title ?? LocalizedStringResource("inspector.tab.dom", bundle: .module),
-            systemImage: systemImage ?? "chevron.left.forwardslash.chevron.right",
+    ) -> WebInspector.TabDescriptor {
+        WebInspector.TabDescriptor(
             id: "wi_dom",
+            title: title ?? wiLocalized("inspector.tab.dom"),
+            systemImage: systemImage ?? "chevron.left.forwardslash.chevron.right",
             role: .inspector,
             requires: [.dom],
             activation: .init(domLiveUpdates: true)
-        ) { controller in
-            NavigationStack {
-                WebInspector.DOMTreeView(inspector: controller.dom)
-                    .domInspectorToolbar(controller.dom)
-            }
+        ) { context in
+            #if canImport(UIKit)
+            let root = DOMTreeTabViewController(inspector: context.domInspector)
+            return UINavigationController(rootViewController: root)
+            #elseif canImport(AppKit)
+            return DOMTreeTabViewController(inspector: context.domInspector)
+            #endif
         }
     }
 
     @MainActor
     public static func element(
-        title: LocalizedStringResource? = nil,
+        title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.Tab {
-        WebInspector.Tab(
-            title ?? LocalizedStringResource("inspector.tab.element", bundle: .module),
-            systemImage: systemImage ?? "info.circle",
+    ) -> WebInspector.TabDescriptor {
+        WebInspector.TabDescriptor(
             id: "wi_element",
+            title: title ?? wiLocalized("inspector.tab.element"),
+            systemImage: systemImage ?? "info.circle",
             role: .inspector,
             requires: [.dom]
-        ) { controller in
-            NavigationStack {
-                WebInspector.ElementDetailsView(inspector: controller.dom)
-                    .domInspectorToolbar(controller.dom)
-            }
+        ) { context in
+            #if canImport(UIKit)
+            let root = ElementDetailsTabViewController(inspector: context.domInspector)
+            return UINavigationController(rootViewController: root)
+            #elseif canImport(AppKit)
+            return ElementDetailsTabViewController(inspector: context.domInspector)
+            #endif
         }
     }
 
     @MainActor
     public static func network(
-        title: LocalizedStringResource? = nil,
+        title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.Tab {
-        WebInspector.Tab(
-            title ?? LocalizedStringResource("inspector.tab.network", bundle: .module),
-            systemImage: systemImage ?? "waveform.path.ecg.rectangle",
+    ) -> WebInspector.TabDescriptor {
+        WebInspector.TabDescriptor(
             id: "wi_network",
+            title: title ?? wiLocalized("inspector.tab.network"),
+            systemImage: systemImage ?? "waveform.path.ecg.rectangle",
             role: .inspector,
             requires: [.network],
             activation: .init(networkLiveLogging: true)
-        ) { controller in
-            @Bindable var network = controller.network
-            NavigationStack(path: $network.navigationPath) {
-                WebInspector.NetworkView(inspector: network)
-            }
+        ) { context in
+            #if canImport(UIKit)
+            return NetworkTabViewController(inspector: context.networkInspector)
+            #elseif canImport(AppKit)
+            return NetworkTabViewController(inspector: context.networkInspector)
+            #endif
         }
     }
 }
-

@@ -121,27 +121,19 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func tableSelectionBindingKeepsSelectedEntryIDInSync() throws {
+    func setResourceFilterAllClearsSpecificSelection() {
         let inspector = WebInspector.NetworkInspector(session: NetworkSession())
-        try applyRequestStart(
-            to: inspector,
-            requestID: 10,
-            url: "https://example.com/sync",
-            initiator: "fetch",
-            monotonicMs: 1_000
-        )
 
-        let selectedID = try #require(inspector.store.entries.first?.id)
+        inspector.activeResourceFilters = [.image, .script]
+        #expect(inspector.effectiveResourceFilters == [.image, .script])
 
-        inspector.tableSelection.wrappedValue = [selectedID]
-        #expect(inspector.selectedEntryID == selectedID)
-
-        inspector.tableSelection.wrappedValue = []
-        #expect(inspector.selectedEntryID == nil)
+        inspector.setResourceFilter(.all, isEnabled: true)
+        #expect(inspector.activeResourceFilters.isEmpty)
+        #expect(inspector.effectiveResourceFilters.isEmpty)
     }
 
     @Test
-    func detailBindingClearsSelectionWhenDismissed() throws {
+    func clearResetsSelectedEntryID() throws {
         let inspector = WebInspector.NetworkInspector(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
@@ -153,10 +145,11 @@ struct NetworkInspectorTests {
 
         let selectedID = try #require(inspector.store.entries.first?.id)
         inspector.selectedEntryID = selectedID
-        #expect(inspector.isShowingDetail.wrappedValue == true)
 
-        inspector.isShowingDetail.wrappedValue = false
+        inspector.clear()
+
         #expect(inspector.selectedEntryID == nil)
+        #expect(inspector.store.entries.isEmpty)
     }
 
     @Test
