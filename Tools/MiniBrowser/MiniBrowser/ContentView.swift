@@ -2,43 +2,28 @@ import SwiftUI
 import WebInspectorKit
 
 struct ContentView: View {
+    @Environment(\.windowScene) private var windowScene
     @State private var model: BrowserViewModel?
     @State private var inspectorController: WebInspector.Controller?
-    @State private var isShowingInspector = false
-   
     
     var body: some View {
         if let model, let inspectorController {
-#if os(macOS)
-            HSplitView {
-                NavigationStack {
-                    ContentWebView(model: model)
-                }
-                WebInspector.Panel(inspectorController, webView: model.webView)
-            }
-#else
             NavigationStack {
                 ContentWebView(model: model)
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
                             Button {
-                                isShowingInspector.toggle()
+                                presentWebInspector(
+                                    windowScene: windowScene,
+                                    model: model,
+                                    inspectorController: inspectorController
+                                )
                             } label: {
                                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                             }
                         }
                     }
-                    .sheet(isPresented: $isShowingInspector) {
-                        InspectorSheetView(
-                            model:model,
-                            inspectorController: inspectorController
-                        )
-                        .presentationBackgroundInteraction(.enabled)
-                        .presentationDetents([.medium, .large])
-                        .presentationContentInteraction(.scrolls)
-                    }
             }
-#endif
         } else {
             Color.clear
                 .onAppear {
