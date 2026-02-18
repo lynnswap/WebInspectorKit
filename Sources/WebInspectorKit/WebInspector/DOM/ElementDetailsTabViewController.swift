@@ -144,23 +144,28 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         let hasSelection = inspector.selection.nodeId != nil
         let hasPageWebView = inspector.hasPageWebView
 
-        let reloadAction = UIAction(
-            title: wiLocalized("reload.target.inspector"),
-            image: UIImage(systemName: "arrow.clockwise"),
-            attributes: hasPageWebView ? [] : [.disabled]
-        ) { [weak self] _ in
-            self?.reloadInspector()
-        }
-
-        let deleteAction = UIAction(
-            title: wiLocalized("inspector.delete_node"),
-            image: UIImage(systemName: "trash"),
-            attributes: hasSelection ? [.destructive] : [.destructive, .disabled]
-        ) { [weak self] _ in
-            self?.deleteNode()
-        }
-
-        return UIMenu(children: [reloadAction, deleteAction])
+        return DOMSecondaryMenuBuilder.makeMenu(
+            hasSelection: hasSelection,
+            hasPageWebView: hasPageWebView,
+            onCopyHTML: { [weak self] in
+                self?.inspector.copySelection(.html)
+            },
+            onCopySelectorPath: { [weak self] in
+                self?.inspector.copySelection(.selectorPath)
+            },
+            onCopyXPath: { [weak self] in
+                self?.inspector.copySelection(.xpath)
+            },
+            onReloadInspector: { [weak self] in
+                self?.reloadInspector()
+            },
+            onReloadPage: { [weak self] in
+                self?.inspector.session.reloadPage()
+            },
+            onDeleteNode: { [weak self] in
+                self?.deleteNode()
+            }
+        )
     }
 
     private func refreshUI() {

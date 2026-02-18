@@ -68,47 +68,31 @@ final class DOMTreeTabViewController: UIViewController {
         let hasSelection = inspector.selection.nodeId != nil
         let hasPageWebView = inspector.hasPageWebView
 
-        let copySection = UIMenu(
-            title: wiLocalized("Copy"),
-            options: .displayInline,
-            children: [
-                UIAction(title: "HTML", attributes: hasSelection ? [] : [.disabled]) { [weak self] _ in
-                    self?.inspector.copySelection(.html)
-                },
-                UIAction(title: wiLocalized("dom.element.copy.selector_path"), attributes: hasSelection ? [] : [.disabled]) { [weak self] _ in
-                    self?.inspector.copySelection(.selectorPath)
-                },
-                UIAction(title: "XPath", attributes: hasSelection ? [] : [.disabled]) { [weak self] _ in
-                    self?.inspector.copySelection(.xpath)
+        return DOMSecondaryMenuBuilder.makeMenu(
+            hasSelection: hasSelection,
+            hasPageWebView: hasPageWebView,
+            onCopyHTML: { [weak self] in
+                self?.inspector.copySelection(.html)
+            },
+            onCopySelectorPath: { [weak self] in
+                self?.inspector.copySelection(.selectorPath)
+            },
+            onCopyXPath: { [weak self] in
+                self?.inspector.copySelection(.xpath)
+            },
+            onReloadInspector: { [weak self] in
+                guard let self else { return }
+                Task {
+                    await self.inspector.reloadInspector()
                 }
-            ]
+            },
+            onReloadPage: { [weak self] in
+                self?.inspector.session.reloadPage()
+            },
+            onDeleteNode: { [weak self] in
+                self?.deleteNode()
+            }
         )
-
-        let reloadSection = UIMenu(
-            title: wiLocalized("reload"),
-            options: .displayInline,
-            children: [
-                UIAction(title: wiLocalized("reload.target.inspector"), attributes: hasPageWebView ? [] : [.disabled]) { [weak self] _ in
-                    guard let self else { return }
-                    Task {
-                        await self.inspector.reloadInspector()
-                    }
-                },
-                UIAction(title: wiLocalized("reload.target.page"), attributes: hasPageWebView ? [] : [.disabled]) { [weak self] _ in
-                    self?.inspector.session.reloadPage()
-                }
-            ]
-        )
-
-        let deleteAction = UIAction(
-            title: wiLocalized("inspector.delete_node"),
-            image: UIImage(systemName: "trash"),
-            attributes: hasSelection ? [.destructive] : [.destructive, .disabled]
-        ) { [weak self] _ in
-            self?.deleteNode()
-        }
-
-        return UIMenu(children: [copySection, reloadSection, deleteAction])
     }
 
     private func observeState() {
