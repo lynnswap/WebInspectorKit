@@ -641,9 +641,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         }
 
         cell.accessories = []
-        var content = cell.defaultContentConfiguration()
-        content.textProperties.numberOfLines = 0
-        content.secondaryTextProperties.numberOfLines = 0
+        var content = UIListContentConfiguration.cell()
 
         let row = sections[indexPath.section].rows[indexPath.item]
         switch row {
@@ -655,26 +653,34 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
             if let encodedBodyLength = entry.encodedBodyLength {
                 summaryParts.append("↓ \(entry.sizeText(for: encodedBodyLength))")
             }
-            content.text = summaryParts.joined(separator: "  ")
-            content.secondaryText = entry.url
-            content.textProperties.color = networkStatusColor(for: entry.statusSeverity)
-            content.secondaryTextProperties.color = .label
-            content.secondaryTextProperties.numberOfLines = 4
+            content = makeElementLikeSubtitleConfiguration(
+                title: summaryParts.joined(separator: "  "),
+                detail: entry.url,
+                titleColor: networkStatusColor(for: entry.statusSeverity),
+                detailColor: .label,
+                titleNumberOfLines: 1,
+                detailNumberOfLines: 4
+            )
         case .header(let name, let value):
-            content.text = name
-            content.secondaryText = value
-            content.textProperties.color = .secondaryLabel
-            content.secondaryTextProperties.color = .label
+            content = makeElementLikeSubtitleConfiguration(
+                title: name,
+                detail: value,
+                titleColor: .secondaryLabel,
+                detailColor: .label
+            )
         case .emptyHeader:
             content = UIListContentConfiguration.cell()
             content.text = wiLocalized("network.headers.empty", default: "No headers")
             content.textProperties.color = .secondaryLabel
         case .body(let entry, let body):
-            content.text = makeBodyPrimaryText(entry: entry, body: body)
-            content.secondaryText = makeBodySecondaryText(body)
-            content.textProperties.color = .secondaryLabel
-            content.secondaryTextProperties.color = .label
-            content.secondaryTextProperties.numberOfLines = 6
+            content = makeElementLikeSubtitleConfiguration(
+                title: makeBodyPrimaryText(entry: entry, body: body),
+                detail: makeBodySecondaryText(body),
+                titleColor: .secondaryLabel,
+                detailColor: .label,
+                titleNumberOfLines: 1,
+                detailNumberOfLines: 6
+            )
             cell.accessories = [.disclosureIndicator()]
         case .error(let error):
             content = UIListContentConfiguration.cell()
@@ -684,6 +690,36 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         }
         cell.contentConfiguration = content
         return cell
+    }
+
+    private func makeElementLikeSubtitleConfiguration(
+        title: String,
+        detail: String,
+        titleColor: UIColor,
+        detailColor: UIColor,
+        titleNumberOfLines: Int = 1,
+        detailNumberOfLines: Int = 0
+    ) -> UIListContentConfiguration {
+        var configuration = UIListContentConfiguration.subtitleCell()
+        configuration.text = title
+        configuration.secondaryText = detail
+        configuration.textProperties.numberOfLines = titleNumberOfLines
+        configuration.secondaryTextProperties.numberOfLines = detailNumberOfLines
+        configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                weight: .semibold
+            )
+        )
+        configuration.textProperties.color = titleColor
+        configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+            for: .monospacedSystemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                weight: .regular
+            )
+        )
+        configuration.secondaryTextProperties.color = detailColor
+        return configuration
     }
 
     func collectionView(
