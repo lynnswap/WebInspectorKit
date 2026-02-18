@@ -298,17 +298,15 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     private func makeFilterMenu() -> UIMenu {
-        var actions: [UIAction] = []
-
         let allIsOn = inspector.effectiveResourceFilters.isEmpty
-        actions.append(UIAction(
+        let allAction = UIAction(
             title: wiLocalized("network.filter.all"),
             state: allIsOn ? .on : .off
         ) { [weak self] _ in
             self?.inspector.setResourceFilter(.all, isEnabled: true)
-        })
-        actions.append(UIAction(title: "", attributes: .disabled) { _ in })
+        }
 
+        var resourceActions: [UIAction] = []
         for filter in NetworkResourceFilter.pickerCases {
             let isOn = inspector.activeResourceFilters.contains(filter)
             let action = UIAction(
@@ -318,10 +316,11 @@ private final class NetworkListViewController: UIViewController, UISearchResults
                 guard let self else { return }
                 self.inspector.setResourceFilter(filter, isEnabled: !isOn)
             }
-            actions.append(action)
+            resourceActions.append(action)
         }
 
-        return UIMenu(title: wiLocalized("network.controls.filter"), children: actions)
+        let resourceSection = UIMenu(options: [.displayInline], children: resourceActions)
+        return UIMenu(children: [allAction, resourceSection])
     }
 
     private func clearEntries() {
