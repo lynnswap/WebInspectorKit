@@ -50,7 +50,7 @@ final class DOMTreeTabViewController: UIViewController {
         setupNavigationItems()
 
         NSLayoutConstraint.activate([
-            inspectorWebView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
