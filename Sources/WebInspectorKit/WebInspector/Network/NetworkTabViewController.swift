@@ -369,14 +369,31 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         }
 
         let entry = displayedEntries[indexPath.item]
-        var content = UIListContentConfiguration.valueCell()
+        var content = UIListContentConfiguration.cell()
         content.text = entry.displayName
-        content.secondaryText = entry.fileTypeLabel
-        content.image = UIImage(systemName: "circle.fill")
-        content.imageProperties.tintColor = networkStatusColor(for: entry.statusSeverity)
-        content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 7, weight: .regular)
+        content.secondaryText = nil
+        content.textProperties.numberOfLines = 2
+        content.textProperties.lineBreakMode = .byTruncatingMiddle
+        content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                weight: .semibold
+            )
+        )
         cell.contentConfiguration = content
-        cell.accessories = [.disclosureIndicator()]
+        cell.accessories = [
+            .customView(configuration: statusIndicatorConfiguration(for: entry.statusSeverity)),
+            .label(
+                text: entry.fileTypeLabel,
+                options: .init(
+                    reservedLayoutWidth: .actual,
+                    tintColor: .secondaryLabel,
+                    font: .preferredFont(forTextStyle: .footnote),
+                    adjustsFontForContentSizeCategory: true
+                )
+            ),
+            .disclosureIndicator()
+        ]
         return cell
     }
 
@@ -386,6 +403,18 @@ private final class NetworkListViewController: UIViewController, UISearchResults
             return
         }
         onSelectEntry?(displayedEntries[indexPath.item])
+    }
+
+    private func statusIndicatorConfiguration(for severity: NetworkStatusSeverity) -> UICellAccessory.CustomViewConfiguration {
+        let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
+        dotView.backgroundColor = networkStatusColor(for: severity)
+        dotView.layer.cornerRadius = 4
+        return .init(
+            customView: dotView,
+            placement: .leading(),
+            reservedLayoutWidth: .custom(8),
+            maintainsFixedSize: true
+        )
     }
 }
 

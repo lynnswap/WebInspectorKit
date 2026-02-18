@@ -7,12 +7,18 @@ import UIKit
 private enum NetworkTabPreviewScenario {
     enum Mode {
         case list
+        case listLongTitle
         case detail
     }
 
     static func makeInspector(mode: Mode) -> WebInspector.NetworkInspector {
         let session = NetworkSession()
-        session.wiApplyPreviewBatch(sampleBatchPayload())
+        switch mode {
+        case .listLongTitle:
+            session.wiApplyPreviewBatch(sampleBatchPayload(includeLongTitle: true))
+        case .list, .detail:
+            session.wiApplyPreviewBatch(sampleBatchPayload())
+        }
         let inspector = WebInspector.NetworkInspector(session: session)
         if mode == .detail {
             inspector.selectedEntryID = inspector.displayEntries.first?.id
@@ -20,7 +26,7 @@ private enum NetworkTabPreviewScenario {
         return inspector
     }
 
-    private static func sampleBatchPayload() -> [String: Any] {
+    private static func sampleBatchPayload(includeLongTitle: Bool = false) -> [String: Any] {
         let sampleJSON = """
         {
           "version": 1,
@@ -122,7 +128,28 @@ private enum NetworkTabPreviewScenario {
                 "events": []
             ]
         }
-        return payload
+        guard includeLongTitle else {
+            return payload
+        }
+
+        var mutated = payload
+        var events = mutated["events"] as? [[String: Any]] ?? []
+        events.insert([
+            "kind": "resourceTiming",
+            "requestId": 1999,
+            "url": "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json",
+            "method": "GET",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "application/json",
+            "startTime": ["monotonicMs": 1900.0, "wallMs": 1700000000800.0],
+            "endTime": ["monotonicMs": 2200.0, "wallMs": 1700000001100.0],
+            "encodedBodyLength": 512,
+            "decodedBodySize": 512,
+            "initiator": "xhr"
+        ], at: 0)
+        mutated["events"] = events
+        return mutated
     }
 }
 
@@ -170,6 +197,9 @@ private struct NetworkTabPreviewContainer: UIViewControllerRepresentable {
         case .list:
             let inspector = NetworkTabPreviewScenario.makeInspector(mode: .list)
             return NetworkTabViewController(inspector: inspector)
+        case .listLongTitle:
+            let inspector = NetworkTabPreviewScenario.makeInspector(mode: .listLongTitle)
+            return NetworkTabViewController(inspector: inspector)
         case .detail:
             let inspector = NetworkTabPreviewScenario.makeInspector(mode: .detail)
             let host = NetworkDetailPreviewHostViewController()
@@ -183,6 +213,10 @@ private struct NetworkTabPreviewContainer: UIViewControllerRepresentable {
 
 #Preview("Network Root") {
     NetworkTabPreviewContainer(mode: .list)
+}
+
+#Preview("Network Root Long Title") {
+    NetworkTabPreviewContainer(mode: .listLongTitle)
 }
 
 #Preview("Network Detail") {
