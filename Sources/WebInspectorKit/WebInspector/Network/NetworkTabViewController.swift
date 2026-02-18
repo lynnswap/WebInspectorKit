@@ -646,21 +646,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         let row = sections[indexPath.section].rows[indexPath.item]
         switch row {
         case .summary(let entry):
-            var summaryParts: [String] = ["\(entry.statusLabel)"]
-            if let duration = entry.duration {
-                summaryParts.append("◷ \(entry.durationText(for: duration))")
-            }
-            if let encodedBodyLength = entry.encodedBodyLength {
-                summaryParts.append("↓ \(entry.sizeText(for: encodedBodyLength))")
-            }
-            content = makeElementLikeSubtitleConfiguration(
-                title: summaryParts.joined(separator: "  "),
-                detail: entry.url,
-                titleColor: networkStatusColor(for: entry.statusSeverity),
-                detailColor: .label,
-                titleNumberOfLines: 1,
-                detailNumberOfLines: 4
-            )
+            content = makeOverviewSubtitleConfiguration(for: entry)
         case .header(let name, let value):
             content = makeElementLikeSubtitleConfiguration(
                 title: name,
@@ -720,6 +706,130 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         )
         configuration.secondaryTextProperties.color = detailColor
         return configuration
+    }
+
+    private func makeOverviewSubtitleConfiguration(for entry: NetworkEntry) -> UIListContentConfiguration {
+        var configuration = UIListContentConfiguration.subtitleCell()
+        configuration.textProperties.numberOfLines = 1
+        configuration.secondaryText = entry.url
+        configuration.secondaryTextProperties.numberOfLines = 4
+        configuration.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
+        configuration.secondaryTextProperties.color = .label
+
+        let metricsFont = UIFont.preferredFont(forTextStyle: .footnote)
+        let attributed = NSMutableAttributedString()
+        attributed.append(NSAttributedString(attachment: makeStatusBadgeAttachment(for: entry, baselineFont: metricsFont)))
+
+        if let duration = entry.duration {
+            appendOverviewMetric(
+                symbolName: "clock",
+                text: entry.durationText(for: duration),
+                to: attributed,
+                font: metricsFont,
+                color: .secondaryLabel
+            )
+        }
+        if let encodedBodyLength = entry.encodedBodyLength {
+            appendOverviewMetric(
+                symbolName: "arrow.down.to.line",
+                text: entry.sizeText(for: encodedBodyLength),
+                to: attributed,
+                font: metricsFont,
+                color: .secondaryLabel
+            )
+        }
+
+        configuration.attributedText = attributed
+        return configuration
+    }
+
+    private func makeStatusBadgeAttachment(for entry: NetworkEntry, baselineFont: UIFont) -> NSTextAttachment {
+        let tint = networkStatusColor(for: entry.statusSeverity)
+        let badgeFont = UIFontMetrics(forTextStyle: .caption1).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize,
+                weight: .semibold
+            )
+        )
+        let badgeText = entry.statusLabel as NSString
+        let textSize = badgeText.size(withAttributes: [.font: badgeFont])
+        let horizontalPadding: CGFloat = 8
+        let verticalPadding: CGFloat = 4
+        let badgeSize = CGSize(
+            width: ceil(textSize.width + horizontalPadding * 2),
+            height: ceil(textSize.height + verticalPadding * 2)
+        )
+
+        let badgeImage = UIGraphicsImageRenderer(size: badgeSize).image { _ in
+            let rect = CGRect(origin: .zero, size: badgeSize)
+            let cornerRadius = min(8, badgeSize.height / 2)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius)
+            tint.withAlphaComponent(0.14).setFill()
+            path.fill()
+
+            let textRect = CGRect(
+                x: (badgeSize.width - textSize.width) / 2,
+                y: (badgeSize.height - textSize.height) / 2,
+                width: textSize.width,
+                height: textSize.height
+            )
+            badgeText.draw(
+                in: textRect,
+                withAttributes: [
+                    .font: badgeFont,
+                    .foregroundColor: tint
+                ]
+            )
+        }
+
+        let attachment = NSTextAttachment()
+        attachment.image = badgeImage
+        let baselineOffset = (baselineFont.capHeight - badgeSize.height) / 2
+        attachment.bounds = CGRect(x: 0, y: baselineOffset, width: badgeSize.width, height: badgeSize.height)
+        return attachment
+    }
+
+    private func appendOverviewMetric(
+        symbolName: String,
+        text: String,
+        to attributed: NSMutableAttributedString,
+        font: UIFont,
+        color: UIColor
+    ) {
+        attributed.append(NSAttributedString(string: "  "))
+        if let symbol = makeSymbolAttachment(symbolName: symbolName, baselineFont: font, tintColor: color) {
+            attributed.append(symbol)
+            attributed.append(NSAttributedString(string: " "))
+        }
+        attributed.append(
+            NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .foregroundColor: color
+                ]
+            )
+        )
+    }
+
+    private func makeSymbolAttachment(
+        symbolName: String,
+        baselineFont: UIFont,
+        tintColor: UIColor
+    ) -> NSAttributedString? {
+        let symbolConfiguration = UIImage.SymbolConfiguration(font: baselineFont)
+        guard
+            let symbolImage = UIImage(systemName: symbolName, withConfiguration: symbolConfiguration)?
+                .withTintColor(tintColor, renderingMode: .alwaysOriginal)
+        else {
+            return nil
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = symbolImage
+        let symbolSize = symbolImage.size
+        let baselineOffset = (baselineFont.capHeight - symbolSize.height) / 2
+        attachment.bounds = CGRect(x: 0, y: baselineOffset, width: symbolSize.width, height: symbolSize.height)
+        return NSAttributedString(attachment: attachment)
     }
 
     func collectionView(
