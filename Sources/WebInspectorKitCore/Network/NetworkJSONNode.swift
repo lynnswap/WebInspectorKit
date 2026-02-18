@@ -97,14 +97,16 @@ public struct NetworkJSONNode: Identifiable, Sendable {
 
 private extension NetworkJSONNode.JSONValue {
     static func make(from object: Any) -> NetworkJSONNode.JSONValue {
-        if let dictionary = object as? [String: Any] {
+        if let dictionary = object as? NSDictionary {
             var mapped: [String: NetworkJSONNode.JSONValue] = [:]
             dictionary.forEach { key, value in
-                mapped[key] = make(from: value)
+                if let key = key as? String {
+                    mapped[key] = make(from: value)
+                }
             }
             return .object(mapped)
         }
-        if let array = object as? [Any] {
+        if let array = object as? NSArray {
             return .array(array.map { make(from: $0) })
         }
         if let string = object as? String {

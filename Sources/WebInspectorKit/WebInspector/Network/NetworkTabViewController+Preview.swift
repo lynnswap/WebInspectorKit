@@ -26,7 +26,7 @@ private enum NetworkTabPreviewScenario {
         return inspector
     }
 
-    private static func sampleBatchPayload(includeLongTitle: Bool = false) -> [String: Any] {
+    private static func sampleBatchPayload(includeLongTitle: Bool = false) -> NSDictionary {
         let sampleJSON = """
         {
           "version": 1,
@@ -119,7 +119,7 @@ private enum NetworkTabPreviewScenario {
         guard
             let data = sampleJSON.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data),
-            let payload = object as? [String: Any]
+            let payload = object as? NSDictionary
         else {
             return [
                 "version": 1,
@@ -132,8 +132,8 @@ private enum NetworkTabPreviewScenario {
             return payload
         }
 
-        var mutated = payload
-        var events = mutated["events"] as? [[String: Any]] ?? []
+        let mutated = NSMutableDictionary(dictionary: payload)
+        let events = NSMutableArray(array: (mutated["events"] as? NSArray) ?? [])
         events.insert([
             "kind": "resourceTiming",
             "requestId": 1999,
@@ -149,7 +149,7 @@ private enum NetworkTabPreviewScenario {
             "initiator": "xhr"
         ], at: 0)
         mutated["events"] = events
-        return mutated
+        return NSDictionary(dictionary: mutated)
     }
 }
 

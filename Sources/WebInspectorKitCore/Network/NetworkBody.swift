@@ -86,7 +86,7 @@ public final class NetworkBody {
             self.fileName = fileName
         }
 
-        init?(dictionary: [String: Any]) {
+        init?(dictionary: NSDictionary) {
             let name = dictionary["name"] as? String ?? ""
             let value = dictionary["value"] as? String ?? ""
             if name.isEmpty && value.isEmpty {
@@ -153,7 +153,7 @@ public final class NetworkBody {
         }
     }
 
-    convenience init?(dictionary: [String: Any]) {
+    convenience init?(dictionary: NSDictionary) {
         let rawKind = (dictionary["kind"] as? String)?.lowercased() ?? ""
         let kind = Kind(rawValue: rawKind) ?? .other
         let preview = dictionary["preview"] as? String
@@ -171,7 +171,7 @@ public final class NetworkBody {
         let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
         let summary = dictionary["summary"] as? String
         let reference = dictionary["ref"] as? String
-        let formEntries = (dictionary["formEntries"] as? [[String: Any]] ?? [])
+        let formEntries = (dictionary["formEntries"] as? [NSDictionary] ?? [])
             .compactMap(FormEntry.init(dictionary:))
 
         self.init(
@@ -191,7 +191,7 @@ public final class NetworkBody {
         if let payload = value as? NetworkBodyPayload {
             return NetworkBody.from(payload: payload, role: .response)
         }
-        if let dictionary = value as? [String: Any] {
+        if let dictionary = value as? NSDictionary {
             return NetworkBody(dictionary: dictionary)
         }
         if let string = value as? String {
@@ -259,4 +259,3 @@ public final class NetworkBody {
         fetchState = .full
     }
 }
-

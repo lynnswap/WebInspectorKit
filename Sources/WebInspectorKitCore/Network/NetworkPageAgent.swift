@@ -112,7 +112,7 @@ extension NetworkPageAgent {
             if let jsonString = result as? String,
                let data = jsonString.data(using: .utf8) {
                 payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
-            } else if let dictionary = result as? [String: Any],
+            } else if let dictionary = result as? NSDictionary,
                       let data = try? JSONSerialization.data(withJSONObject: dictionary) {
                 payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
             } else {

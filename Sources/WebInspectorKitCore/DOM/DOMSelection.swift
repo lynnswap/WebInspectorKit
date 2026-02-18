@@ -9,10 +9,10 @@ struct DOMSelectionSnapshot {
     let selectorPath: String
     let styleRevision: Int
 
-    init?(dictionary: [String: Any]) {
+    init?(dictionary: NSDictionary) {
         let nodeId = dictionary["id"] as? Int ?? dictionary["nodeId"] as? Int
         let preview = dictionary["preview"] as? String ?? ""
-        let attributesPayload = dictionary["attributes"] as? [[String: Any]] ?? []
+        let attributesPayload = dictionary["attributes"] as? [NSDictionary] ?? []
         let attributes = attributesPayload.compactMap { entry -> DOMAttribute? in
             guard let name = entry["name"] as? String else { return nil }
             let value = entry["value"] as? String ?? ""
@@ -98,7 +98,7 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
         self.blockedStylesheetCount = blockedStylesheetCount
     }
 
-    package func applySnapshot(from dictionary: [String: Any]) {
+    package func applySnapshot(from dictionary: NSDictionary) {
         let snapshot = DOMSelectionSnapshot(dictionary: dictionary)
         applySnapshot(snapshot)
     }

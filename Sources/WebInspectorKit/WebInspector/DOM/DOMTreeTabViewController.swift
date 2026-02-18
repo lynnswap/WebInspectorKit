@@ -154,8 +154,9 @@ final class DOMTreeTabViewController: NSViewController {
         return button
     }()
 
-    private lazy var copyButton: NSButton = {
-        let button = NSButton(title: wiLocalized("Copy"), target: self, action: #selector(showCopyMenu(_:)))
+    private lazy var copyButton: NSPopUpButton = {
+        let button = NSPopUpButton(frame: .zero, pullsDown: true)
+        button.title = wiLocalized("Copy")
         button.bezelStyle = .rounded
         button.menu = makeCopyMenu()
         return button
@@ -245,6 +246,8 @@ final class DOMTreeTabViewController: NSViewController {
 
     private func makeCopyMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.addItem(withTitle: wiLocalized("Copy"), action: nil, keyEquivalent: "")
+        menu.addItem(.separator())
 
         let html = NSMenuItem(title: "HTML", action: #selector(copyHTML(_:)), keyEquivalent: "")
         html.target = self
@@ -280,14 +283,6 @@ final class DOMTreeTabViewController: NSViewController {
     @objc
     private func toggleSelectionMode() {
         inspector.toggleSelectionMode()
-    }
-
-    @objc
-    private func showCopyMenu(_ sender: NSButton) {
-        guard let menu = sender.menu else {
-            return
-        }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
     }
 
     @objc

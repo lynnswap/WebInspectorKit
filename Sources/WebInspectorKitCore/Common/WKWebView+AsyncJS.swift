@@ -1,10 +1,12 @@
 import WebKit
 
+package typealias WIAny = Any
+
 package extension WKWebView {
     @MainActor
     func callAsyncVoidJavaScript(
         _ script: String,
-        arguments: [String: Any] = [:],
+        arguments: [String: WIAny] = [:],
         in frame: WKFrameInfo? = nil,
         contentWorld: WKContentWorld
     ) async throws {
@@ -16,4 +18,3 @@ package extension WKWebView {
         )
     }
 }
-

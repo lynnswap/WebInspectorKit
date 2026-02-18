@@ -48,7 +48,7 @@ extension DOMPageAgent: WKScriptMessageHandler {
         guard HandlerName(rawValue: message.name) != nil else {
             return
         }
-        guard let payload = message.body as? [String: Any],
+        guard let payload = message.body as? NSDictionary,
               let rawJSON = payload["bundle"] as? String,
               !rawJSON.isEmpty else {
             return
@@ -231,10 +231,10 @@ public extension DOMPageAgent {
             return
         }
         let debounceMs = max(50, Int(configuration.autoUpdateDebounce * 1000))
-        let options: [String: Any] = [
-            "maxDepth": max(1, configuration.snapshotDepth),
-            "debounce": debounceMs,
-            "enabled": enabled,
+        let options: NSDictionary = [
+            "maxDepth": NSNumber(value: max(1, configuration.snapshotDepth)),
+            "debounce": NSNumber(value: debounceMs),
+            "enabled": NSNumber(value: enabled),
         ]
         do {
             let didConfigure = try await configureAutoSnapshotWhenReady(on: webView, options: options)
@@ -274,7 +274,7 @@ extension DOMPageAgent {
 private extension DOMPageAgent {
     func configureAutoSnapshotWhenReady(
         on webView: WKWebView,
-        options: [String: Any]
+        options: NSDictionary
     ) async throws -> Bool {
         for attempt in 0..<autoSnapshotConfigureRetryCount {
             let rawResult = try await webView.callAsyncJavaScript(
@@ -376,14 +376,14 @@ private extension DOMPageAgent {
         if let string = resolved as? String {
             return Data(string.utf8)
         }
-        if let dictionary = resolved as? [String: Any] {
+        if let dictionary = resolved as? NSDictionary {
             guard JSONSerialization.isValidJSONObject(dictionary) else {
                 domLogger.error("DOM payload dictionary is invalid for JSON serialization")
                 throw WebInspectorCoreError.serializationFailed
             }
             return try JSONSerialization.data(withJSONObject: dictionary)
         }
-        if let array = resolved as? [Any] {
+        if let array = resolved as? NSArray {
             guard JSONSerialization.isValidJSONObject(array) else {
                 domLogger.error("DOM payload array is invalid for JSON serialization")
                 throw WebInspectorCoreError.serializationFailed

@@ -289,7 +289,7 @@ private extension DOMFrontendStore {
     }
 
     private func handleLogMessage(_ payload: Any) {
-        if let dictionary = payload as? [String: Any],
+        if let dictionary = payload as? NSDictionary,
            let logMessage = dictionary["message"] as? String {
             inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
         } else if let logMessage = payload as? String {
@@ -298,7 +298,7 @@ private extension DOMFrontendStore {
     }
 
     private func handleDOMSelectionMessage(_ payload: Any) {
-        if let dictionary = payload as? [String: Any], !dictionary.isEmpty {
+        if let dictionary = payload as? NSDictionary, dictionary.count > 0 {
             let previousNodeId = session.selection.nodeId
             let previousPreview = session.selection.preview
             let previousPath = session.selection.path
@@ -329,7 +329,7 @@ private extension DOMFrontendStore {
     }
 
     private func handleDOMSelectorMessage(_ payload: Any) {
-        if let dictionary = payload as? [String: Any] {
+        if let dictionary = payload as? NSDictionary {
             let nodeId = dictionary["id"] as? Int
             let selectorPath = dictionary["selectorPath"] as? String ?? ""
             if let nodeId, session.selection.nodeId == nodeId {

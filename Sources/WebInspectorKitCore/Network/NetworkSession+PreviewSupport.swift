@@ -3,7 +3,7 @@ import Foundation
 
 @_spi(PreviewSupport)
 public extension NetworkSession {
-    func wiApplyPreviewBatch(_ payload: [String: Any]) {
+    func wiApplyPreviewBatch(_ payload: NSDictionary) {
         guard let batch = NetworkEventBatch.decode(from: payload) else {
             return
         }

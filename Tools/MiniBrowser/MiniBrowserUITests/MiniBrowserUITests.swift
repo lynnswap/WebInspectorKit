@@ -24,11 +24,32 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
-        // UI tests must launch the application that they test.
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
+    func testInspectorTabSwitchStressDoesNotTerminateApp() throws {
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        let openInspectorButton = app.buttons["MiniBrowser.openInspectorButton"]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 10))
+        var tabButtons = tabBar.buttons.allElementsBoundByIndex
+        XCTAssertGreaterThanOrEqual(tabButtons.count, 2, "Expected at least 2 inspector tabs")
+        for _ in 0..<20 {
+            tabButtons = tabBar.buttons.allElementsBoundByIndex
+            for tabButton in tabButtons {
+                XCTAssertTrue(tabButton.waitForExistence(timeout: 3))
+                tabButton.tap()
+                XCTAssertEqual(app.state, .runningForeground)
+            }
+        }
     }
 
     @MainActor

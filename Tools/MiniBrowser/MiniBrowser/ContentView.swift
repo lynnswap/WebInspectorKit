@@ -21,6 +21,7 @@ struct ContentView: View {
                             } label: {
                                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                             }
+                            .accessibilityIdentifier("MiniBrowser.openInspectorButton")
                         }
                     }
             }
