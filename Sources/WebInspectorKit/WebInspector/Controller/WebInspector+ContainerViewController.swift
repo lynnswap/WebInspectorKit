@@ -10,6 +10,11 @@ extension WebInspector {
 
         private weak var pageWebView: WKWebView?
         private var tabDescriptors: [TabDescriptor]
+        private var canonicalIdentifierByUITabIdentifier: [String: TabDescriptor.ID] = [:]
+        private var primaryUITabIdentifierByCanonicalIdentifier: [TabDescriptor.ID: String] = [:]
+        private var uiTabByIdentifier: [String: UITab] = [:]
+        private var orderedUITabIdentifiers: [String] = []
+        private var isApplyingSelectionFromController = false
 
         public init(
             _ inspectorController: Controller,
@@ -82,20 +87,40 @@ extension WebInspector {
         private func rebuildTabs() {
             inspectorController.configureTabs(tabDescriptors)
             let context = TabContext(controller: inspectorController)
-            var controllers: [UIViewController] = []
-            controllers.reserveCapacity(tabDescriptors.count)
+            var usedUITabIdentifiers = Set<String>()
+            var builtTabs: [UITab] = []
+            builtTabs.reserveCapacity(tabDescriptors.count)
+
+            canonicalIdentifierByUITabIdentifier = [:]
+            primaryUITabIdentifierByCanonicalIdentifier = [:]
+            uiTabByIdentifier = [:]
+            orderedUITabIdentifiers = []
+            orderedUITabIdentifiers.reserveCapacity(tabDescriptors.count)
 
             for (index, descriptor) in tabDescriptors.enumerated() {
                 let viewController = descriptor.makeViewController(context: context)
-                viewController.tabBarItem = UITabBarItem(
+                let uiIdentifier = makeUniqueUITabIdentifier(
+                    for: descriptor.id,
+                    index: index,
+                    used: &usedUITabIdentifiers
+                )
+                let tab = UITab(
                     title: descriptor.title,
                     image: UIImage(systemName: descriptor.systemImage),
-                    tag: index
-                )
-                controllers.append(viewController)
+                    identifier: uiIdentifier
+                ) { _ in
+                    viewController
+                }
+                canonicalIdentifierByUITabIdentifier[uiIdentifier] = descriptor.id
+                if primaryUITabIdentifierByCanonicalIdentifier[descriptor.id] == nil {
+                    primaryUITabIdentifierByCanonicalIdentifier[descriptor.id] = uiIdentifier
+                }
+                uiTabByIdentifier[uiIdentifier] = tab
+                orderedUITabIdentifiers.append(uiIdentifier)
+                builtTabs.append(tab)
             }
 
-            setViewControllers(controllers, animated: false)
+            setTabs(builtTabs, animated: false)
             syncNativeSelection(with: inspectorController.selectedTabID)
         }
 
@@ -107,34 +132,83 @@ extension WebInspector {
         }
 
         private func syncNativeSelection(with tabID: TabDescriptor.ID?) {
-            guard tabDescriptors.isEmpty == false else {
+            guard orderedUITabIdentifiers.isEmpty == false else {
                 return
             }
 
             if let tabID,
-               let index = tabDescriptors.firstIndex(where: { $0.id == tabID }) {
-                if selectedIndex != index {
-                    selectedIndex = index
-                }
+               let uiIdentifier = primaryUITabIdentifierByCanonicalIdentifier[tabID] {
+                selectTabIfNeeded(withUIIdentifier: uiIdentifier)
                 return
             }
 
-            let fallbackIndex = selectedIndex != NSNotFound ? selectedIndex : 0
-            let resolvedIndex = tabDescriptors.indices.contains(fallbackIndex) ? fallbackIndex : 0
-            if selectedIndex != resolvedIndex {
-                selectedIndex = resolvedIndex
+            let resolvedUIIdentifier: String
+            if let currentlySelectedUIIdentifier = selectedTab?.identifier,
+               canonicalIdentifierByUITabIdentifier[currentlySelectedUIIdentifier] != nil {
+                resolvedUIIdentifier = currentlySelectedUIIdentifier
+            } else {
+                resolvedUIIdentifier = orderedUITabIdentifiers[0]
             }
-            inspectorController.synchronizeSelectedTabFromNativeUI(tabDescriptors[resolvedIndex].id)
+
+            selectTabIfNeeded(withUIIdentifier: resolvedUIIdentifier)
+            if let canonicalTabID = canonicalIdentifierByUITabIdentifier[resolvedUIIdentifier] {
+                inspectorController.synchronizeSelectedTabFromNativeUI(canonicalTabID)
+            }
         }
 
-        public func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
+        private func selectTabIfNeeded(withUIIdentifier uiIdentifier: String) {
             guard
-                let index = viewControllers?.firstIndex(of: viewController),
-                tabDescriptors.indices.contains(index)
+                selectedTab?.identifier != uiIdentifier,
+                let tab = uiTabByIdentifier[uiIdentifier]
             else {
                 return
             }
-            inspectorController.synchronizeSelectedTabFromNativeUI(tabDescriptors[index].id)
+
+            isApplyingSelectionFromController = true
+            selectedTab = tab
+            isApplyingSelectionFromController = false
+        }
+
+        private func makeUniqueUITabIdentifier(
+            for canonicalIdentifier: TabDescriptor.ID,
+            index: Int,
+            used: inout Set<String>
+        ) -> String {
+            let base = canonicalIdentifier.isEmpty ? "tab_\(index)" : canonicalIdentifier
+            if used.insert(base).inserted {
+                return base
+            }
+
+            var suffix = 2
+            while true {
+                let candidate = "\(base)__\(suffix)"
+                if used.insert(candidate).inserted {
+                    return candidate
+                }
+                suffix += 1
+            }
+        }
+
+        public func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
+            canonicalIdentifierByUITabIdentifier[tab.identifier] != nil
+        }
+
+        public func tabBarController(
+            _ tabBarController: UITabBarController,
+            didSelectTab selectedTab: UITab,
+            previousTab: UITab?
+        ) {
+            guard isApplyingSelectionFromController == false else {
+                return
+            }
+
+            guard let canonicalTabID = canonicalIdentifierByUITabIdentifier[selectedTab.identifier] else {
+                return
+            }
+            guard inspectorController.selectedTabID != canonicalTabID else {
+                return
+            }
+            inspectorController.synchronizeSelectedTabFromNativeUI(canonicalTabID)
         }
     }
 }
