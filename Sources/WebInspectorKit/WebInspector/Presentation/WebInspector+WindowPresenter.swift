@@ -21,14 +21,15 @@ extension WebInspector {
         ) {
             if let inspectorWindow,
                let existingContainer = inspectorWindow.contentViewController as? ContainerViewController {
+                existingContainer.setTabs(tabs)
                 existingContainer.setInspectorController(controller)
                 existingContainer.setPageWebView(webView)
-                existingContainer.setTabs(tabs)
                 inspectorWindow.makeKeyAndOrderFront(nil)
                 NSApp.activate(ignoringOtherApps: true)
                 return
             }
 
+            normalizeSelection(controller, tabs: tabs)
             let container = ContainerViewController(controller, webView: webView, tabs: tabs)
             let window = NSWindow(contentViewController: container)
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -51,6 +52,17 @@ extension WebInspector {
             inspectorWindow = window
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        private func normalizeSelection(_ controller: Controller, tabs: [TabDescriptor]) {
+            controller.configureTabs(tabs)
+            guard let selectedTabID = controller.selectedTabID else {
+                controller.selectedTabID = tabs.first?.id
+                return
+            }
+            if tabs.contains(where: { $0.id == selectedTabID }) == false {
+                controller.selectedTabID = tabs.first?.id
+            }
         }
 
         public func windowWillClose(_ notification: Notification) {

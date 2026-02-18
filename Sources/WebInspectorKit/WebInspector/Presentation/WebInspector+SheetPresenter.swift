@@ -16,16 +16,28 @@ extension WebInspector {
             tabs: [TabDescriptor] = [.dom(), .element(), .network()]
         ) {
             if let existing = findPresentedContainer(from: presenter) {
+                existing.setTabs(tabs)
                 existing.setInspectorController(controller)
                 existing.setPageWebView(webView)
-                existing.setTabs(tabs)
                 return
             }
 
+            normalizeSelection(controller, tabs: tabs)
             let container = ContainerViewController(controller, webView: webView, tabs: tabs)
             container.modalPresentationStyle = .pageSheet
             applyDefaultDetents(to: container)
             presenter.present(container, animated: true)
+        }
+
+        private func normalizeSelection(_ controller: Controller, tabs: [TabDescriptor]) {
+            controller.configureTabs(tabs)
+            guard let selectedTabID = controller.selectedTabID else {
+                controller.selectedTabID = tabs.first?.id
+                return
+            }
+            if tabs.contains(where: { $0.id == selectedTabID }) == false {
+                controller.selectedTabID = tabs.first?.id
+            }
         }
 
         private func applyDefaultDetents(to controller: UIViewController) {

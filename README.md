@@ -21,6 +21,14 @@ UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
   - iOS: `WebInspector.SheetPresenter`
   - macOS: `WebInspector.WindowPresenter`
 
+## Native UI Style Rules
+
+- iOS uses `UICollectionView` list layouts (`.insetGrouped`) and `UIListContentConfiguration` presets for row/header typography.
+- Section headers use `UIListContentConfiguration.header()`.
+- Root tab screens (DOM / Element / Network) do not show centered navigation titles.
+- Detail screens show contextual titles and keep sectioned content structure (Overview / Request / Response / Body / Error).
+- Secondary actions are grouped under the trailing menu button (`ellipsis` on iOS 26+, `ellipsis.circle` before iOS 26).
+
 ## Requirements
 
 - Swift 6.2+
@@ -119,6 +127,12 @@ Tip: If you omit `.network()`, network scripts are never installed.
 ## Migration
 
 Breaking changes from the SwiftUI-first API are documented in [`MIGRATION.md`](MIGRATION.md).
+
+## UI Debug Checklist
+
+- If header typography looks off, verify `.header()` is used for section headers.
+- If list rows look custom/plain, verify `UIListContentConfiguration` + list background configurations are used.
+- If DOM WebView appears clipped under navigation UI, verify `InspectorWebView` uses no automatic content inset adjustment.
 
 ## License
 

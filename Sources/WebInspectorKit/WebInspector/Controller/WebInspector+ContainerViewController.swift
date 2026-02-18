@@ -61,7 +61,6 @@ extension WebInspector {
             super.viewDidLoad()
             delegate = self
             tabBar.scrollEdgeAppearance = tabBar.standardAppearance
-            view.backgroundColor = .systemBackground
 
             bindSelectionCallback()
             rebuildTabs()

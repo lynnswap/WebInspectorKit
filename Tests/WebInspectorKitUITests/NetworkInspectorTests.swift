@@ -153,6 +153,30 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
+        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 31,
+            url: "https://example.com/filter-target.js",
+            initiator: "script",
+            monotonicMs: 1_000
+        )
+        let selectedID = try #require(inspector.store.entries.first?.id)
+        inspector.selectedEntryID = selectedID
+        inspector.searchText = "filter-target"
+        inspector.activeResourceFilters = [.script]
+
+        inspector.clear()
+
+        #expect(inspector.selectedEntryID == nil)
+        #expect(inspector.store.entries.isEmpty)
+        #expect(inspector.searchText == "filter-target")
+        #expect(inspector.activeResourceFilters == [.script])
+        #expect(inspector.effectiveResourceFilters == [.script])
+    }
+
+    @Test
     func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
         let inspector = WebInspector.NetworkInspector(session: NetworkSession())
         try applyRequestStart(

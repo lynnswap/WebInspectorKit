@@ -52,3 +52,7 @@ This release introduces a breaking redesign of `WebInspectorKit`.
 
 - DOM tree rendering still uses the internal DOM frontend assets in `WKWebView`.
 - `WebInspectorKitCore` API surface remains unchanged.
+- Native UI styling is now standardized around platform list presets:
+  - iOS: `UICollectionView` + `.insetGrouped` + `UIListContentConfiguration` / `UIBackgroundConfiguration`
+  - macOS: native split/list-detail UI with sectioned detail structure
+- Root tab screens intentionally hide centered navigation titles; detail screens provide titles.

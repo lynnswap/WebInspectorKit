@@ -46,6 +46,7 @@ final class ElementDetailsTabViewController: UITableViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = nil
+        navigationItem.title = ""
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
         setupNavigationItems()
 
@@ -144,7 +145,7 @@ final class ElementDetailsTabViewController: UITableViewController {
         }
     }
 
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+    private func headerTitle(for section: Int) -> String? {
         guard let section = Section(rawValue: section), inspector.selection.nodeId != nil else {
             return nil
         }
@@ -159,6 +160,10 @@ final class ElementDetailsTabViewController: UITableViewController {
         case .attributes:
             return wiLocalized("dom.element.section.attributes")
         }
+    }
+
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        headerTitle(for: section)
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -176,10 +181,12 @@ final class ElementDetailsTabViewController: UITableViewController {
         switch section {
         case .element:
             configuration.text = inspector.selection.preview
-            configuration.textProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            configuration.textProperties.font = WIUIStyle.iOS.monospaceFont
+            configuration.textProperties.color = .label
         case .selector:
             configuration.text = inspector.selection.selectorPath
-            configuration.textProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            configuration.textProperties.font = WIUIStyle.iOS.monospaceFont
+            configuration.textProperties.color = .label
         case .styles:
             configureStyleCell(configuration: &configuration, row: indexPath.row)
         case .attributes:
@@ -219,7 +226,7 @@ final class ElementDetailsTabViewController: UITableViewController {
                 details = "\(rule.sourceLabel)\n\(details)"
             }
             configuration.secondaryText = details
-            configuration.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            configuration.secondaryTextProperties.font = WIUIStyle.iOS.monospaceFont
             return
         }
         nextRow += rules.count
@@ -252,7 +259,7 @@ final class ElementDetailsTabViewController: UITableViewController {
         let attribute = inspector.selection.attributes[row]
         configuration.text = attribute.name
         configuration.secondaryText = attribute.value
-        configuration.secondaryTextProperties.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        configuration.secondaryTextProperties.font = WIUIStyle.iOS.monospaceFont
         configuration.textProperties.color = .secondaryLabel
     }
 

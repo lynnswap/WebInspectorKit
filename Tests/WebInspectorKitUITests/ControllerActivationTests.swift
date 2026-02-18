@@ -159,6 +159,21 @@ struct ControllerActivationTests {
         #expect(controller.network.session.lastPageWebView == nil)
     }
 
+    @Test
+    func nativeSelectionSyncWhileConnectedUpdatesSelectedTab() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.selectedTabID == "wi_dom")
+
+        controller.synchronizeSelectedTabFromNativeUI("wi_network")
+
+        #expect(controller.selectedTabID == "wi_network")
+        #expect(controller.network.session.mode == .active)
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

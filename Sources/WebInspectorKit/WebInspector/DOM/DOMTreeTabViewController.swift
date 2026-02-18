@@ -9,8 +9,6 @@ final class DOMTreeTabViewController: UIViewController {
     private let inspector: WebInspector.DOMInspector
     private let observationToken = WIObservationToken()
 
-    private let errorContainer = UIView()
-    private let errorLabel = UILabel()
     private lazy var pickItem: UIBarButtonItem = {
         UIBarButtonItem(
             image: UIImage(systemName: "viewfinder.circle"),
@@ -43,17 +41,16 @@ final class DOMTreeTabViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = nil
-        view.backgroundColor = .systemBackground
+        navigationItem.title = ""
 
         let inspectorWebView = inspector.frontendStore.makeInspectorWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(inspectorWebView)
 
-        setupErrorOverlay()
         setupNavigationItems()
 
         NSLayoutConstraint.activate([
-            inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
+            inspectorWebView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
@@ -61,33 +58,6 @@ final class DOMTreeTabViewController: UIViewController {
 
         observeState()
         updateUI()
-    }
-
-    private func setupErrorOverlay() {
-        errorContainer.translatesAutoresizingMaskIntoConstraints = false
-        errorContainer.backgroundColor = UIColor.secondarySystemBackground.withAlphaComponent(0.92)
-        errorContainer.layer.cornerRadius = 12
-        errorContainer.isHidden = true
-
-        errorLabel.translatesAutoresizingMaskIntoConstraints = false
-        errorLabel.numberOfLines = 0
-        errorLabel.textAlignment = .center
-        errorLabel.textColor = .secondaryLabel
-        errorLabel.font = .preferredFont(forTextStyle: .footnote)
-
-        errorContainer.addSubview(errorLabel)
-        view.addSubview(errorContainer)
-
-        NSLayoutConstraint.activate([
-            errorLabel.topAnchor.constraint(equalTo: errorContainer.topAnchor, constant: 12),
-            errorLabel.leadingAnchor.constraint(equalTo: errorContainer.leadingAnchor, constant: 12),
-            errorLabel.trailingAnchor.constraint(equalTo: errorContainer.trailingAnchor, constant: -12),
-            errorLabel.bottomAnchor.constraint(equalTo: errorContainer.bottomAnchor, constant: -12),
-
-            errorContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            errorContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            errorContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
-        ])
     }
 
     private func setupNavigationItems() {
@@ -155,11 +125,12 @@ final class DOMTreeTabViewController: UIViewController {
 
     private func updateUI() {
         if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
-            errorLabel.text = errorMessage
-            errorContainer.isHidden = false
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.text = errorMessage
+            configuration.image = UIImage(systemName: "exclamationmark.triangle")
+            contentUnavailableConfiguration = configuration
         } else {
-            errorLabel.text = nil
-            errorContainer.isHidden = true
+            contentUnavailableConfiguration = nil
         }
 
         let hasSelection = inspector.selection.nodeId != nil

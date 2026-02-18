@@ -69,6 +69,40 @@ struct TabDescriptorTests {
         #expect(controller.selectedTabID == "tab_a")
     }
 
+    @Test
+    func configureTabsReplacesInvalidSelectionWithFirstTab() {
+        let controller = WebInspector.Controller()
+        controller.configureTabs([
+            WebInspector.TabDescriptor(
+                id: "tab_a",
+                title: "A",
+                systemImage: "a.circle"
+            ) { _ in
+                makeDummyController()
+            },
+            WebInspector.TabDescriptor(
+                id: "tab_b",
+                title: "B",
+                systemImage: "b.circle"
+            ) { _ in
+                makeDummyController()
+            }
+        ])
+        controller.selectedTabID = "tab_b"
+
+        controller.configureTabs([
+            WebInspector.TabDescriptor(
+                id: "tab_c",
+                title: "C",
+                systemImage: "c.circle"
+            ) { _ in
+                makeDummyController()
+            }
+        ])
+
+        #expect(controller.selectedTabID == "tab_c")
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
