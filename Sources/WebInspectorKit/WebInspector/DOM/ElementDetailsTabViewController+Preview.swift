@@ -44,7 +44,13 @@ private enum ElementDetailsPreviewScenario {
                 DOMAttribute(
                     nodeId: 101,
                     name: "style",
-                    value: "border:none;max-width:100%;margin:8px 0;min-width:1px;min-height:1px"
+                    value: """
+                    border:none;
+                    max-width:100%;
+                    margin:8px 0;
+                    min-width:1px;
+                    min-height:1px
+                    """
                 ),
                 DOMAttribute(nodeId: 101, name: "alt", value: "スノーボード 2026"),
                 DOMAttribute(

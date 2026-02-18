@@ -3,6 +3,36 @@ import WebInspectorKitCore
 #if canImport(UIKit)
 import UIKit
 
+private struct ElementAttributeEditingKey: Hashable {
+    let nodeID: Int?
+    let name: String
+}
+
+@MainActor
+private protocol ElementAttributeEditorCellDelegate: AnyObject {
+    func elementAttributeEditorCellDidBeginEditing(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    )
+    func elementAttributeEditorCellDidChangeDraft(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    )
+    func elementAttributeEditorCellDidCommitValue(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    )
+    func elementAttributeEditorCellDidEndEditing(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    )
+    func elementAttributeEditorCellNeedsRelayout(_ cell: ElementAttributeEditorCell)
+}
+
 @MainActor
 final class ElementDetailsTabViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
     private struct DetailSection {
@@ -23,7 +53,12 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     private let observationToken = WIObservationToken()
     private var sections: [DetailSection] = []
     private let listCellReuseIdentifier = "ElementDetailsListCell"
+    private let attributeEditorCellReuseIdentifier = "ElementDetailsAttributeEditorCell"
     private let headerReuseIdentifier = "ElementDetailsHeaderView"
+    private var editingAttributeKey: ElementAttributeEditingKey?
+    private var editingDraftValue: String?
+    private var isInlineEditingActive = false
+    private var lastSelectionNodeID: Int?
 
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
@@ -31,6 +66,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: listCellReuseIdentifier)
+        collectionView.register(ElementAttributeEditorCell.self, forCellWithReuseIdentifier: attributeEditorCellReuseIdentifier)
         collectionView.register(
             UICollectionViewListCell.self,
             forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
@@ -130,6 +166,11 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     private func refreshUI() {
         let hasSelection = inspector.selection.nodeId != nil
         let hasPageWebView = inspector.hasPageWebView
+        let currentSelectionNodeID = inspector.selection.nodeId
+        if currentSelectionNodeID != lastSelectionNodeID {
+            clearInlineEditingState()
+            lastSelectionNodeID = currentSelectionNodeID
+        }
 
         secondaryActionsItem.menu = makeSecondaryMenu()
         secondaryActionsItem.isEnabled = hasSelection || hasPageWebView
@@ -142,12 +183,16 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             configuration.secondaryText = wiLocalized("dom.element.hint")
             configuration.image = UIImage(systemName: "cursorarrow.rays")
             contentUnavailableConfiguration = configuration
+            clearInlineEditingState()
             sections = []
         } else {
             contentUnavailableConfiguration = nil
             sections = makeSections()
         }
 
+        guard !isInlineEditingActive else {
+            return
+        }
         collectionView.reloadData()
     }
 
@@ -226,8 +271,10 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         if inspector.selection.attributes.isEmpty {
             attributeRows = [.emptyAttribute]
         } else {
-            attributeRows = inspector.selection.attributes.map {
-                .attribute(nodeID: $0.nodeId, name: $0.name, value: $0.value)
+            attributeRows = inspector.selection.attributes.map { attribute in
+                let key = ElementAttributeEditingKey(nodeID: attribute.nodeId, name: attribute.name)
+                let value = editingAttributeKey == key ? (editingDraftValue ?? attribute.value) : attribute.value
+                return .attribute(nodeID: attribute.nodeId, name: attribute.name, value: value)
             }
         }
 
@@ -253,7 +300,33 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         guard
             sections.indices.contains(indexPath.section),
-            sections[indexPath.section].rows.indices.contains(indexPath.item),
+            sections[indexPath.section].rows.indices.contains(indexPath.item)
+        else {
+            return UICollectionViewCell()
+        }
+
+        let row = sections[indexPath.section].rows[indexPath.item]
+        if case let .attribute(nodeID, name, value) = row {
+            guard
+                let cell = collectionView.dequeueReusableCell(
+                    withReuseIdentifier: attributeEditorCellReuseIdentifier,
+                    for: indexPath
+                ) as? ElementAttributeEditorCell
+            else {
+                return UICollectionViewCell()
+            }
+            let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+            cell.delegate = self
+            cell.configure(
+                key: key,
+                name: name,
+                value: value,
+                activateEditor: isInlineEditingActive && editingAttributeKey == key
+            )
+            return cell
+        }
+
+        guard
             let cell = collectionView.dequeueReusableCell(
                 withReuseIdentifier: listCellReuseIdentifier,
                 for: indexPath
@@ -265,7 +338,6 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         var configuration = UIListContentConfiguration.cell()
         cell.accessories = []
 
-        let row = sections[indexPath.section].rows[indexPath.item]
         switch row {
         case .element(let preview):
             configuration = UIListContentConfiguration.cell()
@@ -314,26 +386,8 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             configuration.text = message
             configuration.textProperties.color = .secondaryLabel
             configuration.textProperties.font = .preferredFont(forTextStyle: .subheadline)
-        case let .attribute(_, name, value):
-            configuration = UIListContentConfiguration.subtitleCell()
-            configuration.text = name
-            configuration.secondaryText = value
-            configuration.textProperties.numberOfLines = 1
-            configuration.secondaryTextProperties.numberOfLines = 0
-            configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-                for: .systemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                    weight: .semibold
-                )
-            )
-            configuration.textProperties.color = .secondaryLabel
-            configuration.secondaryTextProperties.color = .label
-            configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
-                for: .monospacedSystemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
-                    weight: .regular
-                )
-            )
+        case .attribute:
+            configuration = UIListContentConfiguration.cell()
         case .emptyAttribute:
             configuration = UIListContentConfiguration.cell()
             configuration.text = wiLocalized("dom.element.attributes.empty")
@@ -367,43 +421,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     }
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        guard let row = attributeRow(at: indexPath) else {
-            return false
-        }
-        return !row.name.isEmpty
-    }
-
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        defer {
-            collectionView.deselectItem(at: indexPath, animated: true)
-        }
-
-        guard let row = attributeRow(at: indexPath) else {
-            return
-        }
-
-        let alert = UIAlertController(
-            title: row.name,
-            message: wiLocalized("dom.element.section.attributes"),
-            preferredStyle: .alert
-        )
-        alert.addTextField { textField in
-            textField.text = row.value
-            textField.clearButtonMode = .whileEditing
-            textField.autocapitalizationType = .none
-            textField.autocorrectionType = .no
-        }
-        alert.addAction(UIAlertAction(title: wiLocalized("common.cancel"), style: .cancel))
-        alert.addAction(UIAlertAction(title: wiLocalized("common.save"), style: .default) { [weak self] _ in
-            guard
-                let self,
-                let value = alert.textFields?.first?.text
-            else {
-                return
-            }
-            self.inspector.updateAttributeValue(name: row.name, value: value)
-        })
-        present(alert, animated: true)
+        false
     }
 
     private func trailingSwipeActions(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
@@ -412,7 +430,8 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         }
 
         let action = UIContextualAction(style: .destructive, title: nil) { [weak self] _, _, completion in
-            self?.deleteAttribute(named: attributeRow.name)
+            let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
+            self?.deleteAttribute(for: key)
             completion(true)
         }
         action.image = UIImage(systemName: "trash")
@@ -436,7 +455,8 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
                 image: UIImage(systemName: "trash"),
                 attributes: [.destructive]
             ) { _ in
-                self?.deleteAttribute(named: attributeRow.name)
+                let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
+                self?.deleteAttribute(for: key)
             }
             return UIMenu(children: [deleteAction])
         }
@@ -455,8 +475,34 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         return (nodeID: nodeID, name: name, value: value)
     }
 
-    private func deleteAttribute(named name: String) {
-        inspector.removeAttribute(name: name)
+    private func deleteAttribute(for key: ElementAttributeEditingKey) {
+        if let editorCell = visibleAttributeEditorCell(for: key) {
+            editorCell.suppressNextCommitAndEndEditing()
+        } else {
+            view.endEditing(true)
+        }
+        if editingAttributeKey == key {
+            clearInlineEditingState()
+        }
+        inspector.removeAttribute(name: key.name)
+    }
+
+    private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
+        for visibleCell in collectionView.visibleCells {
+            guard let editorCell = visibleCell as? ElementAttributeEditorCell else {
+                continue
+            }
+            if editorCell.currentEditingKey == key {
+                return editorCell
+            }
+        }
+        return nil
+    }
+
+    private func clearInlineEditingState() {
+        editingAttributeKey = nil
+        editingDraftValue = nil
+        isInlineEditingActive = false
     }
 
     @objc
@@ -474,6 +520,277 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     @objc
     private func deleteNode() {
         inspector.deleteSelectedNode()
+    }
+}
+
+@MainActor
+extension ElementDetailsTabViewController: ElementAttributeEditorCellDelegate {
+    fileprivate func elementAttributeEditorCellDidBeginEditing(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    ) {
+        editingAttributeKey = key
+        editingDraftValue = value
+        isInlineEditingActive = true
+    }
+
+    fileprivate func elementAttributeEditorCellDidChangeDraft(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    ) {
+        editingAttributeKey = key
+        editingDraftValue = value
+    }
+
+    fileprivate func elementAttributeEditorCellDidCommitValue(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    ) {
+        editingAttributeKey = key
+        editingDraftValue = value
+        inspector.updateAttributeValue(name: key.name, value: value)
+    }
+
+    fileprivate func elementAttributeEditorCellDidEndEditing(
+        _ cell: ElementAttributeEditorCell,
+        key: ElementAttributeEditingKey,
+        value: String
+    ) {
+        isInlineEditingActive = false
+        if editingAttributeKey == key {
+            editingAttributeKey = nil
+            editingDraftValue = nil
+        }
+        sections = makeSections()
+        collectionView.reloadData()
+    }
+
+    fileprivate func elementAttributeEditorCellNeedsRelayout(_ cell: ElementAttributeEditorCell) {
+        collectionView.performBatchUpdates(nil)
+    }
+}
+
+private final class ElementAttributeEditorCell: UICollectionViewListCell, UITextViewDelegate {
+    weak var delegate: ElementAttributeEditorCellDelegate?
+
+    private let nameLabel = UILabel()
+    private let valueTextView = UITextView()
+    private let stackView = UIStackView()
+
+    private var valueHeightConstraint: NSLayoutConstraint?
+    private var editingKey: ElementAttributeEditingKey?
+    private var debounceTask: Task<Void, Never>?
+    private var isApplyingValue = false
+    private var suppressNextCommit = false
+
+    var currentEditingKey: ElementAttributeEditingKey? {
+        editingKey
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupViews()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        debounceTask?.cancel()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        if valueTextView.isFirstResponder {
+            valueTextView.resignFirstResponder()
+        }
+        suppressNextCommit = false
+        debounceTask?.cancel()
+        debounceTask = nil
+        editingKey = nil
+    }
+
+    func configure(
+        key: ElementAttributeEditingKey,
+        name: String,
+        value: String,
+        activateEditor: Bool
+    ) {
+        editingKey = key
+        nameLabel.text = name
+
+        if valueTextView.text != value {
+            isApplyingValue = true
+            valueTextView.text = value
+            isApplyingValue = false
+        }
+
+        updateTextViewHeightIfNeeded()
+
+        if activateEditor, !valueTextView.isFirstResponder {
+            valueTextView.becomeFirstResponder()
+        }
+    }
+
+    func suppressNextCommitAndEndEditing() {
+        suppressNextCommit = true
+        debounceTask?.cancel()
+        debounceTask = nil
+        if valueTextView.isFirstResponder {
+            valueTextView.resignFirstResponder()
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateTextViewHeightIfNeeded()
+    }
+
+    override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+        let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
+        setNeedsLayout()
+        layoutIfNeeded()
+        let targetSize = CGSize(width: attributes.size.width, height: UIView.layoutFittingCompressedSize.height)
+        let fittedSize = contentView.systemLayoutSizeFitting(
+            targetSize,
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        attributes.size.height = ceil(fittedSize.height)
+        return attributes
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        guard let editingKey else {
+            return
+        }
+        delegate?.elementAttributeEditorCellDidBeginEditing(self, key: editingKey, value: textView.text ?? "")
+    }
+
+    func textViewDidChange(_ textView: UITextView) {
+        guard
+            !isApplyingValue,
+            let editingKey
+        else {
+            return
+        }
+
+        let value = textView.text ?? ""
+        updateTextViewHeightIfNeeded()
+        delegate?.elementAttributeEditorCellDidChangeDraft(self, key: editingKey, value: value)
+
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard
+                let self,
+                !Task.isCancelled,
+                let currentKey = self.editingKey,
+                currentKey == editingKey
+            else {
+                return
+            }
+            self.delegate?.elementAttributeEditorCellDidCommitValue(self, key: currentKey, value: self.valueTextView.text ?? "")
+        }
+    }
+
+    func textViewDidEndEditing(_ textView: UITextView) {
+        debounceTask?.cancel()
+        guard let editingKey else {
+            return
+        }
+        let value = textView.text ?? ""
+        if suppressNextCommit {
+            suppressNextCommit = false
+            delegate?.elementAttributeEditorCellDidEndEditing(self, key: editingKey, value: value)
+            return
+        }
+        delegate?.elementAttributeEditorCellDidCommitValue(self, key: editingKey, value: value)
+        delegate?.elementAttributeEditorCellDidEndEditing(self, key: editingKey, value: value)
+    }
+
+    private func setupViews() {
+        preservesSuperviewLayoutMargins = true
+        contentView.preservesSuperviewLayoutMargins = true
+
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.numberOfLines = 1
+        nameLabel.textColor = .secondaryLabel
+        nameLabel.adjustsFontForContentSizeCategory = true
+        nameLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        nameLabel.setContentHuggingPriority(.required, for: .vertical)
+        nameLabel.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+            for: .systemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                weight: .semibold
+            )
+        )
+
+        valueTextView.translatesAutoresizingMaskIntoConstraints = false
+        valueTextView.delegate = self
+        valueTextView.isEditable = true
+        valueTextView.isSelectable = true
+        valueTextView.isScrollEnabled = false
+        valueTextView.backgroundColor = .clear
+        valueTextView.textContainerInset = .zero
+        valueTextView.textContainer.lineFragmentPadding = 0
+        valueTextView.adjustsFontForContentSizeCategory = true
+        valueTextView.textColor = .label
+        valueTextView.autocapitalizationType = .none
+        valueTextView.autocorrectionType = .no
+        valueTextView.smartDashesType = .no
+        valueTextView.smartQuotesType = .no
+        valueTextView.spellCheckingType = .no
+        valueTextView.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+            for: .monospacedSystemFont(
+                ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                weight: .regular
+            )
+        )
+        valueTextView.setContentCompressionResistancePriority(.required, for: .vertical)
+        valueTextView.setContentHuggingPriority(.required, for: .vertical)
+
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.axis = .vertical
+        stackView.spacing = 6
+        stackView.addArrangedSubview(nameLabel)
+        stackView.addArrangedSubview(valueTextView)
+        contentView.addSubview(stackView)
+
+        let valueHeightConstraint = valueTextView.heightAnchor.constraint(equalToConstant: ceil(UIFont.preferredFont(forTextStyle: .footnote).lineHeight))
+        valueHeightConstraint.priority = .required
+        self.valueHeightConstraint = valueHeightConstraint
+
+        NSLayoutConstraint.activate([
+            stackView.topAnchor.constraint(equalTo: contentView.layoutMarginsGuide.topAnchor),
+            stackView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.trailingAnchor),
+            stackView.bottomAnchor.constraint(equalTo: contentView.layoutMarginsGuide.bottomAnchor),
+            valueHeightConstraint
+        ])
+    }
+
+    private func updateTextViewHeightIfNeeded() {
+        guard let valueHeightConstraint else {
+            return
+        }
+        let width = valueTextView.bounds.width
+        guard width > 0 else {
+            return
+        }
+        let fittingSize = valueTextView.sizeThatFits(CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        let minLineHeight = valueTextView.font?.lineHeight ?? UIFont.preferredFont(forTextStyle: .footnote).lineHeight
+        let targetHeight = max(ceil(minLineHeight), ceil(fittingSize.height))
+        if abs(valueHeightConstraint.constant - targetHeight) < 0.5 {
+            return
+        }
+        valueHeightConstraint.constant = targetHeight
+        delegate?.elementAttributeEditorCellNeedsRelayout(self)
     }
 }
 
