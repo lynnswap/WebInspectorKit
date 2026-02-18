@@ -15,7 +15,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         case selector(path: String)
         case styleRule(selector: String, detail: String)
         case styleMeta(String)
-        case attribute(name: String, value: String)
+        case attribute(nodeID: Int?, name: String, value: String)
         case emptyAttribute
     }
 
@@ -226,7 +226,9 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         if inspector.selection.attributes.isEmpty {
             attributeRows = [.emptyAttribute]
         } else {
-            attributeRows = inspector.selection.attributes.map { .attribute(name: $0.name, value: $0.value) }
+            attributeRows = inspector.selection.attributes.map {
+                .attribute(nodeID: $0.nodeId, name: $0.name, value: $0.value)
+            }
         }
 
         let attributeSection = DetailSection(
@@ -269,25 +271,29 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             configuration = UIListContentConfiguration.cell()
             configuration.text = preview
             configuration.textProperties.numberOfLines = 0
+            configuration.textProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .monospacedSystemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                    weight: .regular
+                )
+            )
+            configuration.textProperties.color = .label
         case .selector(let path):
             configuration = UIListContentConfiguration.cell()
             configuration.text = path
             configuration.textProperties.numberOfLines = 0
+            configuration.textProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .monospacedSystemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                    weight: .regular
+                )
+            )
+            configuration.textProperties.color = .label
         case .styleRule(let selector, let details):
             configuration = UIListContentConfiguration.subtitleCell()
             configuration.text = selector
             configuration.secondaryText = details
-            configuration.textProperties.numberOfLines = 0
-            configuration.secondaryTextProperties.numberOfLines = 0
-        case .styleMeta(let message):
-            configuration = UIListContentConfiguration.cell()
-            configuration.text = message
-            configuration.textProperties.color = .secondaryLabel
-        case .attribute(let name, let value):
-            configuration = UIListContentConfiguration.subtitleCell()
-            configuration.text = name
-            configuration.secondaryText = value
-            configuration.textProperties.numberOfLines = 0
+            configuration.textProperties.numberOfLines = 1
             configuration.secondaryTextProperties.numberOfLines = 0
             configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
                 for: .systemFont(
@@ -297,6 +303,37 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             )
             configuration.textProperties.color = .secondaryLabel
             configuration.secondaryTextProperties.color = .label
+            configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .monospacedSystemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                    weight: .regular
+                )
+            )
+        case .styleMeta(let message):
+            configuration = UIListContentConfiguration.cell()
+            configuration.text = message
+            configuration.textProperties.color = .secondaryLabel
+            configuration.textProperties.font = .preferredFont(forTextStyle: .subheadline)
+        case let .attribute(_, name, value):
+            configuration = UIListContentConfiguration.subtitleCell()
+            configuration.text = name
+            configuration.secondaryText = value
+            configuration.textProperties.numberOfLines = 1
+            configuration.secondaryTextProperties.numberOfLines = 0
+            configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                    weight: .semibold
+                )
+            )
+            configuration.textProperties.color = .secondaryLabel
+            configuration.secondaryTextProperties.color = .label
+            configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .monospacedSystemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
+                    weight: .regular
+                )
+            )
         case .emptyAttribute:
             configuration = UIListContentConfiguration.cell()
             configuration.text = wiLocalized("dom.element.attributes.empty")
@@ -330,16 +367,10 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     }
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        guard
-            sections.indices.contains(indexPath.section),
-            sections[indexPath.section].rows.indices.contains(indexPath.item)
-        else {
+        guard let row = attributeRow(at: indexPath) else {
             return false
         }
-        if case .attribute = sections[indexPath.section].rows[indexPath.item] {
-            return true
-        }
-        return false
+        return !row.name.isEmpty
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -347,24 +378,17 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             collectionView.deselectItem(at: indexPath, animated: true)
         }
 
-        guard
-            sections.indices.contains(indexPath.section),
-            sections[indexPath.section].rows.indices.contains(indexPath.item)
-        else {
-            return
-        }
-
-        guard case let .attribute(name, value) = sections[indexPath.section].rows[indexPath.item] else {
+        guard let row = attributeRow(at: indexPath) else {
             return
         }
 
         let alert = UIAlertController(
-            title: name,
+            title: row.name,
             message: wiLocalized("dom.element.section.attributes"),
             preferredStyle: .alert
         )
         alert.addTextField { textField in
-            textField.text = value
+            textField.text = row.value
             textField.clearButtonMode = .whileEditing
             textField.autocapitalizationType = .none
             textField.autocorrectionType = .no
@@ -377,28 +401,62 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             else {
                 return
             }
-            self.inspector.updateAttributeValue(name: name, value: value)
+            self.inspector.updateAttributeValue(name: row.name, value: value)
         })
         present(alert, animated: true)
     }
 
     private func trailingSwipeActions(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let attributeRow = attributeRow(at: indexPath) else {
+            return nil
+        }
+
+        let action = UIContextualAction(style: .destructive, title: nil) { [weak self] _, _, completion in
+            self?.deleteAttribute(named: attributeRow.name)
+            completion(true)
+        }
+        action.image = UIImage(systemName: "trash")
+        let configuration = UISwipeActionsConfiguration(actions: [action])
+        configuration.performsFirstActionWithFullSwipe = true
+        return configuration
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        contextMenuConfigurationForItemAt indexPath: IndexPath,
+        point: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard let attributeRow = attributeRow(at: indexPath) else {
+            return nil
+        }
+
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            let deleteAction = UIAction(
+                title: wiLocalized("delete"),
+                image: UIImage(systemName: "trash"),
+                attributes: [.destructive]
+            ) { _ in
+                self?.deleteAttribute(named: attributeRow.name)
+            }
+            return UIMenu(children: [deleteAction])
+        }
+    }
+
+    private func attributeRow(at indexPath: IndexPath) -> (nodeID: Int?, name: String, value: String)? {
         guard
             sections.indices.contains(indexPath.section),
             sections[indexPath.section].rows.indices.contains(indexPath.item)
         else {
             return nil
         }
-
-        guard case let .attribute(name, _) = sections[indexPath.section].rows[indexPath.item] else {
+        guard case let .attribute(nodeID, name, value) = sections[indexPath.section].rows[indexPath.item] else {
             return nil
         }
+        return (nodeID: nodeID, name: name, value: value)
+    }
 
-        let action = UIContextualAction(style: .destructive, title: wiLocalized("delete")) { [weak self] _, _, completion in
-            self?.inspector.removeAttribute(name: name)
-            completion(true)
-        }
-        return UISwipeActionsConfiguration(actions: [action])
+    private func deleteAttribute(named name: String) {
+        inspector.removeAttribute(name: name)
     }
 
     @objc
