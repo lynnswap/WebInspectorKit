@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 import Observation
 import WebKit
 import SwiftUI
@@ -24,7 +23,7 @@ private let logger = Logger(
     private var refreshControl: UIRefreshControl?
 #endif
     
-    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
+    @ObservationIgnored private var keyValueObservations: [NSKeyValueObservation] = []
     
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
@@ -62,42 +61,58 @@ private let logger = Logger(
         setObservers()
         webView.load(URLRequest(url: url))
     }
+
+    deinit {
+        keyValueObservations.forEach { $0.invalidate() }
+    }
     
     private func setObservers() {
-        webView.publisher(for: \.estimatedProgress)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.estimatedProgress = newValue
+        keyValueObservations.removeAll()
+
+        keyValueObservations.append(
+            webView.observe(\.estimatedProgress, options: [.initial, .new]) { [weak self] webView, _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    self?.estimatedProgress = webView.estimatedProgress
+                }
             }
-            .store(in: &cancellables)
-        
-        webView.publisher(for: \.url)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.currentURL = newValue
+        )
+
+        keyValueObservations.append(
+            webView.observe(\.url, options: [.initial, .new]) { [weak self] webView, _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    self?.currentURL = webView.url
+                }
             }
-            .store(in: &cancellables)
-        
-        webView.publisher(for: \.canGoForward)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.canGoForward = newValue
+        )
+
+        keyValueObservations.append(
+            webView.observe(\.canGoForward, options: [.initial, .new]) { [weak self] webView, _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    self?.canGoForward = webView.canGoForward
+                }
             }
-            .store(in: &cancellables)
-        
-        webView.publisher(for: \.canGoBack)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.canGoBack = newValue
+        )
+
+        keyValueObservations.append(
+            webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] webView, _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    self?.canGoBack = webView.canGoBack
+                }
             }
-            .store(in: &cancellables)
-        
-        webView.publisher(for: \.underPageBackgroundColor)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newValue in
-                self?.underPageBackgroundColor = Color(newValue)
+        )
+
+        keyValueObservations.append(
+            webView.observe(\.underPageBackgroundColor, options: [.initial, .new]) { [weak self] webView, _ in
+                guard let self else { return }
+                Task { @MainActor [weak self] in
+                    self?.underPageBackgroundColor = Color(webView.underPageBackgroundColor)
+                }
             }
-            .store(in: &cancellables)
+        )
     }
     
     func goBack() {

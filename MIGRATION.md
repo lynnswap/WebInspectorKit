@@ -1,58 +1,99 @@
-# Migration Guide: SwiftUI API -> Native UIKit/AppKit API
+# MIGRATION (Next Release)
 
-This release introduces a breaking redesign of `WebInspectorKit`.
+このリリースは**破壊的変更**です。互換レイヤは提供しません。  
+product 名 (`WebInspectorKitCore` / `WebInspectorKit`) は維持されます。
 
-## Removed APIs
+## 1. 破壊的変更一覧
 
-- `WebInspector.Panel`
-- `WebInspector.Tab`
-- `WebInspector.TabBuilder`
-- `WebInspector.DOMTreeView`
-- `WebInspector.ElementDetailsView`
-- `WebInspector.NetworkView`
-- SwiftUI toolbar modifiers (`domInspectorToolbar`, `networkInspectorToolbar`)
-- SwiftUI-specific `NetworkInspector` bindings (`navigationPath`, `isShowingDetail`, `tableSelection`, filter `Binding` helpers)
+- `WebInspector.*` 名前空間を廃止（トップレベル公開型へ移行）。
+- 旧 `SessionController` / `InspectorPaneDescriptor` / `InspectorPaneContext` / `ContainerViewController` / `SheetPresenter` / `WindowPresenter` を削除。
+- 旧 `DOMPaneModel` / `NetworkPaneModel` / `InspectorStore` を削除。
+- Runtime 公開型を `WIRuntimeActor` / `WIDOMRuntimeActor` / `WINetworkRuntimeActor` に刷新。
+- Runtime 通信契約を `WISessionCommand` / `AsyncStream<WISessionEvent>` に統一。
+- State は `@MainActor @Observable WISessionStore` + `WISessionViewState` へ統合。
 
-## New APIs
+## 2. 旧 -> 新 対応表
 
-- `WebInspector.TabDescriptor`
-- `WebInspector.TabContext`
-- `WebInspector.ContainerViewController`
-- `WebInspector.SheetPresenter` (iOS)
-- `WebInspector.WindowPresenter` (macOS)
-- `WebInspector.TabDescriptor.dom()` / `.element()` / `.network()`
+| 旧 | 新 |
+|---|---|
+| `WebInspector.SessionController` | `WISessionController` |
+| `WebInspector.InspectorPaneDescriptor` | `WIPaneDescriptor` |
+| `WebInspector.InspectorPaneContext` | `WIPaneContext` |
+| `WebInspector.DOMPaneModel` | `WIDOMPaneViewModel` |
+| `WebInspector.NetworkPaneModel` | `WINetworkPaneViewModel` |
+| `WebInspector.InspectorStore` | `WISessionStore` |
+| `InspectorRuntimeActor` | `WIRuntimeActor` |
+| `DOMRuntimeActor` | `WIDOMRuntimeActor` |
+| `NetworkRuntimeActor` | `WINetworkRuntimeActor` |
+| `WebInspector.ContainerViewController` | `WIContainerViewController` |
+| `WebInspector.SheetPresenter` | `WISheetPresenter` |
+| `WebInspector.WindowPresenter` | `WIWindowPresenter` |
+| `WebInspector.Configuration` | `WIConfiguration` |
 
-## API Mapping
+## 3. attach/detach とイベント購読フロー
 
-- `WebInspector.Panel(controller, webView: webView)`
-  -> `WebInspector.ContainerViewController(controller, webView: webView, tabs: [.dom(), .element(), .network()])`
+1. `WISessionController.connect(to:)` / `suspend()` / `disconnect()` を呼ぶ。
+2. Controller は `WISessionCommand` を `WIRuntimeActor` へ dispatch する。
+3. Runtime は `WISessionEvent.stateChanged(WISessionViewState)` を `AsyncStream` へ発行。
+4. `WISessionStore.bind(to:)` が event stream だけで状態を再構築する。
+5. UI は `WISessionStore.viewState` を読むだけで表示更新する。
 
-- SwiftUI sheet presentation
-  -> iOS: `WebInspector.SheetPresenter.shared.present(...)`
+## 4. DOM/Network 置換コード例
 
-- SwiftUI window/sheet composition on macOS
-  -> `WebInspector.WindowPresenter.shared.present(...)`
+### 旧
 
-- `WebInspector.Tab { controller in AnyView(...) }`
-  -> `WebInspector.TabDescriptor(id:title:systemImage:makeViewController:)`
+```swift
+let inspector = WebInspector.SessionController()
+WebInspector.SheetPresenter.shared.present(
+    from: presenter,
+    inspector: inspector,
+    webView: webView,
+    tabs: [.dom(), .element(), .network()]
+)
+```
 
-## NetworkInspector updates
+### 新
 
-- Keep using:
-  - `selectedEntryID`
-  - `searchText`
-  - `activeResourceFilters`
-  - `effectiveResourceFilters`
-  - `sortDescriptors`
-  - `displayEntries`
-- Removed:
-  - any `Binding` helper properties for SwiftUI
+```swift
+let inspector = WISessionController()
+WISheetPresenter.shared.present(
+    from: presenter,
+    inspector: inspector,
+    webView: webView,
+    tabs: [.dom(), .element(), .network()]
+)
+```
 
-## Notes
+### カスタムタブ
 
-- DOM tree rendering still uses the internal DOM frontend assets in `WKWebView`.
-- `WebInspectorKitCore` API surface remains unchanged.
-- Native UI styling is now standardized around platform list presets:
-  - iOS: `UICollectionView` + `.insetGrouped` + `UIListContentConfiguration` / `UIBackgroundConfiguration`
-  - macOS: native split/list-detail UI with sectioned detail structure
-- Root tab screens intentionally hide centered navigation titles; detail screens provide titles.
+```swift
+let custom = WIPaneDescriptor(
+    id: "my_custom_tab",
+    title: "Custom",
+    systemImage: "folder",
+    role: .other
+) { _ in
+    #if canImport(UIKit)
+    return UIViewController()
+    #else
+    return NSViewController()
+    #endif
+}
+```
+
+## 5. Strict Concurrency で出やすい典型エラー
+
+- `non-Sendable` 境界エラー:
+  - Cross-actor で渡す型を `Sendable` にする。
+  - UI専用参照型は `@MainActor` に閉じる。
+- MainActor 境界エラー:
+  - UI状態は `@MainActor`、実行制御は actor 側に分離する。
+- fire-and-forget の競合:
+  - `Task {}` 乱立を避け、`WIRuntimeActor.dispatch(_:)` に集約する。
+- JSON payload デコード不正:
+  - `[String: Any]` に依存せず `Codable` で decode し、recoverable error event に変換する。
+
+## 備考
+
+- MiniBrowser は Observation + async に統一され、Combine 依存を除去しています。
+- `SWIFT_STRICT_CONCURRENCY = complete` 前提で動作します。

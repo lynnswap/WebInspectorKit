@@ -6,13 +6,13 @@ import UIKit
 
 @MainActor
 final class NetworkTabViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
     private let observationToken = WIObservationToken()
 
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         self.listViewController = NetworkListViewController(inspector: inspector)
         self.detailViewController = NetworkDetailViewController(inspector: inspector)
@@ -126,7 +126,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
 
 @MainActor
 private final class NetworkListViewController: UIViewController, UISearchResultsUpdating, UICollectionViewDataSource, UICollectionViewDelegate {
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
     private let observationToken = WIObservationToken()
     private let listCellReuseIdentifier = "NetworkListCell"
 
@@ -155,7 +155,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }()
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -437,7 +437,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
 
     private let listCellReuseIdentifier = "NetworkDetailListCell"
     private let headerReuseIdentifier = "NetworkDetailHeaderCell"
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
 
     private var sections: [DetailSection] = []
     private lazy var collectionView: UICollectionView = {
@@ -456,7 +456,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
     }()
     private var entry: NetworkEntry?
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -935,7 +935,7 @@ private final class NetworkBodyPreviewViewController: UIViewController {
     }
 
     private let entry: NetworkEntry
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
     private let bodyState: NetworkBody
 
     private var mode: PreviewMode = .text
@@ -950,7 +950,7 @@ private final class NetworkBodyPreviewViewController: UIViewController {
     }()
     private let textView = UITextView()
 
-    init(entry: NetworkEntry, inspector: WebInspector.NetworkInspector, bodyState: NetworkBody) {
+    init(entry: NetworkEntry, inspector: WINetworkPaneViewModel, bodyState: NetworkBody) {
         self.entry = entry
         self.inspector = inspector
         self.bodyState = bodyState
@@ -1132,13 +1132,13 @@ import AppKit
 
 @MainActor
 final class NetworkTabViewController: NSSplitViewController {
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
     private let observationToken = WIObservationToken()
 
     private let listViewController: NetworkMacListViewController
     private let detailViewController: NetworkMacDetailViewController
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         self.listViewController = NetworkMacListViewController(inspector: inspector)
         self.detailViewController = NetworkMacDetailViewController(inspector: inspector)
@@ -1221,7 +1221,7 @@ final class NetworkTabViewController: NSSplitViewController {
 
 @MainActor
 private final class NetworkMacListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
     private let observationToken = WIObservationToken()
 
     private let searchField = NSSearchField()
@@ -1232,7 +1232,7 @@ private final class NetworkMacListViewController: NSViewController, NSTableViewD
     private var displayedEntries: [NetworkEntry] = []
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -1501,14 +1501,14 @@ private final class NetworkMacDetailViewController: NSViewController {
         let rows: [DetailRow]
     }
 
-    private let inspector: WebInspector.NetworkInspector
+    private let inspector: WINetworkPaneViewModel
 
     private let fetchButton = NSButton(title: "", target: nil, action: nil)
     private let emptyLabel = NSTextField(labelWithString: "")
     private let contentStackView = NSStackView()
     private var entry: NetworkEntry?
 
-    init(inspector: WebInspector.NetworkInspector) {
+    init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }

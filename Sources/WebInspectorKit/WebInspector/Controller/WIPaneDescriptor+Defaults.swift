@@ -6,13 +6,13 @@ import UIKit
 import AppKit
 #endif
 
-extension WebInspector.TabDescriptor {
+extension WIPaneDescriptor {
     @MainActor
     public static func dom(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.TabDescriptor {
-        WebInspector.TabDescriptor(
+    ) -> WIPaneDescriptor {
+        WIPaneDescriptor(
             id: "wi_dom",
             title: title ?? wiLocalized("inspector.tab.dom"),
             systemImage: systemImage ?? "chevron.left.forwardslash.chevron.right",
@@ -33,8 +33,8 @@ extension WebInspector.TabDescriptor {
     public static func element(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.TabDescriptor {
-        WebInspector.TabDescriptor(
+    ) -> WIPaneDescriptor {
+        WIPaneDescriptor(
             id: "wi_element",
             title: title ?? wiLocalized("inspector.tab.element"),
             systemImage: systemImage ?? "info.circle",
@@ -54,8 +54,8 @@ extension WebInspector.TabDescriptor {
     public static func network(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WebInspector.TabDescriptor {
-        WebInspector.TabDescriptor(
+    ) -> WIPaneDescriptor {
+        WIPaneDescriptor(
             id: "wi_network",
             title: title ?? wiLocalized("inspector.tab.network"),
             systemImage: systemImage ?? "waveform.path.ecg.rectangle",

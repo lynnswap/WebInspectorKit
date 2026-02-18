@@ -23,8 +23,12 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     weak var webView: WKWebView?
     let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
+    private var configureTask: Task<Void, Never>?
+    private var clearTask: Task<Void, Never>?
 
     @MainActor deinit {
+        configureTask?.cancel()
+        clearTask?.cancel()
         detachPageWebView()
     }
 
@@ -34,20 +38,12 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         if mode == .stopped {
             store.reset()
         }
-        Task {
-            await self.configureNetworkLogging(
-                mode: mode,
-                clearExisting: false,
-                on: self.webView
-            )
-        }
+        scheduleConfigure(mode: mode, clearExisting: false, on: webView)
     }
 
     func clearNetworkLogs() {
         store.clear()
-        Task {
-            await self.clearRemoteNetworkRecords(on: self.webView)
-        }
+        scheduleClear(on: webView)
     }
 }
 
@@ -67,13 +63,7 @@ extension NetworkPageAgent {
             }
         }
         if let modeBeforeDetach, let webView {
-            Task {
-                await self.configureNetworkLogging(
-                    mode: modeBeforeDetach,
-                    clearExisting: false,
-                    on: webView
-                )
-            }
+            scheduleConfigure(mode: modeBeforeDetach, clearExisting: false, on: webView)
         }
         replacePageWebView(with: nil)
     }
@@ -87,13 +77,7 @@ extension NetworkPageAgent {
             store.reset()
         }
         registerMessageHandlers()
-        Task {
-            await self.configureNetworkLogging(
-                mode: self.loggingMode,
-                clearExisting: true,
-                on: webView
-            )
-        }
+        scheduleConfigure(mode: loggingMode, clearExisting: true, on: webView)
     }
 
     func didClearPageWebView() {
@@ -178,6 +162,26 @@ extension NetworkPageAgent: WKScriptMessageHandler {
 }
 
 private extension NetworkPageAgent {
+    func scheduleConfigure(mode: NetworkLoggingMode, clearExisting: Bool, on targetWebView: WKWebView?) {
+        configureTask?.cancel()
+        configureTask = Task { [weak self] in
+            guard let self else { return }
+            await configureNetworkLogging(
+                mode: mode,
+                clearExisting: clearExisting,
+                on: targetWebView
+            )
+        }
+    }
+
+    func scheduleClear(on targetWebView: WKWebView?) {
+        clearTask?.cancel()
+        clearTask = Task { [weak self] in
+            guard let self else { return }
+            await clearRemoteNetworkRecords(on: targetWebView)
+        }
+    }
+
     func registerMessageHandlers() {
         guard let webView else { return }
         let controller = webView.configuration.userContentController

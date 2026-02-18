@@ -7,13 +7,13 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WebInspector.Controller
+    inspectorController: WISessionController
 ) {
     guard let presenter = resolvePresenter(from: windowScene) else {
         return
     }
 
-    WebInspector.SheetPresenter.shared.present(
+    WISheetPresenter.shared.present(
         from: presenter,
         inspector: inspectorController,
         webView: model.webView,
@@ -76,9 +76,9 @@ import AppKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WebInspector.Controller
+    inspectorController: WISessionController
 ) {
-    WebInspector.WindowPresenter.shared.present(
+    WIWindowPresenter.shared.present(
         parentWindow: windowScene,
         inspector: inspectorController,
         webView: model.webView,

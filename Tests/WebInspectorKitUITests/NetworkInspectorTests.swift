@@ -7,7 +7,7 @@ import Testing
 struct NetworkInspectorTests {
     @Test
     func applyFetchedBodyUpdatesDecodedBodyLengthForResponseBody() {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
         let entry = makeEntry()
         let target = NetworkBody(
             kind: .text,
@@ -45,7 +45,7 @@ struct NetworkInspectorTests {
 
     @Test
     func applyFetchedBodyUpdatesRequestBodyBytesForRequestBody() {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
         let entry = makeEntry()
         let target = NetworkBody(
             kind: .text,
@@ -83,7 +83,7 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesAppliesSearchResourceFilterAndSortTogether() throws {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
 
         try applyRequestStart(
             to: inspector,
@@ -122,7 +122,7 @@ struct NetworkInspectorTests {
 
     @Test
     func setResourceFilterAllClearsSpecificSelection() {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
 
         inspector.activeResourceFilters = [.image, .script]
         #expect(inspector.effectiveResourceFilters == [.image, .script])
@@ -134,7 +134,7 @@ struct NetworkInspectorTests {
 
     @Test
     func clearResetsSelectedEntryID() throws {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
             requestID: 11,
@@ -154,7 +154,7 @@ struct NetworkInspectorTests {
 
     @Test
     func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
             requestID: 31,
@@ -178,7 +178,7 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
-        let inspector = WebInspector.NetworkInspector(session: NetworkSession())
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
             requestID: 21,
@@ -221,7 +221,7 @@ struct NetworkInspectorTests {
     }
 
     private func applyRequestStart(
-        to inspector: WebInspector.NetworkInspector,
+        to inspector: WINetworkPaneViewModel,
         requestID: Int,
         url: String,
         initiator: String,

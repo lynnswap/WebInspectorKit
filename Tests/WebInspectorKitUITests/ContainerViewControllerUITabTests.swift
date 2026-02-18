@@ -10,13 +10,13 @@ import UIKit
 struct ContainerViewControllerUITabTests {
     @Test
     func rebuildTabsBuildsUITabsFromDescriptors() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B"),
             makeDescriptor(id: "tab_c", title: "C")
         ]
-        let container = WebInspector.ContainerViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
@@ -26,13 +26,13 @@ struct ContainerViewControllerUITabTests {
 
     @Test
     func selectedTabMatchesControllerSelection() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.selectedTabID = "tab_b"
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
         ]
-        let container = WebInspector.ContainerViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
@@ -41,12 +41,12 @@ struct ContainerViewControllerUITabTests {
 
     @Test
     func invalidSelectionFallsBackToCurrentSelectionAndNormalizesController() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
         ]
-        let container = WebInspector.ContainerViewController(
+        let container = WIContainerViewController(
             controller,
             webView: makeTestWebView(),
             tabs: descriptors
@@ -74,12 +74,12 @@ struct ContainerViewControllerUITabTests {
 
     @Test
     func didSelectTabDelegateUpdatesControllerSelectionWhenConnected() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
         ]
-        let container = WebInspector.ContainerViewController(
+        let container = WIContainerViewController(
             controller,
             webView: makeTestWebView(),
             tabs: descriptors
@@ -103,12 +103,12 @@ struct ContainerViewControllerUITabTests {
 
     @Test
     func duplicateTabIDsCreateUniqueUITabIdentifiersAndKeepPrimarySelectionMapping() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "duplicate", title: "First"),
             makeDescriptor(id: "duplicate", title: "Second")
         ]
-        let container = WebInspector.ContainerViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
@@ -130,8 +130,8 @@ struct ContainerViewControllerUITabTests {
         #expect(container.selectedTab?.identifier == firstIdentifier)
     }
 
-    private func makeDescriptor(id: String, title: String) -> WebInspector.TabDescriptor {
-        WebInspector.TabDescriptor(
+    private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
+        WIPaneDescriptor(
             id: id,
             title: title,
             systemImage: "circle"

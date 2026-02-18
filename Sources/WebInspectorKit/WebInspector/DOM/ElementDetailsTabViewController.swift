@@ -49,7 +49,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         case emptyAttribute
     }
 
-    private let inspector: WebInspector.DOMInspector
+    private let inspector: WIDOMPaneViewModel
     private let observationToken = WIObservationToken()
     private var sections: [DetailSection] = []
     private let listCellReuseIdentifier = "ElementDetailsListCell"
@@ -90,7 +90,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         )
     }()
 
-    init(inspector: WebInspector.DOMInspector) {
+    init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -820,13 +820,13 @@ final class ElementDetailsTabViewController: NSViewController, NSTableViewDataSo
         let detail: String
     }
 
-    private let inspector: WebInspector.DOMInspector
+    private let inspector: WIDOMPaneViewModel
     private let observationToken = WIObservationToken()
 
     private let tableView = NSTableView()
     private var rows: [Row] = []
 
-    init(inspector: WebInspector.DOMInspector) {
+    init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }

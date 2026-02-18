@@ -13,10 +13,10 @@ import AppKit
 struct TabDescriptorTests {
     @Test
     func duplicateTabIDsUseLastActivationDefinition() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let webView = makeTestWebView()
 
-        let first = WebInspector.TabDescriptor(
+        let first = WIPaneDescriptor(
             id: "duplicate",
             title: "First",
             systemImage: "1.circle",
@@ -27,7 +27,7 @@ struct TabDescriptorTests {
             makeDummyController()
         }
 
-        let second = WebInspector.TabDescriptor(
+        let second = WIPaneDescriptor(
             id: "duplicate",
             title: "Second",
             systemImage: "2.circle",
@@ -47,17 +47,17 @@ struct TabDescriptorTests {
 
     @Test
     func configureTabsSetsFirstTabAsSelectedWhenNoSelectionExists() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
 
         controller.configureTabs([
-            WebInspector.TabDescriptor(
+            WIPaneDescriptor(
                 id: "tab_a",
                 title: "A",
                 systemImage: "a.circle"
             ) { _ in
                 makeDummyController()
             },
-            WebInspector.TabDescriptor(
+            WIPaneDescriptor(
                 id: "tab_b",
                 title: "B",
                 systemImage: "b.circle"
@@ -71,16 +71,16 @@ struct TabDescriptorTests {
 
     @Test
     func configureTabsReplacesInvalidSelectionWithFirstTab() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([
-            WebInspector.TabDescriptor(
+            WIPaneDescriptor(
                 id: "tab_a",
                 title: "A",
                 systemImage: "a.circle"
             ) { _ in
                 makeDummyController()
             },
-            WebInspector.TabDescriptor(
+            WIPaneDescriptor(
                 id: "tab_b",
                 title: "B",
                 systemImage: "b.circle"
@@ -91,7 +91,7 @@ struct TabDescriptorTests {
         controller.selectedTabID = "tab_b"
 
         controller.configureTabs([
-            WebInspector.TabDescriptor(
+            WIPaneDescriptor(
                 id: "tab_c",
                 title: "C",
                 systemImage: "c.circle"
@@ -110,7 +110,7 @@ struct TabDescriptorTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func makeDummyController() -> WebInspector.PlatformViewController {
+    private func makeDummyController() -> WIPlatformViewController {
         #if canImport(UIKit)
         return UIViewController()
         #elseif canImport(AppKit)

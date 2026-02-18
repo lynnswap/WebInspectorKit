@@ -7,7 +7,7 @@ import WebKit
 struct ControllerActivationTests {
     @Test
     func connectWithNoNetworkTabsDoesNotAttachNetworkSession() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .element()])
         let webView = makeTestWebView()
 
@@ -20,7 +20,7 @@ struct ControllerActivationTests {
 
     @Test
     func connectWithoutPanelDefaultsNetworkSessionToActiveLogging() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -31,7 +31,7 @@ struct ControllerActivationTests {
 
     @Test
     func selectedTabSwitchesNetworkModeBetweenBufferingAndActive() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .network()])
         let webView = makeTestWebView()
 
@@ -47,7 +47,7 @@ struct ControllerActivationTests {
 
     @Test
     func selectedTabSwitchesDOMAutoSnapshot() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .element()])
         let webView = makeTestWebView()
 
@@ -63,7 +63,7 @@ struct ControllerActivationTests {
 
     @Test
     func connectNilSuspendsWithoutClearingLastPageWebView() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .network()])
         let webView = makeTestWebView()
 
@@ -81,7 +81,7 @@ struct ControllerActivationTests {
 
     @Test
     func reconnectAfterSuspendRestoresModeForSelectedTab() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .network()])
         let webView = makeTestWebView()
 
@@ -100,7 +100,7 @@ struct ControllerActivationTests {
 
     @Test
     func configureTabsWhileConnectedReconnectsNewlyRequiredSessions() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .element()])
         let webView = makeTestWebView()
 
@@ -113,7 +113,7 @@ struct ControllerActivationTests {
 
     @Test
     func configureTabsWhileConnectedWithSameRequirementsKeepsDOMSelection() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .element()])
         let webView = makeTestWebView()
 
@@ -129,7 +129,7 @@ struct ControllerActivationTests {
 
     @Test
     func disconnectKeepsNetworkStoppedForControllerOnlyUsage() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -144,7 +144,7 @@ struct ControllerActivationTests {
 
     @Test
     func nativeSelectionSyncAfterDisconnectKeepsSessionsStopped() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .network()])
         let webView = makeTestWebView()
 
@@ -161,7 +161,7 @@ struct ControllerActivationTests {
 
     @Test
     func nativeSelectionSyncWhileConnectedUpdatesSelectedTab() {
-        let controller = WebInspector.Controller()
+        let controller = WISessionController()
         controller.configureTabs([.dom(), .network()])
         let webView = makeTestWebView()
 

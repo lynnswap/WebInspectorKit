@@ -6,7 +6,7 @@ import UIKit
 
 @MainActor
 final class DOMTreeTabViewController: UIViewController {
-    private let inspector: WebInspector.DOMInspector
+    private let inspector: WIDOMPaneViewModel
     private let observationToken = WIObservationToken()
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -24,7 +24,7 @@ final class DOMTreeTabViewController: UIViewController {
         )
     }()
 
-    init(inspector: WebInspector.DOMInspector) {
+    init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -142,7 +142,7 @@ import AppKit
 
 @MainActor
 final class DOMTreeTabViewController: NSViewController {
-    private let inspector: WebInspector.DOMInspector
+    private let inspector: WIDOMPaneViewModel
     private let observationToken = WIObservationToken()
 
     private let errorLabel = NSTextField(labelWithString: "")
@@ -173,7 +173,7 @@ final class DOMTreeTabViewController: NSViewController {
         return button
     }()
 
-    init(inspector: WebInspector.DOMInspector) {
+    init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }

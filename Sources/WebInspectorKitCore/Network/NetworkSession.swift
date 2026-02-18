@@ -16,6 +16,10 @@ public final class NetworkSession: PageSession {
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: NetworkPageAgent
 
+    var hasAttachedPageWebView: Bool {
+        pageAgent.webView != nil
+    }
+
     public init(configuration: NetworkConfiguration = .init()) {
         self.configuration = configuration
         let pageAgent = NetworkPageAgent()

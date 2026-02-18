@@ -16,12 +16,6 @@ final class DOMFrontendStore: NSObject {
         case domSelector = "webInspectorDomSelector"
     }
 
-    private struct InspectorProtocolRequest {
-        let id: Int
-        let method: String
-        let params: [String: Any]
-    }
-
     private struct PendingBundle {
         let rawJSON: String
         let preserveState: Bool
@@ -37,10 +31,13 @@ final class DOMFrontendStore: NSObject {
     private var configuration: DOMConfiguration
     private var matchedStylesTask: Task<Void, Never>?
     private var matchedStylesRequestToken = 0
+    private let protocolRouter: DOMProtocolRouter
+    var onRecoverableError: (@MainActor (String) -> Void)?
 
     init(session: DOMSession) {
         self.session = session
         self.configuration = session.configuration
+        self.protocolRouter = DOMProtocolRouter(session: session)
         super.init()
         session.bundleSink = self
     }
@@ -383,104 +380,33 @@ private extension DOMFrontendStore {
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
-        var object: [String: Any]?
-        if let messageString = payload as? String, let data = messageString.data(using: .utf8) {
-            object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        } else if let dictionary = payload as? [String: Any] {
-            object = dictionary
-        }
-        guard
-            let dictionary = object,
-            let id = protocolRequestID(from: dictionary["id"]),
-            let method = dictionary["method"] as? String
-        else {
-            return
-        }
-        let params = dictionary["params"] as? [String: Any] ?? [:]
-        let request = InspectorProtocolRequest(id: id, method: method, params: params)
-        processProtocolRequest(request)
-    }
-
-    private func protocolRequestID(from value: Any?) -> Int? {
-        switch value {
-        case let id as Int:
-            return id
-        case let number as NSNumber:
-            // JS numbers often arrive bridged as NSNumber. Avoid truncating non-integral values.
-            let doubleValue = number.doubleValue
-            let intValue = number.intValue
-            guard Double(intValue) == doubleValue else { return nil }
-            return intValue
-        case let double as Double:
-            let intValue = Int(double)
-            guard Double(intValue) == double else { return nil }
-            return intValue
-        case let string as String:
-            return Int(string)
-        default:
-            return nil
-        }
-    }
-
-    private func processProtocolRequest(_ request: InspectorProtocolRequest) {
-        Task {
-            do {
-                switch request.method {
-                case "DOM.getDocument":
-                    let depth = (request.params["depth"] as? Int) ?? configuration.snapshotDepth
-                    let payload = try await self.session.captureSnapshot(maxDepth: depth)
-                    await self.sendResponse(id: request.id, result: payload)
-                case "DOM.requestChildNodes":
-                    let depth = (request.params["depth"] as? Int) ?? configuration.subtreeDepth
-                    let identifier = request.params["nodeId"] as? Int ?? 0
-                    let subtree = try await self.session.captureSubtree(nodeId: identifier, maxDepth: depth)
-                    await self.sendResponse(id: request.id, result: subtree)
-                case "DOM.highlightNode":
-                    if let identifier = request.params["nodeId"] as? Int {
-                        await self.session.highlight(nodeId: identifier)
-                    }
-                    await self.sendResponse(id: request.id, result: [:])
-                case "Overlay.hideHighlight", "DOM.hideHighlight":
-                    await self.session.hideHighlight()
-                    await self.sendResponse(id: request.id, result: [:])
-                case "DOM.getSelectorPath":
-                    let identifier = request.params["nodeId"] as? Int ?? 0
-                    let selectorPath = try await self.session.selectorPath(nodeId: identifier)
-                    await self.sendResponse(id: request.id, result: ["selectorPath": selectorPath])
-                default:
-                    await self.sendError(id: request.id, message: "Unsupported method: \(request.method)")
-                }
-            } catch {
-                await self.sendError(id: request.id, message: error.localizedDescription)
+        Task { [weak self] in
+            guard let self else { return }
+            let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
+            if let recoverableError = outcome.recoverableError {
+                onRecoverableError?(recoverableError)
             }
+            guard let responseJSON = outcome.responseJSON else { return }
+            await dispatchToFrontend(responseJSON: responseJSON)
         }
     }
 
-    private func dispatchToFrontend(_ message: Any) async {
+    private func dispatchToFrontend(responseJSON: String) async {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(message)",
-                arguments: ["message": message],
+                """
+                (function(messageJSON) {
+                    const message = JSON.parse(messageJSON);
+                    window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(message);
+                })(messageJSON);
+                """,
+                arguments: ["messageJSON": responseJSON],
                 contentWorld: .page
             )
         } catch {
             inspectorLogger.error("dispatch to frontend failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func sendResponse(id: Int, result: Any) async {
-        var message: [String: Any] = ["id": id]
-        message["result"] = result
-        await dispatchToFrontend(message)
-    }
-
-    private func sendError(id: Int, message: String) async {
-        let payload: [String: Any] = [
-            "id": id,
-            "error": ["message": message]
-        ]
-        await dispatchToFrontend(payload)
     }
 }
 

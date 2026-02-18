@@ -11,7 +11,7 @@ private enum NetworkTabPreviewScenario {
         case detail
     }
 
-    static func makeInspector(mode: Mode) -> WebInspector.NetworkInspector {
+    static func makeInspector(mode: Mode) -> WINetworkPaneViewModel {
         let session = NetworkSession()
         switch mode {
         case .listLongTitle:
@@ -19,7 +19,7 @@ private enum NetworkTabPreviewScenario {
         case .list, .detail:
             session.wiApplyPreviewBatch(sampleBatchPayload())
         }
-        let inspector = WebInspector.NetworkInspector(session: session)
+        let inspector = WINetworkPaneViewModel(session: session)
         if mode == .detail {
             inspector.selectedEntryID = inspector.displayEntries.first?.id
         }
@@ -155,7 +155,7 @@ private enum NetworkTabPreviewScenario {
 
 @MainActor
 private final class NetworkDetailPreviewHostViewController: UIViewController {
-    var inspector: WebInspector.NetworkInspector?
+    var inspector: WINetworkPaneViewModel?
     private var detailViewController: NetworkDetailViewController?
 
     override func viewDidLoad() {

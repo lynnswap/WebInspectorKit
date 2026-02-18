@@ -6,28 +6,28 @@ UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit` (Native UI): UIKit/AppKit container, default tabs, presenters
-- `WebInspectorKitCore` (Core): DOM/Network engines + bundled inspector scripts
+- `WebInspectorKit` (Native UI): UIKit/AppKit container, pane descriptors, presenters, Observation state
+- `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorKitCore`.
 
 ## Features
 
-- DOM tree browsing (Web frontend hosted in `WKWebView`) with element picking, highlights, deletion, and attribute editing
-- Network request logging (fetch/XHR/WebSocket) with buffering when the Network tab is not selected
-- Configurable tabs via `WebInspector.TabDescriptor`
-- Explicit lifecycle via `WebInspector.Controller` (`connect(to:)`, `suspend()`, `disconnect()`)
+- DOM tree browsing (element picking, highlights, deletion, attribute editing)
+- Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
+- Configurable panes via `WIPaneDescriptor`
+- Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
 - Native presentation helpers:
-  - iOS: `WebInspector.SheetPresenter`
-  - macOS: `WebInspector.WindowPresenter`
+  - iOS: `WISheetPresenter`
+  - macOS: `WIWindowPresenter`
 
-## Native UI Style Rules
+## Architecture (Actor-led MVVM)
 
-- iOS uses `UICollectionView` list layouts (`.insetGrouped`) and `UIListContentConfiguration` presets for row/header typography.
-- Section headers use `UIListContentConfiguration.header()`.
-- Root tab screens (DOM / Element / Network) do not show centered navigation titles.
-- Detail screens show contextual titles and keep sectioned content structure (Overview / Request / Response / Body / Error).
-- Secondary actions are grouped under the trailing menu button (`ellipsis` on iOS 26+, `ellipsis.circle` before iOS 26).
+- `Presentation`: `WIContainerViewController`, presenters
+- `State`: `@MainActor @Observable WISessionStore`
+- `Runtime`: `WIRuntimeActor`, `WIDOMRuntimeActor`, `WINetworkRuntimeActor`
+- `Bridge`: `WIPageRuntimeBridge`
+- Runtime events are delivered as `AsyncStream<WISessionEvent>`.
 
 ## Requirements
 
@@ -44,8 +44,7 @@ npm run test:ts
 
 ## Installation
 
-Add this repository as a Swift Package dependency in Xcode (Package Dependencies).
-Choose one or both products depending on your use case:
+Add this repository as a Swift Package dependency in Xcode and select:
 
 - `WebInspectorKit`
 - `WebInspectorKitCore`
@@ -59,10 +58,10 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WebInspector.Controller()
+    private let inspector = WISessionController()
 
     @objc private func presentInspector() {
-        WebInspector.SheetPresenter.shared.present(
+        WISheetPresenter.shared.present(
             from: self,
             inspector: inspector,
             webView: pageWebView,
@@ -81,10 +80,10 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WebInspector.Controller()
+    let inspector = WISessionController()
 
     @objc func presentInspector() {
-        WebInspector.WindowPresenter.shared.present(
+        WIWindowPresenter.shared.present(
             parentWindow: window,
             inspector: inspector,
             webView: pageWebView,
@@ -94,45 +93,34 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## Custom Tabs
+## Custom Pane
 
 ```swift
-let customTab = WebInspector.TabDescriptor(
-    id: "my_custom_tab",
+let customPane = WIPaneDescriptor(
+    id: "my_custom_pane",
     title: "Custom",
     systemImage: "folder",
     role: .other
 ) { context in
     #if canImport(UIKit)
     return UIViewController()
-    #elseif canImport(AppKit)
+    #else
     return NSViewController()
     #endif
 }
 
-let container = WebInspector.ContainerViewController(
+let container = WIContainerViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customTab]
+    tabs: [.dom(), .element(), .network(), customPane]
 )
 ```
 
-Tip: If you omit `.network()`, network scripts are never installed.
-
-## Limitations
-
-- WKWebView only; JavaScript must be enabled.
-- Console features are not implemented.
+Tip: `.network()` を含めない場合、Network script は inject されません。
 
 ## Migration
 
-Breaking changes from the SwiftUI-first API are documented in [`MIGRATION.md`](MIGRATION.md).
-
-## UI Debug Checklist
-
-- If header typography looks off, verify `.header()` is used for section headers.
-- If list rows look custom/plain, verify `UIListContentConfiguration` + list background configurations are used.
-- If DOM WebView appears clipped under navigation UI, verify `InspectorWebView` uses no automatic content inset adjustment.
+破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
 
 ## License
 
