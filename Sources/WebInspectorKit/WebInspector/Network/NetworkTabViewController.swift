@@ -697,6 +697,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
                 weight: .semibold
             )
         )
+        configuration.textToSecondaryTextVerticalPadding = 8
         configuration.textProperties.color = titleColor
         configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
             for: .monospacedSystemFont(
@@ -715,6 +716,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         configuration.secondaryTextProperties.numberOfLines = 4
         configuration.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
         configuration.secondaryTextProperties.color = .label
+        configuration.textToSecondaryTextVerticalPadding = 8
 
         let metricsFont = UIFont.preferredFont(forTextStyle: .footnote)
         let attributed = NSMutableAttributedString()

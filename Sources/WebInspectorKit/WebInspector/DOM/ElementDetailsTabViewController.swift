@@ -366,6 +366,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             configuration.text = selector
             configuration.secondaryText = details
             configuration.textProperties.numberOfLines = 1
+            configuration.textToSecondaryTextVerticalPadding = 8
             configuration.secondaryTextProperties.numberOfLines = 0
             configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
                 for: .systemFont(
