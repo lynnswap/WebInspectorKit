@@ -60,6 +60,9 @@ final class InspectorWebView: WKWebView {
 #endif
         
 #if canImport(UIKit)
+        isOpaque = false
+        backgroundColor = .clear
+        scrollView.backgroundColor = .clear
         scrollView.isScrollEnabled = true
         scrollView.alwaysBounceVertical = true
         scrollView.contentInsetAdjustmentBehavior = .never

@@ -369,11 +369,9 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         }
 
         let entry = displayedEntries[indexPath.item]
-        var content = cell.defaultContentConfiguration()
+        var content = UIListContentConfiguration.valueCell()
         content.text = entry.displayName
         content.secondaryText = entry.fileTypeLabel
-        content.textProperties.numberOfLines = 2
-        content.textProperties.lineBreakMode = .byTruncatingTail
         content.image = UIImage(systemName: "circle.fill")
         content.imageProperties.tintColor = networkStatusColor(for: entry.statusSeverity)
         content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 7, weight: .regular)
@@ -676,7 +674,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDataS
         else {
             return UICollectionReusableView()
         }
-        var configuration = header.defaultContentConfiguration()
+        var configuration = UIListContentConfiguration.header()
         configuration.text = sections[indexPath.section].title
         header.contentConfiguration = configuration
         return header

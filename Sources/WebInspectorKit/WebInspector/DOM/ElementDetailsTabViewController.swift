@@ -4,16 +4,41 @@ import WebInspectorKitCore
 import UIKit
 
 @MainActor
-final class ElementDetailsTabViewController: UITableViewController {
-    private enum Section: Int, CaseIterable {
-        case element
-        case selector
-        case styles
-        case attributes
+final class ElementDetailsTabViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate {
+    private struct DetailSection {
+        let title: String
+        let rows: [DetailRow]
+    }
+
+    private enum DetailRow {
+        case element(preview: String)
+        case selector(path: String)
+        case styleRule(selector: String, detail: String)
+        case styleMeta(String)
+        case attribute(name: String, value: String)
+        case emptyAttribute
     }
 
     private let inspector: WebInspector.DOMInspector
     private let observationToken = WIObservationToken()
+    private var sections: [DetailSection] = []
+    private let listCellReuseIdentifier = "ElementDetailsListCell"
+    private let headerReuseIdentifier = "ElementDetailsHeaderView"
+
+    private lazy var collectionView: UICollectionView = {
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
+        collectionView.translatesAutoresizingMaskIntoConstraints = false
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: listCellReuseIdentifier)
+        collectionView.register(
+            UICollectionViewListCell.self,
+            forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
+            withReuseIdentifier: headerReuseIdentifier
+        )
+        return collectionView
+    }()
+
     private lazy var pickItem: UIBarButtonItem = {
         UIBarButtonItem(
             image: UIImage(systemName: "viewfinder.circle"),
@@ -31,7 +56,7 @@ final class ElementDetailsTabViewController: UITableViewController {
 
     init(inspector: WebInspector.DOMInspector) {
         self.inspector = inspector
-        super.init(style: .insetGrouped)
+        super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable)
@@ -47,8 +72,14 @@ final class ElementDetailsTabViewController: UITableViewController {
         super.viewDidLoad()
         title = nil
         navigationItem.title = ""
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Cell")
         setupNavigationItems()
+        view.addSubview(collectionView)
+        NSLayoutConstraint.activate([
+            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
 
         observationToken.observe({ [weak self] in
             guard let self else { return }
@@ -61,6 +92,7 @@ final class ElementDetailsTabViewController: UITableViewController {
             _ = self.inspector.selection.matchedStylesTruncated
             _ = self.inspector.selection.blockedStylesheetCount
             _ = self.inspector.hasPageWebView
+            _ = self.inspector.isSelectingElement
         }, onChange: { [weak self] in
             self?.refreshUI()
         })
@@ -110,180 +142,229 @@ final class ElementDetailsTabViewController: UITableViewController {
             configuration.secondaryText = wiLocalized("dom.element.hint")
             configuration.image = UIImage(systemName: "cursorarrow.rays")
             contentUnavailableConfiguration = configuration
+            sections = []
         } else {
             contentUnavailableConfiguration = nil
+            sections = makeSections()
         }
 
-        tableView.reloadData()
+        collectionView.reloadData()
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int {
-        Section.allCases.count
+    private func makeLayout() -> UICollectionViewLayout {
+        var listConfiguration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        listConfiguration.showsSeparators = true
+        listConfiguration.headerMode = .supplementary
+        listConfiguration.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+            self?.trailingSwipeActions(for: indexPath)
+        }
+
+        return UICollectionViewCompositionalLayout { _, environment in
+            let section = NSCollectionLayoutSection.list(using: listConfiguration, layoutEnvironment: environment)
+            let headerSize = NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1.0),
+                heightDimension: .estimated(44)
+            )
+            let header = NSCollectionLayoutBoundarySupplementaryItem(
+                layoutSize: headerSize,
+                elementKind: UICollectionView.elementKindSectionHeader,
+                alignment: .top
+            )
+            header.pinToVisibleBounds = true
+            section.boundarySupplementaryItems = [header]
+            return section
+        }
     }
 
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+    private func makeSections() -> [DetailSection] {
         guard inspector.selection.nodeId != nil else {
+            return []
+        }
+
+        let elementSection = DetailSection(
+            title: wiLocalized("dom.element.section.element"),
+            rows: [.element(preview: inspector.selection.preview)]
+        )
+
+        let selectorSection = DetailSection(
+            title: wiLocalized("dom.element.section.selector"),
+            rows: [.selector(path: inspector.selection.selectorPath)]
+        )
+
+        var styleRows: [DetailRow] = []
+        if inspector.selection.isLoadingMatchedStyles {
+            styleRows.append(.styleMeta(wiLocalized("dom.element.styles.loading")))
+        } else if inspector.selection.matchedStyles.isEmpty {
+            styleRows.append(.styleMeta(wiLocalized("dom.element.styles.empty")))
+        } else {
+            for rule in inspector.selection.matchedStyles {
+                let declarations = rule.declarations.map { declaration in
+                    let importantSuffix = declaration.important ? " !important" : ""
+                    return "\(declaration.name): \(declaration.value)\(importantSuffix);"
+                }
+                var details = declarations.joined(separator: "\n")
+                if !rule.sourceLabel.isEmpty {
+                    details = "\(rule.sourceLabel)\n\(details)"
+                }
+                styleRows.append(.styleRule(selector: rule.selectorText, detail: details))
+            }
+        }
+        if inspector.selection.matchedStylesTruncated {
+            styleRows.append(.styleMeta(wiLocalized("dom.element.styles.truncated")))
+        }
+        if inspector.selection.blockedStylesheetCount > 0 {
+            let blocked = "\(inspector.selection.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))"
+            styleRows.append(.styleMeta(blocked))
+        }
+
+        let styleSection = DetailSection(
+            title: wiLocalized("dom.element.section.styles"),
+            rows: styleRows
+        )
+
+        let attributeRows: [DetailRow]
+        if inspector.selection.attributes.isEmpty {
+            attributeRows = [.emptyAttribute]
+        } else {
+            attributeRows = inspector.selection.attributes.map { .attribute(name: $0.name, value: $0.value) }
+        }
+
+        let attributeSection = DetailSection(
+            title: wiLocalized("dom.element.section.attributes"),
+            rows: attributeRows
+        )
+
+        return [elementSection, selectorSection, styleSection, attributeSection]
+    }
+
+    func numberOfSections(in collectionView: UICollectionView) -> Int {
+        sections.count
+    }
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        guard sections.indices.contains(section) else {
             return 0
         }
-
-        guard let section = Section(rawValue: section) else {
-            return 0
-        }
-
-        switch section {
-        case .element:
-            return 1
-        case .selector:
-            return 1
-        case .styles:
-            let styleRows = max(1, inspector.selection.matchedStyles.count)
-            let truncatedRow = inspector.selection.matchedStylesTruncated ? 1 : 0
-            let blockedRow = inspector.selection.blockedStylesheetCount > 0 ? 1 : 0
-            return styleRows + truncatedRow + blockedRow
-        case .attributes:
-            return max(1, inspector.selection.attributes.count)
-        }
+        return sections[section].rows.count
     }
 
-    private func headerTitle(for section: Int) -> String? {
-        guard let section = Section(rawValue: section), inspector.selection.nodeId != nil else {
-            return nil
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        guard
+            sections.indices.contains(indexPath.section),
+            sections[indexPath.section].rows.indices.contains(indexPath.item),
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: listCellReuseIdentifier,
+                for: indexPath
+            ) as? UICollectionViewListCell
+        else {
+            return UICollectionViewCell()
         }
 
-        switch section {
-        case .element:
-            return wiLocalized("dom.element.section.element")
-        case .selector:
-            return wiLocalized("dom.element.section.selector")
-        case .styles:
-            return wiLocalized("dom.element.section.styles")
-        case .attributes:
-            return wiLocalized("dom.element.section.attributes")
-        }
-    }
+        var configuration = UIListContentConfiguration.cell()
+        cell.accessories = []
 
-    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        headerTitle(for: section)
-    }
-
-    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "Cell", for: indexPath)
-        var configuration = cell.defaultContentConfiguration()
-        configuration.textProperties.numberOfLines = 0
-        configuration.secondaryTextProperties.numberOfLines = 0
-        cell.accessoryType = .none
-
-        guard let section = Section(rawValue: indexPath.section) else {
-            cell.contentConfiguration = configuration
-            return cell
-        }
-
-        switch section {
-        case .element:
-            configuration.text = inspector.selection.preview
-            configuration.textProperties.font = WIUIStyle.iOS.monospaceFont
-            configuration.textProperties.color = .label
-        case .selector:
-            configuration.text = inspector.selection.selectorPath
-            configuration.textProperties.font = WIUIStyle.iOS.monospaceFont
-            configuration.textProperties.color = .label
-        case .styles:
-            configureStyleCell(configuration: &configuration, row: indexPath.row)
-        case .attributes:
-            configureAttributeCell(configuration: &configuration, row: indexPath.row)
+        let row = sections[indexPath.section].rows[indexPath.item]
+        switch row {
+        case .element(let preview):
+            configuration = UIListContentConfiguration.cell()
+            configuration.text = preview
+            configuration.textProperties.numberOfLines = 0
+        case .selector(let path):
+            configuration = UIListContentConfiguration.cell()
+            configuration.text = path
+            configuration.textProperties.numberOfLines = 0
+        case .styleRule(let selector, let details):
+            configuration = UIListContentConfiguration.subtitleCell()
+            configuration.text = selector
+            configuration.secondaryText = details
+            configuration.textProperties.numberOfLines = 0
+            configuration.secondaryTextProperties.numberOfLines = 0
+        case .styleMeta(let message):
+            configuration = UIListContentConfiguration.cell()
+            configuration.text = message
+            configuration.textProperties.color = .secondaryLabel
+        case .attribute(let name, let value):
+            configuration = UIListContentConfiguration.subtitleCell()
+            configuration.text = name
+            configuration.secondaryText = value
+            configuration.textProperties.numberOfLines = 0
+            configuration.secondaryTextProperties.numberOfLines = 0
+            configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(
+                    ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
+                    weight: .semibold
+                )
+            )
+            configuration.textProperties.color = .secondaryLabel
+            configuration.secondaryTextProperties.color = .label
+        case .emptyAttribute:
+            configuration = UIListContentConfiguration.cell()
+            configuration.text = wiLocalized("dom.element.attributes.empty")
+            configuration.textProperties.color = .secondaryLabel
         }
 
         cell.contentConfiguration = configuration
         return cell
     }
 
-    private func configureStyleCell(configuration: inout UIListContentConfiguration, row: Int) {
-        if inspector.selection.isLoadingMatchedStyles {
-            configuration.text = wiLocalized("dom.element.styles.loading")
-            configuration.textProperties.color = .secondaryLabel
-            return
+    func collectionView(
+        _ collectionView: UICollectionView,
+        viewForSupplementaryElementOfKind kind: String,
+        at indexPath: IndexPath
+    ) -> UICollectionReusableView {
+        guard
+            kind == UICollectionView.elementKindSectionHeader,
+            sections.indices.contains(indexPath.section),
+            let header = collectionView.dequeueReusableSupplementaryView(
+                ofKind: kind,
+                withReuseIdentifier: headerReuseIdentifier,
+                for: indexPath
+            ) as? UICollectionViewListCell
+        else {
+            return UICollectionReusableView()
         }
-
-        let rules = inspector.selection.matchedStyles
-        var nextRow = 0
-
-        if rules.isEmpty {
-            if row == nextRow {
-                configuration.text = wiLocalized("dom.element.styles.empty")
-                configuration.textProperties.color = .secondaryLabel
-                return
-            }
-            nextRow += 1
-        } else if row < rules.count {
-            let rule = rules[row]
-            configuration.text = rule.selectorText
-            let declarations = rule.declarations.map { declaration in
-                let importantSuffix = declaration.important ? " !important" : ""
-                return "\(declaration.name): \(declaration.value)\(importantSuffix);"
-            }
-            var details = declarations.joined(separator: "\n")
-            if !rule.sourceLabel.isEmpty {
-                details = "\(rule.sourceLabel)\n\(details)"
-            }
-            configuration.secondaryText = details
-            configuration.secondaryTextProperties.font = WIUIStyle.iOS.monospaceFont
-            return
-        }
-        nextRow += rules.count
-
-        if inspector.selection.matchedStylesTruncated, row == nextRow {
-            configuration.text = wiLocalized("dom.element.styles.truncated")
-            configuration.textProperties.color = .secondaryLabel
-            return
-        }
-        if inspector.selection.matchedStylesTruncated {
-            nextRow += 1
-        }
-
-        if inspector.selection.blockedStylesheetCount > 0, row == nextRow {
-            configuration.text = "\(inspector.selection.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))"
-            configuration.textProperties.color = .secondaryLabel
-            return
-        }
-
-        configuration.text = nil
+        var configuration = UIListContentConfiguration.header()
+        configuration.text = sections[indexPath.section].title
+        header.contentConfiguration = configuration
+        return header
     }
 
-    private func configureAttributeCell(configuration: inout UIListContentConfiguration, row: Int) {
-        guard !inspector.selection.attributes.isEmpty else {
-            configuration.text = wiLocalized("dom.element.attributes.empty")
-            configuration.textProperties.color = .secondaryLabel
-            return
+    func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+        guard
+            sections.indices.contains(indexPath.section),
+            sections[indexPath.section].rows.indices.contains(indexPath.item)
+        else {
+            return false
         }
-
-        let attribute = inspector.selection.attributes[row]
-        configuration.text = attribute.name
-        configuration.secondaryText = attribute.value
-        configuration.secondaryTextProperties.font = WIUIStyle.iOS.monospaceFont
-        configuration.textProperties.color = .secondaryLabel
+        if case .attribute = sections[indexPath.section].rows[indexPath.item] {
+            return true
+        }
+        return false
     }
 
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         defer {
-            tableView.deselectRow(at: indexPath, animated: true)
+            collectionView.deselectItem(at: indexPath, animated: true)
         }
 
         guard
-            let section = Section(rawValue: indexPath.section),
-            section == .attributes,
-            inspector.selection.attributes.indices.contains(indexPath.row)
+            sections.indices.contains(indexPath.section),
+            sections[indexPath.section].rows.indices.contains(indexPath.item)
         else {
             return
         }
 
-        let attribute = inspector.selection.attributes[indexPath.row]
+        guard case let .attribute(name, value) = sections[indexPath.section].rows[indexPath.item] else {
+            return
+        }
+
         let alert = UIAlertController(
-            title: attribute.name,
+            title: name,
             message: wiLocalized("dom.element.section.attributes"),
             preferredStyle: .alert
         )
         alert.addTextField { textField in
-            textField.text = attribute.value
+            textField.text = value
             textField.clearButtonMode = .whileEditing
             textField.autocapitalizationType = .none
             textField.autocorrectionType = .no
@@ -296,26 +377,25 @@ final class ElementDetailsTabViewController: UITableViewController {
             else {
                 return
             }
-            self.inspector.updateAttributeValue(name: attribute.name, value: value)
+            self.inspector.updateAttributeValue(name: name, value: value)
         })
         present(alert, animated: true)
     }
 
-    override func tableView(
-        _ tableView: UITableView,
-        trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath
-    ) -> UISwipeActionsConfiguration? {
+    private func trailingSwipeActions(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard
-            let section = Section(rawValue: indexPath.section),
-            section == .attributes,
-            inspector.selection.attributes.indices.contains(indexPath.row)
+            sections.indices.contains(indexPath.section),
+            sections[indexPath.section].rows.indices.contains(indexPath.item)
         else {
             return nil
         }
 
-        let attribute = inspector.selection.attributes[indexPath.row]
+        guard case let .attribute(name, _) = sections[indexPath.section].rows[indexPath.item] else {
+            return nil
+        }
+
         let action = UIContextualAction(style: .destructive, title: wiLocalized("delete")) { [weak self] _, _, completion in
-            self?.inspector.removeAttribute(name: attribute.name)
+            self?.inspector.removeAttribute(name: name)
             completion(true)
         }
         return UISwipeActionsConfiguration(actions: [action])
