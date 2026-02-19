@@ -128,6 +128,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     private var lastSelectionNodeID: Int?
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
 
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
@@ -196,6 +197,11 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         })
 
         refreshUI()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        flushPendingAttributeEditorRelayoutIfNeeded()
     }
 
     private func setupNavigationItems() {
@@ -388,6 +394,10 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             guard let self else {
                 return UICollectionViewCell()
             }
+            self.attributeRelayoutCoordinator.beginCellDequeue()
+            defer {
+                self.attributeRelayoutCoordinator.endCellDequeue()
+            }
             switch item.stableID.cellKind {
             case .attributeEditor:
                 return collectionView.dequeueConfiguredReusableCell(
@@ -413,6 +423,25 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             )
         }
         return dataSource
+    }
+
+    private func requestAttributeEditorRelayout() {
+        attributeRelayoutCoordinator.requestRelayout()
+        flushPendingAttributeEditorRelayoutIfNeeded()
+    }
+
+    private func flushPendingAttributeEditorRelayoutIfNeeded() {
+        guard attributeRelayoutCoordinator.beginRelayoutIfPossible(isViewVisible: collectionView.window != nil) else {
+            return
+        }
+
+        collectionView.performBatchUpdates(nil) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.attributeRelayoutCoordinator.finishRelayout()
+            self.flushPendingAttributeEditorRelayoutIfNeeded()
+        }
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
@@ -652,6 +681,10 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         false
     }
 
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        flushPendingAttributeEditorRelayoutIfNeeded()
+    }
+
     private func trailingSwipeActions(for indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard let attributeRow = attributeRow(at: indexPath) else {
             return nil
@@ -795,7 +828,7 @@ extension ElementDetailsTabViewController: ElementAttributeEditorCellDelegate {
     }
 
     fileprivate func elementAttributeEditorCellNeedsRelayout(_ cell: ElementAttributeEditorCell) {
-        collectionView.performBatchUpdates(nil)
+        requestAttributeEditorRelayout()
     }
 }
 
@@ -907,7 +940,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         }
 
         let value = textView.text ?? ""
-        updateTextViewHeightIfNeeded()
+        updateTextViewHeightIfNeeded(notifyDelegate: true)
         delegate?.elementAttributeEditorCellDidChangeDraft(self, key: editingKey, value: value)
 
         debounceTask?.cancel()
@@ -1001,7 +1034,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         ])
     }
 
-    private func updateTextViewHeightIfNeeded() {
+    private func updateTextViewHeightIfNeeded(notifyDelegate: Bool = false) {
         guard let valueHeightConstraint else {
             return
         }
@@ -1016,6 +1049,9 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
             return
         }
         valueHeightConstraint.constant = targetHeight
+        guard notifyDelegate else {
+            return
+        }
         delegate?.elementAttributeEditorCellNeedsRelayout(self)
     }
 }
