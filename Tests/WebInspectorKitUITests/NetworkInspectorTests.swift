@@ -82,6 +82,27 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func handleOnlyBodyStartsInlineStateForDeferredFetch() {
+        let body = NetworkBody(
+            kind: .text,
+            preview: "preview",
+            full: nil,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: true,
+            summary: nil,
+            reference: nil,
+            handle: NSObject(),
+            formEntries: [],
+            fetchState: nil,
+            role: .response
+        )
+
+        #expect(body.canFetchBody)
+        #expect(body.fetchState == .inline)
+    }
+
+    @Test
     func displayEntriesAppliesSearchResourceFilterAndSortTogether() throws {
         let inspector = WINetworkPaneViewModel(session: NetworkSession())
 

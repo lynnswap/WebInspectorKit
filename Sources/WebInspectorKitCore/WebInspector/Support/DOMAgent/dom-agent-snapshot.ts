@@ -1,5 +1,5 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
-import {captureDOM, describe, layoutInfoForNode, rememberNode} from "./dom-agent-dom-core";
+import {captureDOMEnvelope, describe, layoutInfoForNode, rememberNode} from "./dom-agent-dom-core";
 
 const MAX_PENDING_MUTATIONS = 1500;
 const MAX_LAYOUT_INFO_RECORDS = 400;
@@ -193,7 +193,7 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
         if (typeof maxDepthOverride === "number" && maxDepthOverride > 0) {
             maxDepth = Math.min(maxDepth, maxDepthOverride);
         }
-        var snapshot = captureDOM(maxDepth);
+        var snapshot = captureDOMEnvelope(maxDepth);
         var payload = {
             version: 1,
             kind: "snapshot",
@@ -203,7 +203,7 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             snapshot: snapshot
         };
         handler.postMessage({
-            bundle: JSON.stringify(payload)
+            bundle: payload
         });
     } catch (error) {
         console.error("auto snapshot failed", error);
@@ -465,7 +465,7 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
                 events: messages.slice(offset, offset + chunkSize)
             };
             mutationHandler.postMessage({
-                bundle: JSON.stringify(payload)
+                bundle: payload
             });
         }
     } catch (error) {

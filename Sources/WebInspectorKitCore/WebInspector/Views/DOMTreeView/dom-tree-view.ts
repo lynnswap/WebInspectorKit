@@ -13,6 +13,7 @@ import {
     updateConfig,
 } from "./dom-tree-protocol";
 import {
+    applyMutationBuffer,
     applyMutationBundle,
     applyMutationBundles,
     registerProtocolHandlers,
@@ -51,6 +52,7 @@ function installWebInspectorKit(): void {
         dispatchMessageFromBackend,
         applyMutationBundle,
         applyMutationBundles,
+        applyMutationBuffer,
         requestDocument,
         setSearchTerm,
         setPreferredDepth,

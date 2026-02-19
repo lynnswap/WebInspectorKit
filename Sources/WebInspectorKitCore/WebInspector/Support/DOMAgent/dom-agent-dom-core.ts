@@ -6,11 +6,71 @@ type DOMNodeDescriptor = {
     [key: string]: any;
 };
 
+type SnapshotDescriptorPayload = {
+    root: DOMNodeDescriptor | null;
+    selectedNodeId: number | null;
+    selectedNodePath: number[] | null;
+};
+
+type SerializedNodeEnvelope = {
+    type: "serialized-node-envelope";
+    node: unknown;
+    fallback: SnapshotDescriptorPayload | DOMNodeDescriptor | null;
+    selectedNodeId?: number | null;
+    selectedNodePath?: number[] | null;
+};
+
+type WebKitRuntimeBridge = {
+    createJSHandle?: (value: unknown) => unknown;
+    serializeNode?: (node: Node) => unknown;
+};
+
 type RenderedElement = Element & {
     offsetWidth?: number;
     offsetHeight?: number;
     getBBox?: () => DOMRect;
 };
+
+function webkitRuntime(): WebKitRuntimeBridge | null {
+    const runtime = (window.webkit || null) as unknown as WebKitRuntimeBridge | null;
+    return runtime;
+}
+
+function serializeNodeIfSupported(node: Node | null): unknown | null {
+    if (!node) {
+        return null;
+    }
+    const runtime = webkitRuntime();
+    if (!runtime || typeof runtime.serializeNode !== "function") {
+        return null;
+    }
+    try {
+        return runtime.serializeNode(node);
+    } catch {
+    }
+    return null;
+}
+
+function makeSerializedEnvelope(
+    node: Node | null,
+    fallback: SnapshotDescriptorPayload | DOMNodeDescriptor | null,
+    selectedNodeId?: number | null,
+    selectedNodePath?: number[] | null
+): SerializedNodeEnvelope | null {
+    const serializedNode = serializeNodeIfSupported(node);
+    if (!serializedNode) {
+        return null;
+    }
+
+    const envelope: SerializedNodeEnvelope = {
+        type: "serialized-node-envelope",
+        node: serializedNode,
+        fallback: fallback,
+        selectedNodeId: selectedNodeId ?? null,
+        selectedNodePath: selectedNodePath ?? null
+    };
+    return envelope;
+}
 
 export function rememberNode(node: AnyNode | null) {
     if (!node) {
@@ -270,7 +330,7 @@ export function rectForNode(node: AnyNode | null) {
     return null;
 }
 
-export function captureDOM(maxDepth?: number) {
+export function captureDOMPayload(maxDepth?: number): SnapshotDescriptorPayload {
     var currentURL = document.URL || "";
     var shouldReset = inspector.documentURL && inspector.documentURL !== currentURL;
     if (!inspector.map || shouldReset) {
@@ -298,22 +358,81 @@ export function captureDOM(maxDepth?: number) {
     var selectedNodePath: number[] | null = Array.isArray(selectionPath) ? selectionPath : null;
     inspector.pendingSelectionPath = null;
 
-    return JSON.stringify({
+    return {
         root: tree,
         selectedNodeId: selectedNodeId,
         selectedNodePath: selectedNodePath
-    });
+    };
+}
+
+export function captureDOM(maxDepth?: number) {
+    return JSON.stringify(captureDOMPayload(maxDepth));
+}
+
+export function captureDOMEnvelope(maxDepth?: number) {
+    const snapshot = captureDOMPayload(maxDepth);
+    const rootCandidate = document.documentElement || document.body;
+    const serializedEnvelope = makeSerializedEnvelope(
+        rootCandidate,
+        snapshot,
+        snapshot.selectedNodeId,
+        snapshot.selectedNodePath
+    );
+    if (serializedEnvelope) {
+        return serializedEnvelope;
+    }
+    return snapshot;
 }
 
 export function captureDOMSubtree(identifier: number, maxDepth?: number) {
+    const payload = captureDOMSubtreePayload(identifier, maxDepth);
+    if (!payload) {
+        return "";
+    }
+    return JSON.stringify(payload);
+}
+
+export function captureDOMSubtreePayload(identifier: number, maxDepth?: number): DOMNodeDescriptor | null {
     var map = inspector.map;
     if (!map || !map.size) {
-        return "";
+        return null;
     }
     var node = map.get(identifier);
     if (!node) {
+        return null;
+    }
+    return describe(node, 0, maxDepth || 4, null, Number.MAX_SAFE_INTEGER);
+}
+
+export function captureDOMSubtreeEnvelope(identifier: number, maxDepth?: number) {
+    const subtree = captureDOMSubtreePayload(identifier, maxDepth);
+    if (!subtree) {
         return "";
     }
-    var tree = describe(node, 0, maxDepth || 4, null, Number.MAX_SAFE_INTEGER);
-    return JSON.stringify(tree);
+    const node = inspector.map?.get(identifier) || null;
+    const serializedEnvelope = makeSerializedEnvelope(node as Node | null, subtree);
+    if (serializedEnvelope) {
+        return serializedEnvelope;
+    }
+    return subtree;
+}
+
+export function createNodeHandle(identifier: number): unknown | null {
+    const map = inspector.map;
+    if (!map || !map.size) {
+        return null;
+    }
+    const node = map.get(identifier) || null;
+    if (!node) {
+        return null;
+    }
+    const runtime = webkitRuntime();
+    if (!runtime || typeof runtime.createJSHandle !== "function") {
+        return null;
+    }
+    try {
+        return runtime.createJSHandle(node);
+    } catch {
+    }
+    return null;
 }

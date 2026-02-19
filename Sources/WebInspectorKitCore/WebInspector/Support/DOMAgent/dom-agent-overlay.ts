@@ -178,6 +178,17 @@ export function highlightDOMNode(identifier: number) {
         return false;
     }
     var node = map.get(identifier);
+    return highlightResolvedNode(node as AnyNode | null);
+}
+
+export function highlightDOMNodeHandle(handle: unknown) {
+    if (!handle || typeof handle !== "object") {
+        return false;
+    }
+    return highlightResolvedNode(handle as AnyNode);
+}
+
+function highlightResolvedNode(node: AnyNode | null) {
     if (!node) {
         return false;
     }

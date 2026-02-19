@@ -2,7 +2,8 @@ import {
     clearNetworkRecords,
     configureNetwork,
     installNetworkObserver,
-    getBody
+    getBody,
+    getBodyForHandle
 } from "./NetworkAgent/network-agent-core";
 
 if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed)) {
@@ -12,6 +13,7 @@ if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__insta
         configure: configureNetwork,
         clear: clearNetworkRecords,
         getBody: getBody,
+        getBodyForHandle: getBodyForHandle,
         __installed: true
     };
 

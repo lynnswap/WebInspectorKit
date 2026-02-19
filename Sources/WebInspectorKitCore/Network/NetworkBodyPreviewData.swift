@@ -19,10 +19,10 @@ extension NetworkBody {
     }
 
     public var canFetchBody: Bool {
-        guard let reference, !reference.isEmpty else {
-            return false
+        if let reference, !reference.isEmpty {
+            return true
         }
-        return true
+        return handle != nil
     }
 
     private var decodedPreviewText: String? {

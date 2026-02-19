@@ -81,6 +81,51 @@ struct DOMFrontendStoreTests {
     }
 
     @Test
+    func selectionUpdateAcceptsNSNumberAndDictionaryPayloads() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let tokenBefore = store.testMatchedStylesRequestToken
+
+        let nsDictionaryPayload: NSDictionary = [
+            "id": NSNumber(value: 77),
+            "preview": "<div id=\"target\">",
+            "attributes": [
+                [
+                    "name": "id",
+                    "value": "target",
+                ],
+            ],
+            "path": ["html", "body", "div"],
+            "selectorPath": "div#target",
+            "styleRevision": NSNumber(value: 2),
+        ]
+        store.testHandleDOMSelectionMessage(nsDictionaryPayload)
+
+        #expect(store.session.selection.nodeId == 77)
+        #expect(store.session.selection.selectorPath == "div#target")
+        #expect(store.session.selection.styleRevision == 2)
+        #expect(store.testMatchedStylesRequestToken > tokenBefore)
+
+        let swiftDictionaryPayload: [String: Any] = [
+            "id": 78,
+            "preview": "<div id=\"swift-target\">",
+            "attributes": [
+                [
+                    "name": "id",
+                    "value": "swift-target",
+                ],
+            ],
+            "path": ["html", "body", "div"],
+            "selectorPath": "div#swift-target",
+            "styleRevision": 3,
+        ]
+        store.testHandleDOMSelectionMessage(swiftDictionaryPayload)
+
+        #expect(store.session.selection.nodeId == 78)
+        #expect(store.session.selection.selectorPath == "div#swift-target")
+        #expect(store.session.selection.styleRevision == 3)
+    }
+
+    @Test
     func selectionUpdateWithSameNodeAndChangedAttributesRestartsMatchedStylesFetch() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let existingRule = DOMMatchedStyleRule(

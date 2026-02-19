@@ -10,6 +10,13 @@ function resolveNode(identifier: number) {
     return map.get(identifier) || null;
 }
 
+function resolveHandleNode(handle: unknown): AnyNode | null {
+    if (!handle || typeof handle !== "object") {
+        return null;
+    }
+    return handle as AnyNode;
+}
+
 function classNames(element: Element | null) {
     if (!element || !element.classList) {
         return [];
@@ -318,6 +325,14 @@ export function xpathForNode(identifier: number) {
 
 export function removeNode(identifier: number) {
     var node = resolveNode(identifier);
+    return removeResolvedNode(node);
+}
+
+export function removeNodeHandle(handle: unknown) {
+    return removeResolvedNode(resolveHandleNode(handle));
+}
+
+function removeResolvedNode(node: AnyNode | null) {
     if (!node) {
         return false;
     }
@@ -351,6 +366,14 @@ export function removeNode(identifier: number) {
 
 export function setAttributeForNode(identifier: number, name: string | null | undefined, value: string | null | undefined) {
     var node = resolveNode(identifier);
+    return setAttributeForResolvedNode(node, name, value);
+}
+
+export function setAttributeForHandle(handle: unknown, name: string | null | undefined, value: string | null | undefined) {
+    return setAttributeForResolvedNode(resolveHandleNode(handle), name, value);
+}
+
+function setAttributeForResolvedNode(node: AnyNode | null, name: string | null | undefined, value: string | null | undefined) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;
     }
@@ -371,6 +394,14 @@ export function setAttributeForNode(identifier: number, name: string | null | un
 
 export function removeAttributeForNode(identifier: number, name: string | null | undefined) {
     var node = resolveNode(identifier);
+    return removeAttributeForResolvedNode(node, name);
+}
+
+export function removeAttributeForHandle(handle: unknown, name: string | null | undefined) {
+    return removeAttributeForResolvedNode(resolveHandleNode(handle), name);
+}
+
+function removeAttributeForResolvedNode(node: AnyNode | null, name: string | null | undefined) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) {
         return false;
     }

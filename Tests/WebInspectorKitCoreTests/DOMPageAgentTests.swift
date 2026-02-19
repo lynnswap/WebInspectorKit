@@ -105,12 +105,14 @@ struct DOMSessionTests {
     func attachRegistersHandlersAndInstallsUserScripts() {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()
+        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         session.attach(to: webView)
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorDOMSnapshot"))
         #expect(addedHandlerNames.contains("webInspectorDOMMutations"))
+        #expect(controller.addedHandlers.allSatisfy { $0.world == bridgeWorld })
         #expect(controller.userScripts.count == 2)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorDOM") })
     }
@@ -119,6 +121,7 @@ struct DOMSessionTests {
     func suspendRemovesHandlersAndClearsWebView() {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()
+        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         session.attach(to: webView)
         let removedBefore = controller.removedHandlers.count
@@ -129,6 +132,7 @@ struct DOMSessionTests {
         #expect(controller.removedHandlers.count > removedBefore)
         #expect(removedHandlerNames.contains("webInspectorDOMSnapshot"))
         #expect(removedHandlerNames.contains("webInspectorDOMMutations"))
+        #expect(controller.removedHandlers.allSatisfy { $0.world == bridgeWorld })
         #expect(session.pageWebView == nil)
     }
 
@@ -143,7 +147,31 @@ struct DOMSessionTests {
         let raw = try await webView.evaluateJavaScript(
             "(() => Boolean(window.webInspectorDOM && window.webInspectorDOM.__installed))();",
             in: nil,
-            contentWorld: .page
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
+        #expect(installed == true)
+    }
+
+    @Test
+    func attachInstallsBridgeWorldScriptWhenPageWorldProbeAlreadyExists() async throws {
+        let session = DOMSession(configuration: .init())
+        let (webView, controller) = makeTestWebView()
+        controller.addUserScript(
+            WKUserScript(
+                source: "(function() { /* webInspectorDOM */ })();",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+
+        session.attach(to: webView)
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+
+        let raw = try await webView.evaluateJavaScript(
+            "(() => Boolean(window.webInspectorDOM && window.webInspectorDOM.__installed))();",
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
@@ -162,7 +190,7 @@ struct DOMSessionTests {
         let rawStatus = try await webView.evaluateJavaScript(
             "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
             in: nil,
-            contentWorld: .page
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
         let status = rawStatus as? [String: Any]
         let enabled = (status?["snapshotAutoUpdateEnabled"] as? Bool)
@@ -296,7 +324,7 @@ struct DOMSessionTests {
             let raw = try? await webView.evaluateJavaScript(
                 "(() => Boolean(window.webInspectorDOM?.debugStatus?.().snapshotAutoUpdateEnabled))();",
                 in: nil,
-                contentWorld: .page
+                contentWorld: WISPIContentWorldProvider.bridgeWorld()
             )
             let enabled = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
             if enabled {
@@ -328,7 +356,7 @@ struct DOMSessionTests {
         let rawStatus = try? await webView.evaluateJavaScript(
             "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
             in: nil,
-            contentWorld: .page
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
         return rawStatus as? [String: Any]
     }

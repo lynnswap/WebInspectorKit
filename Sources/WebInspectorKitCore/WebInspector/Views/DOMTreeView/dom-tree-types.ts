@@ -52,11 +52,33 @@ export interface RawNodeDescriptor {
     localName?: string;
     attributes?: (string | undefined)[];
     nodeValue?: string;
+    documentURL?: string;
+    xmlVersion?: string;
+    publicId?: string;
+    systemId?: string;
+    name?: string;
+    value?: string;
     childNodeCount?: number;
     childCount?: number;
     children?: RawNodeDescriptor[];
     layoutFlags?: unknown[];
     isRendered?: boolean;
+}
+
+/** Private serialized node envelope payload */
+export interface SerializedNodeEnvelope {
+    type?: "serialized-node-envelope";
+    node?: unknown;
+    fallback?: RawNodeDescriptor | DOMSnapshotEnvelopePayload | null;
+    selectedNodeId?: number | null;
+    selectedNodePath?: number[] | null;
+}
+
+/** Snapshot payload shape used by protocol and private envelope fallback */
+export interface DOMSnapshotEnvelopePayload {
+    root?: RawNodeDescriptor | SerializedNodeEnvelope | null;
+    selectedNodeId?: number | null;
+    selectedNodePath?: number[] | null;
 }
 
 /** Snapshot containing the root node */
@@ -263,6 +285,9 @@ export interface WebKitMessageHandlers {
 
 /** WebKit bridge interface */
 export interface WebKitBridge {
+    createJSHandle?: (value: unknown) => unknown;
+    serializeNode?: (node: Node) => unknown;
+    buffers?: Record<string, unknown>;
     messageHandlers?: WebKitMessageHandlers;
 }
 
@@ -289,7 +314,7 @@ export interface SelectorPathResponse {
 export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
-    snapshot?: RawNodeDescriptor;
+    snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
     events?: ProtocolMessage[];
     bundle?: string | MutationBundle;
     preserveState?: boolean;
@@ -328,6 +353,7 @@ export interface WebInspectorDOMFrontend {
     dispatchMessageFromBackend(message: string | ProtocolMessage): void;
     applyMutationBundle(bundle: string | MutationBundle): void;
     applyMutationBundles(bundles: string | MutationBundle | MutationBundle[]): void;
+    applyMutationBuffer(bufferName: string): boolean;
     requestDocument(options?: RequestDocumentOptions): Promise<void>;
     setSearchTerm(value: string): void;
     setPreferredDepth(depth: number): void;

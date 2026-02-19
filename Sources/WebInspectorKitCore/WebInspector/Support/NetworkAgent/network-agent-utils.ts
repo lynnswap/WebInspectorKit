@@ -263,6 +263,74 @@ const makeBodyRef = (role: string, requestId: number) => {
     return `${role}:${requestId}`;
 };
 
+const buildHandlePayload = (
+    bodyInfo: RequestBodyInfo | null | undefined,
+    storedPayload?: Record<string, any> | null
+) => {
+    const payload: Record<string, any> = {};
+    const source = storedPayload && typeof storedPayload === "object" ? storedPayload : null;
+
+    const kind = source && typeof source.kind === "string" && source.kind
+        ? source.kind
+        : (typeof bodyInfo?.kind === "string" && bodyInfo.kind ? bodyInfo.kind : "text");
+    payload.kind = kind;
+
+    const sourceEncoding = source && typeof source.encoding === "string" ? source.encoding : null;
+    payload.encoding = sourceEncoding || (bodyInfo?.base64Encoded ? "base64" : (kind === "binary" ? "none" : "utf-8"));
+    payload.truncated = source && typeof source.truncated === "boolean" ? source.truncated : !!bodyInfo?.truncated;
+
+    const sourceSize = source ? source.size : undefined;
+    if (Number.isFinite(sourceSize)) {
+        payload.size = sourceSize;
+    } else if (Number.isFinite(bodyInfo?.size)) {
+        payload.size = bodyInfo?.size;
+    }
+
+    const content = (source && typeof source.content === "string" ? source.content : null)
+        || (typeof bodyInfo?.storageBody === "string" ? bodyInfo.storageBody : null)
+        || (typeof bodyInfo?.body === "string" ? bodyInfo.body : null);
+    if (content != null) {
+        payload.content = content;
+    }
+
+    const summary = (source && typeof source.summary === "string" ? source.summary : null)
+        || (typeof bodyInfo?.summary === "string" ? bodyInfo.summary : null);
+    if (summary != null) {
+        payload.summary = summary;
+    }
+
+    const formEntries = source && Array.isArray(source.formEntries)
+        ? source.formEntries.slice()
+        : (Array.isArray(bodyInfo?.formEntries) ? bodyInfo.formEntries.slice() : null);
+    if (formEntries && formEntries.length) {
+        payload.formEntries = formEntries;
+    }
+
+    if (!payload.content && !payload.summary && !(Array.isArray(payload.formEntries) && payload.formEntries.length)) {
+        return null;
+    }
+
+    return payload;
+};
+
+const makeBodyHandle = (bodyInfo: RequestBodyInfo | null | undefined, storedPayload?: Record<string, any> | null) => {
+    const runtime = (window.webkit || null) as unknown as { createJSHandle?: (value: unknown) => unknown } | null;
+    if (!runtime || typeof runtime.createJSHandle !== "function") {
+        return null;
+    }
+
+    const handlePayload = buildHandlePayload(bodyInfo, storedPayload);
+    if (!handlePayload) {
+        return null;
+    }
+
+    try {
+        return runtime.createJSHandle(handlePayload);
+    } catch {
+    }
+    return null;
+};
+
 const buildStoredBodyPayload = (bodyInfo: RequestBodyInfo | null | undefined) => {
     if (!bodyInfo) {
         return null;
@@ -294,7 +362,11 @@ const buildStoredBodyPayload = (bodyInfo: RequestBodyInfo | null | undefined) =>
     return payload;
 };
 
-const makeBodyPreviewPayload = (bodyInfo: RequestBodyInfo | null | undefined, ref?: string | null) => {
+const makeBodyPreviewPayload = (
+    bodyInfo: RequestBodyInfo | null | undefined,
+    ref?: string | null,
+    handle?: unknown
+) => {
     if (!bodyInfo) {
         return undefined;
     }
@@ -318,6 +390,9 @@ const makeBodyPreviewPayload = (bodyInfo: RequestBodyInfo | null | undefined, re
     }
     if (ref) {
         payload.ref = ref;
+    }
+    if (handle) {
+        payload.handle = handle;
     }
     return payload;
 };
@@ -1104,6 +1179,7 @@ export {
     handleResourceEntry,
     isActiveLogging,
     makeBodyPreviewPayload,
+    makeBodyHandle,
     makeBodyRef,
     makeNetworkTime,
     networkState,

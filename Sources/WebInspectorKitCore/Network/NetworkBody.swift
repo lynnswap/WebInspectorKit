@@ -19,6 +19,7 @@ struct NetworkBodyPayload: Decodable {
     let summary: String?
     let formEntries: [NetworkBodyFormEntryPayload]?
     let ref: String?
+    let handle: AnyObject?
 
     private enum CodingKeys: String, CodingKey {
         case kind
@@ -30,6 +31,7 @@ struct NetworkBodyPayload: Decodable {
         case summary
         case formEntries
         case ref
+        case handle
     }
 
     init(from decoder: Decoder) throws {
@@ -43,6 +45,42 @@ struct NetworkBodyPayload: Decodable {
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
         formEntries = try container.decodeIfPresent([NetworkBodyFormEntryPayload].self, forKey: .formEntries)
         ref = try container.decodeIfPresent(String.self, forKey: .ref)
+        handle = nil
+    }
+
+    init(dictionary: NSDictionary) {
+        kind = (dictionary["kind"] as? String) ?? "other"
+        encoding = dictionary["encoding"] as? String
+        if let size = dictionary["size"] as? Int {
+            self.size = size
+        } else if let size = dictionary["size"] as? NSNumber {
+            self.size = size.intValue
+        } else {
+            self.size = nil
+        }
+        truncated = (dictionary["truncated"] as? Bool) ?? false
+        preview = dictionary["preview"] as? String
+        content = dictionary["content"] as? String
+        summary = dictionary["summary"] as? String
+        if let entries = dictionary["formEntries"] as? [NSDictionary] {
+            formEntries = entries.compactMap { entry in
+                guard let name = entry["name"] as? String,
+                      let value = entry["value"] as? String else {
+                    return nil
+                }
+                return NetworkBodyFormEntryPayload(
+                    name: name,
+                    value: value,
+                    isFile: entry["isFile"] as? Bool,
+                    fileName: entry["fileName"] as? String,
+                    size: (entry["size"] as? NSNumber)?.intValue
+                )
+            }
+        } else {
+            formEntries = nil
+        }
+        ref = dictionary["ref"] as? String
+        handle = dictionary["handle"] as AnyObject?
     }
 }
 
@@ -115,6 +153,7 @@ public final class NetworkBody {
     public var isTruncated: Bool
     public var summary: String?
     public var reference: String?
+    public var handle: AnyObject?
     public var formEntries: [FormEntry]
     public var fetchState: FetchState
     public var role: Role
@@ -128,6 +167,7 @@ public final class NetworkBody {
         isTruncated: Bool = false,
         summary: String? = nil,
         reference: String? = nil,
+        handle: AnyObject? = nil,
         formEntries: [FormEntry] = [],
         fetchState: FetchState? = nil,
         role: Role = .response
@@ -142,11 +182,14 @@ public final class NetworkBody {
         self.isTruncated = isTruncated
         self.summary = summary
         self.reference = reference
+        self.handle = handle
         self.formEntries = formEntries
         self.role = role
+        let hasReference = reference?.isEmpty == false
+        let hasHandle = handle != nil
         if let fetchState {
             self.fetchState = fetchState
-        } else if resolvedFull == nil && reference != nil {
+        } else if resolvedFull == nil && (hasReference || hasHandle) {
             self.fetchState = .inline
         } else {
             self.fetchState = .full
@@ -171,6 +214,7 @@ public final class NetworkBody {
         let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
         let summary = dictionary["summary"] as? String
         let reference = dictionary["ref"] as? String
+        let handle = dictionary["handle"] as AnyObject?
         let formEntries = (dictionary["formEntries"] as? [NSDictionary] ?? [])
             .compactMap(FormEntry.init(dictionary:))
 
@@ -183,6 +227,7 @@ public final class NetworkBody {
             isTruncated: truncated,
             summary: summary,
             reference: reference,
+            handle: handle,
             formEntries: formEntries
         )
     }
@@ -221,6 +266,7 @@ public final class NetworkBody {
             isTruncated: payload.truncated,
             summary: payload.summary,
             reference: payload.ref,
+            handle: payload.handle,
             formEntries: entries,
             role: role
         )

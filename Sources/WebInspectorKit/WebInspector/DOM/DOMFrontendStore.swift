@@ -1,7 +1,7 @@
-import WebKit
-import OSLog
 import Observation
+import OSLog
 import WebInspectorKitCore
+import WebKit
 
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "DOMFrontendStore")
 
@@ -17,7 +17,7 @@ final class DOMFrontendStore: NSObject {
     }
 
     private struct PendingBundle {
-        let rawJSON: String
+        let bundle: Any
         let preserveState: Bool
     }
 
@@ -32,12 +32,14 @@ final class DOMFrontendStore: NSObject {
     private var matchedStylesTask: Task<Void, Never>?
     private var matchedStylesRequestToken = 0
     private let protocolRouter: DOMProtocolRouter
+    private let bridgeRuntime = WISPIRuntime.shared
+    private var jsBufferSequence = 0
     var onRecoverableError: (@MainActor (String) -> Void)?
 
     init(session: DOMSession) {
         self.session = session
-        self.configuration = session.configuration
-        self.protocolRouter = DOMProtocolRouter(session: session)
+        configuration = session.configuration
+        protocolRouter = DOMProtocolRouter(session: session)
         super.init()
         session.bundleSink = self
     }
@@ -63,8 +65,8 @@ final class DOMFrontendStore: NSObject {
         self.webView = nil
     }
 
-    func enqueueMutationBundle(_ rawJSON: String, preserveState: Bool) {
-        let payload = PendingBundle(rawJSON: rawJSON, preserveState: preserveState)
+    func enqueueMutationBundle(_ bundle: Any, preserveState: Bool) {
+        let payload = PendingBundle(bundle: bundle, preserveState: preserveState)
         applyMutationBundle(payload)
     }
 
@@ -109,8 +111,8 @@ final class DOMFrontendStore: NSObject {
                     "config": [
                         "snapshotDepth": config.snapshotDepth,
                         "subtreeDepth": config.subtreeDepth,
-                        "autoUpdateDebounce": config.autoUpdateDebounce
-                    ]
+                        "autoUpdateDebounce": config.autoUpdateDebounce,
+                    ],
                 ],
                 contentWorld: .page
             )
@@ -215,8 +217,19 @@ final class DOMFrontendStore: NSObject {
 
     private func applyBundlesNow(_ bundles: [PendingBundle]) async {
         guard let webView, !bundles.isEmpty else { return }
+
+        let payloads: [[String: Any]] = bundles.map {
+            [
+                "bundle": $0.bundle,
+                "preserveState": $0.preserveState,
+            ]
+        }
+
+        if await applyBundlesWithBufferIfNeeded(payloads, on: webView) {
+            return
+        }
+
         do {
-            let payloads = bundles.map { ["bundle": $0.rawJSON, "preserveState": $0.preserveState] }
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOMFrontend?.applyMutationBundles?.(bundles)",
                 arguments: ["bundles": payloads],
@@ -225,6 +238,66 @@ final class DOMFrontendStore: NSObject {
         } catch {
             inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func applyBundlesWithBufferIfNeeded(
+        _ payloads: [[String: Any]],
+        on webView: InspectorWebView
+    ) async -> Bool {
+        guard session.bridgeMode == .privateFull else {
+            return false
+        }
+
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: payloads),
+            data.count > WIJSBufferTransport.bufferThresholdBytes
+        else {
+            return false
+        }
+
+        let controller = webView.configuration.userContentController
+        guard WIJSBufferTransport.isAvailable(on: controller, runtime: bridgeRuntime) else {
+            return false
+        }
+
+        let bufferName = nextBufferName()
+        guard WIJSBufferTransport.addBuffer(
+            data: data,
+            name: bufferName,
+            to: controller,
+            contentWorld: .page,
+            runtime: bridgeRuntime
+        ) else {
+            return false
+        }
+
+        defer {
+            WIJSBufferTransport.removeBuffer(named: bufferName, from: controller, contentWorld: .page)
+        }
+
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                if (!window.webInspectorDOMFrontend || typeof window.webInspectorDOMFrontend.applyMutationBuffer !== "function") {
+                    return false;
+                }
+                return window.webInspectorDOMFrontend.applyMutationBuffer(bufferName);
+                """,
+                arguments: ["bufferName": bufferName],
+                in: nil,
+                contentWorld: .page
+            )
+            let didApply = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
+            return didApply
+        } catch {
+            inspectorLogger.error("send mutation buffer failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private func nextBufferName() -> String {
+        jsBufferSequence += 1
+        return "wi_dom_bundle_\(jsBufferSequence)"
     }
 
     private func applyPreferredDepthNow(_ depth: Int) async {
@@ -256,7 +329,12 @@ final class DOMFrontendStore: NSObject {
 
 extension DOMFrontendStore: DOMBundleSink {
     func domDidEmit(bundle: DOMBundle) {
-        enqueueMutationBundle(bundle.rawJSON, preserveState: true)
+        switch bundle.payload {
+        case let .jsonString(rawJSON):
+            enqueueMutationBundle(rawJSON, preserveState: true)
+        case let .objectEnvelope(object):
+            enqueueMutationBundle(object, preserveState: true)
+        }
     }
 }
 
@@ -386,22 +464,33 @@ private extension DOMFrontendStore {
             if let recoverableError = outcome.recoverableError {
                 onRecoverableError?(recoverableError)
             }
+            if let responseObject = outcome.responseObject {
+                await dispatchToFrontend(message: responseObject)
+                return
+            }
             guard let responseJSON = outcome.responseJSON else { return }
-            await dispatchToFrontend(responseJSON: responseJSON)
+            await dispatchToFrontend(message: responseJSON)
         }
     }
 
-    private func dispatchToFrontend(responseJSON: String) async {
+    private func dispatchToFrontend(message: Any) async {
         guard let webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
                 """
-                (function(messageJSON) {
-                    const message = JSON.parse(messageJSON);
-                    window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(message);
-                })(messageJSON);
+                (function(message) {
+                    let resolved = message;
+                    if (typeof resolved === "string") {
+                        try {
+                            window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(JSON.parse(resolved));
+                            return;
+                        } catch {
+                        }
+                    }
+                    window.webInspectorDOMFrontend?.dispatchMessageFromBackend?.(resolved);
+                })(message);
                 """,
-                arguments: ["messageJSON": responseJSON],
+                arguments: ["message": message],
                 contentWorld: .page
             )
         } catch {

@@ -23,9 +23,15 @@ function mutationHandler(): WebKitMockHandler {
 function parseBundleCall(
     handler: WebKitMockHandler
 ): Record<string, any> {
-    const call = handler.postMessage.mock.calls.at(-1)?.[0] as { bundle?: string } | undefined;
-    const rawBundle = call?.bundle ?? "{}";
-    return JSON.parse(rawBundle);
+    const call = handler.postMessage.mock.calls.at(-1)?.[0] as { bundle?: unknown } | undefined;
+    const rawBundle = call?.bundle;
+    if (!rawBundle) {
+        return {};
+    }
+    if (typeof rawBundle === "string") {
+        return JSON.parse(rawBundle);
+    }
+    return rawBundle as Record<string, any>;
 }
 
 function resetInspectorState() {

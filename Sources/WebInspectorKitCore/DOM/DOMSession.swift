@@ -15,6 +15,10 @@ public final class DOMSession {
         autoSnapshotEnabled
     }
 
+    package var bridgeMode: WIBridgeMode {
+        pageAgent.currentBridgeMode
+    }
+
     public weak var bundleSink: (any DOMBundleSink)? {
         didSet {
             pageAgent.sink = bundleSink
@@ -23,8 +27,8 @@ public final class DOMSession {
 
     public init(configuration: DOMConfiguration = .init()) {
         self.configuration = configuration
-        self.selection = DOMSelection()
-        self.pageAgent = DOMPageAgent(configuration: configuration)
+        selection = DOMSelection()
+        pageAgent = DOMPageAgent(configuration: configuration)
     }
 
     public func updateConfiguration(_ configuration: DOMConfiguration) {
@@ -102,6 +106,18 @@ public extension DOMSession {
 
     func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
         try await pageAgent.matchedStyles(nodeId: nodeId, maxRules: maxRules)
+    }
+}
+
+// MARK: - Snapshot API (bridge/object)
+
+extension DOMSession {
+    package func captureSnapshotPayload(maxDepth: Int) async throws -> Any {
+        try await pageAgent.captureSnapshotEnvelope(maxDepth: maxDepth)
+    }
+
+    package func captureSubtreePayload(nodeId: Int, maxDepth: Int) async throws -> Any {
+        try await pageAgent.captureSubtreeEnvelope(nodeId: nodeId, maxDepth: maxDepth)
     }
 }
 

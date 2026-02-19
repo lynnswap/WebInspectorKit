@@ -4,12 +4,14 @@ import {
     NetworkLoggingMode,
     clearThrottledEvents,
     enqueueNetworkEvent,
+    makeBodyHandle,
     networkState,
     queuedEvents,
     serializeRequestBody,
     setThrottleOptions,
     shouldCaptureNetworkBodies
 } from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-utils";
+import { getBodyForHandle } from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-core";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
@@ -114,5 +116,78 @@ describe("network-agent-utils", () => {
 
         networkState.mode = NetworkLoggingMode.ACTIVE;
         expect(shouldCaptureNetworkBodies()).toBe(true);
+    });
+
+    it("builds handle payload as metadata-preserving object", () => {
+        const createJSHandle = vi.fn((value: unknown) => ({ marker: "handle", value }));
+        const webkit = window.webkit as unknown as { createJSHandle?: (value: unknown) => unknown };
+        webkit.createJSHandle = createJSHandle;
+
+        const handle = makeBodyHandle(
+            {
+                kind: "binary",
+                body: "AQI=",
+                storageBody: "AQID",
+                base64Encoded: true,
+                truncated: true,
+                size: 4,
+                summary: "Binary body (4 bytes)"
+            },
+            {
+                kind: "binary",
+                encoding: "base64",
+                truncated: true,
+                size: 4,
+                content: "AQID",
+                summary: "Binary body (4 bytes)"
+            }
+        );
+
+        expect(handle).toEqual({
+            marker: "handle",
+            value: {
+                kind: "binary",
+                encoding: "base64",
+                truncated: true,
+                size: 4,
+                content: "AQID",
+                summary: "Binary body (4 bytes)"
+            }
+        });
+        expect(createJSHandle).toHaveBeenCalledTimes(1);
+    });
+
+    it("restores stored metadata from object handle payload", () => {
+        const restored = getBodyForHandle({
+            kind: "binary",
+            encoding: "base64",
+            truncated: true,
+            size: 9,
+            content: "AQIDBA==",
+            summary: "Binary body (9 bytes)"
+        }) as Record<string, unknown> | null;
+
+        expect(restored).not.toBeNull();
+        expect(restored).toMatchObject({
+            kind: "binary",
+            encoding: "base64",
+            truncated: true,
+            size: 9,
+            content: "AQIDBA==",
+            summary: "Binary body (9 bytes)"
+        });
+    });
+
+    it("accepts string-like handle objects via valueOf fallback", () => {
+        const restored = getBodyForHandle({
+            valueOf: () => "body-from-value-of"
+        }) as Record<string, unknown> | null;
+
+        expect(restored).toMatchObject({
+            kind: "text",
+            encoding: "utf-8",
+            content: "body-from-value-of",
+            size: "body-from-value-of".length
+        });
     });
 });

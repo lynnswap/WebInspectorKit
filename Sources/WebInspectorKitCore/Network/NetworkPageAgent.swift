@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import ObjectiveC.runtime
 import WebKit
 
 public enum NetworkLoggingMode: String, Sendable {
@@ -12,6 +13,25 @@ private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "Netw
 private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetworkAgent */ })();
 """
+private let networkPrivateUnavailableSentinel = "__wi_private_unavailable__"
+@MainActor private var networkBridgeScriptInstalledKey: UInt8 = 0
+
+@MainActor
+private extension WKUserContentController {
+    var wi_networkBridgeScriptInstalled: Bool {
+        get {
+            (objc_getAssociatedObject(self, &networkBridgeScriptInstalledKey) as? NSNumber)?.boolValue ?? false
+        }
+        set {
+            objc_setAssociatedObject(
+                self,
+                &networkBridgeScriptInstalledKey,
+                NSNumber(value: newValue),
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+        }
+    }
+}
 
 @MainActor
 public final class NetworkPageAgent: NSObject, PageAgent {
@@ -25,6 +45,22 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     private var loggingMode: NetworkLoggingMode = .buffering
     private var configureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
+
+    private let runtime: WISPIRuntime
+    private let bridgeWorld: WKContentWorld
+    private var bridgeMode: WIBridgeMode
+    private var bridgeModeLocked = false
+
+    package var currentBridgeMode: WIBridgeMode {
+        bridgeMode
+    }
+
+    override init() {
+        runtime = .shared
+        bridgeMode = runtime.startupMode()
+        bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
+        super.init()
+    }
 
     @MainActor deinit {
         configureTask?.cancel()
@@ -73,6 +109,7 @@ extension NetworkPageAgent {
     }
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
+        resolveBridgeModeIfNeeded(with: webView)
         if previousWebView !== webView {
             store.reset()
         }
@@ -84,48 +121,19 @@ extension NetworkPageAgent {
         store.reset()
     }
 
-    func fetchBody(bodyRef: String, role: NetworkBody.Role) async -> NetworkBody? {
+    func fetchBody(bodyRef: String?, bodyHandle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
         guard let webView else { return nil }
-        do {
-            let result = try await webView.callAsyncJavaScript(
-                """
-                return (function(ref) {
-                    if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {
-                        return null;
-                    }
-                    const body = window.webInspectorNetworkAgent.getBody(ref);
-                    if (body == null) {
-                        return null;
-                    }
-                    try {
-                        return JSON.stringify(body);
-                    } catch (error) {
-                        return null;
-                    }
-                })(ref);
-                """,
-                arguments: ["ref": bodyRef],
-                in: nil,
-                contentWorld: .page
-            )
-            let payload: NetworkBodyPayload?
-            if let jsonString = result as? String,
-               let data = jsonString.data(using: .utf8) {
-                payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
-            } else if let dictionary = result as? NSDictionary,
-                      let data = try? JSONSerialization.data(withJSONObject: dictionary) {
-                payload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data)
-            } else {
-                payload = nil
+
+        if let bodyHandle {
+            if let body = await fetchBodyFromHandle(bodyHandle, role: role, in: webView) {
+                return body
             }
-            guard let payload else {
-                return nil
-            }
-            return NetworkBody.from(payload: payload, role: role)
-        } catch {
-            networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        guard let bodyRef, !bodyRef.isEmpty else {
             return nil
         }
+        return await fetchBodyFromReference(bodyRef, role: role, in: webView)
     }
 }
 
@@ -155,13 +163,31 @@ extension NetworkPageAgent: WKScriptMessageHandler {
         }
         store.applyNetworkBatch(batch)
     }
-    
+
     private func handleNetworkReset() {
         store.reset()
     }
 }
 
 private extension NetworkPageAgent {
+    func resolveBridgeModeIfNeeded(with webView: WKWebView) {
+        guard !bridgeModeLocked else {
+            return
+        }
+        bridgeMode = runtime.modeForAttachment(webView: webView)
+        bridgeModeLocked = true
+        networkLogger.notice("bridge_mode=\(self.bridgeMode.rawValue, privacy: .public)")
+    }
+
+    func lockToLegacyMode(_ reason: String) {
+        guard bridgeMode != .legacyJSON else {
+            return
+        }
+        bridgeMode = .legacyJSON
+        bridgeModeLocked = true
+        networkLogger.error("bridge_mode=legacyJSON \(reason, privacy: .public)")
+    }
+
     func scheduleConfigure(mode: NetworkLoggingMode, clearExisting: Bool, on targetWebView: WKWebView?) {
         configureTask?.cancel()
         configureTask = Task { [weak self] in
@@ -186,8 +212,8 @@ private extension NetworkPageAgent {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
-            controller.add(self, contentWorld: .page, name: $0.rawValue)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
+            controller.add(self, contentWorld: bridgeWorld, name: $0.rawValue)
         }
     }
 
@@ -195,14 +221,14 @@ private extension NetworkPageAgent {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
         }
         networkLogger.debug("detached network message handlers")
     }
 
     func installNetworkAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
-        if controller.userScripts.contains(where: { $0.source == networkPresenceProbeScript }) {
+        if controller.wi_networkBridgeScriptInstalled {
             return
         }
 
@@ -217,18 +243,21 @@ private extension NetworkPageAgent {
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
+            forMainFrameOnly: true,
+            in: bridgeWorld
         )
         let checkScript = WKUserScript(
             source: networkPresenceProbeScript,
             injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
+            forMainFrameOnly: true,
+            in: bridgeWorld
         )
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
+        controller.wi_networkBridgeScriptInstalled = true
 
         do {
-            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: bridgeWorld)
         } catch {
             networkLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
         }
@@ -242,7 +271,7 @@ private extension NetworkPageAgent {
     ) async {
         guard let webView = targetWebView ?? self.webView else { return }
         let controller = webView.configuration.userContentController
-        let networkInstalled = controller.userScripts.contains { $0.source == networkPresenceProbeScript }
+        let networkInstalled = controller.wi_networkBridgeScriptInstalled
         let modeRequiresAgent = mode != .stopped
         let shouldInstallNetworkAgent = modeRequiresAgent || (networkInstalled && clearExisting)
 
@@ -250,7 +279,7 @@ private extension NetworkPageAgent {
             await installNetworkAgentScriptIfNeeded(on: webView)
         }
 
-        let networkReady = webView.configuration.userContentController.userScripts.contains { $0.source == networkPresenceProbeScript }
+        let networkReady = webView.configuration.userContentController.wi_networkBridgeScriptInstalled
         let script = """
         (function(mode, clearExisting) {
             if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
@@ -266,9 +295,9 @@ private extension NetworkPageAgent {
                 script,
                 arguments: [
                     "clearExisting": clearExisting,
-                    "mode": mode.rawValue
+                    "mode": mode.rawValue,
                 ],
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
         } catch {
             networkLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
@@ -281,7 +310,7 @@ private extension NetworkPageAgent {
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorNetworkAgent.clear();",
                 arguments: [:],
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
         } catch {
             networkLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
@@ -290,5 +319,109 @@ private extension NetworkPageAgent {
 
     func decodeNetworkBatch(from payload: Any?) -> NetworkEventBatch? {
         NetworkEventBatch.decode(from: payload)
+    }
+
+    func fetchBodyFromHandle(_ handle: AnyObject, role: NetworkBody.Role, in webView: WKWebView) async -> NetworkBody? {
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return (function(handle, unavailable) {
+                    if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function") {
+                        return unavailable;
+                    }
+                    return window.webInspectorNetworkAgent.getBodyForHandle(handle);
+                })(handle, unavailable);
+                """,
+                arguments: [
+                    "handle": handle,
+                    "unavailable": networkPrivateUnavailableSentinel,
+                ],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+
+            if let sentinel = result as? String, sentinel == networkPrivateUnavailableSentinel {
+                lockToLegacyMode("selector_missing=getBodyForHandle")
+                return nil
+            }
+
+            return decodeNetworkBody(from: result, role: role)
+        } catch {
+            lockToLegacyMode("runtime_probe_failed=getBodyForHandle")
+            networkLogger.error("getBodyForHandle failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func fetchBodyFromReference(_ bodyRef: String, role: NetworkBody.Role, in webView: WKWebView) async -> NetworkBody? {
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return (function(ref) {
+                    if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {
+                        return null;
+                    }
+                    return window.webInspectorNetworkAgent.getBody(ref);
+                })(ref);
+                """,
+                arguments: ["ref": bodyRef],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            return decodeNetworkBody(from: result, role: role)
+        } catch {
+            networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func decodeNetworkBody(from payload: Any?, role: NetworkBody.Role) -> NetworkBody? {
+        guard let payload else {
+            return nil
+        }
+
+        let resolved = unwrapOptionalPayload(payload)
+        if let bodyPayload = resolved as? NetworkBodyPayload {
+            return NetworkBody.from(payload: bodyPayload, role: role)
+        }
+
+        if let dictionary = resolved as? NSDictionary {
+            let bodyPayload = NetworkBodyPayload(dictionary: dictionary)
+            return NetworkBody.from(payload: bodyPayload, role: role)
+        }
+
+        if let jsonString = resolved as? String,
+           let data = jsonString.data(using: .utf8),
+           let bodyPayload = try? JSONDecoder().decode(NetworkBodyPayload.self, from: data) {
+            return NetworkBody.from(payload: bodyPayload, role: role)
+        }
+
+        if let inlineString = resolved as? String {
+            return NetworkBody(
+                kind: .text,
+                preview: inlineString,
+                full: inlineString,
+                size: inlineString.count,
+                isBase64Encoded: false,
+                isTruncated: false,
+                role: role
+            )
+        }
+
+        return nil
+    }
+
+    func unwrapOptionalPayload(_ value: Any?) -> Any {
+        guard let value else {
+            return NSNull()
+        }
+        let mirror = Mirror(reflecting: value)
+        guard mirror.displayStyle == .optional else {
+            return value
+        }
+        guard let child = mirror.children.first else {
+            return NSNull()
+        }
+        return unwrapOptionalPayload(child.value)
     }
 }

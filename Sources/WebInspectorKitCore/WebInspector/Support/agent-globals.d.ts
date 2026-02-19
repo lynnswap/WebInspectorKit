@@ -14,6 +14,9 @@ declare global {
             __installed?: boolean;
         };
         webkit?: {
+            createJSHandle?: (value: unknown) => unknown;
+            serializeNode?: (node: Node) => unknown;
+            buffers?: Record<string, unknown>;
             messageHandlers?: {
                 webInspectorDOMSnapshot?: WebKitMessageHandler;
                 webInspectorDOMMutations?: WebKitMessageHandler;

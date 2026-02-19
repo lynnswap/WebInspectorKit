@@ -153,6 +153,7 @@ struct NetworkPageAgentTests {
     func attachRegistersHandlersAndInstallsScripts() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
+        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         agent.attachPageWebView(webView)
         await waitForScripts(on: controller, atLeast: 2)
@@ -160,6 +161,7 @@ struct NetworkPageAgentTests {
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
+        #expect(controller.addedHandlers.allSatisfy { $0.world == bridgeWorld })
         #expect(controller.userScripts.count == 2)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetworkAgent") })
     }
@@ -168,6 +170,7 @@ struct NetworkPageAgentTests {
     func detachRemovesHandlersAndClearsWebView() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
+        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         agent.attachPageWebView(webView)
         await waitForScripts(on: controller, atLeast: 2)
@@ -178,6 +181,7 @@ struct NetworkPageAgentTests {
         #expect(controller.removedHandlers.count > removedBefore)
         #expect(removedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
+        #expect(controller.removedHandlers.allSatisfy { $0.world == bridgeWorld })
         #expect(agent.webView == nil)
     }
 
@@ -193,10 +197,48 @@ struct NetworkPageAgentTests {
         let raw = try await webView.evaluateJavaScript(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
-            contentWorld: .page
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+    }
+
+    @Test
+    func attachInstallsBridgeWorldNetworkScriptWhenPageWorldProbeAlreadyExists() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+        controller.addUserScript(
+            WKUserScript(
+                source: "(function() { /* webInspectorNetworkAgent */ })();",
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+        )
+
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 3)
+        await loadHTML("<html><body><p>hello</p></body></html>", in: webView)
+
+        let raw = try await webView.evaluateJavaScript(
+            "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
+        #expect(installed == true)
+    }
+
+    @Test
+    func fetchBodyUsesHandlePathWhenHandleIsProvided() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 2)
+        await loadHTML("<html><body><p>handle</p></body></html>", in: webView)
+
+        let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
+        #expect(body?.full == "token")
     }
 
     @Test

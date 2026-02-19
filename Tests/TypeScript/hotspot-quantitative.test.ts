@@ -118,6 +118,14 @@ describe("hotspot quantitative acceptance", () => {
 
         const mutationBundles = mutationHandler().postMessage.mock.calls.length;
         const fallbackFullSnapshots = snapshotHandler().postMessage.mock.calls.length;
+        const stringifiedSnapshotBundles = snapshotHandler().postMessage.mock.calls.filter(call => {
+            const payload = call[0] as { bundle?: unknown };
+            return typeof payload.bundle === "string";
+        }).length;
+        const stringifiedMutationBundles = mutationHandler().postMessage.mock.calls.filter(call => {
+            const payload = call[0] as { bundle?: unknown };
+            return typeof payload.bundle === "string";
+        }).length;
 
         console.info(
             `[quant] dom_full_snapshot_reduction=${(reduction * 100).toFixed(2)}% ` +
@@ -126,9 +134,13 @@ describe("hotspot quantitative acceptance", () => {
         console.info(
             `[quant] dom_mutation_vs_full mutationBundles=${mutationBundles} fullSnapshots=${fallbackFullSnapshots}`
         );
+        console.info(
+            `[quant] dom_bundle_stringify_count snapshot=${stringifiedSnapshotBundles} mutation=${stringifiedMutationBundles}`
+        );
 
         expect(reduction).toBeGreaterThanOrEqual(0.5);
         expect(mutationBundles).toBeGreaterThan(fallbackFullSnapshots);
+        expect(stringifiedSnapshotBundles + stringifiedMutationBundles).toBe(0);
     });
 
     it("reduces buffering payload size by at least 30% compared to body-capturing baseline", async () => {

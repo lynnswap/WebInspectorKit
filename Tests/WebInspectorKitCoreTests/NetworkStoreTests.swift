@@ -186,6 +186,11 @@ struct NetworkStoreTests {
                     "kind": "responseReceived",
                     "requestId": "invalid",
                     "status": 200
+                ],
+                [
+                    "kind": "loadingFinished",
+                    "requestId": true,
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_300.0, wallMs: 1_700_000_000_300.0)
                 ]
             ]
         ]

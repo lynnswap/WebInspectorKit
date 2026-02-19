@@ -105,13 +105,17 @@ public final class WINetworkPaneViewModel {
         guard body.fetchState != .fetching else {
             return
         }
-        guard let bodyRef = body.reference, !bodyRef.isEmpty else {
+        let bodyRef = body.reference
+        let bodyHandle = body.handle
+        let hasReference = bodyRef?.isEmpty == false
+        let hasHandle = bodyHandle != nil
+        guard hasReference || hasHandle else {
             body.markFailed(.unavailable)
             return
         }
 
         body.markFetching()
-        guard let fetched = await session.fetchBody(ref: bodyRef, role: body.role) else {
+        guard let fetched = await session.fetchBody(ref: bodyRef, handle: bodyHandle, role: body.role) else {
             body.markFailed(.unavailable)
             return
         }

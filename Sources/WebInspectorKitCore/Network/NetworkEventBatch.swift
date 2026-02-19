@@ -58,6 +58,137 @@ struct NetworkEventPayload: Decodable {
     let error: NetworkErrorPayload?
 }
 
+private extension NetworkTimePayload {
+    init?(dictionary: NSDictionary) {
+        guard let monotonicMs = networkDouble(from: dictionary["monotonicMs"]) else {
+            return nil
+        }
+        guard let wallMs = networkDouble(from: dictionary["wallMs"]) else {
+            return nil
+        }
+        self.init(monotonicMs: monotonicMs, wallMs: wallMs)
+    }
+}
+
+private extension NetworkErrorPayload {
+    init?(dictionary: NSDictionary) {
+        guard let domain = dictionary["domain"] as? String else {
+            return nil
+        }
+        guard let message = dictionary["message"] as? String else {
+            return nil
+        }
+        self.init(
+            domain: domain,
+            code: dictionary["code"] as? String,
+            message: message,
+            isCanceled: dictionary["isCanceled"] as? Bool,
+            isTimeout: dictionary["isTimeout"] as? Bool
+        )
+    }
+}
+
+private extension NetworkEventPayload {
+    init?(dictionary: NSDictionary) {
+        guard let kind = dictionary["kind"] as? String else {
+            return nil
+        }
+        guard let requestId = networkInt(from: dictionary["requestId"]) else {
+            return nil
+        }
+        let time = (dictionary["time"] as? NSDictionary).flatMap(NetworkTimePayload.init(dictionary:))
+        let startTime = (dictionary["startTime"] as? NSDictionary).flatMap(NetworkTimePayload.init(dictionary:))
+        let endTime = (dictionary["endTime"] as? NSDictionary).flatMap(NetworkTimePayload.init(dictionary:))
+
+        let headers = dictionary["headers"] as? [String: String]
+            ?? (dictionary["headers"] as? NSDictionary).map { rawHeaders in
+                var mapped: [String: String] = [:]
+                for (key, value) in rawHeaders {
+                    mapped[String(describing: key)] = String(describing: value)
+                }
+                return mapped
+            }
+
+        let bodyPayload: NetworkBodyPayload?
+        if let body = dictionary["body"] as? NSDictionary {
+            bodyPayload = NetworkBodyPayload(dictionary: body)
+        } else {
+            bodyPayload = nil
+        }
+
+        let errorPayload = (dictionary["error"] as? NSDictionary).flatMap(NetworkErrorPayload.init(dictionary:))
+
+        self.init(
+            kind: kind,
+            requestId: requestId,
+            time: time,
+            startTime: startTime,
+            endTime: endTime,
+            url: dictionary["url"] as? String,
+            method: dictionary["method"] as? String,
+            status: networkInt(from: dictionary["status"]),
+            statusText: dictionary["statusText"] as? String,
+            mimeType: dictionary["mimeType"] as? String,
+            headers: headers,
+            initiator: dictionary["initiator"] as? String,
+            body: bodyPayload,
+            bodySize: networkInt(from: dictionary["bodySize"]),
+            encodedBodyLength: networkInt(from: dictionary["encodedBodyLength"]),
+            decodedBodySize: networkInt(from: dictionary["decodedBodySize"]),
+            error: errorPayload
+        )
+    }
+}
+
+private func networkDouble(from value: Any?) -> Double? {
+    if let value = value as? Double {
+        return value
+    }
+    if let value = value as? NSNumber {
+        return value.doubleValue
+    }
+    if let value = value as? String {
+        return Double(value)
+    }
+    return nil
+}
+
+private func networkInt(from value: Any?) -> Int? {
+    if value is Bool {
+        return nil
+    }
+    if let value = value as? NSNumber {
+        if CFGetTypeID(value) == CFBooleanGetTypeID() {
+            return nil
+        }
+        return networkIntegralInt(from: value.doubleValue)
+    }
+    if let value = value as? Int {
+        return value
+    }
+    if let value = value as? String {
+        return Int(value)
+    }
+    if let value = value as? Double {
+        return networkIntegralInt(from: value)
+    }
+    return nil
+}
+
+private func networkIntegralInt(from value: Double) -> Int? {
+    guard value.isFinite else {
+        return nil
+    }
+    let truncated = value.rounded(.towardZero)
+    guard truncated == value else {
+        return nil
+    }
+    guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
+        return nil
+    }
+    return Int(truncated)
+}
+
 struct HTTPNetworkEvent: NetworkEventProtocol {
     let kind: HTTPNetworkEventKind
     let sessionID: String
@@ -389,9 +520,13 @@ struct NetworkEventBatch: Decodable {
         if let payload = rawEvent as? NetworkEventPayload {
             return payload
         }
-        if let dictionary = rawEvent as? NSDictionary,
-           let data = try? JSONSerialization.data(withJSONObject: dictionary) {
-            return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+        if let dictionary = rawEvent as? NSDictionary {
+            if let payload = NetworkEventPayload(dictionary: dictionary) {
+                return payload
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: dictionary) {
+                return try? JSONDecoder().decode(NetworkEventPayload.self, from: data)
+            }
         }
         if let jsonString = rawEvent as? String,
            let data = jsonString.data(using: .utf8) {

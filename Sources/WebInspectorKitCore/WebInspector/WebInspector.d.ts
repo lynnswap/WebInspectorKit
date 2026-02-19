@@ -24,6 +24,9 @@ declare global {
     }
 
     interface WebKitBridge {
+        createJSHandle?: (value: unknown) => unknown;
+        serializeNode?: (node: Node) => unknown;
+        buffers?: Record<string, unknown>;
         messageHandlers: WebInspectorMessageHandlers;
     }
 

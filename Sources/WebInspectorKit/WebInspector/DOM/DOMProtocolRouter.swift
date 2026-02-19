@@ -6,6 +6,7 @@ import WebInspectorKitCore
 final class DOMProtocolRouter {
     struct RoutingOutcome {
         let responseJSON: String?
+        let responseObject: [String: Any]?
         let recoverableError: String?
     }
 
@@ -18,9 +19,14 @@ final class DOMProtocolRouter {
 
     func route(payload: Any?, configuration: DOMConfiguration) async -> RoutingOutcome {
         guard let request = decodeRequest(from: payload) else {
+            let message = "DOM protocol payload decode failed"
+            let requestID = decodeRequestIdentifier(from: payload) ?? 0
             return RoutingOutcome(
-                responseJSON: nil,
-                recoverableError: "DOM protocol payload decode failed"
+                responseJSON: encodeResponse(
+                    .init(id: requestID, result: nil, error: .init(message: message))
+                ),
+                responseObject: makeObjectResponse(id: requestID, result: nil, errorMessage: message),
+                recoverableError: message
             )
         }
 
@@ -28,22 +34,22 @@ final class DOMProtocolRouter {
             switch request.method {
             case "DOM.getDocument":
                 let depth = request.params.intValue(forKey: "depth") ?? configuration.snapshotDepth
-                let snapshot = try await session.captureSnapshot(maxDepth: depth)
+                let snapshot = try await session.captureSnapshotPayload(maxDepth: depth)
+                let object = makeObjectResponse(id: request.id, result: snapshot, errorMessage: nil)
                 return RoutingOutcome(
-                    responseJSON: encodeResponse(
-                        .init(id: request.id, result: .string(snapshot), error: nil)
-                    ),
+                    responseJSON: nil,
+                    responseObject: object,
                     recoverableError: nil
                 )
 
             case "DOM.requestChildNodes":
                 let depth = request.params.intValue(forKey: "depth") ?? configuration.subtreeDepth
                 let nodeID = request.params.intValue(forKey: "nodeId") ?? 0
-                let subtree = try await session.captureSubtree(nodeId: nodeID, maxDepth: depth)
+                let subtree = try await session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
+                let object = makeObjectResponse(id: request.id, result: subtree, errorMessage: nil)
                 return RoutingOutcome(
-                    responseJSON: encodeResponse(
-                        .init(id: request.id, result: .string(subtree), error: nil)
-                    ),
+                    responseJSON: nil,
+                    responseObject: object,
                     recoverableError: nil
                 )
 
@@ -51,45 +57,35 @@ final class DOMProtocolRouter {
                 if let nodeID = request.params.intValue(forKey: "nodeId") {
                     await session.highlight(nodeId: nodeID)
                 }
-                return RoutingOutcome(
-                    responseJSON: encodeResponse(
-                        .init(id: request.id, result: .object([:]), error: nil)
-                    ),
-                    recoverableError: nil
-                )
+                let object = makeObjectResponse(id: request.id, result: [:], errorMessage: nil)
+                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
 
             case "Overlay.hideHighlight", "DOM.hideHighlight":
                 await session.hideHighlight()
-                return RoutingOutcome(
-                    responseJSON: encodeResponse(
-                        .init(id: request.id, result: .object([:]), error: nil)
-                    ),
-                    recoverableError: nil
-                )
+                let object = makeObjectResponse(id: request.id, result: [:], errorMessage: nil)
+                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
 
             case "DOM.getSelectorPath":
                 let nodeID = request.params.intValue(forKey: "nodeId") ?? 0
                 let selectorPath = try await session.selectorPath(nodeId: nodeID)
-                return RoutingOutcome(
-                    responseJSON: encodeResponse(
-                        .init(
-                            id: request.id,
-                            result: .object(["selectorPath": .string(selectorPath)]),
-                            error: nil
-                        )
-                    ),
-                    recoverableError: nil
+                let object = makeObjectResponse(
+                    id: request.id,
+                    result: ["selectorPath": selectorPath],
+                    errorMessage: nil
                 )
+                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
 
             default:
+                let message = "Unsupported method: \(request.method)"
                 return RoutingOutcome(
                     responseJSON: encodeResponse(
                         .init(
                             id: request.id,
                             result: nil,
-                            error: .init(message: "Unsupported method: \(request.method)")
+                            error: .init(message: message)
                         )
                     ),
+                    responseObject: makeObjectResponse(id: request.id, result: nil, errorMessage: message),
                     recoverableError: "Unsupported DOM protocol method: \(request.method)"
                 )
             }
@@ -99,6 +95,7 @@ final class DOMProtocolRouter {
                 responseJSON: encodeResponse(
                     .init(id: request.id, result: nil, error: .init(message: error.localizedDescription))
                 ),
+                responseObject: makeObjectResponse(id: request.id, result: nil, errorMessage: error.localizedDescription),
                 recoverableError: error.localizedDescription
             )
         }
@@ -237,6 +234,60 @@ private extension DOMProtocolRouter {
         return try? JSONDecoder().decode(ProtocolRequest.self, from: data)
     }
 
+    func decodeRequestIdentifier(from payload: Any?) -> Int? {
+        guard let payload else {
+            return nil
+        }
+        if let dictionary = payload as? [String: Any] {
+            return parseIdentifierValue(dictionary["id"])
+        }
+        if let dictionary = payload as? NSDictionary {
+            return parseIdentifierValue(dictionary["id"])
+        }
+        if let data = payloadData(from: payload),
+           let object = try? JSONSerialization.jsonObject(with: data, options: []),
+           let dictionary = object as? [String: Any] {
+            return parseIdentifierValue(dictionary["id"])
+        }
+        return nil
+    }
+
+    func parseIdentifierValue(_ value: Any?) -> Int? {
+        if value is Bool {
+            return nil
+        }
+        if let value = value as? Int {
+            return value
+        }
+        if let value = value as? NSNumber {
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                return nil
+            }
+            return parseIntegralInt(from: value.doubleValue)
+        }
+        if let value = value as? String {
+            return Int(value)
+        }
+        if let value = value as? Double {
+            return parseIntegralInt(from: value)
+        }
+        return nil
+    }
+
+    func parseIntegralInt(from value: Double) -> Int? {
+        guard value.isFinite else {
+            return nil
+        }
+        let truncated = value.rounded(.towardZero)
+        guard truncated == value else {
+            return nil
+        }
+        guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
+            return nil
+        }
+        return Int(truncated)
+    }
+
     func payloadData(from payload: Any) -> Data? {
         if let data = payload as? Data {
             return data
@@ -255,6 +306,16 @@ private extension DOMProtocolRouter {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    func makeObjectResponse(id: Int, result: Any?, errorMessage: String?) -> [String: Any] {
+        var object: [String: Any] = ["id": id]
+        if let errorMessage {
+            object["error"] = ["message": errorMessage]
+        } else {
+            object["result"] = result ?? [:]
+        }
+        return object
     }
 }
 

@@ -54,7 +54,7 @@ public final class NetworkSession: PageSession {
         pageAgent.clearNetworkLogs()
     }
 
-    public func fetchBody(ref: String, role: NetworkBody.Role) async -> NetworkBody? {
-        await pageAgent.fetchBody(bodyRef: ref, role: role)
+    public func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
+        await pageAgent.fetchBody(bodyRef: ref, bodyHandle: handle, role: role)
     }
 }

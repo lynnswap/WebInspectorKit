@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import ObjectiveC.runtime
 import WebKit
 
 private let domLogger = Logger(subsystem: "WebInspectorKit", category: "DOMPageAgent")
@@ -8,6 +9,25 @@ private let domAgentPresenceProbeScript: String = """
 """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
+private let unavailablePrivateAPISentinel = "__wi_private_unavailable__"
+@MainActor private var domBridgeScriptInstalledKey: UInt8 = 0
+
+@MainActor
+private extension WKUserContentController {
+    var wi_domBridgeScriptInstalled: Bool {
+        get {
+            (objc_getAssociatedObject(self, &domBridgeScriptInstalledKey) as? NSNumber)?.boolValue ?? false
+        }
+        set {
+            objc_setAssociatedObject(
+                self,
+                &domBridgeScriptInstalledKey,
+                NSNumber(value: newValue),
+                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+        }
+    }
+}
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
@@ -21,12 +41,45 @@ public final class DOMPageAgent: NSObject, PageAgent {
         case mutation = "webInspectorDOMMutations"
     }
 
+    private enum HandleCommand {
+        case highlight
+        case removeNode
+        case setAttribute(name: String, value: String)
+        case removeAttribute(name: String)
+
+        var functionName: String {
+            switch self {
+            case .highlight:
+                return "highlightNodeHandle"
+            case .removeNode:
+                return "removeNodeHandle"
+            case .setAttribute:
+                return "setAttributeForHandle"
+            case .removeAttribute:
+                return "removeAttributeForHandle"
+            }
+        }
+    }
+
     public weak var sink: (any DOMBundleSink)?
     weak var webView: WKWebView?
     private var configuration: DOMConfiguration
 
+    private let runtime: WISPIRuntime
+    private let bridgeWorld: WKContentWorld
+    private let handleCache = WIJSHandleCache(capacity: 128)
+    private var bridgeMode: WIBridgeMode
+    private var bridgeModeLocked = false
+
+    package var currentBridgeMode: WIBridgeMode {
+        bridgeMode
+    }
+
     public init(configuration: DOMConfiguration) {
         self.configuration = configuration
+        runtime = .shared
+        bridgeMode = runtime.startupMode()
+        bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
 
     @MainActor deinit {
@@ -49,11 +102,17 @@ extension DOMPageAgent: WKScriptMessageHandler {
             return
         }
         guard let payload = message.body as? NSDictionary,
-              let rawJSON = payload["bundle"] as? String,
-              !rawJSON.isEmpty else {
+              let bundle = payload["bundle"]
+        else {
             return
         }
-        sink?.domDidEmit(bundle: DOMBundle(rawJSON: rawJSON))
+
+        if let rawJSON = bundle as? String, !rawJSON.isEmpty {
+            sink?.domDidEmit(bundle: DOMBundle(rawJSON: rawJSON))
+            return
+        }
+
+        sink?.domDidEmit(bundle: DOMBundle(objectEnvelope: bundle))
     }
 }
 
@@ -68,7 +127,7 @@ public extension DOMPageAgent {
             "return window.webInspectorDOM.startSelection()",
             arguments: [:],
             in: nil,
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
         let data = try serializePayload(rawResult)
         return try JSONDecoder().decode(SelectionModeResult.self, from: data)
@@ -80,7 +139,7 @@ public extension DOMPageAgent {
         }
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorDOM.cancelSelection()",
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
     }
 
@@ -88,10 +147,13 @@ public extension DOMPageAgent {
         guard let webView else {
             return
         }
+        if await runHandleCommand(.highlight, nodeId: nodeId, on: webView) {
+            return
+        }
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorDOM.highlightNode(identifier)",
             arguments: ["identifier": nodeId],
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
     }
 
@@ -101,7 +163,7 @@ public extension DOMPageAgent {
         }
         try? await webView.callAsyncVoidJavaScript(
             "window.webInspectorDOM && window.webInspectorDOM.clearHighlight();",
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
     }
 }
@@ -110,34 +172,17 @@ public extension DOMPageAgent {
 
 public extension DOMPageAgent {
     func captureSnapshot(maxDepth: Int) async throws -> String {
-        guard let webView else {
-            throw WebInspectorCoreError.scriptUnavailable
-        }
-        let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorDOM.captureSnapshot(maxDepth)",
-            arguments: ["maxDepth": max(1, maxDepth)],
-            in: nil,
-            contentWorld: .page
-        )
-        let data = try serializePayload(rawResult)
-        return String(decoding: data, as: UTF8.self)
+        let payload = try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: false)
+        return try jsonString(from: payload)
     }
 
     func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
-        guard let webView else {
-            throw WebInspectorCoreError.scriptUnavailable
-        }
-        let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorDOM.captureSubtree(identifier, maxDepth)",
-            arguments: ["identifier": nodeId, "maxDepth": max(1, maxDepth)],
-            in: nil,
-            contentWorld: .page
-        )
-        let data = try serializePayload(rawResult)
-        guard !data.isEmpty else {
+        let payload = try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: false)
+        let json = try jsonString(from: payload)
+        guard !json.isEmpty else {
             throw WebInspectorCoreError.subtreeUnavailable
         }
-        return String(decoding: data, as: UTF8.self)
+        return json
     }
 
     func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
@@ -151,10 +196,18 @@ public extension DOMPageAgent {
                 "options": ["maxRules": maxRules],
             ],
             in: nil,
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
         let data = try serializePayload(rawResult)
         return try JSONDecoder().decode(DOMMatchedStylesPayload.self, from: data)
+    }
+
+    func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
+        try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
+    }
+
+    func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any {
+        try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
     }
 }
 
@@ -166,11 +219,16 @@ public extension DOMPageAgent {
             return
         }
         do {
+            if await runHandleCommand(.removeNode, nodeId: nodeId, on: webView) {
+                handleCache.removeHandle(for: nodeId)
+                return
+            }
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOM.removeNode(identifier)",
                 arguments: ["identifier": nodeId],
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
+            handleCache.removeHandle(for: nodeId)
         } catch {
             domLogger.error("remove node failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -181,6 +239,9 @@ public extension DOMPageAgent {
             return
         }
         do {
+            if await runHandleCommand(.setAttribute(name: name, value: value), nodeId: nodeId, on: webView) {
+                return
+            }
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOM.setAttributeForNode(identifier, name, value)",
                 arguments: [
@@ -188,7 +249,7 @@ public extension DOMPageAgent {
                     "name": name,
                     "value": value,
                 ],
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
         } catch {
             domLogger.error("set attribute failed: \(error.localizedDescription, privacy: .public)")
@@ -200,13 +261,16 @@ public extension DOMPageAgent {
             return
         }
         do {
+            if await runHandleCommand(.removeAttribute(name: name), nodeId: nodeId, on: webView) {
+                return
+            }
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOM.removeAttributeForNode(identifier, name)",
                 arguments: [
                     "identifier": nodeId,
                     "name": name,
                 ],
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
         } catch {
             domLogger.error("remove attribute failed: \(error.localizedDescription, privacy: .public)")
@@ -255,23 +319,45 @@ extension DOMPageAgent {
         Task {
             try? await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
         }
         detachMessageHandlers(from: webView)
     }
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
+        resolveBridgeModeIfNeeded(with: webView)
         registerMessageHandlers(on: webView)
         installDOMAgentScriptIfNeeded(on: webView)
     }
 
-    func didClearPageWebView() {}
+    func didClearPageWebView() {
+        handleCache.clear()
+    }
 }
 
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func resolveBridgeModeIfNeeded(with webView: WKWebView) {
+        guard !bridgeModeLocked else {
+            return
+        }
+        bridgeMode = runtime.modeForAttachment(webView: webView)
+        bridgeModeLocked = true
+        domLogger.notice("bridge_mode=\(self.bridgeMode.rawValue, privacy: .public)")
+    }
+
+    func lockToLegacyMode(_ reason: String) {
+        guard bridgeMode != .legacyJSON else {
+            return
+        }
+        bridgeMode = .legacyJSON
+        bridgeModeLocked = true
+        handleCache.clear()
+        domLogger.error("bridge_mode=legacyJSON \(reason, privacy: .public)")
+    }
+
     func configureAutoSnapshotWhenReady(
         on webView: WKWebView,
         options: NSDictionary
@@ -287,7 +373,7 @@ private extension DOMPageAgent {
                 """,
                 arguments: ["options": options],
                 in: nil,
-                contentWorld: .page
+                contentWorld: bridgeWorld
             )
             let didConfigure = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
             if didConfigure {
@@ -303,22 +389,22 @@ private extension DOMPageAgent {
     func registerMessageHandlers(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
-            controller.add(self, contentWorld: .page, name: $0.rawValue)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
+            controller.add(self, contentWorld: bridgeWorld, name: $0.rawValue)
         }
     }
 
     func detachMessageHandlers(from webView: WKWebView) {
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
         }
         domLogger.debug("detached DOM message handlers")
     }
 
     func installDOMAgentScriptIfNeeded(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
-        if controller.userScripts.contains(where: { $0.source == domAgentPresenceProbeScript }) {
+        if controller.wi_domBridgeScriptInstalled {
             return
         }
 
@@ -334,20 +420,23 @@ private extension DOMPageAgent {
             WKUserScript(
                 source: scriptSource,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
+                forMainFrameOnly: true,
+                in: bridgeWorld
             )
         )
         controller.addUserScript(
             WKUserScript(
                 source: domAgentPresenceProbeScript,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: true
+                forMainFrameOnly: true,
+                in: bridgeWorld
             )
         )
+        controller.wi_domBridgeScriptInstalled = true
 
         // Install into already-loaded documents too.
         Task {
-            _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+            _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: bridgeWorld)
         }
         domLogger.debug("installed DOM agent user script")
     }
@@ -360,18 +449,90 @@ private extension DOMPageAgent {
             script,
             arguments: ["identifier": nodeId],
             in: nil,
-            contentWorld: .page
+            contentWorld: bridgeWorld
         )
         return rawResult as? String ?? ""
     }
 
-    func serializePayload(_ payload: Any?) throws -> Data {
-        guard let payload else {
-            domLogger.error("DOM payload is nil")
-            throw WebInspectorCoreError.serializationFailed
+    func snapshotPayload(maxDepth: Int, preferEnvelope: Bool) async throws -> Any {
+        guard let webView else {
+            throw WebInspectorCoreError.scriptUnavailable
+        }
+        let rawResult = try await webView.callAsyncJavaScript(
+            preferEnvelope
+                ? """
+                if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSnapshotEnvelope === "function") {
+                    return window.webInspectorDOM.captureSnapshotEnvelope(maxDepth);
+                }
+                return window.webInspectorDOM.captureSnapshot(maxDepth);
+                """
+                : "return window.webInspectorDOM.captureSnapshot(maxDepth)",
+            arguments: ["maxDepth": max(1, maxDepth)],
+            in: nil,
+            contentWorld: bridgeWorld
+        )
+        return unwrapOptionalPayload(rawResult) as Any
+    }
+
+    func subtreePayload(nodeId: Int, maxDepth: Int, preferEnvelope: Bool) async throws -> Any {
+        guard let webView else {
+            throw WebInspectorCoreError.scriptUnavailable
+        }
+        let rawResult = try await webView.callAsyncJavaScript(
+            preferEnvelope
+                ? """
+                if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSubtreeEnvelope === "function") {
+                    return window.webInspectorDOM.captureSubtreeEnvelope(identifier, maxDepth);
+                }
+                return window.webInspectorDOM.captureSubtree(identifier, maxDepth);
+                """
+                : "return window.webInspectorDOM.captureSubtree(identifier, maxDepth)",
+            arguments: [
+                "identifier": nodeId,
+                "maxDepth": max(1, maxDepth),
+            ],
+            in: nil,
+            contentWorld: bridgeWorld
+        )
+        let payload = unwrapOptionalPayload(rawResult) as Any
+        if let string = payload as? String, string.isEmpty {
+            throw WebInspectorCoreError.subtreeUnavailable
+        }
+        return payload
+    }
+
+    func jsonString(from payload: Any?) throws -> String {
+        let resolved = unwrapOptionalPayload(payload) as Any
+
+        if let string = resolved as? String {
+            return string
         }
 
-        let resolved = unwrapOptionalPayload(payload) ?? payload
+        if let dictionary = resolved as? NSDictionary {
+            if let fallback = dictionary["fallback"], JSONSerialization.isValidJSONObject(fallback) {
+                let data = try JSONSerialization.data(withJSONObject: fallback)
+                return String(decoding: data, as: UTF8.self)
+            }
+            guard JSONSerialization.isValidJSONObject(dictionary) else {
+                throw WebInspectorCoreError.serializationFailed
+            }
+            let data = try JSONSerialization.data(withJSONObject: dictionary)
+            return String(decoding: data, as: UTF8.self)
+        }
+
+        if let array = resolved as? NSArray {
+            guard JSONSerialization.isValidJSONObject(array) else {
+                throw WebInspectorCoreError.serializationFailed
+            }
+            let data = try JSONSerialization.data(withJSONObject: array)
+            return String(decoding: data, as: UTF8.self)
+        }
+
+        throw WebInspectorCoreError.serializationFailed
+    }
+
+    func serializePayload(_ payload: Any?) throws -> Data {
+        let resolved = unwrapOptionalPayload(payload) as Any
 
         if let string = resolved as? String {
             return Data(string.utf8)
@@ -395,14 +556,145 @@ private extension DOMPageAgent {
         throw WebInspectorCoreError.serializationFailed
     }
 
-    func unwrapOptionalPayload(_ value: Any) -> Any? {
+    func unwrapOptionalPayload(_ value: Any?) -> Any {
+        guard let value else {
+            return NSNull()
+        }
         let mirror = Mirror(reflecting: value)
         guard mirror.displayStyle == .optional else {
             return value
         }
         guard let child = mirror.children.first else {
-            return nil
+            return NSNull()
         }
         return unwrapOptionalPayload(child.value)
+    }
+
+    private func runHandleCommand(_ command: HandleCommand, nodeId: Int, on webView: WKWebView) async -> Bool {
+        guard bridgeMode != .legacyJSON else {
+            return false
+        }
+        guard let handle = await resolveHandle(for: nodeId, on: webView) else {
+            return false
+        }
+
+        do {
+            let invocation = makeHandleInvocation(command: command, handle: handle)
+            let rawResult = try await webView.callAsyncJavaScript(
+                invocation.script,
+                arguments: invocation.arguments,
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+
+            if let sentinel = rawResult as? String, sentinel == unavailablePrivateAPISentinel {
+                lockToLegacyMode("selector_missing=\(command.functionName)")
+                return false
+            }
+
+            let succeeded = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
+            if !succeeded {
+                if case .removeNode = command {
+                    handleCache.removeHandle(for: nodeId)
+                }
+                return false
+            }
+            if case .removeNode = command {
+                handleCache.removeHandle(for: nodeId)
+            }
+            return true
+        } catch {
+            lockToLegacyMode("runtime_probe_failed=\(command.functionName)")
+            domLogger.error("handle command failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func resolveHandle(for nodeId: Int, on webView: WKWebView) async -> AnyObject? {
+        if let cached = handleCache.handle(for: nodeId) {
+            return cached
+        }
+
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                if (!window.webInspectorDOM || typeof window.webInspectorDOM.createNodeHandle !== "function") {
+                    return unavailable;
+                }
+                return window.webInspectorDOM.createNodeHandle(identifier);
+                """,
+                arguments: [
+                    "identifier": nodeId,
+                    "unavailable": unavailablePrivateAPISentinel,
+                ],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+
+            if let sentinel = rawResult as? String, sentinel == unavailablePrivateAPISentinel {
+                lockToLegacyMode("selector_missing=createNodeHandle")
+                return nil
+            }
+
+            let resolved = unwrapOptionalPayload(rawResult)
+            guard !(resolved is NSNull) else {
+                return nil
+            }
+            let handle = resolved as AnyObject
+
+            handleCache.store(handle: handle, for: nodeId)
+            return handle
+        } catch {
+            lockToLegacyMode("runtime_probe_failed=createNodeHandle")
+            domLogger.error("resolve handle failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func makeHandleInvocation(command: HandleCommand, handle: AnyObject) -> (script: String, arguments: [String: Any]) {
+        var arguments: [String: Any] = [
+            "handle": handle,
+            "unavailable": unavailablePrivateAPISentinel,
+        ]
+
+        let script: String
+        switch command {
+        case .highlight:
+            script = """
+            if (!window.webInspectorDOM || typeof window.webInspectorDOM.highlightNodeHandle !== "function") {
+                return unavailable;
+            }
+            return window.webInspectorDOM.highlightNodeHandle(handle);
+            """
+
+        case .removeNode:
+            script = """
+            if (!window.webInspectorDOM || typeof window.webInspectorDOM.removeNodeHandle !== "function") {
+                return unavailable;
+            }
+            return window.webInspectorDOM.removeNodeHandle(handle);
+            """
+
+        case let .setAttribute(name, value):
+            arguments["name"] = name
+            arguments["value"] = value
+            script = """
+            if (!window.webInspectorDOM || typeof window.webInspectorDOM.setAttributeForHandle !== "function") {
+                return unavailable;
+            }
+            return window.webInspectorDOM.setAttributeForHandle(handle, name, value);
+            """
+
+        case let .removeAttribute(name):
+            arguments["name"] = name
+            script = """
+            if (!window.webInspectorDOM || typeof window.webInspectorDOM.removeAttributeForHandle !== "function") {
+                return unavailable;
+            }
+            return window.webInspectorDOM.removeAttributeForHandle(handle, name);
+            """
+        }
+
+        return (script: script, arguments: arguments)
     }
 }

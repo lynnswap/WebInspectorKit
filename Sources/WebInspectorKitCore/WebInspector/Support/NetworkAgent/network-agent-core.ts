@@ -11,6 +11,7 @@ import {
     enqueueNetworkEvent,
     enqueueThrottledEvent,
     generateSessionID,
+    makeBodyHandle,
     makeBodyPreviewPayload,
     makeBodyRef,
     makeNetworkTime,
@@ -79,13 +80,17 @@ const buildNetworkError = (
 const storeBodyForRole = (role: string, requestId: number, bodyInfo: RequestBodyInfo | null | undefined) => {
     const stored = buildStoredBodyPayload(bodyInfo);
     if (!stored) {
-        return null;
+        return { ref: null, handle: null };
+    }
+    const handle = makeBodyHandle(bodyInfo, stored);
+    if (handle) {
+        stored.handle = handle;
     }
     const ref = makeBodyRef(role, requestId);
     if (!bodyCache.store(ref, stored)) {
-        return null;
+        return { ref: null, handle: handle };
     }
-    return ref;
+    return { ref: ref, handle: handle };
 };
 
 const recordStart = (
@@ -100,7 +105,7 @@ const recordStart = (
 ) => {
     const time = makeNetworkTime(startTimeOverride, wallTimeOverride);
     trackedRequests.set(requestId, {startTime: time.monotonicMs, wallTime: time.wallMs});
-    const bodyRef = storeBodyForRole("req", requestId, requestBody);
+    const bodyPayload = storeBodyForRole("req", requestId, requestBody);
     enqueueNetworkEvent({
         kind: "requestWillBeSent",
         requestId: requestId,
@@ -109,7 +114,7 @@ const recordStart = (
         method: method,
         headers: requestHeaders || {},
         initiator: requestType,
-        body: makeBodyPreviewPayload(requestBody, bodyRef),
+        body: makeBodyPreviewPayload(requestBody, bodyPayload.ref, bodyPayload.handle),
         bodySize: requestBody ? requestBody.size : undefined
     });
 };
@@ -160,7 +165,7 @@ const recordFinish = (
     responseBody?: RequestBodyInfo | null
 ) => {
     const time = makeNetworkTime(endTimeOverride, wallTimeOverride);
-    const bodyRef = storeBodyForRole("res", requestId, responseBody);
+    const bodyPayload = storeBodyForRole("res", requestId, responseBody);
     enqueueNetworkEvent({
         kind: "loadingFinished",
         requestId: requestId,
@@ -171,7 +176,7 @@ const recordFinish = (
         statusText: statusText,
         mimeType: mimeType,
         initiator: requestType,
-        body: makeBodyPreviewPayload(responseBody, bodyRef)
+        body: makeBodyPreviewPayload(responseBody, bodyPayload.ref, bodyPayload.handle)
     });
     trackedRequests.delete(requestId);
 };
@@ -299,6 +304,116 @@ const getBody = (ref: string | null | undefined) => {
     return bodyCache.take(ref);
 };
 
+const cloneStoredBodyPayload = (source: Record<string, any>) => {
+    const payload: Record<string, any> = {};
+    const kind = typeof source.kind === "string" && source.kind ? source.kind : "other";
+    payload.kind = kind;
+    payload.encoding = typeof source.encoding === "string" && source.encoding
+        ? source.encoding
+        : (kind === "binary" ? "none" : "utf-8");
+    payload.truncated = source.truncated === true;
+    if (Number.isFinite(source.size)) {
+        payload.size = source.size;
+    }
+    if (typeof source.content === "string") {
+        payload.content = source.content;
+    }
+    if (typeof source.summary === "string") {
+        payload.summary = source.summary;
+    }
+    if (Array.isArray(source.formEntries) && source.formEntries.length) {
+        payload.formEntries = source.formEntries.slice();
+    }
+    if (!payload.content && !payload.summary && !(Array.isArray(payload.formEntries) && payload.formEntries.length)) {
+        return null;
+    }
+    return payload;
+};
+
+const buildStoredBodyPayloadFromHandleRecord = (source: Record<string, any>) => {
+    const normalized = cloneStoredBodyPayload(source);
+    if (normalized) {
+        return normalized;
+    }
+
+    const synthesized = buildStoredBodyPayload({
+        kind: typeof source.kind === "string" ? source.kind : undefined,
+        body: typeof source.body === "string"
+            ? source.body
+            : (typeof source.preview === "string" ? source.preview : undefined),
+        storageBody: typeof source.storageBody === "string"
+            ? source.storageBody
+            : (typeof source.content === "string" ? source.content : undefined),
+        base64Encoded: source.base64Encoded === true || source.encoding === "base64",
+        truncated: source.truncated === true,
+        size: Number.isFinite(source.size) ? source.size : undefined,
+        summary: typeof source.summary === "string" ? source.summary : undefined,
+        formEntries: Array.isArray(source.formEntries) ? source.formEntries : undefined
+    });
+    if (!synthesized) {
+        return null;
+    }
+    if (typeof source.encoding === "string" && source.encoding) {
+        synthesized.encoding = source.encoding;
+    }
+    return synthesized;
+};
+
+const coerceHandleToString = (handle: unknown) => {
+    if (typeof handle === "string") {
+        return handle;
+    }
+    if (!handle || typeof handle !== "object") {
+        return null;
+    }
+
+    try {
+        const viaValueOf = (handle as { valueOf?: () => unknown }).valueOf?.();
+        if (typeof viaValueOf === "string") {
+            return viaValueOf;
+        }
+    } catch {
+    }
+
+    try {
+        const viaToString = (handle as { toString?: () => string }).toString?.();
+        if (typeof viaToString === "string" && viaToString && viaToString !== "[object Object]") {
+            return viaToString;
+        }
+    } catch {
+    }
+
+    return null;
+};
+
+const getBodyForHandle = (handle: unknown) => {
+    if (handle == null) {
+        return null;
+    }
+
+    if (typeof handle === "object") {
+        const fromHandleRecord = buildStoredBodyPayloadFromHandleRecord(handle as Record<string, any>);
+        if (fromHandleRecord) {
+            return fromHandleRecord;
+        }
+    }
+
+    const handleText = coerceHandleToString(handle);
+    if (typeof handleText !== "string") {
+        return null;
+    }
+
+    const stored = buildStoredBodyPayload({
+        kind: "text",
+        body: handleText,
+        storageBody: handleText,
+        base64Encoded: false,
+        truncated: false,
+        size: handleText.length
+    });
+    return stored || null;
+};
+
 const configureNetwork = (options: { mode?: string; throttle?: unknown; clear?: boolean } | null | undefined) => {
     if (!options || typeof options !== "object") {
         return;
@@ -323,6 +438,7 @@ export {
     clearNetworkRecords,
     configureNetwork,
     getBody,
+    getBodyForHandle,
     installNetworkObserver,
     recordFailure,
     recordFinish,
