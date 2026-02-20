@@ -15,7 +15,7 @@ private struct DiffableRenderState<ID: DiffableStableID, Payload> {
 @MainActor
 final class NetworkTabViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let inspector: WINetworkPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationToken: WIObservationToken?
 
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
@@ -33,7 +33,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
     }
 
     deinit {
-        observationToken.invalidate()
+        observationToken?.invalidate()
     }
 
     override func viewDidLoad() {
@@ -63,16 +63,18 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         setViewController(primary, for: .primary)
         setViewController(secondary, for: .secondary)
 
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.selectedEntryID
-            _ = self.inspector.store.entries
-            self.observeSelectedEntryFields()
-        }, onChange: { [weak self] in
-            self?.syncDetailSelection()
-        })
-
         syncDetailSelection()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        startObservingInspectorIfNeeded()
+        syncDetailSelection()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        stopObservingInspector()
     }
 
     private func syncDetailSelection() {
@@ -80,6 +82,27 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         detailViewController.display(entry)
         listViewController.selectEntry(with: inspector.selectedEntryID)
         ensurePrimaryColumnIfNeeded()
+    }
+
+    private func startObservingInspectorIfNeeded() {
+        guard observationToken == nil else {
+            return
+        }
+        let token = WIObservationToken()
+        observationToken = token
+        token.observe({ [weak self] in
+            guard let self else { return }
+            _ = self.inspector.selectedEntryID
+            _ = self.inspector.store.entries
+            self.observeSelectedEntryFields()
+        }, onChange: { [weak self] in
+            self?.syncDetailSelection()
+        })
+    }
+
+    private func stopObservingInspector() {
+        observationToken?.invalidate()
+        observationToken = nil
     }
 
     private func observeSelectedEntryFields() {
@@ -163,12 +186,14 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     private let inspector: WINetworkPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationToken: WIObservationToken?
 
     private var displayedEntries: [NetworkEntry] = []
     private var entryByID: [UUID: NetworkEntry] = [:]
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var needsSnapshotReloadOnNextAppearance = false
+    private var pendingReloadDataTask: Task<Void, Never>?
     private lazy var collectionView: UICollectionView = {
         let view = UICollectionView(frame: .zero, collectionViewLayout: makeListLayout())
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -203,7 +228,8 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     deinit {
-        observationToken.invalidate()
+        pendingReloadDataTask?.cancel()
+        observationToken?.invalidate()
     }
 
     override func viewDidLoad() {
@@ -228,21 +254,11 @@ private final class NetworkListViewController: UIViewController, UISearchResults
 
         navigationItem.rightBarButtonItems = [secondaryActionsItem, filterItem]
 
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.displayEntries
-            _ = self.inspector.effectiveResourceFilters
-            _ = self.inspector.store.entries
-            _ = self.inspector.searchText
-        }, onChange: { [weak self] in
-            self?.reloadDataFromInspector()
-        })
-
-        reloadDataFromInspector()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        startObservingInspectorIfNeeded()
         navigationController?.setNavigationBarHidden(false, animated: animated)
         let canDismiss =
             navigationController?.presentingViewController != nil ||
@@ -258,6 +274,16 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         } else {
             navigationItem.leftBarButtonItem = nil
         }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        flushPendingSnapshotUpdateIfNeeded()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        stopObservingInspector()
     }
 
     func updateSearchResults(for searchController: UISearchController) {
@@ -325,6 +351,33 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    }
+
+    private func applySnapshotUsingReloadData() {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        pendingReloadDataTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.pendingReloadDataTask = nil
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+            guard !Task.isCancelled else {
+                return
+            }
+            self.selectEntry(with: self.inspector.selectedEntryID)
+        }
+    }
+
+    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
         let render = buildRenderState()
         let stableIDs = render.stableIDs
         precondition(
@@ -355,15 +408,37 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         if !reconfigured.isEmpty {
             snapshot.reconfigureItems(reconfigured)
         }
+        return snapshot
+    }
 
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    private var isCollectionViewVisible: Bool {
+        isViewLoaded && view.window != nil
+    }
+
+    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+        guard isCollectionViewVisible else {
+            needsSnapshotReloadOnNextAppearance = true
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshot(animatingDifferences: animatingDifferences)
+    }
+
+    private func flushPendingSnapshotUpdateIfNeeded() {
+        guard needsSnapshotReloadOnNextAppearance, isCollectionViewVisible else {
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshotUsingReloadData()
     }
 
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        applySnapshot(animatingDifferences: view.window != nil)
-        selectEntry(with: inspector.selectedEntryID)
+        requestSnapshotUpdate(animatingDifferences: true)
+        if isCollectionViewVisible {
+            selectEntry(with: inspector.selectedEntryID)
+        }
         filterItem.menu = makeFilterMenu()
         secondaryActionsItem.menu = makeSecondaryMenu()
         secondaryActionsItem.isEnabled = !inspector.store.entries.isEmpty
@@ -379,6 +454,29 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         } else {
             contentUnavailableConfiguration = nil
         }
+    }
+
+    private func startObservingInspectorIfNeeded() {
+        guard observationToken == nil else {
+            return
+        }
+        let token = WIObservationToken()
+        observationToken = token
+        token.observe({ [weak self] in
+            guard let self else { return }
+            _ = self.inspector.displayEntries
+            _ = self.inspector.effectiveResourceFilters
+            _ = self.inspector.store.entries
+            _ = self.inspector.searchText
+        }, onChange: { [weak self] in
+            self?.reloadDataFromInspector()
+        })
+        reloadDataFromInspector()
+    }
+
+    private func stopObservingInspector() {
+        observationToken?.invalidate()
+        observationToken = nil
     }
 
     private func configureListCell(_ cell: UICollectionViewListCell, item: ItemIdentifier) {
@@ -621,6 +719,8 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     private var sections: [DetailSection] = []
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var needsSnapshotReloadOnNextAppearance = false
+    private var pendingReloadDataTask: Task<Void, Never>?
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -641,6 +741,10 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         nil
     }
 
+    deinit {
+        pendingReloadDataTask?.cancel()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -656,12 +760,17 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         display(nil)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        flushPendingSnapshotUpdateIfNeeded()
+    }
+
     func display(_ entry: NetworkEntry?) {
         self.entry = entry
         guard let entry else {
             title = nil
             sections = []
-            applySnapshot(animatingDifferences: false)
+            requestSnapshotUpdate(animatingDifferences: false)
             collectionView.isHidden = true
             navigationItem.rightBarButtonItem = nil
             contentUnavailableConfiguration = nil
@@ -672,7 +781,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         sections = makeSections(for: entry)
         contentUnavailableConfiguration = nil
         collectionView.isHidden = false
-        applySnapshot(animatingDifferences: view.window != nil)
+        requestSnapshotUpdate(animatingDifferences: true)
         navigationItem.rightBarButtonItem = makeSecondaryActionsItem(for: entry)
     }
 
@@ -744,6 +853,32 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    }
+
+    private func applySnapshotUsingReloadData() {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        pendingReloadDataTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.pendingReloadDataTask = nil
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+            guard !Task.isCancelled else {
+                return
+            }
+        }
+    }
+
+    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
         let renderSections = makeRenderSections()
         let allStableIDs = renderSections.flatMap(\.stableIDs)
         precondition(
@@ -777,8 +912,28 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         if !reconfigured.isEmpty {
             snapshot.reconfigureItems(reconfigured)
         }
+        return snapshot
+    }
 
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    private var isCollectionViewVisible: Bool {
+        isViewLoaded && view.window != nil
+    }
+
+    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+        guard isCollectionViewVisible else {
+            needsSnapshotReloadOnNextAppearance = true
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshot(animatingDifferences: animatingDifferences)
+    }
+
+    private func flushPendingSnapshotUpdateIfNeeded() {
+        guard needsSnapshotReloadOnNextAppearance, isCollectionViewVisible else {
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshotUsingReloadData()
     }
 
     private func makeRenderSections() -> [RenderSection] {
@@ -1547,7 +1702,7 @@ private struct DiffableRenderState<ID: DiffableStableID, Payload> {
 @MainActor
 final class NetworkTabViewController: NSSplitViewController {
     private let inspector: WINetworkPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationToken: WIObservationToken?
 
     private let listViewController: NetworkMacListViewController
     private let detailViewController: NetworkMacDetailViewController
@@ -1565,7 +1720,7 @@ final class NetworkTabViewController: NSSplitViewController {
     }
 
     deinit {
-        observationToken.invalidate()
+        observationToken?.invalidate()
     }
 
     override func viewDidLoad() {
@@ -1582,7 +1737,33 @@ final class NetworkTabViewController: NSSplitViewController {
             self.detailViewController.display(entry)
         }
 
-        observationToken.observe({ [weak self] in
+        syncDetailSelection()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        startObservingInspectorIfNeeded()
+        syncDetailSelection()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        stopObservingInspector()
+    }
+
+    private func syncDetailSelection() {
+        let entry = inspector.store.entry(forEntryID: inspector.selectedEntryID)
+        detailViewController.display(entry)
+        listViewController.selectEntry(with: inspector.selectedEntryID)
+    }
+
+    private func startObservingInspectorIfNeeded() {
+        guard observationToken == nil else {
+            return
+        }
+        let token = WIObservationToken()
+        observationToken = token
+        token.observe({ [weak self] in
             guard let self else { return }
             _ = self.inspector.selectedEntryID
             _ = self.inspector.store.entries
@@ -1590,14 +1771,11 @@ final class NetworkTabViewController: NSSplitViewController {
         }, onChange: { [weak self] in
             self?.syncDetailSelection()
         })
-
-        syncDetailSelection()
     }
 
-    private func syncDetailSelection() {
-        let entry = inspector.store.entry(forEntryID: inspector.selectedEntryID)
-        detailViewController.display(entry)
-        listViewController.selectEntry(with: inspector.selectedEntryID)
+    private func stopObservingInspector() {
+        observationToken?.invalidate()
+        observationToken = nil
     }
 
     private func observeSelectedEntryFields() {
@@ -1665,7 +1843,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 
     private let inspector: WINetworkPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationToken: WIObservationToken?
 
     private let searchField = NSSearchField()
     private let filterButton = NSPopUpButton(frame: .zero, pullsDown: true)
@@ -1686,6 +1864,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     private var entryByID: [UUID: NetworkEntry] = [:]
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var needsSnapshotApplyOnNextAppearance = false
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
     init(inspector: WINetworkPaneViewModel) {
@@ -1699,7 +1878,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 
     deinit {
-        observationToken.invalidate()
+        observationToken?.invalidate()
     }
 
     override func loadView() {
@@ -1746,17 +1925,17 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.displayEntries
-            _ = self.inspector.effectiveResourceFilters
-            _ = self.inspector.store.entries
-            _ = self.inspector.searchText
-        }, onChange: { [weak self] in
-            self?.reloadDataFromInspector()
-        })
+    }
 
-        reloadDataFromInspector()
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        startObservingInspectorIfNeeded()
+        flushPendingSnapshotUpdateIfNeeded()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        stopObservingInspector()
     }
 
     func controlTextDidChange(_ obj: Notification) {
@@ -1809,9 +1988,35 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        applySnapshot(animatingDifferences: view.window != nil)
+        requestSnapshotUpdate(animatingDifferences: true)
+        if isCollectionViewVisible {
+            selectEntry(with: inspector.selectedEntryID)
+        }
         clearButton.isEnabled = !inspector.store.entries.isEmpty
         rebuildFilterMenu()
+    }
+
+    private func startObservingInspectorIfNeeded() {
+        guard observationToken == nil else {
+            return
+        }
+        let token = WIObservationToken()
+        observationToken = token
+        token.observe({ [weak self] in
+            guard let self else { return }
+            _ = self.inspector.displayEntries
+            _ = self.inspector.effectiveResourceFilters
+            _ = self.inspector.store.entries
+            _ = self.inspector.searchText
+        }, onChange: { [weak self] in
+            self?.reloadDataFromInspector()
+        })
+        reloadDataFromInspector()
+    }
+
+    private func stopObservingInspector() {
+        observationToken?.invalidate()
+        observationToken = nil
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
@@ -1845,6 +2050,28 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
             snapshot.reloadItems(reloaded)
         }
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    }
+
+    private var isCollectionViewVisible: Bool {
+        isViewLoaded && view.window != nil
+    }
+
+    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+        guard isCollectionViewVisible else {
+            needsSnapshotApplyOnNextAppearance = true
+            return
+        }
+        needsSnapshotApplyOnNextAppearance = false
+        applySnapshot(animatingDifferences: animatingDifferences)
+    }
+
+    private func flushPendingSnapshotUpdateIfNeeded() {
+        guard needsSnapshotApplyOnNextAppearance, isCollectionViewVisible else {
+            return
+        }
+        needsSnapshotApplyOnNextAppearance = false
+        applySnapshot(animatingDifferences: false)
+        selectEntry(with: inspector.selectedEntryID)
     }
 
     private func rebuildFilterMenu() {

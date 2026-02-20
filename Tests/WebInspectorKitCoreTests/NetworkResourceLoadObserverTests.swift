@@ -131,10 +131,133 @@ struct NetworkResourceLoadObserverTests {
         #expect(attached == false)
     }
 
+    @Test
+    func skipsCallbacksWhenEventEmissionIsDisabled() {
+        let webView = makeWebView()
+        var events: [HTTPNetworkEvent] = []
+        let observer = NetworkResourceLoadObserver(
+            sessionID: "native-session",
+            isEventEmissionEnabled: { false }
+        ) { event in
+            events.append(event)
+        }
+
+        let info = FakeResourceLoadInfo(
+            loadID: 100,
+            resourceType: 10,
+            url: URL(string: "https://example.com/app.js")!,
+            method: "GET"
+        )
+        var request = URLRequest(url: URL(string: "https://example.com/app.js")!)
+        request.httpMethod = "GET"
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.com/app.js")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "application/javascript"]
+        )!
+
+        observer.handleDidSendRequest(webView: webView, resourceLoad: info, request: request)
+        observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
+        observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
+
+        #expect(events.isEmpty)
+    }
+
+    @Test
+    func keepsInFlightCallbacksUntilCompletionAfterEmissionIsDisabled() {
+        let webView = makeWebView()
+        var events: [HTTPNetworkEvent] = []
+        let emissionState = EmissionState(enabled: true)
+        let observer = NetworkResourceLoadObserver(
+            sessionID: "native-session",
+            isEventEmissionEnabled: { emissionState.enabled }
+        ) { event in
+            events.append(event)
+        }
+
+        let info = FakeResourceLoadInfo(
+            loadID: 101,
+            resourceType: 10,
+            url: URL(string: "https://example.com/inflight.js")!,
+            method: "GET"
+        )
+        var request = URLRequest(url: URL(string: "https://example.com/inflight.js")!)
+        request.httpMethod = "GET"
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.com/inflight.js")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "application/javascript"]
+        )!
+
+        observer.handleDidSendRequest(webView: webView, resourceLoad: info, request: request)
+        emissionState.enabled = false
+        observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
+
+        #expect(events.count == 2)
+        #expect(events[0].kind == .requestWillBeSent)
+        #expect(events[1].kind == .loadingFinished)
+        #expect(events[0].requestID == events[1].requestID)
+
+        let nextInfo = FakeResourceLoadInfo(
+            loadID: 102,
+            resourceType: 10,
+            url: URL(string: "https://example.com/new.js")!,
+            method: "GET"
+        )
+        observer.handleDidSendRequest(webView: webView, resourceLoad: nextInfo, request: request)
+        observer.handleDidComplete(webView: webView, resourceLoad: nextInfo, error: nil, response: response)
+        #expect(events.count == 2)
+    }
+
+    @Test
+    func ignoresFollowUpsForLoadsStartedWhileEmissionWasDisabledAfterReenable() {
+        let webView = makeWebView()
+        var events: [HTTPNetworkEvent] = []
+        let emissionState = EmissionState(enabled: false)
+        let observer = NetworkResourceLoadObserver(
+            sessionID: "native-session",
+            isEventEmissionEnabled: { emissionState.enabled }
+        ) { event in
+            events.append(event)
+        }
+
+        let info = FakeResourceLoadInfo(
+            loadID: 103,
+            resourceType: 10,
+            url: URL(string: "https://example.com/suppressed.js")!,
+            method: "GET"
+        )
+        var request = URLRequest(url: URL(string: "https://example.com/suppressed.js")!)
+        request.httpMethod = "GET"
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.com/suppressed.js")!,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "application/javascript"]
+        )!
+
+        observer.handleDidSendRequest(webView: webView, resourceLoad: info, request: request)
+        emissionState.enabled = true
+        observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
+        observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
+
+        #expect(events.isEmpty)
+    }
+
     private func makeWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+}
+
+private final class EmissionState: @unchecked Sendable {
+    var enabled: Bool
+
+    init(enabled: Bool) {
+        self.enabled = enabled
     }
 }
 

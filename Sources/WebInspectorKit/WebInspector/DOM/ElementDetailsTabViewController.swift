@@ -129,6 +129,8 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
+    private var needsSnapshotReloadOnNextAppearance = false
+    private var pendingReloadDataTask: Task<Void, Never>?
 
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
@@ -164,6 +166,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     }
 
     deinit {
+        pendingReloadDataTask?.cancel()
         observationToken.invalidate()
     }
 
@@ -202,6 +205,11 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         flushPendingAttributeEditorRelayoutIfNeeded()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        flushPendingSnapshotUpdateIfNeeded()
     }
 
     private func setupNavigationItems() {
@@ -266,7 +274,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         guard !isInlineEditingActive else {
             return
         }
-        applySnapshot(animatingDifferences: view.window != nil)
+        requestSnapshotUpdate(animatingDifferences: true)
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -445,6 +453,32 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    }
+
+    private func applySnapshotUsingReloadData() {
+        pendingReloadDataTask?.cancel()
+        let snapshot = makeSnapshot()
+        pendingReloadDataTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.pendingReloadDataTask = nil
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+            guard !Task.isCancelled else {
+                return
+            }
+        }
+    }
+
+    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
         let renderSections = makeRenderSections()
         let allStableIDs = renderSections.flatMap(\.stableIDs)
         precondition(
@@ -478,8 +512,31 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         if !reconfigured.isEmpty {
             snapshot.reconfigureItems(reconfigured)
         }
+        return snapshot
+    }
 
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    private var isCollectionViewVisible: Bool {
+        isViewLoaded && view.window != nil
+    }
+
+    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+        guard isCollectionViewVisible else {
+            needsSnapshotReloadOnNextAppearance = true
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshot(animatingDifferences: animatingDifferences)
+    }
+
+    private func flushPendingSnapshotUpdateIfNeeded() {
+        guard !isInlineEditingActive else {
+            return
+        }
+        guard needsSnapshotReloadOnNextAppearance, isCollectionViewVisible else {
+            return
+        }
+        needsSnapshotReloadOnNextAppearance = false
+        applySnapshotUsingReloadData()
     }
 
     private func makeRenderSections() -> [RenderSection] {
@@ -824,7 +881,7 @@ extension ElementDetailsTabViewController: ElementAttributeEditorCellDelegate {
             editingDraftValue = nil
         }
         sections = makeSections()
-        applySnapshot(animatingDifferences: true)
+        requestSnapshotUpdate(animatingDifferences: true)
     }
 
     fileprivate func elementAttributeEditorCellNeedsRelayout(_ cell: ElementAttributeEditorCell) {
@@ -1131,6 +1188,7 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
     private let observationToken = WIObservationToken()
     private var payloadByStableID: [ItemStableID: ItemKind] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var needsSnapshotApplyOnNextAppearance = false
 
     private lazy var collectionView: NSCollectionView = {
         let collectionView = NSCollectionView(frame: .zero)
@@ -1239,6 +1297,11 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
         refreshUI()
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        flushPendingSnapshotUpdateIfNeeded()
+    }
+
     private func makeLayout() -> NSCollectionViewLayout {
         let layout = NSCollectionViewFlowLayout()
         layout.minimumLineSpacing = 6
@@ -1276,7 +1339,7 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
         pickButton.isEnabled = inspector.hasPageWebView
         reloadButton.isEnabled = inspector.hasPageWebView
         deleteButton.isEnabled = inspector.selection.nodeId != nil
-        applySnapshot(animatingDifferences: view.window != nil)
+        requestSnapshotUpdate(animatingDifferences: true)
     }
 
     private func applySnapshot(animatingDifferences: Bool) {
@@ -1309,6 +1372,27 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
             snapshot.reloadItems(reloaded)
         }
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+    }
+
+    private var isCollectionViewVisible: Bool {
+        isViewLoaded && view.window != nil
+    }
+
+    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+        guard isCollectionViewVisible else {
+            needsSnapshotApplyOnNextAppearance = true
+            return
+        }
+        needsSnapshotApplyOnNextAppearance = false
+        applySnapshot(animatingDifferences: animatingDifferences)
+    }
+
+    private func flushPendingSnapshotUpdateIfNeeded() {
+        guard needsSnapshotApplyOnNextAppearance, isCollectionViewVisible else {
+            return
+        }
+        needsSnapshotApplyOnNextAppearance = false
+        applySnapshot(animatingDifferences: false)
     }
 
     private func makeRenderItems() -> (stableIDs: [ItemStableID], payloadByID: [ItemStableID: ItemKind], revisionByID: [ItemStableID: Int]) {

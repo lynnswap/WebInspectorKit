@@ -348,7 +348,8 @@ private extension NetworkPageAgent {
         }
 
         let networkReady = webView.configuration.userContentController.wi_networkBridgeScriptInstalled
-        let resourceObserverMode = nativeObserverEnabled ? "disabled" : "enabled"
+        let nativeObserverShouldOwnResources = nativeObserverEnabled && mode == .active
+        let resourceObserverMode = nativeObserverShouldOwnResources ? "disabled" : "enabled"
         let pageHookMode = resolvedPageHookMode()
         networkLogger.notice(
             "network_page_hook mode=\(pageHookMode, privacy: .public) resource_observer=\(resourceObserverMode, privacy: .public) native_enabled=\(self.nativeObserverEnabled, privacy: .public) native_session=\(self.nativeSessionID, privacy: .public)"
@@ -541,7 +542,13 @@ private extension NetworkPageAgent {
         let sessionID = "native-\(UUID().uuidString.lowercased())"
         let observer = NetworkResourceLoadObserver(
             sessionID: sessionID,
-            includeFetchAndXHR: nativeObserverIncludesFetchAndXHR
+            includeFetchAndXHR: nativeObserverIncludesFetchAndXHR,
+            isEventEmissionEnabled: { [weak self] in
+                guard let self else {
+                    return false
+                }
+                return self.loggingMode == .active
+            }
         ) { [weak self] event in
             self?.store.applyEvent(event)
         }

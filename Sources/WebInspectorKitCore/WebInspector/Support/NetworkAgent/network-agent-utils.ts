@@ -70,6 +70,7 @@ type NetworkState = {
     controlAuthToken: string;
     resourceObserver: PerformanceObserver | null;
     resourceSeen: Set<string> | null;
+    resourceStartCutoffMs: number | null;
 };
 
 const networkState: NetworkState = {
@@ -82,7 +83,8 @@ const networkState: NetworkState = {
     messageAuthToken: "",
     controlAuthToken: "",
     resourceObserver: null,
-    resourceSeen: null
+    resourceSeen: null,
+    resourceStartCutoffMs: null
 };
 
 const trackedRequests = new Map<number, { startTime: number; wallTime: number }>();
@@ -1108,6 +1110,11 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
         return null;
     }
     const resourceEntry = entry as PerformanceResourceTiming;
+    const startTime = typeof resourceEntry.startTime === "number" ? resourceEntry.startTime : now();
+    const resourceStartCutoffMs = networkState.resourceStartCutoffMs;
+    if (typeof resourceStartCutoffMs === "number" && startTime < resourceStartCutoffMs) {
+        return null;
+    }
     if (!networkState.resourceSeen) {
         networkState.resourceSeen = new Set<string>();
     }
@@ -1115,14 +1122,13 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
     if (!resourceSeen) {
         return null;
     }
-    const key = String(resourceEntry.name || "") + "::" + resourceEntry.startTime;
+    const key = String(resourceEntry.name || "") + "::" + startTime;
     if (resourceSeen.has(key)) {
         return null;
     }
     resourceSeen.add(key);
 
     const requestId = nextRequestID();
-    const startTime = typeof resourceEntry.startTime === "number" ? resourceEntry.startTime : now();
     const duration = typeof resourceEntry.duration === "number" && resourceEntry.duration >= 0 ? resourceEntry.duration : 0;
     const endTime = startTime + duration;
     const requestType = resourceEntry.initiatorType || "resource";

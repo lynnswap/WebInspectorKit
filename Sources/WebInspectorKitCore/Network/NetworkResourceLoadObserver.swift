@@ -40,19 +40,23 @@ final class NetworkResourceLoadObserver: NSObject {
     typealias EventSink = @MainActor (HTTPNetworkEvent) -> Void
     typealias SupportsResourceLoadDelegate = @MainActor (WKWebView) -> Bool
     typealias SetResourceLoadDelegate = @MainActor (WKWebView, AnyObject?) -> Bool
+    typealias IsEventEmissionEnabled = @MainActor () -> Bool
 
     private let sessionID: String
     private let includeFetchAndXHR: Bool
+    private let isEventEmissionEnabled: IsEventEmissionEnabled
     private let applyEvent: EventSink
     private let supportsResourceLoadDelegate: SupportsResourceLoadDelegate
     private let setResourceLoadDelegate: SetResourceLoadDelegate
     private var statesByLoadID: [UInt64: LoadState] = [:]
+    private var suppressedLoadIDs: Set<UInt64> = []
     private var nextRequestID = -1
     private weak var attachedWebView: WKWebView?
 
     init(
         sessionID: String,
         includeFetchAndXHR: Bool = false,
+        isEventEmissionEnabled: @escaping IsEventEmissionEnabled = { true },
         supportsResourceLoadDelegate: @escaping SupportsResourceLoadDelegate = { webView in
             WISPIRuntime.shared.canSetResourceLoadDelegate(on: webView)
         },
@@ -63,6 +67,7 @@ final class NetworkResourceLoadObserver: NSObject {
     ) {
         self.sessionID = sessionID
         self.includeFetchAndXHR = includeFetchAndXHR
+        self.isEventEmissionEnabled = isEventEmissionEnabled
         self.applyEvent = applyEvent
         self.supportsResourceLoadDelegate = supportsResourceLoadDelegate
         self.setResourceLoadDelegate = setResourceLoadDelegate
@@ -148,6 +153,7 @@ final class NetworkResourceLoadObserver: NSObject {
 extension NetworkResourceLoadObserver {
     func handleDidSendRequest(webView: WKWebView, resourceLoad: AnyObject, request: URLRequest) {
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
+        guard shouldProcessStart(for: loadID) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
         if shouldIgnore(resourceType: resourceType) {
             statesByLoadID.removeValue(forKey: loadID)
@@ -165,6 +171,7 @@ extension NetworkResourceLoadObserver {
 
     func handleDidReceiveResponse(webView: WKWebView, resourceLoad: AnyObject, response: URLResponse) {
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
+        guard shouldProcessFollowUp(for: loadID, terminal: false) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
         if shouldIgnore(resourceType: resourceType) {
             return
@@ -188,6 +195,7 @@ extension NetworkResourceLoadObserver {
         response: URLResponse?
     ) {
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
+        guard shouldProcessFollowUp(for: loadID, terminal: true) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
         if shouldIgnore(resourceType: resourceType) {
             statesByLoadID.removeValue(forKey: loadID)
@@ -219,6 +227,7 @@ extension NetworkResourceLoadObserver {
         request: URLRequest
     ) {
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
+        guard shouldProcessFollowUp(for: loadID, terminal: false) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
         if shouldIgnore(resourceType: resourceType) {
             return
@@ -239,8 +248,31 @@ extension NetworkResourceLoadObserver {
 
 @MainActor
 private extension NetworkResourceLoadObserver {
+    private func shouldProcessStart(for loadID: UInt64) -> Bool {
+        guard isEventEmissionEnabled() else {
+            statesByLoadID.removeValue(forKey: loadID)
+            suppressedLoadIDs.insert(loadID)
+            return false
+        }
+        return true
+    }
+
+    private func shouldProcessFollowUp(for loadID: UInt64, terminal: Bool) -> Bool {
+        if suppressedLoadIDs.contains(loadID) {
+            if terminal {
+                suppressedLoadIDs.remove(loadID)
+            }
+            return false
+        }
+        if isEventEmissionEnabled() {
+            return true
+        }
+        return statesByLoadID[loadID] != nil
+    }
+
     private func resetState() {
         statesByLoadID.removeAll()
+        suppressedLoadIDs.removeAll()
         nextRequestID = -1
     }
 

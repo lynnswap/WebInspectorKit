@@ -16,6 +16,7 @@ import {
     makeBodyRef,
     makeNetworkTime,
     networkState,
+    now,
     normalizeHeaders,
     parseRawHeaders,
     queuedEvents,
@@ -302,7 +303,17 @@ const setNetworkPageHookMode = (mode: unknown) => {
 };
 
 const setNetworkResourceObserverMode = (mode: unknown) => {
+    const previousMode = resourceObserverModeState;
     resourceObserverModeState = normalizeResourceObserverMode(mode);
+    if (
+        previousMode === "disabled" &&
+        resourceObserverModeState === "enabled" &&
+        networkState.mode === NetworkLoggingMode.BUFFERING
+    ) {
+        networkState.resourceStartCutoffMs = now();
+    } else if (resourceObserverModeState === "disabled") {
+        networkState.resourceStartCutoffMs = null;
+    }
     applyResourceObserverMode();
 };
 
@@ -343,6 +354,9 @@ const setNetworkLoggingMode = (mode: string) => {
     const previousMode = networkState.mode;
     const resolvedMode = normalizeLoggingMode(mode);
     networkState.mode = resolvedMode;
+    if (networkState.mode !== NetworkLoggingMode.BUFFERING) {
+        networkState.resourceStartCutoffMs = null;
+    }
     if (networkState.mode === NetworkLoggingMode.STOPPED) {
         resetNetworkState();
         return;
