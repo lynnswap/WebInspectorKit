@@ -206,6 +206,33 @@ extension BrowserViewModel: WKUIDelegate {
         return nil
     }
 
+#if os(iOS)
+    func webView(
+        _ webView: WKWebView,
+        contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+        completionHandler: @escaping @MainActor (UIContextMenuConfiguration?) -> Void
+    ) {
+        let configuration = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak webView] suggestedActions in
+            guard let linkURL = elementInfo.linkURL else {
+                return UIMenu(title: "", children: suggestedActions)
+            }
+
+            let openInAppAction = UIAction(
+                title: "Open in MiniBrowser",
+                image: UIImage(systemName: "safari")
+            ) { _ in
+                guard let webView else { return }
+                logger.debug("Open link in-app from context menu: \(linkURL.absoluteString, privacy: .public)")
+                webView.load(URLRequest(url: linkURL))
+            }
+
+            return UIMenu(title: "", children: [openInAppAction] + suggestedActions)
+        }
+
+        completionHandler(configuration)
+    }
+#endif
+
     func webViewDidClose(_ webView: WKWebView) {
         logger.debug("\(#function) WebView closed")
     }
