@@ -6,7 +6,7 @@ UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit` (Native UI): UIKit/AppKit container, pane descriptors, presenters, Observation state
+- `WebInspectorKit` (Native UI): UIKit/AppKit container, pane descriptors, Observation state
 - `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorKitCore`.
@@ -17,13 +17,10 @@ UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
 - Configurable panes via `WIPaneDescriptor`
 - Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
-- Native presentation helpers:
-  - iOS: `WISheetPresenter`
-  - macOS: `WIWindowPresenter`
 
 ## Architecture (Actor-led MVVM)
 
-- `Presentation`: `WIContainerViewController`, presenters
+- `Presentation`: `WIContainerViewController`
 - `State`: `@MainActor @Observable WISessionStore`
 - `Runtime`: `WIRuntimeActor`, `WIDOMRuntimeActor`, `WINetworkRuntimeActor`
 - `Bridge`: `WIPageRuntimeBridge`
@@ -61,12 +58,18 @@ final class BrowserViewController: UIViewController {
     private let inspector = WISessionController()
 
     @objc private func presentInspector() {
-        WISheetPresenter.shared.present(
-            from: self,
-            inspector: inspector,
+        let container = WIContainerViewController(
+            inspector,
             webView: pageWebView,
             tabs: [.dom(), .element(), .network()]
         )
+        container.modalPresentationStyle = .pageSheet
+        if let sheet = container.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.selectedDetentIdentifier = .medium
+            sheet.prefersGrabberVisible = true
+        }
+        present(container, animated: true)
     }
 }
 ```
@@ -83,12 +86,16 @@ final class BrowserWindowController: NSWindowController {
     let inspector = WISessionController()
 
     @objc func presentInspector() {
-        WIWindowPresenter.shared.present(
-            parentWindow: window,
-            inspector: inspector,
+        let container = WIContainerViewController(
+            inspector,
             webView: pageWebView,
             tabs: [.dom(), .element(), .network()]
         )
+        let inspectorWindow = NSWindow(contentViewController: container)
+        inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        inspectorWindow.title = "Web Inspector"
+        inspectorWindow.setContentSize(NSSize(width: 960, height: 720))
+        inspectorWindow.makeKeyAndOrderFront(nil)
     }
 }
 ```

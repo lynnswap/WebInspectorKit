@@ -13,12 +13,46 @@ func presentWebInspector(
         return
     }
 
-    WISheetPresenter.shared.present(
-        from: presenter,
-        inspector: inspectorController,
+    if let existing = findPresentedContainer(from: presenter) {
+        existing.setTabs([.dom(), .element(), .network()])
+        existing.setInspectorController(inspectorController)
+        existing.setPageWebView(model.webView)
+        return
+    }
+
+    let container = WIContainerViewController(
+        inspectorController,
         webView: model.webView,
         tabs: [.dom(), .element(), .network()]
     )
+    container.modalPresentationStyle = .pageSheet
+    applyDefaultDetents(to: container)
+    presenter.present(container, animated: true)
+}
+
+@MainActor
+private func findPresentedContainer(from presenter: UIViewController) -> WIContainerViewController? {
+    if let direct = presenter.presentedViewController as? WIContainerViewController {
+        return direct
+    }
+
+    var cursor: UIViewController? = presenter
+    while let current = cursor {
+        if let container = current as? WIContainerViewController {
+            return container
+        }
+        cursor = current.presentedViewController
+    }
+
+    cursor = presenter
+    while let current = cursor {
+        if let container = current as? WIContainerViewController {
+            return container
+        }
+        cursor = current.presentingViewController
+    }
+
+    return nil
 }
 
 @MainActor
@@ -35,6 +69,18 @@ private func resolvePresenter(from windowScene: UIWindowScene?) -> UIViewControl
         }
     }
     return nil
+}
+
+@MainActor
+private func applyDefaultDetents(to controller: UIViewController) {
+    guard let sheet = controller.sheetPresentationController else {
+        return
+    }
+    sheet.detents = [.medium(), .large()]
+    sheet.selectedDetentIdentifier = .medium
+    sheet.prefersGrabberVisible = true
+    sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+    sheet.largestUndimmedDetentIdentifier = .large
 }
 
 @MainActor
@@ -73,16 +119,53 @@ private func topViewController(from root: UIViewController?) -> UIViewController
 import AppKit
 
 @MainActor
+private final class InspectorWindowStore {
+    weak var window: NSWindow?
+}
+
+@MainActor
+private let inspectorWindowStore = InspectorWindowStore()
+
+@MainActor
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
     inspectorController: WISessionController
 ) {
-    WIWindowPresenter.shared.present(
-        parentWindow: windowScene,
-        inspector: inspectorController,
+    if let existingWindow = inspectorWindowStore.window,
+       let existingContainer = existingWindow.contentViewController as? WIContainerViewController {
+        existingContainer.setTabs([.dom(), .element(), .network()])
+        existingContainer.setInspectorController(inspectorController)
+        existingContainer.setPageWebView(model.webView)
+        existingWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        return
+    }
+
+    let container = WIContainerViewController(
+        inspectorController,
         webView: model.webView,
         tabs: [.dom(), .element(), .network()]
     )
+    let window = NSWindow(contentViewController: container)
+    window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+    window.title = "Web Inspector"
+    window.setContentSize(NSSize(width: 960, height: 720))
+    window.minSize = NSSize(width: 640, height: 480)
+
+    if let parentWindow = windowScene {
+        let parentFrame = parentWindow.frame
+        let origin = NSPoint(
+            x: parentFrame.midX - (window.frame.width / 2),
+            y: parentFrame.midY - (window.frame.height / 2)
+        )
+        window.setFrameOrigin(origin)
+    } else {
+        window.center()
+    }
+
+    inspectorWindowStore.window = window
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
 }
 #endif
