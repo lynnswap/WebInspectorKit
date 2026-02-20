@@ -26,7 +26,9 @@ Web Inspector for `WKWebView` (iOS / macOS).
 - iOS 18 / macOS 15+
 - WKWebView with JavaScript enabled
 
-## Quick Start (iOS)
+## Quick Start
+
+### UIKit
 
 ```swift
 import UIKit
@@ -54,7 +56,7 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-## Quick Start (macOS)
+### AppKit
 
 ```swift
 import AppKit

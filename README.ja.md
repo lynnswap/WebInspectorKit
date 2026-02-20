@@ -26,7 +26,9 @@
 - iOS 18 / macOS 15+
 - JavaScript が有効な WKWebView
 
-## クイックスタート（iOS）
+## クイックスタート
+
+### UIKit
 
 ```swift
 import UIKit
@@ -54,7 +56,7 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-## クイックスタート（macOS）
+### AppKit
 
 ```swift
 import AppKit
