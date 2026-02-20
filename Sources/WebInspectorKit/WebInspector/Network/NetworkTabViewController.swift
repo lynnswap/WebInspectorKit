@@ -152,7 +152,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
 }
 
 @MainActor
-private final class NetworkListViewController: UIViewController, UISearchResultsUpdating, UICollectionViewDelegate {
+private final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
     private enum SectionIdentifier: Hashable {
         case main
     }
@@ -191,14 +191,6 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var snapshotTaskGeneration: UInt64 = 0
-    private lazy var collectionView: UICollectionView = {
-        let view = UICollectionView(frame: .zero, collectionViewLayout: makeListLayout())
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.alwaysBounceVertical = true
-        view.keyboardDismissMode = .onDrag
-        view.delegate = self
-        return view
-    }()
     private lazy var dataSource = makeDataSource()
     private lazy var filterItem: UIBarButtonItem = {
         UIBarButtonItem(
@@ -216,7 +208,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
 
     init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
-        super.init(nibName: nil, bundle: nil)
+        super.init(collectionViewLayout: Self.makeListLayout())
     }
 
     @available(*, unavailable)
@@ -233,14 +225,8 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         super.viewDidLoad()
         title = nil
         navigationItem.title = ""
-
-        view.addSubview(collectionView)
-        NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
+        collectionView.alwaysBounceVertical = true
+        collectionView.keyboardDismissMode = .onDrag
 
         let searchController = UISearchController(searchResultsController: nil)
         searchController.searchResultsUpdater = self
@@ -323,7 +309,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         }
     }
 
-    private func makeListLayout() -> UICollectionViewLayout {
+    private static func makeListLayout() -> UICollectionViewLayout {
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.showsSeparators = true
         return UICollectionViewCompositionalLayout.list(using: configuration)
@@ -613,7 +599,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         }
     }
 
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+    override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard
             let item = dataSource.itemIdentifier(for: indexPath),
             let payload = payloadByStableID[item.stableID],
