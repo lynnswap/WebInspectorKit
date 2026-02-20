@@ -195,8 +195,6 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var snapshotTaskGeneration: UInt64 = 0
-    private var previousEffectiveResourceFilters: Set<NetworkResourceFilter>?
-    private var previousSearchText: String?
     private lazy var collectionView: UICollectionView = {
         let view = UICollectionView(frame: .zero, collectionViewLayout: makeListLayout())
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -464,15 +462,9 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     private func reloadDataFromInspector() {
-        let effectiveResourceFilters = inspector.effectiveResourceFilters
-        let searchText = inspector.searchText
-        let shouldAnimateDifferences = shouldAnimateListUpdate(
-            effectiveResourceFilters: effectiveResourceFilters,
-            searchText: searchText
-        )
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: shouldAnimateDifferences)
+        requestSnapshotUpdate(animatingDifferences: false)
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
@@ -491,22 +483,6 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         } else {
             contentUnavailableConfiguration = nil
         }
-    }
-
-    private func shouldAnimateListUpdate(
-        effectiveResourceFilters: Set<NetworkResourceFilter>,
-        searchText: String
-    ) -> Bool {
-        defer {
-            previousEffectiveResourceFilters = effectiveResourceFilters
-            previousSearchText = searchText
-        }
-
-        guard let previousEffectiveResourceFilters, let previousSearchText else {
-            return false
-        }
-
-        return previousEffectiveResourceFilters != effectiveResourceFilters || previousSearchText != searchText
     }
 
     private func startObservingInspectorIfNeeded() {
@@ -1941,8 +1917,6 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotApplyOnNextAppearance = false
-    private var previousEffectiveResourceFilters: Set<NetworkResourceFilter>?
-    private var previousSearchText: String?
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
     init(inspector: WINetworkPaneViewModel) {
@@ -2066,36 +2040,14 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 
     private func reloadDataFromInspector() {
-        let effectiveResourceFilters = inspector.effectiveResourceFilters
-        let searchText = inspector.searchText
-        let shouldAnimateDifferences = shouldAnimateListUpdate(
-            effectiveResourceFilters: effectiveResourceFilters,
-            searchText: searchText
-        )
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: shouldAnimateDifferences)
+        requestSnapshotUpdate(animatingDifferences: false)
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
         clearButton.isEnabled = !inspector.store.entries.isEmpty
         rebuildFilterMenu()
-    }
-
-    private func shouldAnimateListUpdate(
-        effectiveResourceFilters: Set<NetworkResourceFilter>,
-        searchText: String
-    ) -> Bool {
-        defer {
-            previousEffectiveResourceFilters = effectiveResourceFilters
-            previousSearchText = searchText
-        }
-
-        guard let previousEffectiveResourceFilters, let previousSearchText else {
-            return false
-        }
-
-        return previousEffectiveResourceFilters != effectiveResourceFilters || previousSearchText != searchText
     }
 
     private func startObservingInspectorIfNeeded() {
