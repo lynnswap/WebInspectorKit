@@ -118,6 +118,26 @@ struct DOMSessionTests {
     }
 
     @Test
+    func reattachingSameWebViewKeepsSelectionAndDoesNotRequestReload() {
+        let session = DOMSession(configuration: .init())
+        let (webView, _) = makeTestWebView()
+
+        let firstAttach = session.attach(to: webView)
+        #expect(firstAttach.shouldReload == true)
+        #expect(firstAttach.preserveState == false)
+
+        session.selection.nodeId = 42
+        session.selection.preview = "<div id=\"selected\">"
+
+        let secondAttach = session.attach(to: webView)
+
+        #expect(secondAttach.shouldReload == false)
+        #expect(secondAttach.preserveState == false)
+        #expect(session.selection.nodeId == 42)
+        #expect(session.selection.preview == "<div id=\"selected\">")
+    }
+
+    @Test
     func suspendRemovesHandlersAndClearsWebView() {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()

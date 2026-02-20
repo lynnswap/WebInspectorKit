@@ -51,6 +51,11 @@ public final class DOMSession {
 
     @discardableResult
     public func attach(to webView: WKWebView) -> AttachmentResult {
+        if pageAgent.webView === webView {
+            lastPageWebView = webView
+            return (false, false)
+        }
+
         selection.clear()
 
         let previousWebView = lastPageWebView
