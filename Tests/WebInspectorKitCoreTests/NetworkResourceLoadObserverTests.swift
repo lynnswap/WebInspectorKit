@@ -122,7 +122,7 @@ struct NetworkResourceLoadObserverTests {
         let webView = makeWebView()
         let observer = NetworkResourceLoadObserver(
             sessionID: "native-session",
-            setResourceLoadDelegateSelectorName: "_not_a_real_selector:"
+            supportsResourceLoadDelegate: { _ in false }
         ) { _ in
         }
 

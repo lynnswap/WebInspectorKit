@@ -33,6 +33,7 @@ package enum WISPISymbols {
     package static let publicRemoveBufferSelector = deobfuscate([":", "World", "content", ":", "Name", "With", "Buffer", "remove"])
     package static let privateAddBufferSelector = deobfuscate([":", "name", ":", "World", "content", ":", "Buffer", "add", "_"])
     package static let privateRemoveBufferSelector = deobfuscate([":", "World", "content", ":", "Name", "With", "Buffer", "remove", "_"])
+    package static let setResourceLoadDelegateSelector = deobfuscate([":", "Delegate", "Load", "Resource", "set", "_"])
     package static let allocSelector = deobfuscate(["alloc"])
     package static let initWithDataSelector = deobfuscate([":", "Data", "With", "init"])
 
@@ -64,6 +65,7 @@ package struct WISPICapabilities: Sendable {
     package let hasPublicRemoveBufferSelector: Bool
     package let hasPrivateAddBufferSelector: Bool
     package let hasPrivateRemoveBufferSelector: Bool
+    package let hasSetResourceLoadDelegateSelector: Bool
 
     package init(
         hasContentWorldConfiguration: Bool,
@@ -74,7 +76,8 @@ package struct WISPICapabilities: Sendable {
         hasPublicAddBufferSelector: Bool,
         hasPublicRemoveBufferSelector: Bool,
         hasPrivateAddBufferSelector: Bool,
-        hasPrivateRemoveBufferSelector: Bool
+        hasPrivateRemoveBufferSelector: Bool,
+        hasSetResourceLoadDelegateSelector: Bool = false
     ) {
         self.hasContentWorldConfiguration = hasContentWorldConfiguration
         self.hasJSHandleClass = hasJSHandleClass
@@ -85,6 +88,7 @@ package struct WISPICapabilities: Sendable {
         self.hasPublicRemoveBufferSelector = hasPublicRemoveBufferSelector
         self.hasPrivateAddBufferSelector = hasPrivateAddBufferSelector
         self.hasPrivateRemoveBufferSelector = hasPrivateRemoveBufferSelector
+        self.hasSetResourceLoadDelegateSelector = hasSetResourceLoadDelegateSelector
     }
 
     package var supportsPrivateCore: Bool {
@@ -113,6 +117,7 @@ package final class WISPIRuntime {
     private static let publicRemoveBufferSelector = NSSelectorFromString(WISPISymbols.publicRemoveBufferSelector)
     private static let privateAddBufferSelector = NSSelectorFromString(WISPISymbols.privateAddBufferSelector)
     private static let privateRemoveBufferSelector = NSSelectorFromString(WISPISymbols.privateRemoveBufferSelector)
+    private static let setResourceLoadDelegateSelector = NSSelectorFromString(WISPISymbols.setResourceLoadDelegateSelector)
 
     private var startupCapabilitiesCache: WISPICapabilities?
     private var startupModeCache: WIBridgeMode?
@@ -188,6 +193,7 @@ package final class WISPIRuntime {
             || WKUserContentController.instancesRespond(to: Self.privateAddBufferSelector)
         let hasPrivateRemoveBufferSelector = controller.responds(to: Self.privateRemoveBufferSelector)
             || WKUserContentController.instancesRespond(to: Self.privateRemoveBufferSelector)
+        let hasSetResourceLoadDelegateSelector = WKWebView.instancesRespond(to: Self.setResourceLoadDelegateSelector)
 
         return WISPICapabilities(
             hasContentWorldConfiguration: hasContentWorldConfiguration,
@@ -198,8 +204,30 @@ package final class WISPIRuntime {
             hasPublicAddBufferSelector: hasPublicAddBufferSelector,
             hasPublicRemoveBufferSelector: hasPublicRemoveBufferSelector,
             hasPrivateAddBufferSelector: hasPrivateAddBufferSelector,
-            hasPrivateRemoveBufferSelector: hasPrivateRemoveBufferSelector
+            hasPrivateRemoveBufferSelector: hasPrivateRemoveBufferSelector,
+            hasSetResourceLoadDelegateSelector: hasSetResourceLoadDelegateSelector
         )
+    }
+
+    package func canSetResourceLoadDelegate(on webView: WKWebView) -> Bool {
+        webView.responds(to: Self.setResourceLoadDelegateSelector)
+            || WKWebView.instancesRespond(to: Self.setResourceLoadDelegateSelector)
+    }
+
+    @discardableResult
+    package func setResourceLoadDelegate(on webView: WKWebView, delegate: AnyObject?) -> Bool {
+        guard canSetResourceLoadDelegate(on: webView) else {
+            spiRuntimeLogger.notice(
+                "selector_missing selector=\(WISPISymbols.setResourceLoadDelegateSelector, privacy: .public)"
+            )
+            return false
+        }
+
+        typealias Setter = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
+        let implementation = webView.method(for: Self.setResourceLoadDelegateSelector)
+        let function = unsafeBitCast(implementation, to: Setter.self)
+        function(webView, Self.setResourceLoadDelegateSelector, delegate)
+        return true
     }
 }
 

@@ -38,13 +38,14 @@ final class NetworkResourceLoadObserver: NSObject {
     }
 
     typealias EventSink = @MainActor (HTTPNetworkEvent) -> Void
-
-    private static let setResourceLoadDelegateSelectorName = "_setResourceLoadDelegate:"
+    typealias SupportsResourceLoadDelegate = @MainActor (WKWebView) -> Bool
+    typealias SetResourceLoadDelegate = @MainActor (WKWebView, AnyObject?) -> Bool
 
     private let sessionID: String
     private let includeFetchAndXHR: Bool
     private let applyEvent: EventSink
-    private let setResourceLoadDelegateSelector: Selector
+    private let supportsResourceLoadDelegate: SupportsResourceLoadDelegate
+    private let setResourceLoadDelegate: SetResourceLoadDelegate
     private var statesByLoadID: [UInt64: LoadState] = [:]
     private var nextRequestID = -1
     private weak var attachedWebView: WKWebView?
@@ -52,13 +53,19 @@ final class NetworkResourceLoadObserver: NSObject {
     init(
         sessionID: String,
         includeFetchAndXHR: Bool = false,
-        setResourceLoadDelegateSelectorName: String = NetworkResourceLoadObserver.setResourceLoadDelegateSelectorName,
+        supportsResourceLoadDelegate: @escaping SupportsResourceLoadDelegate = { webView in
+            WISPIRuntime.shared.canSetResourceLoadDelegate(on: webView)
+        },
+        setResourceLoadDelegate: @escaping SetResourceLoadDelegate = { webView, delegate in
+            WISPIRuntime.shared.setResourceLoadDelegate(on: webView, delegate: delegate)
+        },
         applyEvent: @escaping EventSink
     ) {
         self.sessionID = sessionID
         self.includeFetchAndXHR = includeFetchAndXHR
         self.applyEvent = applyEvent
-        self.setResourceLoadDelegateSelector = NSSelectorFromString(setResourceLoadDelegateSelectorName)
+        self.supportsResourceLoadDelegate = supportsResourceLoadDelegate
+        self.setResourceLoadDelegate = setResourceLoadDelegate
         super.init()
     }
 
@@ -68,25 +75,28 @@ final class NetworkResourceLoadObserver: NSObject {
             detach(from: currentWebView)
         }
 
-        guard webView.responds(to: setResourceLoadDelegateSelector) else {
+        guard supportsResourceLoadDelegate(webView) else {
             networkResourceObserverLogger.notice(
-                "native observer unavailable selector=\(NSStringFromSelector(self.setResourceLoadDelegateSelector), privacy: .public)"
+                "native observer unavailable selector=\(WISPISymbols.setResourceLoadDelegateSelector, privacy: .public)"
             )
             return false
         }
 
-        setResourceLoadDelegate(on: webView, delegate: self)
+        guard setResourceLoadDelegate(webView, self) else {
+            networkResourceObserverLogger.error("native observer failed to set delegate")
+            return false
+        }
         attachedWebView = webView
         resetState()
         return true
     }
 
     func detach(from webView: WKWebView) {
-        guard webView.responds(to: setResourceLoadDelegateSelector) else {
+        guard supportsResourceLoadDelegate(webView) else {
             resetState()
             return
         }
-        setResourceLoadDelegate(on: webView, delegate: nil)
+        _ = setResourceLoadDelegate(webView, nil)
         if attachedWebView === webView {
             attachedWebView = nil
         }
@@ -229,13 +239,6 @@ extension NetworkResourceLoadObserver {
 
 @MainActor
 private extension NetworkResourceLoadObserver {
-    private func setResourceLoadDelegate(on webView: WKWebView, delegate: AnyObject?) {
-        typealias Setter = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
-        let implementation = webView.method(for: setResourceLoadDelegateSelector)
-        let function = unsafeBitCast(implementation, to: Setter.self)
-        function(webView, setResourceLoadDelegateSelector, delegate)
-    }
-
     private func resetState() {
         statesByLoadID.removeAll()
         nextRequestID = -1
