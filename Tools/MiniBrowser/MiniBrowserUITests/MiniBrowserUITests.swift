@@ -15,7 +15,6 @@ final class MiniBrowserUITests: XCTestCase {
         // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
 
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
     }
 
     override func tearDownWithError() throws {
@@ -24,6 +23,7 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
         XCTAssertEqual(app.state, .runningForeground)
@@ -31,6 +31,7 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testInspectorTabSwitchStressDoesNotTerminateApp() throws {
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
 
@@ -54,6 +55,7 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testLaunchPerformance() throws {
+        XCUIDevice.shared.orientation = .portrait
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
