@@ -62,6 +62,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         let view = UICollectionView(frame: .zero, collectionViewLayout: makeTreeLayout())
         view.translatesAutoresizingMaskIntoConstraints = false
         view.alwaysBounceVertical = true
+        view.contentInsetAdjustmentBehavior = .automatic
         view.keyboardDismissMode = .onDrag
         view.delegate = self
         return view
@@ -89,6 +90,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
         textView.alwaysBounceVertical = true
+        textView.contentInsetAdjustmentBehavior = .automatic
         textView.font = UIFont.monospacedSystemFont(
             ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
             weight: .regular
@@ -101,12 +103,12 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         view.addSubview(treeView)
 
         NSLayoutConstraint.activate([
-            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            textView.topAnchor.constraint(equalTo: view.topAnchor),
             textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            treeView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            treeView.topAnchor.constraint(equalTo: view.topAnchor),
             treeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             treeView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             treeView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
