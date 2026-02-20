@@ -25,19 +25,6 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         self.listViewController = NetworkListViewController(inspector: inspector)
         self.detailViewController = NetworkDetailViewController(inspector: inspector)
         super.init(style: .doubleColumn)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    deinit {
-        observationToken?.invalidate()
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
         delegate = self
         preferredDisplayMode = .oneBesideSecondary
         title = nil
@@ -64,8 +51,15 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         wiApplyClearNavigationBarStyle(to: secondary)
         setViewController(primary, for: .primary)
         setViewController(secondary, for: .secondary)
+    }
 
-        syncDetailSelection()
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        observationToken?.invalidate()
     }
 
     override func viewWillAppear(_ animated: Bool) {
