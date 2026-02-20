@@ -465,16 +465,26 @@ private extension DOMFrontendStore {
                 onRecoverableError?(recoverableError)
             }
             if let responseObject = outcome.responseObject {
-                await dispatchToFrontend(message: responseObject)
+                let delivered = await dispatchToFrontend(message: responseObject)
+                if delivered {
+                    return
+                }
+
+                let fallbackJSON = outcome.responseJSON
+                    ?? protocolRouter.fallbackJSONResponse(forObjectResponse: responseObject)
+                guard let responseJSON = fallbackJSON else { return }
+                inspectorLogger.debug("retrying protocol response dispatch with JSON fallback")
+                _ = await dispatchToFrontend(message: responseJSON)
                 return
             }
             guard let responseJSON = outcome.responseJSON else { return }
-            await dispatchToFrontend(message: responseJSON)
+            _ = await dispatchToFrontend(message: responseJSON)
         }
     }
 
-    private func dispatchToFrontend(message: Any) async {
-        guard let webView else { return }
+    @discardableResult
+    private func dispatchToFrontend(message: Any) async -> Bool {
+        guard let webView else { return true }
         do {
             try await webView.callAsyncVoidJavaScript(
                 """
@@ -493,8 +503,10 @@ private extension DOMFrontendStore {
                 arguments: ["message": message],
                 contentWorld: .page
             )
+            return true
         } catch {
             inspectorLogger.error("dispatch to frontend failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 }

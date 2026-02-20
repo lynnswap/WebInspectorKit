@@ -58,12 +58,20 @@ final class DOMProtocolRouter {
                     await session.highlight(nodeId: nodeID)
                 }
                 let object = makeObjectResponse(id: request.id, result: [:], errorMessage: nil)
-                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
+                return RoutingOutcome(
+                    responseJSON: nil,
+                    responseObject: object,
+                    recoverableError: nil
+                )
 
             case "Overlay.hideHighlight", "DOM.hideHighlight":
                 await session.hideHighlight()
                 let object = makeObjectResponse(id: request.id, result: [:], errorMessage: nil)
-                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
+                return RoutingOutcome(
+                    responseJSON: nil,
+                    responseObject: object,
+                    recoverableError: nil
+                )
 
             case "DOM.getSelectorPath":
                 let nodeID = request.params.intValue(forKey: "nodeId") ?? 0
@@ -73,7 +81,11 @@ final class DOMProtocolRouter {
                     result: ["selectorPath": selectorPath],
                     errorMessage: nil
                 )
-                return RoutingOutcome(responseJSON: nil, responseObject: object, recoverableError: nil)
+                return RoutingOutcome(
+                    responseJSON: nil,
+                    responseObject: object,
+                    recoverableError: nil
+                )
 
             default:
                 let message = "Unsupported method: \(request.method)"
@@ -99,6 +111,10 @@ final class DOMProtocolRouter {
                 recoverableError: error.localizedDescription
             )
         }
+    }
+
+    func fallbackJSONResponse(forObjectResponse responseObject: [String: Any]) -> String? {
+        fallbackJSONResponseImpl(forObjectResponse: responseObject)
     }
 }
 
@@ -308,6 +324,127 @@ private extension DOMProtocolRouter {
         return String(data: data, encoding: .utf8)
     }
 
+    func makeJSONResponse(id: Int, result: Any?, errorMessage: String?) -> String? {
+        if let errorMessage {
+            return encodeResponse(
+                .init(id: id, result: nil, error: .init(message: errorMessage))
+            )
+        }
+        guard let resultValue = jsonValue(from: result) else {
+            return nil
+        }
+        return encodeResponse(
+            .init(id: id, result: resultValue, error: nil)
+        )
+    }
+
+    func fallbackJSONResponseImpl(forObjectResponse responseObject: [String: Any]) -> String? {
+        let identifier = parseIdentifierValue(responseObject["id"]) ?? 0
+        if let errorMessage = extractErrorMessage(from: responseObject["error"]) {
+            return makeJSONResponse(id: identifier, result: nil, errorMessage: errorMessage)
+        }
+        return makeJSONResponse(id: identifier, result: responseObject["result"], errorMessage: nil)
+    }
+
+    func jsonValue(from value: Any?) -> JSONValue? {
+        guard let value else {
+            return .null
+        }
+
+        let resolved = unwrapOptional(value)
+        if resolved is NSNull {
+            return .null
+        }
+
+        if let boolean = resolved as? Bool {
+            return .bool(boolean)
+        }
+
+        if let number = resolved as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return .bool(number.boolValue)
+            }
+            return .number(number.doubleValue)
+        }
+
+        if let string = resolved as? String {
+            return .string(string)
+        }
+
+        if let dictionary = resolved as? [String: Any] {
+            if isSerializedNodeEnvelope(dictionary), let fallback = dictionary["fallback"] {
+                return jsonValue(from: fallback)
+            }
+            var converted: [String: JSONValue] = [:]
+            converted.reserveCapacity(dictionary.count)
+            for (key, value) in dictionary {
+                guard let convertedValue = jsonValue(from: value) else {
+                    return nil
+                }
+                converted[key] = convertedValue
+            }
+            return .object(converted)
+        }
+
+        if let dictionary = resolved as? NSDictionary {
+            var swiftDictionary: [String: Any] = [:]
+            swiftDictionary.reserveCapacity(dictionary.count)
+            for (rawKey, rawValue) in dictionary {
+                guard let key = rawKey as? String else {
+                    return nil
+                }
+                swiftDictionary[key] = rawValue
+            }
+            return jsonValue(from: swiftDictionary)
+        }
+
+        if let array = resolved as? [Any] {
+            var converted: [JSONValue] = []
+            converted.reserveCapacity(array.count)
+            for value in array {
+                guard let convertedValue = jsonValue(from: value) else {
+                    return nil
+                }
+                converted.append(convertedValue)
+            }
+            return .array(converted)
+        }
+
+        if let array = resolved as? NSArray {
+            return jsonValue(from: array.map { $0 })
+        }
+
+        return nil
+    }
+
+    func extractErrorMessage(from value: Any?) -> String? {
+        if let dictionary = value as? [String: Any] {
+            return dictionary["message"] as? String
+        }
+        if let dictionary = value as? NSDictionary {
+            return dictionary["message"] as? String
+        }
+        return nil
+    }
+
+    func isSerializedNodeEnvelope(_ dictionary: [String: Any]) -> Bool {
+        guard let type = dictionary["type"] as? String else {
+            return false
+        }
+        return type == "serialized-node-envelope"
+    }
+
+    func unwrapOptional(_ value: Any) -> Any {
+        let mirror = Mirror(reflecting: value)
+        guard mirror.displayStyle == .optional else {
+            return value
+        }
+        guard let child = mirror.children.first else {
+            return NSNull()
+        }
+        return unwrapOptional(child.value)
+    }
+
     func makeObjectResponse(id: Int, result: Any?, errorMessage: String?) -> [String: Any] {
         var object: [String: Any] = ["id": id]
         if let errorMessage {
@@ -344,3 +481,15 @@ private extension DOMProtocolRouter.JSONValue {
         }
     }
 }
+
+#if DEBUG
+extension DOMProtocolRouter {
+    func testMakeJSONResponse(id: Int, result: Any?, errorMessage: String?) -> String? {
+        makeJSONResponse(id: id, result: result, errorMessage: errorMessage)
+    }
+
+    func testFallbackJSONResponse(forObjectResponse responseObject: [String: Any]) -> String? {
+        fallbackJSONResponse(forObjectResponse: responseObject)
+    }
+}
+#endif
