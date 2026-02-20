@@ -134,20 +134,28 @@ private enum NetworkTabPreviewScenario {
 
         let mutated = NSMutableDictionary(dictionary: payload)
         let events = NSMutableArray(array: (mutated["events"] as? NSArray) ?? [])
-        events.insert([
-            "kind": "resourceTiming",
-            "requestId": 1999,
-            "url": "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json",
-            "method": "GET",
-            "status": 200,
-            "statusText": "OK",
-            "mimeType": "application/json",
-            "startTime": ["monotonicMs": 1900.0, "wallMs": 1700000000800.0],
-            "endTime": ["monotonicMs": 2200.0, "wallMs": 1700000001100.0],
-            "encodedBodyLength": 512,
-            "decodedBodySize": 512,
-            "initiator": "xhr"
-        ], at: 0)
+        let startTime: [String: Double] = [
+            "monotonicMs": 1900.0,
+            "wallMs": 1700000000800.0
+        ]
+        let endTime: [String: Double] = [
+            "monotonicMs": 2200.0,
+            "wallMs": 1700000001100.0
+        ]
+        var insertedEvent: [String: Any] = [:]
+        insertedEvent["kind"] = "resourceTiming"
+        insertedEvent["requestId"] = 1999
+        insertedEvent["url"] = "https://cdn.example.com/assets/network/preview/super-long-file-name-for-line-wrap-validation-with-json-tag-rendering-and-truncation-check.json"
+        insertedEvent["method"] = "GET"
+        insertedEvent["status"] = 200
+        insertedEvent["statusText"] = "OK"
+        insertedEvent["mimeType"] = "application/json"
+        insertedEvent["startTime"] = startTime
+        insertedEvent["endTime"] = endTime
+        insertedEvent["encodedBodyLength"] = 512
+        insertedEvent["decodedBodySize"] = 512
+        insertedEvent["initiator"] = "xhr"
+        events.insert(insertedEvent, at: 0)
         mutated["events"] = events
         return NSDictionary(dictionary: mutated)
     }
