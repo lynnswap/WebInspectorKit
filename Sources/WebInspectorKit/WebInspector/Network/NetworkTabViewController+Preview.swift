@@ -5,10 +5,17 @@ import UIKit
 
 @MainActor
 private enum NetworkTabPreviewScenario {
+    enum BodyPreviewVariant {
+        case json
+        case plainText
+    }
+
     enum Mode {
         case list
         case listLongTitle
         case detail
+        case bodyPreviewObjectTree
+        case bodyPreviewText
     }
 
     static func makeInspector(mode: Mode) -> WINetworkPaneViewModel {
@@ -16,17 +23,27 @@ private enum NetworkTabPreviewScenario {
         switch mode {
         case .listLongTitle:
             session.wiApplyPreviewBatch(sampleBatchPayload(includeLongTitle: true))
+        case .bodyPreviewObjectTree:
+            session.wiApplyPreviewBatch(sampleBatchPayload(bodyPreviewVariant: .json))
+        case .bodyPreviewText:
+            session.wiApplyPreviewBatch(sampleBatchPayload(bodyPreviewVariant: .plainText))
         case .list, .detail:
             session.wiApplyPreviewBatch(sampleBatchPayload())
         }
         let inspector = WINetworkPaneViewModel(session: session)
-        if mode == .detail {
+        switch mode {
+        case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
             inspector.selectedEntryID = inspector.displayEntries.first?.id
+        default:
+            break
         }
         return inspector
     }
 
-    private static func sampleBatchPayload(includeLongTitle: Bool = false) -> NSDictionary {
+    private static func sampleBatchPayload(
+        includeLongTitle: Bool = false,
+        bodyPreviewVariant: BodyPreviewVariant = .json
+    ) -> NSDictionary {
         let sampleJSON = """
         {
           "version": 1,
@@ -119,7 +136,7 @@ private enum NetworkTabPreviewScenario {
         guard
             let data = sampleJSON.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data),
-            let payload = object as? NSDictionary
+            let basePayload = object as? NSDictionary
         else {
             return [
                 "version": 1,
@@ -128,12 +145,50 @@ private enum NetworkTabPreviewScenario {
                 "events": []
             ]
         }
-        guard includeLongTitle else {
-            return payload
+        let payload = NSMutableDictionary(dictionary: basePayload)
+
+        if
+            let events = payload["events"] as? NSArray,
+            let mutableEvents = events.mutableCopy() as? NSMutableArray
+        {
+            for index in 0..<mutableEvents.count {
+                guard let event = mutableEvents[index] as? NSDictionary else {
+                    continue
+                }
+                guard (event["kind"] as? String) == "loadingFinished" else {
+                    continue
+                }
+                let mutableEvent = NSMutableDictionary(dictionary: event)
+                let body = (event["body"] as? NSDictionary)?.mutableCopy() as? NSMutableDictionary ?? NSMutableDictionary()
+                let bodyText: String
+                let bodyPreview: String
+                switch bodyPreviewVariant {
+                case .json:
+                    bodyText = deepPreviewJSONText()
+                    bodyPreview = deepPreviewJSONSummaryText()
+                case .plainText:
+                    bodyText = "status=ok; source=preview; mode=text"
+                    bodyPreview = bodyText
+                }
+                body["kind"] = "text"
+                body["size"] = bodyText.count
+                body["truncated"] = false
+                body["preview"] = bodyPreview
+                body["content"] = bodyText
+                mutableEvent["encodedBodyLength"] = bodyText.count
+                mutableEvent["decodedBodySize"] = bodyText.count
+                mutableEvent["body"] = body
+                mutableEvents[index] = mutableEvent
+                break
+            }
+            payload["events"] = mutableEvents
         }
 
-        let mutated = NSMutableDictionary(dictionary: payload)
-        let events = NSMutableArray(array: (mutated["events"] as? NSArray) ?? [])
+        guard includeLongTitle else {
+            return NSDictionary(dictionary: payload)
+        }
+
+        let events = NSMutableArray(array: (payload["events"] as? NSArray) ?? [])
         let startTime: [String: Double] = [
             "monotonicMs": 1900.0,
             "wallMs": 1700000000800.0
@@ -156,8 +211,65 @@ private enum NetworkTabPreviewScenario {
         insertedEvent["decodedBodySize"] = 512
         insertedEvent["initiator"] = "xhr"
         events.insert(insertedEvent, at: 0)
-        mutated["events"] = events
-        return NSDictionary(dictionary: mutated)
+        payload["events"] = events
+        return NSDictionary(dictionary: payload)
+    }
+
+    private static func deepPreviewJSONSummaryText() -> String {
+        """
+        {"data":{"threaded_conversation_with_injections_v2":{"metadata":{"scribeConfig":{"page":"ranked_replies"}}}}}
+        """
+    }
+
+    private static func deepPreviewJSONText() -> String {
+        """
+        {
+          "data": {
+            "threaded_conversation_with_injections_v2": {
+              "instructions": [
+                {
+                  "type": "TimelineClearCache"
+                },
+                {
+                  "type": "TimelineAddEntries",
+                  "entries": [
+                    {
+                      "entryId": "tweet-1",
+                      "content": {
+                        "itemContent": {
+                          "tweet_results": {
+                            "result": {
+                              "legacy": {
+                                "full_text": "Preview tweet body"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "metadata": {
+                "reader_mode_config": {
+                  "is_enabled": true
+                },
+                "scribeConfig": {
+                  "page": "ranked_replies",
+                  "context": {
+                    "surface": "search",
+                    "product": {
+                      "name": "timeline",
+                      "version": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "source": "preview"
+        }
+        """
     }
 }
 
@@ -197,6 +309,67 @@ private final class NetworkDetailPreviewHostViewController: UIViewController {
 }
 
 @MainActor
+private final class NetworkBodyPreviewHostViewController: UIViewController {
+    var inspector: WINetworkPaneViewModel?
+    private var previewViewController: NetworkBodyPreviewViewController?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        guard let inspector else {
+            showPlaceholder(message: "Inspector not available")
+            return
+        }
+
+        let entryWithBody = inspector.displayEntries.first { entry in
+            entry.responseBody != nil || entry.requestBody != nil
+        }
+        guard let entry = entryWithBody else {
+            showPlaceholder(message: "No preview body entry found")
+            return
+        }
+
+        guard let body = entry.responseBody ?? entry.requestBody else {
+            showPlaceholder(message: "Body payload is empty")
+            return
+        }
+
+        let previewViewController = NetworkBodyPreviewViewController(
+            entry: entry,
+            inspector: inspector,
+            bodyState: body
+        )
+        self.previewViewController = previewViewController
+
+        let navigationController = UINavigationController(rootViewController: previewViewController)
+        addChild(navigationController)
+        navigationController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(navigationController.view)
+        NSLayoutConstraint.activate([
+            navigationController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            navigationController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            navigationController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            navigationController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        navigationController.didMove(toParent: self)
+    }
+
+    private func showPlaceholder(message: String) {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = message
+        label.textColor = .secondaryLabel
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            label.centerYAnchor.constraint(equalTo: view.centerYAnchor)
+        ])
+    }
+}
+
+@MainActor
 private struct NetworkTabPreviewContainer: UIViewControllerRepresentable {
     let mode: NetworkTabPreviewScenario.Mode
 
@@ -211,6 +384,16 @@ private struct NetworkTabPreviewContainer: UIViewControllerRepresentable {
         case .detail:
             let inspector = NetworkTabPreviewScenario.makeInspector(mode: .detail)
             let host = NetworkDetailPreviewHostViewController()
+            host.inspector = inspector
+            return host
+        case .bodyPreviewObjectTree:
+            let inspector = NetworkTabPreviewScenario.makeInspector(mode: .bodyPreviewObjectTree)
+            let host = NetworkBodyPreviewHostViewController()
+            host.inspector = inspector
+            return host
+        case .bodyPreviewText:
+            let inspector = NetworkTabPreviewScenario.makeInspector(mode: .bodyPreviewText)
+            let host = NetworkBodyPreviewHostViewController()
             host.inspector = inspector
             return host
         }
@@ -229,5 +412,13 @@ private struct NetworkTabPreviewContainer: UIViewControllerRepresentable {
 
 #Preview("Network Detail") {
     NetworkTabPreviewContainer(mode: .detail)
+}
+
+#Preview("Network Body Preview Object Tree") {
+    NetworkTabPreviewContainer(mode: .bodyPreviewObjectTree)
+}
+
+#Preview("Network Body Preview Text") {
+    NetworkTabPreviewContainer(mode: .bodyPreviewText)
 }
 #endif
