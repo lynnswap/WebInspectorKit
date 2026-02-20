@@ -34,9 +34,22 @@ UIKit/AppKit-native Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Testing
 
+Fast lane (UT中心):
+
 ```bash
-swift test
+swift test --filter WebInspectorKitCoreTests
+swift test --filter WebInspectorKitFeatureTests
 npm run test:ts
+```
+
+UI smoke (MiniBrowser):
+
+```bash
+xcodebuild -project Tools/MiniBrowser/MiniBrowser.xcodeproj \
+  -scheme MiniBrowser \
+  -destination "platform=iOS Simulator,name=iPhone 17" \
+  -only-testing:MiniBrowserUITests \
+  test
 ```
 
 ## Installation

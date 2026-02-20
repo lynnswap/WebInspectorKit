@@ -103,11 +103,46 @@ struct TabDescriptorTests {
         #expect(controller.selectedTabID == "tab_c")
     }
 
+    @Test
+    func repeatedConfigureTabsNormalizesSelectionAcrossInvalidAndDuplicateIDs() {
+        let controller = WISessionController()
+
+        controller.configureTabs([
+            makeDescriptor(id: "tab_a", title: "A"),
+            makeDescriptor(id: "tab_b", title: "B")
+        ])
+        controller.selectedTabID = "tab_b"
+        #expect(controller.selectedTabID == "tab_b")
+
+        controller.configureTabs([
+            makeDescriptor(id: "duplicate", title: "First"),
+            makeDescriptor(id: "duplicate", title: "Second"),
+            makeDescriptor(id: "tab_c", title: "C")
+        ])
+        #expect(controller.selectedTabID == "duplicate")
+
+        controller.selectedTabID = "missing"
+        controller.configureTabs([
+            makeDescriptor(id: "tab_final", title: "Final")
+        ])
+        #expect(controller.selectedTabID == "tab_final")
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
+        WIPaneDescriptor(
+            id: id,
+            title: title,
+            systemImage: "circle"
+        ) { _ in
+            makeDummyController()
+        }
     }
 
     private func makeDummyController() -> WIPlatformViewController {

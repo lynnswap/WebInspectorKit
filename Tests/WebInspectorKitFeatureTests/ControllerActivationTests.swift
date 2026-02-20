@@ -174,10 +174,117 @@ struct ControllerActivationTests {
         #expect(controller.network.session.mode == .active)
     }
 
+    @Test
+    func repeatedTabSwitchingKeepsSelectedTabAndNetworkModeConsistent() {
+        let controller = WISessionController()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+
+        for iteration in 0..<20 {
+            let expectedTabID = iteration.isMultiple(of: 2) ? "wi_network" : "wi_dom"
+            let expectedMode: NetworkLoggingMode = expectedTabID == "wi_network" ? .active : .buffering
+
+            controller.selectedTabID = expectedTabID
+
+            #expect(controller.selectedTabID == expectedTabID)
+            #expect(controller.network.session.mode == expectedMode)
+        }
+    }
+
+    @Test
+    func repeatedConnectSuspendReconnectDisconnectKeepsLifecycleConsistent() {
+        let controller = WISessionController()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        for _ in 0..<3 {
+            controller.connect(to: webView)
+            #expect(controller.dom.session.hasPageWebView == true)
+            let expectedModeOnConnect: NetworkLoggingMode = controller.selectedTabID == "wi_network" ? .active : .buffering
+            #expect(controller.network.session.mode == expectedModeOnConnect)
+
+            controller.synchronizeSelectedTabFromNativeUI("wi_network")
+            #expect(controller.selectedTabID == "wi_network")
+            #expect(controller.network.session.mode == .active)
+
+            controller.connect(to: nil)
+            #expect(controller.dom.session.hasPageWebView == false)
+            #expect(controller.network.session.mode == .stopped)
+
+            controller.connect(to: webView)
+            #expect(controller.dom.session.hasPageWebView == true)
+            #expect(controller.network.session.mode == .active)
+        }
+
+        controller.disconnect()
+        #expect(controller.selectedTabID == nil)
+        #expect(controller.network.session.mode == .stopped)
+        #expect(controller.network.session.lastPageWebView == nil)
+    }
+
+    @Test
+    func suspendAndReconnectSynchronizeStoreStateWithoutDroppingSelection() async {
+        let controller = WISessionController()
+        controller.configureTabs([.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        controller.selectedTabID = "wi_network"
+        await waitForStoreState(
+            controller.store,
+            lifecycle: .active,
+            selectedPaneID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+
+        controller.connect(to: nil)
+        await waitForStoreState(
+            controller.store,
+            lifecycle: .suspended,
+            selectedPaneID: "wi_network",
+            hasAttachedPage: false,
+            networkMode: .stopped
+        )
+
+        controller.connect(to: webView)
+        await waitForStoreState(
+            controller.store,
+            lifecycle: .active,
+            selectedPaneID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func waitForStoreState(
+        _ store: WISessionStore,
+        lifecycle: WISessionLifecycle,
+        selectedPaneID: String?,
+        hasAttachedPage: Bool,
+        networkMode: NetworkLoggingMode
+    ) async {
+        for _ in 0..<80 {
+            let state = store.viewState
+            if state.lifecycle == lifecycle,
+               state.selectedPaneID == selectedPaneID,
+               state.dom.hasAttachedPage == hasAttachedPage,
+               state.network.hasAttachedPage == hasAttachedPage,
+               state.network.mode == networkMode {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        Issue.record("Timed out waiting for synchronized store state")
     }
 }

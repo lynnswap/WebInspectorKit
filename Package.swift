@@ -46,12 +46,12 @@ let package = Package(
             path: "Tests/WebInspectorKitCoreTests"
         ),
         .testTarget(
-            name: "WebInspectorKitUITests",
+            name: "WebInspectorKitFeatureTests",
             dependencies: [
                 "WebInspectorKit",
                 "WebInspectorKitCore"
             ],
-            path: "Tests/WebInspectorKitUITests"
+            path: "Tests/WebInspectorKitFeatureTests"
         ),
         .plugin(
             name: "WebInspectorKitObfuscatePlugin",
