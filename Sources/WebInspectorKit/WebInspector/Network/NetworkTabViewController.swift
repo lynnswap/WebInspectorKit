@@ -356,7 +356,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         return dataSource
     }
 
-    private func applySnapshot(animatingDifferences: Bool) {
+    private func applySnapshot() {
         pendingReloadDataTask?.cancel()
         snapshotTaskGeneration &+= 1
         let generation = snapshotTaskGeneration
@@ -373,7 +373,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
             guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
-            await self.dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+            await self.dataSource.apply(snapshot, animatingDifferences: false)
             guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
@@ -444,13 +444,13 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+    private func requestSnapshotUpdate() {
         guard isCollectionViewVisible else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        applySnapshot(animatingDifferences: animatingDifferences)
+        applySnapshot()
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -464,7 +464,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: false)
+        requestSnapshotUpdate()
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
@@ -2042,7 +2042,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: false)
+        requestSnapshotUpdate()
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
@@ -2073,7 +2073,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
         observationToken = nil
     }
 
-    private func applySnapshot(animatingDifferences: Bool) {
+    private func applySnapshot() {
         let render = buildRenderState()
         let stableIDs = render.stableIDs
         precondition(
@@ -2103,20 +2103,20 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
         if !reloaded.isEmpty {
             snapshot.reloadItems(reloaded)
         }
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private var isCollectionViewVisible: Bool {
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+    private func requestSnapshotUpdate() {
         guard isCollectionViewVisible else {
             needsSnapshotApplyOnNextAppearance = true
             return
         }
         needsSnapshotApplyOnNextAppearance = false
-        applySnapshot(animatingDifferences: animatingDifferences)
+        applySnapshot()
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -2124,7 +2124,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
             return
         }
         needsSnapshotApplyOnNextAppearance = false
-        applySnapshot(animatingDifferences: false)
+        applySnapshot()
         selectEntry(with: inspector.selectedEntryID)
     }
 
