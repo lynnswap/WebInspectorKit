@@ -24,6 +24,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
         self.pageWebView = webView
         self.tabDescriptors = tabs
         super.init(nibName: nil, bundle: nil)
+        self.view.backgroundColor = .clear
     }
 
     @available(*, unavailable)

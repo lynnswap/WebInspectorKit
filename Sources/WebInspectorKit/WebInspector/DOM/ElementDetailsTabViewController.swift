@@ -264,10 +264,12 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
             configuration.secondaryText = wiLocalized("dom.element.hint")
             configuration.image = UIImage(systemName: "cursorarrow.rays")
             contentUnavailableConfiguration = configuration
+            collectionView.isHidden = true
             clearInlineEditingState()
             sections = []
         } else {
             contentUnavailableConfiguration = nil
+            collectionView.isHidden = false
             sections = makeSections()
         }
 

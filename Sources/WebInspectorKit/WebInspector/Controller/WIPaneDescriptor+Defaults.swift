@@ -22,7 +22,9 @@ extension WIPaneDescriptor {
         ) { context in
             #if canImport(UIKit)
             let root = DOMTreeTabViewController(inspector: context.domInspector)
-            return UINavigationController(rootViewController: root)
+            let nc = UINavigationController(rootViewController: root)
+            wiApplyClearNavigationBarStyle(to: nc)
+            return nc
             #elseif canImport(AppKit)
             return DOMTreeTabViewController(inspector: context.domInspector)
             #endif
@@ -43,7 +45,9 @@ extension WIPaneDescriptor {
         ) { context in
             #if canImport(UIKit)
             let root = ElementDetailsTabViewController(inspector: context.domInspector)
-            return UINavigationController(rootViewController: root)
+            let nc = UINavigationController(rootViewController: root)
+            wiApplyClearNavigationBarStyle(to: nc)
+            return nc
             #elseif canImport(AppKit)
             return ElementDetailsTabViewController(inspector: context.domInspector)
             #endif
@@ -64,7 +68,9 @@ extension WIPaneDescriptor {
             activation: .init(networkLiveLogging: true)
         ) { context in
             #if canImport(UIKit)
-            return NetworkTabViewController(inspector: context.networkInspector)
+            let vc = NetworkTabViewController(inspector: context.networkInspector)
+            vc.view.backgroundColor = .clear
+            return vc
             #elseif canImport(AppKit)
             return NetworkTabViewController(inspector: context.networkInspector)
             #endif

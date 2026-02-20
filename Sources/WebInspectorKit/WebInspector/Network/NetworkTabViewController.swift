@@ -60,6 +60,8 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
 
         let primary = UINavigationController(rootViewController: listViewController)
         let secondary = UINavigationController(rootViewController: detailViewController)
+        wiApplyClearNavigationBarStyle(to: primary)
+        wiApplyClearNavigationBarStyle(to: secondary)
         setViewController(primary, for: .primary)
         setViewController(secondary, for: .secondary)
 
@@ -474,6 +476,7 @@ private final class NetworkListViewController: UIViewController, UISearchResults
 
         let hasActiveSelectedEntry = inspector.store.entry(forEntryID: inspector.selectedEntryID) != nil
         let shouldShowEmptyState = displayedEntries.isEmpty && !hasActiveSelectedEntry
+        collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("network.empty.title")
