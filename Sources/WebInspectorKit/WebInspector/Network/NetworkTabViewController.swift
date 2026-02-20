@@ -194,6 +194,9 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
+    private var snapshotTaskGeneration: UInt64 = 0
+    private var previousEffectiveResourceFilters: Set<NetworkResourceFilter>?
+    private var previousSearchText: String?
     private lazy var collectionView: UICollectionView = {
         let view = UICollectionView(frame: .zero, collectionViewLayout: makeListLayout())
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -291,16 +294,21 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     func selectEntry(with id: UUID?) {
-        guard let id,
-              let row = displayedEntries.firstIndex(where: { $0.id == id }) else {
+        guard let id else {
             guard let selectedIndexPath = collectionView.indexPathsForSelectedItems?.first else {
                 return
             }
             collectionView.deselectItem(at: selectedIndexPath, animated: true)
             return
         }
-
-        let indexPath = IndexPath(item: row, section: 0)
+        let item = ItemIdentifier(stableID: ItemStableID(key: .entry(id: id), cellKind: .list))
+        guard let indexPath = dataSource.indexPath(for: item) else {
+            guard let selectedIndexPath = collectionView.indexPathsForSelectedItems?.first else {
+                return
+            }
+            collectionView.deselectItem(at: selectedIndexPath, animated: true)
+            return
+        }
         if collectionView.indexPathsForSelectedItems?.contains(indexPath) != true {
             collectionView.selectItem(at: indexPath, animated: false, scrollPosition: .centeredVertically)
         }
@@ -352,25 +360,48 @@ private final class NetworkListViewController: UIViewController, UISearchResults
 
     private func applySnapshot(animatingDifferences: Bool) {
         pendingReloadDataTask?.cancel()
-        let snapshot = makeSnapshot()
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
-    }
-
-    private func applySnapshotUsingReloadData() {
-        pendingReloadDataTask?.cancel()
+        snapshotTaskGeneration &+= 1
+        let generation = snapshotTaskGeneration
         let snapshot = makeSnapshot()
         pendingReloadDataTask = Task { [weak self] in
             guard let self else {
                 return
             }
             defer {
-                self.pendingReloadDataTask = nil
+                if self.snapshotTaskGeneration == generation {
+                    self.pendingReloadDataTask = nil
+                }
             }
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
+                return
+            }
+            await self.dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
+                return
+            }
+            self.selectEntry(with: self.inspector.selectedEntryID)
+        }
+    }
+
+    private func applySnapshotUsingReloadData() {
+        pendingReloadDataTask?.cancel()
+        snapshotTaskGeneration &+= 1
+        let generation = snapshotTaskGeneration
+        let snapshot = makeSnapshot()
+        pendingReloadDataTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                if self.snapshotTaskGeneration == generation {
+                    self.pendingReloadDataTask = nil
+                }
+            }
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
             self.selectEntry(with: self.inspector.selectedEntryID)
@@ -433,9 +464,15 @@ private final class NetworkListViewController: UIViewController, UISearchResults
     }
 
     private func reloadDataFromInspector() {
+        let effectiveResourceFilters = inspector.effectiveResourceFilters
+        let searchText = inspector.searchText
+        let shouldAnimateDifferences = shouldAnimateListUpdate(
+            effectiveResourceFilters: effectiveResourceFilters,
+            searchText: searchText
+        )
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: true)
+        requestSnapshotUpdate(animatingDifferences: shouldAnimateDifferences)
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
@@ -454,6 +491,22 @@ private final class NetworkListViewController: UIViewController, UISearchResults
         } else {
             contentUnavailableConfiguration = nil
         }
+    }
+
+    private func shouldAnimateListUpdate(
+        effectiveResourceFilters: Set<NetworkResourceFilter>,
+        searchText: String
+    ) -> Bool {
+        defer {
+            previousEffectiveResourceFilters = effectiveResourceFilters
+            previousSearchText = searchText
+        }
+
+        guard let previousEffectiveResourceFilters, let previousSearchText else {
+            return false
+        }
+
+        return previousEffectiveResourceFilters != effectiveResourceFilters || previousSearchText != searchText
     }
 
     private func startObservingInspectorIfNeeded() {
@@ -721,6 +774,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
+    private var snapshotTaskGeneration: UInt64 = 0
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -770,7 +824,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         guard let entry else {
             title = nil
             sections = []
-            requestSnapshotUpdate(animatingDifferences: false)
+            requestSnapshotUpdate()
             collectionView.isHidden = true
             navigationItem.rightBarButtonItem = nil
             contentUnavailableConfiguration = nil
@@ -781,7 +835,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         sections = makeSections(for: entry)
         contentUnavailableConfiguration = nil
         collectionView.isHidden = false
-        requestSnapshotUpdate(animatingDifferences: true)
+        requestSnapshotUpdate()
         navigationItem.rightBarButtonItem = makeSecondaryActionsItem(for: entry)
     }
 
@@ -852,27 +906,49 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         return dataSource
     }
 
-    private func applySnapshot(animatingDifferences: Bool) {
+    private func applySnapshot() {
         pendingReloadDataTask?.cancel()
-        let snapshot = makeSnapshot()
-        dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
-    }
-
-    private func applySnapshotUsingReloadData() {
-        pendingReloadDataTask?.cancel()
+        snapshotTaskGeneration &+= 1
+        let generation = snapshotTaskGeneration
         let snapshot = makeSnapshot()
         pendingReloadDataTask = Task { [weak self] in
             guard let self else {
                 return
             }
             defer {
-                self.pendingReloadDataTask = nil
+                if self.snapshotTaskGeneration == generation {
+                    self.pendingReloadDataTask = nil
+                }
             }
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
+                return
+            }
+            await self.dataSource.apply(snapshot, animatingDifferences: false)
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
+                return
+            }
+        }
+    }
+
+    private func applySnapshotUsingReloadData() {
+        pendingReloadDataTask?.cancel()
+        snapshotTaskGeneration &+= 1
+        let generation = snapshotTaskGeneration
+        let snapshot = makeSnapshot()
+        pendingReloadDataTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                if self.snapshotTaskGeneration == generation {
+                    self.pendingReloadDataTask = nil
+                }
+            }
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
                 return
             }
         }
@@ -919,13 +995,13 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate(animatingDifferences: Bool) {
+    private func requestSnapshotUpdate() {
         guard isCollectionViewVisible else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        applySnapshot(animatingDifferences: animatingDifferences)
+        applySnapshot()
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -1865,6 +1941,8 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotApplyOnNextAppearance = false
+    private var previousEffectiveResourceFilters: Set<NetworkResourceFilter>?
+    private var previousSearchText: String?
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
     init(inspector: WINetworkPaneViewModel) {
@@ -1975,25 +2053,49 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 
     func selectEntry(with id: UUID?) {
-        guard let id,
-              let row = displayedEntries.firstIndex(where: { $0.id == id })
-        else {
+        guard let id else {
             collectionView.deselectAll(nil)
             return
         }
-        let indexPath = IndexPath(item: row, section: 0)
+        let item = ItemIdentifier(stableID: ItemStableID(key: .entry(id: id), cellKind: .macListItem))
+        guard let indexPath = dataSource.indexPath(for: item) else {
+            collectionView.deselectAll(nil)
+            return
+        }
         collectionView.selectItems(at: Set([indexPath]), scrollPosition: .centeredVertically)
     }
 
     private func reloadDataFromInspector() {
+        let effectiveResourceFilters = inspector.effectiveResourceFilters
+        let searchText = inspector.searchText
+        let shouldAnimateDifferences = shouldAnimateListUpdate(
+            effectiveResourceFilters: effectiveResourceFilters,
+            searchText: searchText
+        )
         displayedEntries = inspector.displayEntries
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate(animatingDifferences: true)
+        requestSnapshotUpdate(animatingDifferences: shouldAnimateDifferences)
         if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
         clearButton.isEnabled = !inspector.store.entries.isEmpty
         rebuildFilterMenu()
+    }
+
+    private func shouldAnimateListUpdate(
+        effectiveResourceFilters: Set<NetworkResourceFilter>,
+        searchText: String
+    ) -> Bool {
+        defer {
+            previousEffectiveResourceFilters = effectiveResourceFilters
+            previousSearchText = searchText
+        }
+
+        guard let previousEffectiveResourceFilters, let previousSearchText else {
+            return false
+        }
+
+        return previousEffectiveResourceFilters != effectiveResourceFilters || previousSearchText != searchText
     }
 
     private func startObservingInspectorIfNeeded() {
