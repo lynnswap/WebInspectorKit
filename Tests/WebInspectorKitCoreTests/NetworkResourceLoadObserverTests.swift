@@ -253,7 +253,8 @@ struct NetworkResourceLoadObserverTests {
     }
 }
 
-private final class EmissionState: @unchecked Sendable {
+@MainActor
+private final class EmissionState {
     var enabled: Bool
 
     init(enabled: Bool) {
