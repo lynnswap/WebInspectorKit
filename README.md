@@ -120,7 +120,7 @@ Tip: `.network()` を含めない場合、Network script は inject されませ
 
 ## Migration
 
-破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
+See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
 
 ## License
 
