@@ -18,7 +18,7 @@ func wiApplyClearNavigationBarStyle(to navigationController: UINavigationControl
     appearance.configureWithTransparentBackground()
     appearance.backgroundColor = .clear
     appearance.backgroundEffect = nil
-    appearance.shadowColor = .clear
+    appearance.shadowColor = nil
 
     navigationController.navigationBar.standardAppearance = appearance
     navigationController.navigationBar.scrollEdgeAppearance = appearance
