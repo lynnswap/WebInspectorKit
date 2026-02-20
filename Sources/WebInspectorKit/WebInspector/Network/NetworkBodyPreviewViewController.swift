@@ -4,7 +4,7 @@ import UIKit
 import WebInspectorKitCore
 
 @MainActor
-final class NetworkBodyPreviewViewController: UIViewController {
+final class NetworkBodyPreviewViewController: UIViewController, UICollectionViewDelegate {
     private enum SectionIdentifier: Hashable {
         case main
     }
@@ -16,12 +16,20 @@ final class NetworkBodyPreviewViewController: UIViewController {
     private struct TreeItemPayload {
         let node: NetworkJSONNode
         let hasChildren: Bool
+        let pathComponents: [NetworkBodyPreviewTreeMenuSupport.PathComponent]
     }
 
     private struct TypeBadgeStyle {
         let letter: String
         let fillColor: UIColor
-        let textColor: UIColor
+    }
+
+    private enum TypeBadgePaletteToken {
+        case yellow
+        case blue
+        case purple
+        case red
+        case grey
     }
 
     private let entry: NetworkEntry
@@ -55,6 +63,7 @@ final class NetworkBodyPreviewViewController: UIViewController {
         view.translatesAutoresizingMaskIntoConstraints = false
         view.alwaysBounceVertical = true
         view.keyboardDismissMode = .onDrag
+        view.delegate = self
         return view
     }()
 
@@ -259,8 +268,6 @@ final class NetworkBodyPreviewViewController: UIViewController {
         configuration.text = display.key
         configuration.secondaryText = display.value
         configuration.image = makeTypeBadgeImage(style: display.badgeStyle)
-        configuration.imageProperties.reservedLayoutSize = CGSize(width: 22, height: 22)
-        configuration.imageProperties.maximumSize = CGSize(width: 22, height: 22)
         configuration.textProperties.font = UIFont.monospacedSystemFont(
             ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
             weight: .regular
@@ -285,6 +292,7 @@ final class NetworkBodyPreviewViewController: UIViewController {
             nodes,
             parent: nil,
             parentPath: "$",
+            pathComponents: [],
             rootItems: &rootItems,
             sectionSnapshot: &sectionSnapshot,
             payloadByItem: &payloadByItem
@@ -308,10 +316,150 @@ final class NetworkBodyPreviewViewController: UIViewController {
         return Set(snapshot.items.filter { snapshot.isExpanded($0) }.map(\.path))
     }
 
+    private func toggleDisclosure(for item: TreeItem, animated: Bool) {
+        guard let payload = treePayloadByItem[item], payload.hasChildren else {
+            return
+        }
+
+        var snapshot = treeDataSource.snapshot(for: .main)
+        if snapshot.isExpanded(item) {
+            snapshot.collapse([item])
+        } else {
+            snapshot.expand([item])
+        }
+        treeDataSource.apply(snapshot, to: .main, animatingDifferences: animated)
+    }
+
+    private func expandAllDescendants(of item: TreeItem) {
+        guard let payload = treePayloadByItem[item], payload.hasChildren else {
+            return
+        }
+
+        var snapshot = treeDataSource.snapshot(for: .main)
+        let descendants = descendants(of: item, in: snapshot)
+        let expandableDescendants = descendants.filter { treePayloadByItem[$0]?.hasChildren == true }
+        snapshot.expand([item] + expandableDescendants)
+        treeDataSource.apply(snapshot, to: .main, animatingDifferences: true)
+    }
+
+    private func descendants(
+        of item: TreeItem,
+        in snapshot: NSDiffableDataSourceSectionSnapshot<TreeItem>
+    ) -> [TreeItem] {
+        let prefix = item.path + "/"
+        return snapshot.items
+            .filter { $0.path.hasPrefix(prefix) }
+            .sorted { lhs, rhs in
+                if lhs.path.count != rhs.path.count {
+                    return lhs.path.count < rhs.path.count
+                }
+                return lhs.path < rhs.path
+            }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        UIPasteboard.general.string = text
+    }
+
+    private func makeContextMenu(for item: TreeItem, payload: TreeItemPayload) -> UIMenu {
+        let scalarText = NetworkBodyPreviewTreeMenuSupport.scalarCopyText(for: payload.node)
+        let copyValueAction = UIAction(
+            title: wiLocalized("network.body.preview.context.copy.value", default: "Value"),
+            attributes: scalarText == nil ? [.disabled] : []
+        ) { [weak self] _ in
+            guard let self, let scalarText else {
+                return
+            }
+            self.copyToPasteboard(scalarText)
+        }
+
+        let subtreeText = NetworkBodyPreviewTreeMenuSupport.subtreeCopyText(for: payload.node)
+        let copySubtreeAction = UIAction(
+            title: wiLocalized("network.body.preview.context.copy.json", default: "JSON"),
+            attributes: subtreeText == nil ? [.disabled] : []
+        ) { [weak self] _ in
+            guard let self, let subtreeText else {
+                return
+            }
+            self.copyToPasteboard(subtreeText)
+        }
+
+        let propertyPath = NetworkBodyPreviewTreeMenuSupport.propertyPathString(from: payload.pathComponents)
+        let copyPathAction = UIAction(
+            title: wiLocalized("network.body.preview.context.copy.path", default: "Path"),
+            attributes: []
+        ) { [weak self] _ in
+            self?.copyToPasteboard(propertyPath)
+        }
+
+        let expandAction = UIAction(
+            title: wiLocalized("network.body.preview.context.expand_all", default: "Expand All"),
+            attributes: payload.hasChildren ? [] : [.disabled]
+        ) { [weak self] _ in
+            self?.expandAllDescendants(of: item)
+        }
+
+        let copyMenu = UIMenu(
+            title: wiLocalized("Copy"),
+            image: UIImage(systemName: "document.on.document"),
+            children: [
+                copyValueAction,
+                copySubtreeAction,
+                copyPathAction
+            ]
+        )
+        let disclosureSection = UIMenu(options: .displayInline, children: [
+            expandAction
+        ])
+        return UIMenu(children: [copyMenu, disclosureSection])
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        guard collectionView === treeView else {
+            return
+        }
+        defer {
+            collectionView.deselectItem(at: indexPath, animated: false)
+        }
+
+        guard
+            let item = treeDataSource.itemIdentifier(for: indexPath),
+            let payload = treePayloadByItem[item],
+            payload.hasChildren
+        else {
+            return
+        }
+        toggleDisclosure(for: item, animated: true)
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        contextMenuConfigurationForItemAt indexPath: IndexPath,
+        point: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard collectionView === treeView else {
+            return nil
+        }
+        guard
+            let item = treeDataSource.itemIdentifier(for: indexPath),
+            let payload = treePayloadByItem[item]
+        else {
+            return nil
+        }
+
+        return UIContextMenuConfiguration(identifier: item.path as NSString, previewProvider: nil) { [weak self] _ in
+            guard let self else {
+                return nil
+            }
+            return self.makeContextMenu(for: item, payload: payload)
+        }
+    }
+
     private func appendNodes(
         _ nodes: [NetworkJSONNode],
         parent: TreeItem?,
         parentPath: String,
+        pathComponents: [NetworkBodyPreviewTreeMenuSupport.PathComponent],
         rootItems: inout [TreeItem],
         sectionSnapshot: inout NSDiffableDataSourceSectionSnapshot<TreeItem>,
         payloadByItem: inout [TreeItem: TreeItemPayload]
@@ -321,10 +469,17 @@ final class NetworkBodyPreviewViewController: UIViewController {
             let item = TreeItem(path: parentPath + segment)
             let children = node.children ?? []
             let hasChildren = !children.isEmpty
+            let currentPathComponents = pathComponents + [
+                NetworkBodyPreviewTreeMenuSupport.PathComponent(
+                    key: node.key,
+                    isIndex: node.isIndex
+                )
+            ]
 
             payloadByItem[item] = TreeItemPayload(
                 node: node,
-                hasChildren: hasChildren
+                hasChildren: hasChildren,
+                pathComponents: currentPathComponents
             )
 
             if let parent {
@@ -339,6 +494,7 @@ final class NetworkBodyPreviewViewController: UIViewController {
                     children,
                     parent: item,
                     parentPath: item.path,
+                    pathComponents: currentPathComponents,
                     rootItems: &rootItems,
                     sectionSnapshot: &sectionSnapshot,
                     payloadByItem: &payloadByItem
@@ -372,43 +528,37 @@ final class NetworkBodyPreviewViewController: UIViewController {
             value = "Object"
             badgeStyle = TypeBadgeStyle(
                 letter: "O",
-                fillColor: .systemBlue,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .yellow)
             )
         case .array(let count):
             value = "Array (\(count))"
             badgeStyle = TypeBadgeStyle(
                 letter: "A",
-                fillColor: .systemOrange,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .yellow)
             )
         case .string(let string):
             value = "\"\(truncate(string))\""
             badgeStyle = TypeBadgeStyle(
                 letter: "S",
-                fillColor: .systemPink,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .red)
             )
         case .number(let number):
             value = number
             badgeStyle = TypeBadgeStyle(
                 letter: "N",
-                fillColor: .systemTeal,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .blue)
             )
         case .bool(let flag):
             value = flag ? "true" : "false"
             badgeStyle = TypeBadgeStyle(
                 letter: "B",
-                fillColor: .systemGreen,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .purple)
             )
         case .null:
             value = "null"
             badgeStyle = TypeBadgeStyle(
                 letter: "0",
-                fillColor: .systemGray,
-                textColor: .white
+                fillColor: Self.badgeFillColor(for: .grey)
             )
         }
 
@@ -416,33 +566,26 @@ final class NetworkBodyPreviewViewController: UIViewController {
     }
 
     private func makeTypeBadgeImage(style: TypeBadgeStyle) -> UIImage? {
-        let badgeSize = CGSize(width: 18, height: 18)
-        let image = UIGraphicsImageRenderer(size: badgeSize).image { _ in
-            let rect = CGRect(origin: .zero, size: badgeSize)
-            let path = UIBezierPath(roundedRect: rect, cornerRadius: 5)
-            style.fillColor.setFill()
-            path.fill()
+        let symbolName = "\(style.letter.lowercased()).square.fill"
+        let image = UIImage(systemName: symbolName)
+            ?? UIImage(systemName: "square.fill")
+        return image?.withTintColor(style.fillColor.resolvedColor(with: traitCollection), renderingMode: .alwaysOriginal)
+    }
 
-            UIColor.black.withAlphaComponent(0.18).setStroke()
-            path.lineWidth = 0.5
-            path.stroke()
 
-            let font = UIFont.systemFont(ofSize: 10, weight: .bold)
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: style.textColor
-            ]
-            let letter = style.letter
-            let textSize = (letter as NSString).size(withAttributes: attributes)
-            let textRect = CGRect(
-                x: (badgeSize.width - textSize.width) / 2,
-                y: (badgeSize.height - textSize.height) / 2,
-                width: textSize.width,
-                height: textSize.height
-            )
-            (letter as NSString).draw(in: textRect, withAttributes: attributes)
+    private static func badgeFillColor(for token: TypeBadgePaletteToken) -> UIColor {
+        switch token {
+        case .yellow:
+            return .systemYellow
+        case .blue:
+            return .systemBlue
+        case .purple:
+            return .systemPurple
+        case .red:
+            return .systemPink
+        case .grey:
+            return .systemGray
         }
-        return image.withRenderingMode(.alwaysOriginal)
     }
 
     private func truncate(_ value: String, limit: Int = 200) -> String {
