@@ -14,6 +14,8 @@ private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetworkAgent */ })();
 """
 private let networkPrivateUnavailableSentinel = "__wi_private_unavailable__"
+private let networkControlTokenWindowKey = "__wiNetworkControlToken"
+private let networkPageHookModeWindowKey = "__wiNetworkPageHookMode"
 @MainActor private var networkBridgeScriptInstalledKey: UInt8 = 0
 
 @MainActor
@@ -40,14 +42,26 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         case networkReset = "webInspectorNetworkReset"
     }
 
+    private enum AuthTokenValidationResult {
+        case valid
+        case missing
+        case mismatched
+    }
+
     weak var webView: WKWebView?
     let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
     private var configureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
+    private var nativeResourceObserver: NetworkResourceLoadObserver?
+    private var nativeObserverEnabled = false
+    private var nativeSessionID = ""
+    private var networkMessageAuthToken = UUID().uuidString.lowercased()
+    // Native observer is the primary source for non-XHR resources.
+    // XHR/fetch remain page-hooked to preserve reliable body capture.
+    private let nativeObserverIncludesFetchAndXHR = false
 
     private let runtime: WISPIRuntime
-    private let bridgeWorld: WKContentWorld
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
 
@@ -58,7 +72,6 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     override init() {
         runtime = .shared
         bridgeMode = runtime.startupMode()
-        bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
         super.init()
     }
 
@@ -105,6 +118,7 @@ extension NetworkPageAgent {
     }
 
     func willDetachPageWebView(_ webView: WKWebView) {
+        detachNativeResourceObserver(from: webView)
         detachMessageHandlers(from: webView)
     }
 
@@ -113,11 +127,15 @@ extension NetworkPageAgent {
         if previousWebView !== webView {
             store.reset()
         }
+        attachNativeResourceObserver(to: webView)
         registerMessageHandlers()
         scheduleConfigure(mode: loggingMode, clearExisting: true, on: webView)
     }
 
     func didClearPageWebView() {
+        nativeResourceObserver = nil
+        nativeObserverEnabled = false
+        nativeSessionID = ""
         store.reset()
     }
 
@@ -147,11 +165,22 @@ extension NetworkPageAgent: WKScriptMessageHandler {
         case .networkEvents:
             handleNetworkEventsMessage(message)
         case .networkReset:
-            handleNetworkReset()
+            handleNetworkReset(message)
         }
     }
 
     private func handleNetworkEventsMessage(_ message: WKScriptMessage) {
+        switch validateMessageAuthToken(message.body) {
+        case .valid:
+            break
+        case .missing:
+            networkLogger.notice("network batch missing auth token, reconfiguring page token")
+            scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
+            return
+        case .mismatched:
+            networkLogger.error("dropped network batch: auth token mismatch")
+            return
+        }
         guard let batch = decodeNetworkBatch(from: message.body) else { return }
         if batch.version != 1 {
             networkLogger.debug("unsupported network batch version: \(batch.version, privacy: .public)")
@@ -164,7 +193,18 @@ extension NetworkPageAgent: WKScriptMessageHandler {
         store.applyNetworkBatch(batch)
     }
 
-    private func handleNetworkReset() {
+    private func handleNetworkReset(_ message: WKScriptMessage) {
+        switch validateMessageAuthToken(message.body) {
+        case .valid:
+            break
+        case .missing:
+            networkLogger.notice("network reset missing auth token, reconfiguring page token")
+            scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
+            return
+        case .mismatched:
+            networkLogger.error("dropped network reset: auth token mismatch")
+            return
+        }
         store.reset()
     }
 }
@@ -212,8 +252,8 @@ private extension NetworkPageAgent {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
-            controller.add(self, contentWorld: bridgeWorld, name: $0.rawValue)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
+            controller.add(self, contentWorld: .page, name: $0.rawValue)
         }
     }
 
@@ -221,7 +261,7 @@ private extension NetworkPageAgent {
         guard let webView else { return }
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: bridgeWorld)
+            controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
         }
         networkLogger.debug("detached network message handlers")
     }
@@ -239,25 +279,53 @@ private extension NetworkPageAgent {
             networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
             return
         }
+        let escapedToken = networkMessageAuthToken
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let pageHookMode = resolvedPageHookMode()
+        let tokenBootstrapScript = """
+        (function(pageHookMode) {
+            Object.defineProperty(window, "\(networkControlTokenWindowKey)", {
+                value: "\(escapedToken)",
+                configurable: true,
+                writable: false,
+                enumerable: false
+            });
+            Object.defineProperty(window, "\(networkPageHookModeWindowKey)", {
+                value: pageHookMode,
+                configurable: true,
+                writable: false,
+                enumerable: false
+            });
+        })("\(pageHookMode)");
+        """
 
+        let tokenScript = WKUserScript(
+            source: tokenBootstrapScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true,
+            in: .page
+        )
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true,
-            in: bridgeWorld
+            in: .page
         )
         let checkScript = WKUserScript(
             source: networkPresenceProbeScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true,
-            in: bridgeWorld
+            in: .page
         )
+        controller.addUserScript(tokenScript)
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
         controller.wi_networkBridgeScriptInstalled = true
 
         do {
-            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: bridgeWorld)
+            _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
+            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         } catch {
             networkLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
         }
@@ -280,13 +348,26 @@ private extension NetworkPageAgent {
         }
 
         let networkReady = webView.configuration.userContentController.wi_networkBridgeScriptInstalled
+        let resourceObserverMode = nativeObserverEnabled ? "disabled" : "enabled"
+        let pageHookMode = resolvedPageHookMode()
+        networkLogger.notice(
+            "network_page_hook mode=\(pageHookMode, privacy: .public) resource_observer=\(resourceObserverMode, privacy: .public) native_enabled=\(self.nativeObserverEnabled, privacy: .public) native_session=\(self.nativeSessionID, privacy: .public)"
+        )
+
         let script = """
-        (function(mode, clearExisting) {
+        (function(mode, clearExisting, resourceObserverMode, pageHookMode, messageAuthToken) {
             if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
                 return;
             }
-            window.webInspectorNetworkAgent.configure({mode: mode, clear: clearExisting});
-        })(mode, clearExisting);
+            window.webInspectorNetworkAgent.configure({
+                mode: mode,
+                clear: clearExisting,
+                controlAuthToken: messageAuthToken,
+                resourceObserverMode: resourceObserverMode,
+                pageHookMode: pageHookMode,
+                messageAuthToken: messageAuthToken
+            });
+        })(mode, clearExisting, resourceObserverMode, pageHookMode, messageAuthToken);
         """
         guard networkReady else { return }
 
@@ -296,8 +377,11 @@ private extension NetworkPageAgent {
                 arguments: [
                     "clearExisting": clearExisting,
                     "mode": mode.rawValue,
+                    "messageAuthToken": networkMessageAuthToken,
+                    "pageHookMode": pageHookMode,
+                    "resourceObserverMode": resourceObserverMode,
                 ],
-                contentWorld: bridgeWorld
+                contentWorld: .page
             )
         } catch {
             networkLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
@@ -308,9 +392,13 @@ private extension NetworkPageAgent {
         guard let webView = targetWebView ?? self.webView else { return }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorNetworkAgent.clear();",
-                arguments: [:],
-                contentWorld: bridgeWorld
+                "window.webInspectorNetworkAgent.clear(options);",
+                arguments: [
+                    "options": [
+                        "controlAuthToken": networkMessageAuthToken
+                    ]
+                ],
+                contentWorld: .page
             )
         } catch {
             networkLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
@@ -321,6 +409,22 @@ private extension NetworkPageAgent {
         NetworkEventBatch.decode(from: payload)
     }
 
+    private func validateMessageAuthToken(_ payload: Any?) -> AuthTokenValidationResult {
+        guard let dictionary = payload as? NSDictionary else {
+            return .mismatched
+        }
+        guard let receivedToken = dictionary["authToken"] as? String else {
+            return .missing
+        }
+        if receivedToken.isEmpty {
+            return .missing
+        }
+        if receivedToken == networkMessageAuthToken {
+            return .valid
+        }
+        return .mismatched
+    }
+
     func fetchBodyFromHandle(_ handle: AnyObject, role: NetworkBody.Role, in webView: WKWebView) async -> NetworkBody? {
         do {
             let result = try await webView.callAsyncJavaScript(
@@ -329,15 +433,18 @@ private extension NetworkPageAgent {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function") {
                         return unavailable;
                     }
-                    return window.webInspectorNetworkAgent.getBodyForHandle(handle);
+                    return window.webInspectorNetworkAgent.getBodyForHandle(handle, options);
                 })(handle, unavailable);
                 """,
                 arguments: [
                     "handle": handle,
+                    "options": [
+                        "controlAuthToken": networkMessageAuthToken
+                    ],
                     "unavailable": networkPrivateUnavailableSentinel,
                 ],
                 in: nil,
-                contentWorld: bridgeWorld
+                contentWorld: .page
             )
 
             if let sentinel = result as? String, sentinel == networkPrivateUnavailableSentinel {
@@ -361,12 +468,17 @@ private extension NetworkPageAgent {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {
                         return null;
                     }
-                    return window.webInspectorNetworkAgent.getBody(ref);
+                    return window.webInspectorNetworkAgent.getBody(ref, options);
                 })(ref);
                 """,
-                arguments: ["ref": bodyRef],
+                arguments: [
+                    "options": [
+                        "controlAuthToken": networkMessageAuthToken
+                    ],
+                    "ref": bodyRef
+                ],
                 in: nil,
-                contentWorld: bridgeWorld
+                contentWorld: .page
             )
             return decodeNetworkBody(from: result, role: role)
         } catch {
@@ -423,5 +535,41 @@ private extension NetworkPageAgent {
             return NSNull()
         }
         return unwrapOptionalPayload(child.value)
+    }
+
+    func attachNativeResourceObserver(to webView: WKWebView) {
+        let sessionID = "native-\(UUID().uuidString.lowercased())"
+        let observer = NetworkResourceLoadObserver(
+            sessionID: sessionID,
+            includeFetchAndXHR: nativeObserverIncludesFetchAndXHR
+        ) { [weak self] event in
+            self?.store.applyEvent(event)
+        }
+        let attached = observer.attach(to: webView)
+        nativeObserverEnabled = attached
+        nativeSessionID = sessionID
+
+        if attached {
+            nativeResourceObserver = observer
+            networkLogger.notice(
+                "native_resource_observer attached session=\(sessionID, privacy: .public) include_fetch_xhr=\(self.nativeObserverIncludesFetchAndXHR, privacy: .public)"
+            )
+        } else {
+            nativeResourceObserver = nil
+            networkLogger.notice("native_resource_observer unavailable, fallback=js_only")
+        }
+    }
+
+    func resolvedPageHookMode() -> String {
+        // Keep page hook enabled so XHR/fetch body handles/refs are always captured.
+        return "enabled"
+    }
+
+    func detachNativeResourceObserver(from webView: WKWebView) {
+        nativeResourceObserver?.detach(from: webView)
+        nativeResourceObserver = nil
+        nativeObserverEnabled = false
+        nativeSessionID = ""
+        networkLogger.debug("native_resource_observer detached")
     }
 }

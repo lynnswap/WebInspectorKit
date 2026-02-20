@@ -66,6 +66,8 @@ type NetworkState = {
     batchSeq: number;
     droppedEvents: number;
     sessionID: string;
+    messageAuthToken: string;
+    controlAuthToken: string;
     resourceObserver: PerformanceObserver | null;
     resourceSeen: Set<string> | null;
 };
@@ -77,6 +79,8 @@ const networkState: NetworkState = {
     batchSeq: 0,
     droppedEvents: 0,
     sessionID: generateSessionID(),
+    messageAuthToken: "",
+    controlAuthToken: "",
     resourceObserver: null,
     resourceSeen: null
 };
@@ -563,6 +567,7 @@ const deliverNetworkEvents = (events: NetworkEventPayload[]) => {
         return;
     }
     const payload: Record<string, any> = {
+        authToken: networkState.messageAuthToken,
         version: NETWORK_EVENT_VERSION,
         sessionId: networkState.sessionID,
         seq: networkState.batchSeq + 1,

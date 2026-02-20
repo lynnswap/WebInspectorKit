@@ -121,7 +121,7 @@ const installXHRPatch = () => {
         return;
     }
 
-    XMLHttpRequest.prototype.open = function(method, url) {
+    const patchedOpen = function(this: XHRWithNetwork, method: string, url: string) {
         const xhr = this as XHRWithNetwork;
         xhr.__wiNetwork = {
             method: String(method || "GET").toUpperCase(),
@@ -129,7 +129,9 @@ const installXHRPatch = () => {
             headers: {}
         };
         return originalOpen.apply(this, arguments as unknown as Parameters<typeof XMLHttpRequest.prototype.open>);
-    };
+    } as PatchedFunction<typeof XMLHttpRequest.prototype.open>;
+    patchedOpen.__wiNetworkPatched = true;
+    XMLHttpRequest.prototype.open = patchedOpen;
 
     XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
         const xhr = this as XHRWithNetwork;
@@ -259,4 +261,27 @@ const installResourceObserver = () => {
     }
 };
 
-export { installFetchPatch, installResourceObserver, installXHRPatch };
+const detachResourceObserver = () => {
+    const observer = networkState.resourceObserver;
+    if (!observer) {
+        return;
+    }
+    try {
+        observer.disconnect();
+    } catch {
+    }
+    networkState.resourceObserver = null;
+    if (networkState.resourceSeen) {
+        networkState.resourceSeen.clear();
+    }
+};
+
+const setResourceObserverEnabled = (enabled: boolean) => {
+    if (enabled) {
+        installResourceObserver();
+        return;
+    }
+    detachResourceObserver();
+};
+
+export { installFetchPatch, installResourceObserver, installXHRPatch, setResourceObserverEnabled };

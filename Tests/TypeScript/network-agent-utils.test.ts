@@ -11,7 +11,11 @@ import {
     setThrottleOptions,
     shouldCaptureNetworkBodies
 } from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-utils";
-import { getBodyForHandle } from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-core";
+import {
+    configureNetwork,
+    getBodyForHandle,
+    installNetworkObserver
+} from "../../Sources/WebInspectorKitCore/WebInspector/Support/NetworkAgent/network-agent-core";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
@@ -22,12 +26,23 @@ function networkEventsHandler(): WebKitMockHandler {
 }
 
 function resetNetworkState() {
+    if (networkState.resourceObserver && typeof networkState.resourceObserver.disconnect === "function") {
+        try {
+            networkState.resourceObserver.disconnect();
+        } catch {
+        }
+    }
     queuedEvents.splice(0, queuedEvents.length);
     clearThrottledEvents();
     networkState.mode = NetworkLoggingMode.ACTIVE;
+    networkState.installed = false;
     networkState.batchSeq = 0;
     networkState.droppedEvents = 0;
     networkState.sessionID = "test-session";
+    networkState.controlAuthToken = "test-control-token";
+    networkState.messageAuthToken = "test-control-token";
+    networkState.resourceObserver = null;
+    networkState.resourceSeen = null;
     setThrottleOptions({
         intervalMs: 0,
         maxQueuedEvents: 500
@@ -165,6 +180,8 @@ describe("network-agent-utils", () => {
             size: 9,
             content: "AQIDBA==",
             summary: "Binary body (9 bytes)"
+        }, {
+            controlAuthToken: "test-control-token"
         }) as Record<string, unknown> | null;
 
         expect(restored).not.toBeNull();
@@ -181,6 +198,8 @@ describe("network-agent-utils", () => {
     it("accepts string-like handle objects via valueOf fallback", () => {
         const restored = getBodyForHandle({
             valueOf: () => "body-from-value-of"
+        }, {
+            controlAuthToken: "test-control-token"
         }) as Record<string, unknown> | null;
 
         expect(restored).toMatchObject({
@@ -189,5 +208,47 @@ describe("network-agent-utils", () => {
             content: "body-from-value-of",
             size: "body-from-value-of".length
         });
+    });
+
+    it("keeps fetch/xhr patch active while disabling resource observer mode", () => {
+        class FakePerformanceObserver {
+            readonly callback: PerformanceObserverCallback;
+            observe = vi.fn();
+            disconnect = vi.fn();
+
+            constructor(callback: PerformanceObserverCallback) {
+                this.callback = callback;
+            }
+        }
+
+        Object.defineProperty(window, "PerformanceObserver", {
+            configurable: true,
+            writable: true,
+            value: FakePerformanceObserver
+        });
+        Object.defineProperty(globalThis, "PerformanceObserver", {
+            configurable: true,
+            writable: true,
+            value: FakePerformanceObserver
+        });
+
+        installNetworkObserver({
+            pageHookMode: "enabled"
+        });
+
+        const installedObserver = networkState.resourceObserver as FakePerformanceObserver | null;
+        expect(installedObserver).not.toBeNull();
+        expect((window.fetch as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
+        expect((XMLHttpRequest.prototype.open as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            resourceObserverMode: "disabled"
+        });
+
+        expect(installedObserver?.disconnect).toHaveBeenCalledTimes(1);
+        expect(networkState.resourceObserver).toBeNull();
+        expect((window.fetch as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
+        expect((XMLHttpRequest.prototype.open as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
     });
 });

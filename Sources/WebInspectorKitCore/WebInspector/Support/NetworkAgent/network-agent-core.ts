@@ -24,7 +24,13 @@ import {
     trackedRequests
 } from "./network-agent-utils";
 import type { RequestBodyInfo } from "./network-agent-utils";
-import { installFetchPatch, installResourceObserver, installXHRPatch } from "./network-agent-http";
+import { installFetchPatch, installResourceObserver, installXHRPatch, setResourceObserverEnabled } from "./network-agent-http";
+
+type PageHookMode = "enabled" | "disabled";
+type ResourceObserverMode = "enabled" | "disabled";
+
+let pageHookModeState: PageHookMode = "enabled";
+let resourceObserverModeState: ResourceObserverMode = "enabled";
 
 const buildNetworkError = (
     error: unknown,
@@ -215,6 +221,7 @@ const flushQueuedEvents = () => {
 const postNetworkReset = () => {
     try {
         window.webkit?.messageHandlers?.webInspectorNetworkReset?.postMessage({
+            authToken: networkState.messageAuthToken,
             version: NETWORK_EVENT_VERSION,
             sessionId: networkState.sessionID
         });
@@ -248,6 +255,10 @@ const ensureInstalled = () => {
     if (networkState.installed) {
         return;
     }
+    if (pageHookModeState === "disabled") {
+        networkState.installed = true;
+        return;
+    }
     installFetchPatch();
     installXHRPatch();
     installResourceObserver();
@@ -266,6 +277,68 @@ const normalizeLoggingMode = (mode: string) => {
     return NetworkLoggingMode.ACTIVE;
 };
 
+const normalizeResourceObserverMode = (mode: unknown) => {
+    if (mode === "disabled") {
+        return "disabled";
+    }
+    return "enabled";
+};
+
+const normalizePageHookMode = (mode: unknown): PageHookMode => {
+    if (mode === "disabled") {
+        return "disabled";
+    }
+    return "enabled";
+};
+
+const applyResourceObserverMode = () => {
+    const shouldEnable = pageHookModeState === "enabled" && resourceObserverModeState === "enabled";
+    setResourceObserverEnabled(shouldEnable);
+};
+
+const setNetworkPageHookMode = (mode: unknown) => {
+    pageHookModeState = normalizePageHookMode(mode);
+    applyResourceObserverMode();
+};
+
+const setNetworkResourceObserverMode = (mode: unknown) => {
+    resourceObserverModeState = normalizeResourceObserverMode(mode);
+    applyResourceObserverMode();
+};
+
+const setNetworkControlAuthToken = (authToken: unknown) => {
+    networkState.controlAuthToken = typeof authToken === "string" ? authToken : "";
+};
+
+const setNetworkMessageAuthToken = (authToken: unknown) => {
+    networkState.messageAuthToken = typeof authToken === "string" ? authToken : "";
+};
+
+const bootstrapNetworkAuthToken = (authToken: unknown) => {
+    setNetworkControlAuthToken(authToken);
+    setNetworkMessageAuthToken(authToken);
+};
+
+const resolveControlAuthToken = (options?: { controlAuthToken?: unknown } | null) => {
+    return typeof options?.controlAuthToken === "string" ? options.controlAuthToken : "";
+};
+
+const isAuthorizedControlCall = (options?: { controlAuthToken?: unknown } | null) => {
+    const receivedToken = resolveControlAuthToken(options);
+    const currentToken = networkState.controlAuthToken;
+    if (!currentToken) {
+        if (!receivedToken) {
+            return false;
+        }
+        setNetworkControlAuthToken(receivedToken);
+        if (!networkState.messageAuthToken) {
+            setNetworkMessageAuthToken(receivedToken);
+        }
+        return true;
+    }
+    return !!receivedToken && receivedToken === currentToken;
+};
+
 const setNetworkLoggingMode = (mode: string) => {
     const previousMode = networkState.mode;
     const resolvedMode = normalizeLoggingMode(mode);
@@ -279,7 +352,7 @@ const setNetworkLoggingMode = (mode: string) => {
     }
 };
 
-const clearNetworkRecords = () => {
+const clearNetworkRecordsInternal = () => {
     trackedRequests.clear();
     const resourceSeen = networkState.resourceSeen;
     if (resourceSeen) {
@@ -293,11 +366,28 @@ const clearNetworkRecords = () => {
     postNetworkReset();
 };
 
-const installNetworkObserver = () => {
+const clearNetworkRecords = (options?: { controlAuthToken?: unknown } | null) => {
+    if (!isAuthorizedControlCall(options)) {
+        return;
+    }
+    clearNetworkRecordsInternal();
+};
+
+const installNetworkObserver = (
+    options?: {
+        pageHookMode?: "enabled" | "disabled";
+    } | null
+) => {
+    if (options && typeof options === "object" && Object.prototype.hasOwnProperty.call(options, "pageHookMode")) {
+        setNetworkPageHookMode(options.pageHookMode);
+    }
     ensureInstalled();
 };
 
-const getBody = (ref: string | null | undefined) => {
+const getBody = (ref: string | null | undefined, options?: { controlAuthToken?: unknown } | null) => {
+    if (!isAuthorizedControlCall(options)) {
+        return null;
+    }
     if (!ref || typeof ref !== "string") {
         return null;
     }
@@ -386,7 +476,10 @@ const coerceHandleToString = (handle: unknown) => {
     return null;
 };
 
-const getBodyForHandle = (handle: unknown) => {
+const getBodyForHandle = (handle: unknown, options?: { controlAuthToken?: unknown } | null) => {
+    if (!isAuthorizedControlCall(options)) {
+        return null;
+    }
     if (handle == null) {
         return null;
     }
@@ -414,8 +507,21 @@ const getBodyForHandle = (handle: unknown) => {
     return stored || null;
 };
 
-const configureNetwork = (options: { mode?: string; throttle?: unknown; clear?: boolean } | null | undefined) => {
+const configureNetwork = (
+    options: {
+        mode?: string;
+        throttle?: unknown;
+        clear?: boolean;
+        resourceObserverMode?: "enabled" | "disabled";
+        pageHookMode?: "enabled" | "disabled";
+        messageAuthToken?: string;
+        controlAuthToken?: string;
+    } | null | undefined
+) => {
     if (!options || typeof options !== "object") {
+        return;
+    }
+    if (!isAuthorizedControlCall(options)) {
         return;
     }
     if (Object.prototype.hasOwnProperty.call(options, "mode")) {
@@ -425,8 +531,17 @@ const configureNetwork = (options: { mode?: string; throttle?: unknown; clear?: 
     if (Object.prototype.hasOwnProperty.call(options, "throttle")) {
         setNetworkThrottling(options.throttle as { intervalMs?: number; maxQueuedEvents?: number } | null | undefined);
     }
+    if (Object.prototype.hasOwnProperty.call(options, "pageHookMode")) {
+        setNetworkPageHookMode(options.pageHookMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "resourceObserverMode")) {
+        setNetworkResourceObserverMode(options.resourceObserverMode);
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "messageAuthToken")) {
+        setNetworkMessageAuthToken(options.messageAuthToken);
+    }
     if (options.clear === true) {
-        clearNetworkRecords();
+        clearNetworkRecordsInternal();
     }
 };
 
@@ -435,6 +550,7 @@ const setNetworkThrottling = (options: { intervalMs?: number; maxQueuedEvents?: 
 };
 
 export {
+    bootstrapNetworkAuthToken,
     clearNetworkRecords,
     configureNetwork,
     getBody,

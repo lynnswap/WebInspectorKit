@@ -153,7 +153,6 @@ struct NetworkPageAgentTests {
     func attachRegistersHandlersAndInstallsScripts() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
-        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         agent.attachPageWebView(webView)
         await waitForScripts(on: controller, atLeast: 2)
@@ -161,8 +160,8 @@ struct NetworkPageAgentTests {
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(addedHandlerNames.contains("webInspectorNetworkReset"))
-        #expect(controller.addedHandlers.allSatisfy { $0.world == bridgeWorld })
-        #expect(controller.userScripts.count == 2)
+        #expect(controller.addedHandlers.allSatisfy { $0.world == .page })
+        #expect(controller.userScripts.count == 3)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetworkAgent") })
     }
 
@@ -170,7 +169,6 @@ struct NetworkPageAgentTests {
     func detachRemovesHandlersAndClearsWebView() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
-        let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
         agent.attachPageWebView(webView)
         await waitForScripts(on: controller, atLeast: 2)
@@ -181,7 +179,7 @@ struct NetworkPageAgentTests {
         #expect(controller.removedHandlers.count > removedBefore)
         #expect(removedHandlerNames.contains("webInspectorNetworkEvents"))
         #expect(removedHandlerNames.contains("webInspectorNetworkReset"))
-        #expect(controller.removedHandlers.allSatisfy { $0.world == bridgeWorld })
+        #expect(controller.removedHandlers.allSatisfy { $0.world == .page })
         #expect(agent.webView == nil)
     }
 
@@ -197,14 +195,14 @@ struct NetworkPageAgentTests {
         let raw = try await webView.evaluateJavaScript(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
-            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+            contentWorld: .page
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
     }
 
     @Test
-    func attachInstallsBridgeWorldNetworkScriptWhenPageWorldProbeAlreadyExists() async throws {
+    func attachInstallsPageWorldNetworkScriptWhenPageWorldProbeAlreadyExists() async throws {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
         controller.addUserScript(
@@ -222,10 +220,36 @@ struct NetworkPageAgentTests {
         let raw = try await webView.evaluateJavaScript(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
-            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+            contentWorld: .page
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+    }
+
+    @Test
+    func attachPatchesXHRAndFetchInPageWorld() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 2)
+        await loadHTML("<html><body><p>patch-check</p></body></html>", in: webView)
+
+        let raw = try await webView.evaluateJavaScript(
+            """
+            (() => ({
+                xhrPatched: Boolean(XMLHttpRequest.prototype.open && XMLHttpRequest.prototype.open.__wiNetworkPatched),
+                fetchPatched: Boolean(window.fetch && window.fetch.__wiNetworkPatched)
+            }))();
+            """,
+            in: nil,
+            contentWorld: .page
+        )
+        let payload = raw as? NSDictionary
+        let xhrPatched = (payload?["xhrPatched"] as? Bool) ?? ((payload?["xhrPatched"] as? NSNumber)?.boolValue ?? false)
+        let fetchPatched = (payload?["fetchPatched"] as? Bool) ?? ((payload?["fetchPatched"] as? NSNumber)?.boolValue ?? false)
+        #expect(xhrPatched == true)
+        #expect(fetchPatched == true)
     }
 
     @Test
@@ -239,6 +263,27 @@ struct NetworkPageAgentTests {
 
         let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
         #expect(body?.full == "token")
+    }
+
+    @Test
+    func reattachKeepsControlTokenValidForBodyFetch() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 3)
+        await loadHTML("<html><body><p>first</p></body></html>", in: webView)
+
+        let firstBody = await agent.fetchBody(bodyRef: nil, bodyHandle: "first" as NSString, role: .response)
+        #expect(firstBody?.full == "first")
+
+        agent.detachPageWebView(preparing: .active)
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 3)
+        await loadHTML("<html><body><p>second</p></body></html>", in: webView)
+
+        let secondBody = await agent.fetchBody(bodyRef: nil, bodyHandle: "second" as NSString, role: .response)
+        #expect(secondBody?.full == "second")
     }
 
     @Test
