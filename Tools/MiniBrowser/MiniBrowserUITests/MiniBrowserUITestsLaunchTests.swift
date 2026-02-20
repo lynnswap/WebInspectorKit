@@ -19,7 +19,6 @@ final class MiniBrowserUITestsLaunchTests: XCTestCase {
 
     @MainActor
     func testLaunch() throws {
-        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
 

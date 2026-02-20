@@ -23,7 +23,6 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
-        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
         XCTAssertEqual(app.state, .runningForeground)
@@ -31,7 +30,6 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testInspectorTabSwitchStressDoesNotTerminateApp() throws {
-        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
 
@@ -55,7 +53,6 @@ final class MiniBrowserUITests: XCTestCase {
 
     @MainActor
     func testLaunchPerformance() throws {
-        XCUIDevice.shared.orientation = .portrait
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
