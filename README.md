@@ -111,7 +111,7 @@ See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
 
 ## Testing
 
-Run tests with `xcodebuild` from the repository root.
+Run tests with `xcodebuild` from the repository root. Execute both macOS and iOS Simulator test suites.
 
 ```bash
 # macOS: Package tests (Core)

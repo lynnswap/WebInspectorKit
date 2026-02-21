@@ -111,7 +111,7 @@ let container = WIContainerViewController(
 
 ## テスト
 
-リポジトリルートで `xcodebuild` を実行します。
+リポジトリルートで `xcodebuild` を実行します。macOS と iOS Simulator の両方のテストを実行してください。
 
 ```bash
 # macOS: Package tests (Core)
