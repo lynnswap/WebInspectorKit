@@ -20,7 +20,10 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../../ObservationsCompat")
+        .package(
+            url: "https://github.com/lynnswap/ObservationsCompat.git",
+            exact: "0.1.0"
+        )
     ],
     targets: [
         .target(

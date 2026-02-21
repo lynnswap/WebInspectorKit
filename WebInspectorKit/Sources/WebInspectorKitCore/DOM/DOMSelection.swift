@@ -108,14 +108,28 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
             clear()
             return
         }
-        let previousNodeId = nodeId
-        nodeId = snapshot.nodeId
-        preview = snapshot.preview
-        attributes = snapshot.attributes
-        path = snapshot.path
-        selectorPath = snapshot.selectorPath
-        styleRevision = snapshot.styleRevision
-        if previousNodeId != snapshot.nodeId {
+        let nodeChanged = nodeId != snapshot.nodeId
+
+        if nodeId != snapshot.nodeId {
+            nodeId = snapshot.nodeId
+        }
+        if preview != snapshot.preview {
+            preview = snapshot.preview
+        }
+        if attributes != snapshot.attributes {
+            attributes = snapshot.attributes
+        }
+        if path != snapshot.path {
+            path = snapshot.path
+        }
+        if selectorPath != snapshot.selectorPath {
+            selectorPath = snapshot.selectorPath
+        }
+        if styleRevision != snapshot.styleRevision {
+            styleRevision = snapshot.styleRevision
+        }
+
+        if nodeChanged {
             clearMatchedStyles()
         }
     }

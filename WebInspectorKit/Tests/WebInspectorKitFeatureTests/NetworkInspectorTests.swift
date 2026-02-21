@@ -271,6 +271,27 @@ struct NetworkInspectorTests {
         #expect(resolved == nil)
     }
 
+    @Test
+    func networkListRenderModelTreatsSameStateAsEqual() {
+        let entryID = UUID()
+        let first = NetworkListRenderModel(
+            entries: [.init(id: entryID, revision: 1)],
+            selectedEntryID: entryID,
+            searchText: "abc",
+            effectiveFilterRawValues: ["script"],
+            storeEntryCount: 1
+        )
+        let second = NetworkListRenderModel(
+            entries: [.init(id: entryID, revision: 1)],
+            selectedEntryID: entryID,
+            searchText: "abc",
+            effectiveFilterRawValues: ["script"],
+            storeEntryCount: 1
+        )
+
+        #expect(first == second)
+    }
+
     private func makeEntry() -> NetworkEntry {
         NetworkEntry(
             sessionID: "session",

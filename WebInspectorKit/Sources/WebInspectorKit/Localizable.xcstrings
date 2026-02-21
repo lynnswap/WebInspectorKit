@@ -1,8 +1,12 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "" : {
+
+    },
     "common.cancel" : {
       "comment" : "Generic cancellation button title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -146,6 +150,7 @@
     },
     "common.save" : {
       "comment" : "Generic confirmation button title for saving changes.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -574,6 +579,7 @@
     },
     "dom.controls.pick" : {
       "comment" : "Toolbar button title for enabling DOM element picker mode.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2569,6 +2575,9 @@
           }
         }
       }
+    },
+    "HTML" : {
+
     },
     "inspector.delete_node" : {
       "localizations" : {
@@ -5007,7 +5016,6 @@
     },
     "network.detail.section.overview" : {
       "comment" : "Section title for the network request overview.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -5288,6 +5296,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "觸發網路請求以查看活動。"
+          }
+        }
+      }
+    },
+    "network.empty.selection.description" : {
+      "comment" : "Empty state description shown when requests exist but no row is selected.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select a request from the list to inspect details."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一覧からリクエストを選択して詳細を確認してください。"
+          }
+        }
+      }
+    },
+    "network.empty.selection.title" : {
+      "comment" : "Empty state title shown when requests exist but no row is selected.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No request selected"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リクエストが選択されていません"
           }
         }
       }
@@ -7582,7 +7624,6 @@
     },
     "network.table.column.duration" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7726,7 +7767,6 @@
     },
     "network.table.column.method" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7870,7 +7910,6 @@
     },
     "network.table.column.request" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8014,7 +8053,6 @@
     },
     "network.table.column.size" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8158,7 +8196,6 @@
     },
     "network.table.column.status" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8302,7 +8339,6 @@
     },
     "network.table.column.type" : {
       "comment" : "Network table column title.",
-      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8871,6 +8907,9 @@
           }
         }
       }
+    },
+    "XPath" : {
+
     }
   },
   "version" : "1.1"

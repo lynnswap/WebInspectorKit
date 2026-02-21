@@ -151,7 +151,7 @@ private final class NetworkListViewController: UICollectionViewController, UISea
         let stableID: ItemStableID
     }
 
-    private struct ItemPayload {
+    fileprivate struct ItemPayload {
         let entryID: UUID
         let displayName: String
         let fileTypeLabel: String
@@ -704,7 +704,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         case header(name: String, value: String)
         case emptyHeader
         case body(entry: NetworkEntry, body: NetworkBody)
-        case error(String)
+        case error(entryID: UUID, message: String)
     }
 
     private struct DetailSection {
@@ -786,25 +786,11 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
             requestSnapshotUpdate()
             collectionView.isHidden = true
             navigationItem.rightBarButtonItem = nil
-            var configuration = UIContentUnavailableConfiguration.empty()
-            if hasEntries {
-                configuration.text = wiLocalized("network.empty.selection.title", default: "No request selected")
-                configuration.secondaryText = wiLocalized(
-                    "network.empty.selection.description",
-                    default: "Select a request from the list to inspect details."
-                )
-            } else {
-                configuration.text = wiLocalized("network.empty.title")
-                configuration.secondaryText = wiLocalized("network.empty.description")
-            }
-            configuration.image = UIImage(systemName: "waveform.path.ecg.rectangle")
-            contentUnavailableConfiguration = configuration
             return
         }
 
         title = entry.displayName
         sections = makeSections(for: entry)
-        contentUnavailableConfiguration = nil
         collectionView.isHidden = false
         requestSnapshotUpdate()
         navigationItem.rightBarButtonItem = makeSecondaryActionsItem(for: entry)
@@ -1086,7 +1072,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
                 payload: .body(entryID: entry.id, bodyKind: bodyKind),
                 revision: bodyRenderHash(entry: entry, body: body)
             )
-        case let .error(message):
+        case let .error(_, message):
             var hasher = Hasher()
             hasher.combine(message)
             return (
@@ -1149,7 +1135,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
             sections.append(DetailSection(
                 kind: .error,
                 title: wiLocalized("network.section.error", default: "Error"),
-                rows: [.error(errorDescription)]
+                rows: [.error(entryID: entry.id, message: errorDescription)]
             ))
         }
 
@@ -1596,19 +1582,17 @@ private func decodedBodyText(from body: NetworkBody) -> String? {
 
 #elseif canImport(AppKit)
 import AppKit
+import SwiftUI
 
 @MainActor
 final class NetworkTabViewController: NSSplitViewController {
     private let inspector: WINetworkPaneViewModel
     private var observationTask: Task<Void, Never>?
-
-    private let listViewController: NetworkMacListViewController
-    private let detailViewController: NetworkMacDetailViewController
+    private var listHostingController: NSHostingController<NetworkMacListPane>?
+    private var detailViewController: NetworkMacDetailViewController?
 
     init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
-        self.listViewController = NetworkMacListViewController(inspector: inspector)
-        self.detailViewController = NetworkMacDetailViewController(inspector: inspector)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1625,23 +1609,28 @@ final class NetworkTabViewController: NSSplitViewController {
         super.viewDidLoad()
         inspector.selectedEntryID = nil
 
-        let listItem = NSSplitViewItem(viewController: listViewController)
-        let detailItem = NSSplitViewItem(viewController: detailViewController)
+        let listHost = NSHostingController(rootView: NetworkMacListPane(inspector: inspector))
+        let detailController = NetworkMacDetailViewController(inspector: inspector)
+        listHostingController = listHost
+        detailViewController = detailController
+
+        let listItem = NSSplitViewItem(viewController: listHost)
+        listItem.minimumThickness = 280
+        listItem.preferredThicknessFraction = 0.42
+        listItem.canCollapse = false
+
+        let detailItem = NSSplitViewItem(viewController: detailController)
+        detailItem.minimumThickness = 280
+
         splitViewItems = [listItem, detailItem]
 
-        listViewController.onSelectEntry = { [weak self] entry in
-            guard let self else { return }
-            self.inspector.selectedEntryID = entry?.id
-            self.detailViewController.display(entry, hasEntries: !self.inspector.store.entries.isEmpty)
-        }
-
-        syncDetailSelection()
+        syncSelection()
     }
 
     override func viewWillAppear() {
         super.viewWillAppear()
         startObservingInspectorIfNeeded()
-        syncDetailSelection()
+        syncSelection()
     }
 
     override func viewDidDisappear() {
@@ -1649,7 +1638,7 @@ final class NetworkTabViewController: NSSplitViewController {
         stopObservingInspector()
     }
 
-    private func syncDetailSelection() {
+    private func syncSelection() {
         let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
             current: inspector.selectedEntryID,
             entries: inspector.displayEntries
@@ -1657,183 +1646,14 @@ final class NetworkTabViewController: NSSplitViewController {
         if inspector.selectedEntryID != resolvedSelection {
             inspector.selectedEntryID = resolvedSelection
         }
-        let entry = inspector.store.entry(forEntryID: inspector.selectedEntryID)
-        detailViewController.display(entry, hasEntries: !inspector.store.entries.isEmpty)
-        listViewController.selectEntry(with: inspector.selectedEntryID)
     }
 
-    private func startObservingInspectorIfNeeded() {
-        guard observationTask == nil else {
-            return
-        }
-        observationTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            for await _ in NetworkListEventStream.makeDetailStream(inspector: self.inspector) {
-                guard !Task.isCancelled else {
-                    break
-                }
-                self.syncDetailSelection()
-            }
-        }
+    func canFetchSelectedBodies() -> Bool {
+        detailViewController?.canFetchBodies ?? false
     }
 
-    private func stopObservingInspector() {
-        observationTask?.cancel()
-        observationTask = nil
-    }
-}
-
-@MainActor
-private final class NetworkMacListViewController: NSViewController, NSTableViewDelegate, NSTableViewDataSource, NSSearchFieldDelegate {
-    private let inspector: WINetworkPaneViewModel
-    private var observationTask: Task<Void, Never>?
-
-    private let searchField = NSSearchField()
-    private let filterButton = NSPopUpButton(frame: .zero, pullsDown: true)
-    private let clearButton = NSButton(title: "", target: nil, action: nil)
-    private lazy var tableView: NSTableView = {
-        let view = NSTableView(frame: .zero)
-        view.delegate = self
-        view.dataSource = self
-        view.headerView = nil
-        view.rowHeight = 62
-        view.intercellSpacing = NSSize(width: 0, height: 4)
-        view.usesAutomaticRowHeights = false
-        view.focusRingType = .none
-        view.backgroundColor = .clear
-        view.selectionHighlightStyle = .regular
-        let column = NSTableColumn(identifier: NetworkMacListCellView.reuseIdentifier)
-        column.resizingMask = .autoresizingMask
-        view.addTableColumn(column)
-        return view
-    }()
-
-    private var displayedEntries: [NetworkEntry] = []
-    private var entryByID: [UUID: NetworkEntry] = [:]
-    private var lastRenderSignature: Int?
-    private var needsTableReloadOnNextAppearance = false
-    private var isApplyingSelection = false
-    var onSelectEntry: ((NetworkEntry?) -> Void)?
-
-    init(inspector: WINetworkPaneViewModel) {
-        self.inspector = inspector
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    deinit {
-        observationTask?.cancel()
-    }
-
-    override func loadView() {
-        view = NSView(frame: .zero)
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-
-        searchField.placeholderString = wiLocalized("network.search.placeholder")
-        searchField.delegate = self
-
-        filterButton.title = wiLocalized("network.controls.filter")
-        filterButton.bezelStyle = .rounded
-        rebuildFilterMenu()
-
-        clearButton.title = wiLocalized("network.controls.clear")
-        clearButton.target = self
-        clearButton.action = #selector(clearEntries)
-        clearButton.bezelStyle = .rounded
-
-        let toolbar = NSStackView(views: [searchField, filterButton, clearButton])
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 8
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-
-        let scrollView = NSScrollView()
-        scrollView.documentView = tableView
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-
-        view.addSubview(toolbar)
-        view.addSubview(scrollView)
-
-        NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-
-            scrollView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-    }
-
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        startObservingInspectorIfNeeded()
-        flushPendingTableReloadIfNeeded()
-    }
-
-    override func viewDidDisappear() {
-        super.viewDidDisappear()
-        stopObservingInspector()
-    }
-
-    func controlTextDidChange(_ obj: Notification) {
-        inspector.searchText = searchField.stringValue
-    }
-
-    func selectEntry(with id: UUID?) {
-        guard let id else {
-            isApplyingSelection = true
-            tableView.deselectAll(nil)
-            isApplyingSelection = false
-            return
-        }
-        guard let index = displayedEntries.firstIndex(where: { $0.id == id }) else {
-            isApplyingSelection = true
-            tableView.deselectAll(nil)
-            isApplyingSelection = false
-            return
-        }
-        let rowIndexes = IndexSet(integer: index)
-        if tableView.selectedRowIndexes != rowIndexes {
-            isApplyingSelection = true
-            tableView.selectRowIndexes(rowIndexes, byExtendingSelection: false)
-            isApplyingSelection = false
-        }
-        tableView.scrollRowToVisible(index)
-    }
-
-    private func reloadDataFromInspector() {
-        displayedEntries = inspector.displayEntries
-        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntryID,
-            entries: displayedEntries
-        )
-        if inspector.selectedEntryID != resolvedSelection {
-            inspector.selectedEntryID = resolvedSelection
-        }
-
-        entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        let renderSignature = tableRenderSignature(for: displayedEntries)
-        if renderSignature != lastRenderSignature {
-            lastRenderSignature = renderSignature
-            requestTableReload()
-        } else if isTableViewVisible {
-            selectEntry(with: inspector.selectedEntryID)
-        }
-
-        clearButton.isEnabled = !inspector.store.entries.isEmpty
-        rebuildFilterMenu()
+    func fetchSelectedBodies(force: Bool) {
+        detailViewController?.fetchBodies(force: force)
     }
 
     private func startObservingInspectorIfNeeded() {
@@ -1848,241 +1668,22 @@ private final class NetworkMacListViewController: NSViewController, NSTableViewD
                 guard !Task.isCancelled else {
                     break
                 }
-                self.reloadDataFromInspector()
+                self.syncSelection()
             }
         }
-        reloadDataFromInspector()
     }
 
     private func stopObservingInspector() {
         observationTask?.cancel()
         observationTask = nil
     }
-
-    private var isTableViewVisible: Bool {
-        isViewLoaded && view.window != nil
-    }
-
-    private func requestTableReload() {
-        guard isTableViewVisible else {
-            needsTableReloadOnNextAppearance = true
-            return
-        }
-        needsTableReloadOnNextAppearance = false
-        applyTableReload()
-    }
-
-    private func flushPendingTableReloadIfNeeded() {
-        guard needsTableReloadOnNextAppearance, isTableViewVisible else {
-            return
-        }
-        needsTableReloadOnNextAppearance = false
-        applyTableReload()
-    }
-
-    private func applyTableReload() {
-        tableView.reloadData()
-        selectEntry(with: inspector.selectedEntryID)
-    }
-
-    private func rebuildFilterMenu() {
-        let menu = NSMenu()
-        menu.addItem(withTitle: wiLocalized("network.controls.filter"), action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
-        let allItem = NSMenuItem(
-            title: wiLocalized("network.filter.all"),
-            action: #selector(selectAllFilters(_:)),
-            keyEquivalent: ""
-        )
-        allItem.target = self
-        allItem.state = inspector.effectiveResourceFilters.isEmpty ? .on : .off
-        menu.addItem(allItem)
-        menu.addItem(.separator())
-
-        for filter in NetworkResourceFilter.pickerCases {
-            let item = NSMenuItem(
-                title: localizedTitle(for: filter),
-                action: #selector(toggleFilter(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = filter.rawValue
-            item.state = inspector.activeResourceFilters.contains(filter) ? .on : .off
-            menu.addItem(item)
-        }
-
-        filterButton.menu = menu
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        displayedEntries.count
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row >= 0, row < displayedEntries.count else {
-            return nil
-        }
-        let entry = displayedEntries[row]
-        let view = (tableView.makeView(
-            withIdentifier: NetworkMacListCellView.reuseIdentifier,
-            owner: self
-        ) as? NetworkMacListCellView) ?? NetworkMacListCellView()
-        view.identifier = NetworkMacListCellView.reuseIdentifier
-        view.configure(entry: entry)
-        return view
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard !isApplyingSelection else {
-            return
-        }
-        let row = tableView.selectedRow
-        guard row >= 0, row < displayedEntries.count else {
-            onSelectEntry?(nil)
-            return
-        }
-        onSelectEntry?(displayedEntries[row])
-    }
-
-    private func tableRenderSignature(for entries: [NetworkEntry]) -> Int {
-        var hasher = Hasher()
-        hasher.combine(entries.count)
-        for entry in entries {
-            hasher.combine(entry.id)
-            hasher.combine(entry.displayName)
-            hasher.combine(entry.method)
-            hasher.combine(entry.fileTypeLabel)
-            hasher.combine(entry.statusLabel)
-            hasher.combine(entry.statusSeverity)
-        }
-        return hasher.finalize()
-    }
-
-    @objc
-    private func selectAllFilters(_ sender: NSMenuItem) {
-        inspector.setResourceFilter(.all, isEnabled: true)
-        rebuildFilterMenu()
-    }
-
-    @objc
-    private func toggleFilter(_ sender: NSMenuItem) {
-        guard
-            let rawValue = sender.representedObject as? String,
-            let filter = NetworkResourceFilter(rawValue: rawValue)
-        else {
-            return
-        }
-
-        let currentlyEnabled = inspector.activeResourceFilters.contains(filter)
-        inspector.setResourceFilter(filter, isEnabled: !currentlyEnabled)
-        rebuildFilterMenu()
-    }
-
-    @objc
-    private func clearEntries() {
-        inspector.clear()
-    }
-
-    private func localizedTitle(for filter: NetworkResourceFilter) -> String {
-        switch filter {
-        case .all:
-            return wiLocalized("network.filter.all")
-        case .document:
-            return wiLocalized("network.filter.document")
-        case .stylesheet:
-            return wiLocalized("network.filter.stylesheet")
-        case .image:
-            return wiLocalized("network.filter.image")
-        case .font:
-            return wiLocalized("network.filter.font")
-        case .script:
-            return wiLocalized("network.filter.script")
-        case .xhrFetch:
-            return wiLocalized("network.filter.xhr_fetch")
-        case .other:
-            return wiLocalized("network.filter.other")
-        }
-    }
-}
-
-private final class NetworkMacListCellView: NSTableCellView {
-    static let reuseIdentifier = NSUserInterfaceItemIdentifier("NetworkMacListCellView")
-
-    private let nameLabel = NSTextField(labelWithString: "")
-    private let detailLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
-    private let stackView = NSStackView()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setupUI()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    private func setupUI() {
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        translatesAutoresizingMaskIntoConstraints = false
-
-        stackView.orientation = .vertical
-        stackView.spacing = 2
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-
-        nameLabel.font = WIUIStyle.macOS.bodyFont
-        nameLabel.lineBreakMode = .byTruncatingMiddle
-        detailLabel.font = WIUIStyle.macOS.detailFont
-        detailLabel.textColor = .secondaryLabelColor
-        metaLabel.font = WIUIStyle.macOS.detailFont
-        metaLabel.textColor = .secondaryLabelColor
-
-        stackView.addArrangedSubview(nameLabel)
-        stackView.addArrangedSubview(detailLabel)
-        stackView.addArrangedSubview(metaLabel)
-        addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
-        ])
-    }
-
-    func configure(entry: NetworkEntry) {
-        nameLabel.stringValue = entry.displayName
-        detailLabel.stringValue = "\(entry.method) • \(entry.fileTypeLabel)"
-        metaLabel.stringValue = entry.statusLabel
-        metaLabel.textColor = networkStatusColor(for: entry.statusSeverity)
-    }
 }
 
 @MainActor
 private final class NetworkMacDetailViewController: NSViewController {
-    private enum DetailRow {
-        case summary(NetworkEntry)
-        case header(name: String, value: String)
-        case emptyHeader
-        case body(entry: NetworkEntry, body: NetworkBody)
-        case error(String)
-    }
-
-    private struct DetailSection {
-        let title: String
-        let rows: [DetailRow]
-    }
-
     private let inspector: WINetworkPaneViewModel
-
-    private let fetchButton = NSButton(title: "", target: nil, action: nil)
-    private let emptyLabel = NSTextField(labelWithString: "")
-    private let contentStackView = NSStackView()
-    private var entry: NetworkEntry?
+    private var hostingController: NSHostingController<NetworkMacDetailPane>?
+    private var fetchTask: Task<Void, Never>?
 
     init(inspector: WINetworkPaneViewModel) {
         self.inspector = inspector
@@ -2094,6 +1695,10 @@ private final class NetworkMacDetailViewController: NSViewController {
         nil
     }
 
+    deinit {
+        fetchTask?.cancel()
+    }
+
     override func loadView() {
         view = NSView(frame: .zero)
     }
@@ -2101,309 +1706,36 @@ private final class NetworkMacDetailViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        fetchButton.title = wiLocalized("network.body.fetch", default: "Fetch Body")
-        fetchButton.bezelStyle = .rounded
-        fetchButton.target = self
-        fetchButton.action = #selector(fetchBodies)
-        fetchButton.translatesAutoresizingMaskIntoConstraints = false
+        let hostingController = NSHostingController(rootView: NetworkMacDetailPane(inspector: inspector))
+        self.hostingController = hostingController
+        addChild(hostingController)
+        let hostedView = hostingController.view
+        hostedView.translatesAutoresizingMaskIntoConstraints = false
 
-        let scrollView = NSScrollView()
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-
-        let contentView = NSView()
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = contentView
-
-        contentStackView.orientation = .vertical
-        contentStackView.spacing = WIUIStyle.macOS.sectionSpacing
-        contentStackView.translatesAutoresizingMaskIntoConstraints = false
-
-        contentView.addSubview(contentStackView)
-        NSLayoutConstraint.activate([
-            contentStackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: WIUIStyle.macOS.verticalPadding),
-            contentStackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: WIUIStyle.macOS.horizontalPadding),
-            contentStackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -WIUIStyle.macOS.horizontalPadding),
-            contentStackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -WIUIStyle.macOS.verticalPadding),
-            contentStackView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor, constant: -(WIUIStyle.macOS.horizontalPadding * 2))
-        ])
-
-        emptyLabel.font = WIUIStyle.macOS.bodyFont
-        emptyLabel.textColor = .secondaryLabelColor
-        emptyLabel.maximumNumberOfLines = 0
-        emptyLabel.isHidden = true
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        view.addSubview(fetchButton)
-        view.addSubview(scrollView)
-        view.addSubview(emptyLabel)
-        NSLayoutConstraint.activate([
-            fetchButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            fetchButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-
-            scrollView.topAnchor.constraint(equalTo: fetchButton.bottomAnchor, constant: 8),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            emptyLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            emptyLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
-            emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24)
-        ])
-
-        display(nil, hasEntries: false)
-    }
-
-    func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
-        self.entry = entry
-
-        guard let entry else {
-            if hasEntries {
-                emptyLabel.stringValue = "\(wiLocalized("network.empty.selection.title", default: "No request selected"))\n\n\(wiLocalized("network.empty.selection.description", default: "Select a request from the list to inspect details."))"
-            } else {
-                emptyLabel.stringValue = "\(wiLocalized("network.empty.title"))\n\n\(wiLocalized("network.empty.description"))"
-            }
-            emptyLabel.isHidden = false
-            contentStackView.isHidden = true
-            fetchButton.isEnabled = false
-            return
-        }
-
-        emptyLabel.isHidden = true
-        contentStackView.isHidden = false
-        rebuildContent(for: entry)
-        fetchButton.isEnabled = canFetchBodies(for: entry)
-    }
-
-    @objc
-    private func fetchBodies() {
-        guard let entry else {
-            return
-        }
-
-        let entryID = entry.id
-        Task {
-            if let requestBody = entry.requestBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: requestBody, force: true)
-            }
-            if let responseBody = entry.responseBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: responseBody, force: true)
-            }
-            guard self.inspector.selectedEntryID == entryID else {
-                return
-            }
-            self.rebuildContent(for: entry)
-            self.fetchButton.isEnabled = self.canFetchBodies(for: entry)
-        }
-    }
-
-    private func rebuildContent(for entry: NetworkEntry) {
-        contentStackView.arrangedSubviews.forEach { arrangedSubview in
-            contentStackView.removeArrangedSubview(arrangedSubview)
-            arrangedSubview.removeFromSuperview()
-        }
-
-        for section in makeSections(for: entry) {
-            contentStackView.addArrangedSubview(makeSectionHeader(section.title))
-            section.rows.forEach { row in
-                contentStackView.addArrangedSubview(makeRowView(row))
-            }
-        }
-    }
-
-    private func makeSections(for entry: NetworkEntry) -> [DetailSection] {
-        var sections: [DetailSection] = [
-            DetailSection(
-                title: wiLocalized("network.detail.section.overview", default: "Overview"),
-                rows: [.summary(entry)]
-            )
-        ]
-
-        let requestRows: [DetailRow]
-        if entry.requestHeaders.isEmpty {
-            requestRows = [.emptyHeader]
-        } else {
-            requestRows = entry.requestHeaders.fields.map { .header(name: $0.name, value: $0.value) }
-        }
-        sections.append(DetailSection(
-            title: wiLocalized("network.section.request", default: "Request"),
-            rows: requestRows
-        ))
-
-        if let requestBody = entry.requestBody {
-            sections.append(DetailSection(
-                title: wiLocalized("network.section.body.request", default: "Request Body"),
-                rows: [.body(entry: entry, body: requestBody)]
-            ))
-        }
-
-        let responseRows: [DetailRow]
-        if entry.responseHeaders.isEmpty {
-            responseRows = [.emptyHeader]
-        } else {
-            responseRows = entry.responseHeaders.fields.map { .header(name: $0.name, value: $0.value) }
-        }
-        sections.append(DetailSection(
-            title: wiLocalized("network.section.response", default: "Response"),
-            rows: responseRows
-        ))
-
-        if let responseBody = entry.responseBody {
-            sections.append(DetailSection(
-                title: wiLocalized("network.section.body.response", default: "Response Body"),
-                rows: [.body(entry: entry, body: responseBody)]
-            ))
-        }
-
-        if let errorDescription = entry.errorDescription, !errorDescription.isEmpty {
-            sections.append(DetailSection(
-                title: wiLocalized("network.section.error", default: "Error"),
-                rows: [.error(errorDescription)]
-            ))
-        }
-
-        return sections
-    }
-
-    private func makeSectionHeader(_ title: String) -> NSView {
-        let label = NSTextField(labelWithString: title)
-        label.font = WIUIStyle.macOS.headerFont
-        label.textColor = .secondaryLabelColor
-        return label
-    }
-
-    private func makeRowView(_ row: DetailRow) -> NSView {
-        switch row {
-        case .summary(let entry):
-            return makeCardView {
-                let metrics = NSTextField(labelWithString: makeSummaryText(for: entry))
-                metrics.font = WIUIStyle.macOS.bodyFont
-                metrics.textColor = networkStatusColor(for: entry.statusSeverity)
-
-                let url = NSTextField(wrappingLabelWithString: entry.url)
-                url.font = WIUIStyle.macOS.bodyFont
-                url.textColor = .labelColor
-                url.lineBreakMode = .byCharWrapping
-
-                return [metrics, url]
-            }
-        case .header(let name, let value):
-            return makeCardView {
-                let key = NSTextField(labelWithString: name)
-                key.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-                key.textColor = .secondaryLabelColor
-
-                let detail = NSTextField(wrappingLabelWithString: value)
-                detail.font = WIUIStyle.macOS.detailFont
-                detail.textColor = .labelColor
-
-                return [key, detail]
-            }
-        case .emptyHeader:
-            return makeCardView {
-                let label = NSTextField(labelWithString: wiLocalized("network.headers.empty", default: "No headers"))
-                label.font = WIUIStyle.macOS.bodyFont
-                label.textColor = .secondaryLabelColor
-                return [label]
-            }
-        case .body(let entry, let body):
-            return makeCardView {
-                let title = NSTextField(labelWithString: makeBodyPrimaryText(entry: entry, body: body))
-                title.font = WIUIStyle.macOS.bodyFont
-                title.textColor = .secondaryLabelColor
-
-                let preview = NSTextField(wrappingLabelWithString: makeBodySecondaryText(body))
-                preview.font = WIUIStyle.macOS.detailFont
-                preview.textColor = .labelColor
-                preview.maximumNumberOfLines = 0
-
-                return [title, preview]
-            }
-        case .error(let message):
-            return makeCardView {
-                let label = NSTextField(wrappingLabelWithString: message)
-                label.font = WIUIStyle.macOS.bodyFont
-                label.textColor = .systemOrange
-                return [label]
-            }
-        }
-    }
-
-    private func makeCardView(content: () -> [NSView]) -> NSView {
-        let card = NSView()
-        card.wantsLayer = true
-        card.layer?.cornerRadius = WIUIStyle.macOS.cardCornerRadius
-        card.layer?.borderWidth = 1
-        card.layer?.borderColor = WIUIStyle.macOS.cardBorderColor.cgColor
-        card.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = NSStackView(views: content())
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = WIUIStyle.macOS.rowSpacing
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(stack)
+        view.addSubview(hostedView)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: card.topAnchor, constant: WIUIStyle.macOS.verticalPadding),
-            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: WIUIStyle.macOS.horizontalPadding),
-            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -WIUIStyle.macOS.horizontalPadding),
-            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -WIUIStyle.macOS.verticalPadding)
+            hostedView.topAnchor.constraint(equalTo: view.topAnchor),
+            hostedView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostedView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hostedView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        return card
     }
 
-    private func makeSummaryText(for entry: NetworkEntry) -> String {
-        var parts: [String] = [entry.statusLabel]
-        if let duration = entry.duration {
-            parts.append("◷ \(entry.durationText(for: duration))")
-        }
-        if let size = entry.encodedBodyLength {
-            parts.append("↓ \(entry.sizeText(for: size))")
-        }
-        return parts.joined(separator: "  ")
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        fetchTask?.cancel()
+        fetchTask = nil
     }
 
-    private func makeBodyPrimaryText(entry: NetworkEntry, body: NetworkBody) -> String {
-        var parts: [String] = []
-        if let typeLabel = networkBodyTypeLabel(entry: entry, body: body) {
-            parts.append(typeLabel)
-        }
-        if let size = networkBodySize(entry: entry, body: body) {
-            parts.append(entry.sizeText(for: size))
-        }
-        if parts.isEmpty {
-            return wiLocalized("network.body.unavailable", default: "Body unavailable")
-        }
-        return parts.joined(separator: "  ")
+    private var selectedEntry: NetworkEntry? {
+        inspector.store.entry(forEntryID: inspector.selectedEntryID)
     }
 
-    private func makeBodySecondaryText(_ body: NetworkBody) -> String {
-        switch body.fetchState {
-        case .fetching:
-            return wiLocalized("network.body.fetching", default: "Fetching body...")
-        case .failed(let error):
-            return error.localizedDescriptionText
-        default:
-            if body.kind == .form, !body.formEntries.isEmpty {
-                return body.formEntries.prefix(4).map {
-                    let value: String
-                    if $0.isFile, let fileName = $0.fileName, !fileName.isEmpty {
-                        value = fileName
-                    } else {
-                        value = $0.value
-                    }
-                    return "\($0.name): \(value)"
-                }.joined(separator: "\n")
-            }
-            return networkBodyPreviewText(body) ?? wiLocalized("network.body.unavailable", default: "Body unavailable")
+    var canFetchBodies: Bool {
+        guard let entry = selectedEntry else {
+            return false
         }
-    }
-
-    private func canFetchBodies(for entry: NetworkEntry) -> Bool {
         if let requestBody = entry.requestBody, requestBody.canFetchBody {
             return true
         }
@@ -2412,20 +1744,440 @@ private final class NetworkMacDetailViewController: NSViewController {
         }
         return false
     }
+
+    func fetchBodies(force: Bool) {
+        guard let entry = selectedEntry else {
+            return
+        }
+        let entryID = entry.id
+
+        fetchTask?.cancel()
+        fetchTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            if let requestBody = entry.requestBody {
+                await inspector.fetchBodyIfNeeded(for: entry, body: requestBody, force: force)
+            }
+            if let responseBody = entry.responseBody {
+                await inspector.fetchBodyIfNeeded(for: entry, body: responseBody, force: force)
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            guard inspector.selectedEntryID == entryID else {
+                return
+            }
+            _ = inspector.store.entry(forEntryID: entryID)
+        }
+    }
 }
 
-private func networkStatusColor(for severity: NetworkStatusSeverity) -> NSColor {
+@MainActor
+private struct NetworkMacListPane: View {
+    @Bindable var inspector: WINetworkPaneViewModel
+
+    var body: some View {
+        VStack(spacing: 8) {
+            controls
+            if inspector.displayEntries.isEmpty {
+                emptyState
+            } else {
+                Table(inspector.displayEntries, selection: tableSelection) {
+                    TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
+                        Text(entry.displayName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .font(.body.weight(.semibold))
+                    }
+                    .width(min: 220, ideal: 320)
+
+                    TableColumn(Text(LocalizedStringResource("network.table.column.status", bundle: .module))) { entry in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(networkStatusColor(for: entry.statusSeverity))
+                                .frame(width: 8, height: 8)
+                            Text(entry.statusLabel)
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(networkStatusColor(for: entry.statusSeverity))
+                    }
+                    .width(min: 92, ideal: 120)
+
+                    TableColumn(Text(LocalizedStringResource("network.table.column.method", bundle: .module))) { entry in
+                        Text(entry.method)
+                            .font(.footnote.monospaced())
+                    }
+                    .width(min: 80, ideal: 96)
+
+                    TableColumn(Text(LocalizedStringResource("network.table.column.type", bundle: .module))) { entry in
+                        Text(entry.fileTypeLabel)
+                            .font(.footnote.monospaced())
+                    }
+                    .width(min: 88, ideal: 110)
+
+                    TableColumn(Text(LocalizedStringResource("network.table.column.duration", bundle: .module))) { entry in
+                        Text(entry.duration.map(entry.durationText(for:)) ?? "-")
+                            .font(.footnote)
+                    }
+                    .width(min: 90, ideal: 110)
+
+                    TableColumn(Text(LocalizedStringResource("network.table.column.size", bundle: .module))) { entry in
+                        Text(entry.encodedBodyLength.map(entry.sizeText(for:)) ?? "-")
+                            .font(.footnote.monospaced())
+                    }
+                    .width(min: 90, ideal: 110)
+                }
+                .tableStyle(.inset)
+            }
+        }
+        .padding(8)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 8) {
+            Menu {
+                Toggle(isOn: bindingForAllFilters()) {
+                    Text(LocalizedStringResource("network.filter.all", bundle: .module))
+                }
+                Divider()
+                ForEach(NetworkResourceFilter.pickerCases, id: \.self) { filter in
+                    Toggle(isOn: bindingForResourceFilter(filter)) {
+                        Text(localizedTitle(for: filter))
+                    }
+                }
+            } label: {
+                Label(LocalizedStringResource("network.controls.filter", bundle: .module), systemImage: "line.3.horizontal.decrease")
+            }
+            .menuStyle(.borderlessButton)
+
+            Button(LocalizedStringResource("network.controls.clear", bundle: .module), role: .destructive) {
+                inspector.clear()
+            }
+            .disabled(inspector.store.entries.isEmpty)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(
+                    "",
+                    text: $inspector.searchText,
+                    prompt: Text(LocalizedStringResource("network.search.placeholder", bundle: .module))
+                )
+                .textFieldStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.secondary.opacity(0.2))
+            )
+            .frame(minWidth: 210, idealWidth: 260, maxWidth: 360)
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Image(systemName: "waveform.path.ecg.rectangle")
+                .foregroundStyle(.secondary)
+        } description: {
+            VStack(spacing: 4) {
+                Text(LocalizedStringResource("network.empty.title", bundle: .module))
+                Text(LocalizedStringResource("network.empty.description", bundle: .module))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var tableSelection: Binding<Set<UUID>> {
+        Binding(
+            get: {
+                guard let selected = inspector.selectedEntryID else {
+                    return []
+                }
+                return [selected]
+            },
+            set: { newSelection in
+                let nextSelected = newSelection.first
+                let resolved = NetworkListSelectionPolicy.resolvedSelection(
+                    current: nextSelected,
+                    entries: inspector.displayEntries
+                )
+                inspector.selectedEntryID = resolved
+            }
+        )
+    }
+
+    private func bindingForAllFilters() -> Binding<Bool> {
+        Binding(
+            get: {
+                inspector.effectiveResourceFilters.isEmpty
+            },
+            set: { isEnabled in
+                if isEnabled {
+                    inspector.setResourceFilter(.all, isEnabled: true)
+                }
+            }
+        )
+    }
+
+    private func bindingForResourceFilter(_ filter: NetworkResourceFilter) -> Binding<Bool> {
+        Binding(
+            get: {
+                inspector.activeResourceFilters.contains(filter)
+            },
+            set: { isEnabled in
+                inspector.setResourceFilter(filter, isEnabled: isEnabled)
+            }
+        )
+    }
+
+    private func localizedTitle(for filter: NetworkResourceFilter) -> LocalizedStringResource {
+        switch filter {
+        case .all:
+            return LocalizedStringResource("network.filter.all", bundle: .module)
+        case .document:
+            return LocalizedStringResource("network.filter.document", bundle: .module)
+        case .stylesheet:
+            return LocalizedStringResource("network.filter.stylesheet", bundle: .module)
+        case .image:
+            return LocalizedStringResource("network.filter.image", bundle: .module)
+        case .font:
+            return LocalizedStringResource("network.filter.font", bundle: .module)
+        case .script:
+            return LocalizedStringResource("network.filter.script", bundle: .module)
+        case .xhrFetch:
+            return LocalizedStringResource("network.filter.xhr_fetch", bundle: .module)
+        case .other:
+            return LocalizedStringResource("network.filter.other", bundle: .module)
+        }
+    }
+}
+
+@MainActor
+private struct NetworkMacDetailPane: View {
+    @Bindable var inspector: WINetworkPaneViewModel
+
+    private var entry: NetworkEntry? {
+        inspector.store.entry(forEntryID: inspector.selectedEntryID)
+    }
+
+    private var hasEntries: Bool {
+        !inspector.store.entries.isEmpty
+    }
+
+    var body: some View {
+        if let entry {
+            List {
+                Section(LocalizedStringResource("network.detail.section.overview", bundle: .module)) {
+                    overviewRow(for: entry)
+                }
+
+                Section(LocalizedStringResource("network.section.request", bundle: .module)) {
+                    headersRows(entry.requestHeaders)
+                }
+
+                if let requestBody = entry.requestBody {
+                    Section(LocalizedStringResource("network.section.body.request", bundle: .module)) {
+                        bodyRow(entry: entry, body: requestBody)
+                    }
+                }
+
+                Section(LocalizedStringResource("network.section.response", bundle: .module)) {
+                    headersRows(entry.responseHeaders)
+                }
+
+                if let responseBody = entry.responseBody {
+                    Section(LocalizedStringResource("network.section.body.response", bundle: .module)) {
+                        bodyRow(entry: entry, body: responseBody)
+                    }
+                }
+
+                if let error = entry.errorDescription, !error.isEmpty {
+                    Section(LocalizedStringResource("network.section.error", bundle: .module)) {
+                        errorRow(error)
+                    }
+                }
+            }
+            .listStyle(.inset)
+        } else {
+            emptyState
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if hasEntries {
+            ContentUnavailableView {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+            } description: {
+                VStack(spacing: 4) {
+                    Text(LocalizedStringResource("network.empty.selection.title", bundle: .module))
+                    Text(LocalizedStringResource("network.empty.selection.description", bundle: .module))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ContentUnavailableView {
+                Image(systemName: "waveform.path.ecg.rectangle")
+                    .foregroundStyle(.secondary)
+            } description: {
+                VStack(spacing: 4) {
+                    Text(LocalizedStringResource("network.empty.title", bundle: .module))
+                    Text(LocalizedStringResource("network.empty.description", bundle: .module))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func overviewRow(for entry: NetworkEntry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text(entry.statusLabel)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(networkStatusColor(for: entry.statusSeverity))
+                if let duration = entry.duration {
+                    Label(entry.durationText(for: duration), systemImage: "clock")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if let encodedBodyLength = entry.encodedBodyLength {
+                    Label(entry.sizeText(for: encodedBodyLength), systemImage: "arrow.down.to.line")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(entry.url)
+                .font(.footnote.monospaced())
+                .lineLimit(4)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+    }
+
+    @ViewBuilder
+    private func headersRows(_ headers: NetworkHeaders) -> some View {
+        if headers.isEmpty {
+            Text(LocalizedStringResource("network.headers.empty", bundle: .module))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(Array(headers.fields.enumerated()), id: \.offset) { _, field in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(field.name)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(field.value)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                }
+            }
+        }
+    }
+
+    private func bodyRow(entry: NetworkEntry, body: NetworkBody) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                if let typeLabel = networkBodyTypeLabel(entry: entry, body: body) {
+                    Label(typeLabel, systemImage: "doc.text")
+                }
+                if let size = networkBodySize(entry: entry, body: body) {
+                    Label(entry.sizeText(for: size), systemImage: "ruler")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            if let summary = body.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Divider()
+
+            Text(bodyPreviewText(for: body))
+                .font(.caption.monospaced())
+                .foregroundStyle(bodyPreviewColor(for: body))
+                .lineLimit(10)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func errorRow(_ message: String) -> some View {
+        Text(message)
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .textSelection(.enabled)
+    }
+
+    private func bodyPreviewText(for body: NetworkBody) -> String {
+        if body.kind == .form, !body.formEntries.isEmpty {
+            return body.formEntries.prefix(4).map {
+                let value: String
+                if $0.isFile, let fileName = $0.fileName, !fileName.isEmpty {
+                    value = fileName
+                } else {
+                    value = $0.value
+                }
+                return "\($0.name): \(value)"
+            }.joined(separator: "\n")
+        }
+
+        switch body.fetchState {
+        case .fetching:
+            return wiLocalized("network.body.fetching", default: "Fetching body...")
+        case .failed(let error):
+            return error.localizedDescriptionText
+        default:
+            return networkBodyPreviewText(body) ?? wiLocalized("network.body.unavailable", default: "Body unavailable")
+        }
+    }
+
+    private func bodyPreviewColor(for body: NetworkBody) -> Color {
+        switch body.fetchState {
+        case .fetching:
+            return .secondary
+        case .failed:
+            return .red
+        default:
+            return .primary
+        }
+    }
+
+}
+
+private func networkStatusColor(for severity: NetworkStatusSeverity) -> Color {
     switch severity {
     case .success:
-        return .systemGreen
+        return .green
     case .notice:
-        return .systemYellow
+        return .yellow
     case .warning:
-        return .systemOrange
+        return .orange
     case .error:
-        return .systemRed
+        return .red
     case .neutral:
-        return .secondaryLabelColor
+        return .secondary
     }
 }
 

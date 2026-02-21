@@ -8,7 +8,7 @@ struct ControllerActivationTests {
     @Test
     func connectWithNoNetworkTabsDoesNotAttachNetworkSession() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), .element()])
+        controller.configureTabs([.dom(), domSecondaryPane()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -48,7 +48,7 @@ struct ControllerActivationTests {
     @Test
     func selectedTabSwitchesDOMAutoSnapshot() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), .element()])
+        controller.configureTabs([.dom(), domSecondaryPane()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -101,7 +101,7 @@ struct ControllerActivationTests {
     @Test
     func configureTabsWhileConnectedReconnectsNewlyRequiredSessions() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), .element()])
+        controller.configureTabs([.dom(), domSecondaryPane()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -114,14 +114,14 @@ struct ControllerActivationTests {
     @Test
     func configureTabsWhileConnectedWithSameRequirementsKeepsDOMSelection() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), .element()])
+        controller.configureTabs([.dom(), domSecondaryPane()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
         controller.dom.selection.nodeId = 42
         controller.dom.selection.preview = "<div id='selected'>"
 
-        controller.configureTabs([.dom(title: "DOM"), .element(title: "Elements")])
+        controller.configureTabs([.dom(title: "DOM"), domSecondaryPane(title: "Elements")])
 
         #expect(controller.dom.selection.nodeId == 42)
         #expect(controller.dom.selection.preview == "<div id='selected'>")
@@ -264,6 +264,25 @@ struct ControllerActivationTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func domSecondaryPane(title: String = "Element") -> WIPaneDescriptor {
+        WIPaneDescriptor(
+            id: "wi_element",
+            title: title,
+            systemImage: "info.circle",
+            role: .inspector,
+            requires: [.dom]
+        ) { context in
+            #if canImport(UIKit)
+            let root = DOMTreeTabViewController(inspector: context.domInspector)
+            let navigationController = UINavigationController(rootViewController: root)
+            wiApplyClearNavigationBarStyle(to: navigationController)
+            return navigationController
+            #elseif canImport(AppKit)
+            return ElementDetailsTabViewController(inspector: context.domInspector)
+            #endif
+        }
     }
 
     private func waitForStoreState(

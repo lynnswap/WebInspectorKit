@@ -30,7 +30,7 @@ final class DOMTreeTabViewController: UIViewController {
 
     private lazy var pickItem: UIBarButtonItem = {
         UIBarButtonItem(
-            image: UIImage(systemName: "viewfinder.circle"),
+            image: UIImage(systemName: pickSymbolName),
             style: .plain,
             target: self,
             action: #selector(toggleSelectionMode)
@@ -75,8 +75,16 @@ final class DOMTreeTabViewController: UIViewController {
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
+            self.updateUI()
+        }
+
         observeState()
         updateUI()
+    }
+
+    private var pickSymbolName: String {
+        traitCollection.horizontalSizeClass == .compact ? "viewfinder.circle" : "scope"
     }
 
     private func setupNavigationItems() {
@@ -148,6 +156,7 @@ final class DOMTreeTabViewController: UIViewController {
         secondaryActionsItem.menu = makeSecondaryMenu()
         secondaryActionsItem.isEnabled = hasSelection || hasPageWebView
         pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
     }
 
@@ -169,35 +178,9 @@ import AppKit
 final class DOMTreeTabViewController: NSViewController {
     private let inspector: WIDOMPaneViewModel
     private var observationTask: Task<Void, Never>?
+    private var contextMenuNodeID: Int?
 
     private let errorLabel = NSTextField(labelWithString: "")
-    private var inspectorWebView: InspectorWebView?
-
-    private lazy var pickButton: NSButton = {
-        let button = NSButton(title: wiLocalized("dom.controls.pick"), target: self, action: #selector(toggleSelectionMode))
-        button.bezelStyle = .rounded
-        return button
-    }()
-
-    private lazy var copyButton: NSPopUpButton = {
-        let button = NSPopUpButton(frame: .zero, pullsDown: true)
-        button.title = wiLocalized("Copy")
-        button.bezelStyle = .rounded
-        button.menu = makeCopyMenu()
-        return button
-    }()
-
-    private lazy var reloadButton: NSButton = {
-        let button = NSButton(title: wiLocalized("reload"), target: self, action: #selector(reloadInspector))
-        button.bezelStyle = .rounded
-        return button
-    }()
-
-    private lazy var deleteButton: NSButton = {
-        let button = NSButton(title: wiLocalized("inspector.delete_node"), target: self, action: #selector(deleteNode))
-        button.bezelStyle = .rounded
-        return button
-    }()
 
     init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
@@ -220,36 +203,31 @@ final class DOMTreeTabViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let toolbar = NSStackView(views: [pickButton, copyButton, reloadButton, deleteButton])
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 8
-        toolbar.alignment = .centerY
-
         let inspectorWebView = inspector.frontendStore.makeInspectorWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
-        self.inspectorWebView = inspectorWebView
+        inspectorWebView.domContextMenuProvider = { [weak self] nodeID in
+            guard let self else {
+                return nil
+            }
+            self.contextMenuNodeID = nodeID
+            return self.makeTreeContextMenu()
+        }
 
         errorLabel.translatesAutoresizingMaskIntoConstraints = false
         errorLabel.isHidden = true
         errorLabel.textColor = .secondaryLabelColor
         errorLabel.maximumNumberOfLines = 3
 
-        view.addSubview(toolbar)
         view.addSubview(inspectorWebView)
         view.addSubview(errorLabel)
 
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            toolbar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-
-            inspectorWebView.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
+            inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            errorLabel.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
+            errorLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
             errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
         ])
 
@@ -277,8 +255,6 @@ final class DOMTreeTabViewController: NSViewController {
 
     private func makeCopyMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: wiLocalized("Copy"), action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
 
         let html = NSMenuItem(title: "HTML", action: #selector(copyHTML(_:)), keyEquivalent: "")
         html.target = self
@@ -295,6 +271,28 @@ final class DOMTreeTabViewController: NSViewController {
         return menu
     }
 
+    private func makeTreeContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        let hasContextNode = contextMenuNodeID != nil
+
+        let copyItem = NSMenuItem(title: wiLocalized("Copy"), action: nil, keyEquivalent: "")
+        copyItem.submenu = makeCopyMenu()
+        copyItem.isEnabled = hasContextNode
+        menu.addItem(copyItem)
+        menu.addItem(.separator())
+
+        let deleteItem = NSMenuItem(
+            title: wiLocalized("inspector.delete_node"),
+            action: #selector(deleteNode),
+            keyEquivalent: ""
+        )
+        deleteItem.target = self
+        deleteItem.isEnabled = hasContextNode
+        menu.addItem(deleteItem)
+
+        return menu
+    }
+
     private func updateUI() {
         if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
             errorLabel.stringValue = errorMessage
@@ -303,44 +301,58 @@ final class DOMTreeTabViewController: NSViewController {
             errorLabel.stringValue = ""
             errorLabel.isHidden = true
         }
-
-        pickButton.state = inspector.isSelectingElement ? .on : .off
-        pickButton.isEnabled = inspector.hasPageWebView
-        copyButton.isEnabled = inspector.selection.nodeId != nil
-        reloadButton.isEnabled = inspector.hasPageWebView
-        deleteButton.isEnabled = inspector.selection.nodeId != nil
-    }
-
-    @objc
-    private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
     }
 
     @objc
     private func copyHTML(_ sender: NSMenuItem) {
-        inspector.copySelection(.html)
+        copyNodeForContextMenu(kind: .html)
     }
 
     @objc
     private func copySelectorPath(_ sender: NSMenuItem) {
-        inspector.copySelection(.selectorPath)
+        copyNodeForContextMenu(kind: .selectorPath)
     }
 
     @objc
     private func copyXPath(_ sender: NSMenuItem) {
-        inspector.copySelection(.xpath)
-    }
-
-    @objc
-    private func reloadInspector() {
-        Task {
-            await inspector.reloadInspector()
-        }
+        copyNodeForContextMenu(kind: .xpath)
     }
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode()
+        let nodeID = contextActionNodeID
+        contextMenuNodeID = nil
+        guard let nodeID else {
+            return
+        }
+        Task {
+            await inspector.session.removeNode(nodeId: nodeID)
+        }
+    }
+
+    private var contextActionNodeID: Int? {
+        contextMenuNodeID
+    }
+
+    private func copyNodeForContextMenu(kind: DOMSelectionCopyKind) {
+        let nodeID = contextActionNodeID
+        contextMenuNodeID = nil
+        guard let nodeID else {
+            return
+        }
+        Task {
+            do {
+                let text = try await inspector.session.selectionCopyText(nodeId: nodeID, kind: kind)
+                guard !text.isEmpty else {
+                    return
+                }
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+            } catch {
+                return
+            }
+        }
     }
 }
 

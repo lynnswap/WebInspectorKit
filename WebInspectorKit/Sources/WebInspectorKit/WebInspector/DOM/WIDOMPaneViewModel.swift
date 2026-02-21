@@ -70,7 +70,9 @@ public final class WIDOMPaneViewModel {
             errorMessage = wiLocalized("dom.error.webview_unavailable")
             return
         }
-        errorMessage = nil
+        if errorMessage != nil {
+            errorMessage = nil
+        }
 
         let depth = session.configuration.snapshotDepth
         frontendStore.updateConfiguration(session.configuration)

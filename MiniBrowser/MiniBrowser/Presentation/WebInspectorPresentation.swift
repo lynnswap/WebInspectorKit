@@ -134,7 +134,7 @@ func presentWebInspector(
 ) {
     if let existingWindow = inspectorWindowStore.window,
        let existingContainer = existingWindow.contentViewController as? WIContainerViewController {
-        existingContainer.setTabs([.dom(), .element(), .network()])
+        existingContainer.setTabs([.dom(), .network()])
         existingContainer.setInspectorController(inspectorController)
         existingContainer.setPageWebView(model.webView)
         existingWindow.makeKeyAndOrderFront(nil)
@@ -145,10 +145,10 @@ func presentWebInspector(
     let container = WIContainerViewController(
         inspectorController,
         webView: model.webView,
-        tabs: [.dom(), .element(), .network()]
+        tabs: [.dom(), .network()]
     )
     let window = NSWindow(contentViewController: container)
-    window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+    window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .docModalWindow]
     window.title = "Web Inspector"
     window.setContentSize(NSSize(width: 960, height: 720))
     window.minSize = NSSize(width: 640, height: 480)

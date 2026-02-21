@@ -53,6 +53,7 @@ export function ensureTreeEventHandlers(): void {
         return;
     }
     dom.tree.addEventListener("click", handleTreeClick);
+    dom.tree.addEventListener("contextmenu", handleTreeContextMenu);
     dom.tree.addEventListener("keydown", handleTreeKeydown);
     dom.tree.addEventListener("mouseover", handleTreeMouseOver);
     dom.tree.addEventListener("mouseout", handleTreeMouseOut);
@@ -547,6 +548,27 @@ function handleTreeClick(event: MouseEvent): void {
     handleRowClick(event, node);
 }
 
+/** Keep selection in sync when opening context menu on a row */
+function handleTreeContextMenu(event: MouseEvent): void {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) {
+        (window as any).__wiLastDOMTreeContextNodeId = null;
+        return;
+    }
+    const row = target.closest(".tree-node__row");
+    if (!row) {
+        (window as any).__wiLastDOMTreeContextNodeId = null;
+        return;
+    }
+    const node = resolveNodeFromElement(row);
+    if (!node) {
+        (window as any).__wiLastDOMTreeContextNodeId = null;
+        return;
+    }
+    (window as any).__wiLastDOMTreeContextNodeId = node.id;
+    selectNode(node.id);
+}
+
 /** Handle delegated placeholder keyboard activation */
 function handleTreeKeydown(event: KeyboardEvent): void {
     const target = event.target instanceof Element ? event.target : null;
@@ -582,6 +604,7 @@ function handleTreeMouseOver(event: MouseEvent): void {
         return;
     }
     hoveredNodeId = node.id;
+    (window as any).__wiLastDOMTreeHoveredNodeId = node.id;
     handleRowHover(node);
 }
 
@@ -600,12 +623,14 @@ function handleTreeMouseOut(event: MouseEvent): void {
         return;
     }
     hoveredNodeId = null;
+    (window as any).__wiLastDOMTreeHoveredNodeId = null;
     handleRowLeave();
 }
 
 /** Handle leaving the tree container */
 function handleTreeMouseLeave(): void {
     hoveredNodeId = null;
+    (window as any).__wiLastDOMTreeHoveredNodeId = null;
     handleRowLeave();
 }
 

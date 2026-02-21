@@ -26,11 +26,11 @@ extension WIPaneDescriptor {
             wiApplyClearNavigationBarStyle(to: nc)
             return nc
             #elseif canImport(AppKit)
-            return DOMTreeTabViewController(inspector: context.domInspector)
+            return DOMInspectorTabViewController(inspector: context.domInspector)
             #endif
         }
     }
-
+    #if canImport(UIKit)
     @MainActor
     public static func element(
         title: String? = nil,
@@ -43,17 +43,13 @@ extension WIPaneDescriptor {
             role: .inspector,
             requires: [.dom]
         ) { context in
-            #if canImport(UIKit)
             let root = ElementDetailsTabViewController(inspector: context.domInspector)
             let nc = UINavigationController(rootViewController: root)
             wiApplyClearNavigationBarStyle(to: nc)
             return nc
-            #elseif canImport(AppKit)
-            return ElementDetailsTabViewController(inspector: context.domInspector)
-            #endif
         }
     }
-
+    #endif
     @MainActor
     public static func network(
         title: String? = nil,

@@ -1,4 +1,5 @@
 import WebKit
+import ObservationsCompat
 
 #if canImport(UIKit)
 import UIKit
@@ -217,25 +218,42 @@ import AppKit
 
 @MainActor
 public final class WIContainerViewController: NSTabViewController {
+    private struct AppKitToolbarObservedState: Sendable, Equatable {
+        let selectedTabID: WIPaneDescriptor.ID?
+        let domHasPageWebView: Bool
+        let domIsSelectingElement: Bool
+        let networkCanFetchBodies: Bool
+    }
+
+    private static let toolbarIdentifier = NSToolbar.Identifier("WIContainerToolbar")
+    private static let domTabID = "wi_dom"
+    private static let networkTabID = "wi_network"
+
     public private(set) var inspectorController: WISessionController
 
     private weak var pageWebView: WKWebView?
     private var tabDescriptors: [WIPaneDescriptor]
+    private weak var appKitToolbar: NSToolbar?
+    private var toolbarObservationTask: Task<Void, Never>?
 
     public init(
         _ inspectorController: WISessionController,
         webView: WKWebView?,
-        tabs: [WIPaneDescriptor] = [.dom(), .element(), .network()]
+        tabs: [WIPaneDescriptor] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
         self.pageWebView = webView
-        self.tabDescriptors = tabs
+        self.tabDescriptors = Self.normalizeAppKitTabs(tabs)
         super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        toolbarObservationTask?.cancel()
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
@@ -254,17 +272,23 @@ public final class WIContainerViewController: NSTabViewController {
         previousController.disconnect()
         self.inspectorController = inspectorController
         bindSelectionCallback()
+        stopObservingToolbarState()
         if isViewLoaded {
             rebuildTabs()
             inspectorController.connect(to: pageWebView)
+            if view.window != nil {
+                startObservingToolbarStateIfNeeded()
+            }
+            updateToolbarState()
         }
     }
 
     public func setTabs(_ tabs: [WIPaneDescriptor]) {
-        tabDescriptors = tabs
+        tabDescriptors = Self.normalizeAppKitTabs(tabs)
         inspectorController.configureTabs(tabDescriptors)
         if isViewLoaded {
             rebuildTabs()
+            updateToolbarState()
         }
     }
 
@@ -280,10 +304,14 @@ public final class WIContainerViewController: NSTabViewController {
         super.viewWillAppear()
         inspectorController.connect(to: pageWebView)
         syncNativeSelection(with: inspectorController.selectedTabID)
+        installToolbarIfNeeded()
+        startObservingToolbarStateIfNeeded()
+        updateToolbarState()
     }
 
     public override func viewDidDisappear() {
         super.viewDidDisappear()
+        stopObservingToolbarState()
         if view.window == nil {
             inspectorController.suspend()
         }
@@ -297,6 +325,7 @@ public final class WIContainerViewController: NSTabViewController {
             return
         }
         inspectorController.synchronizeSelectedTabFromNativeUI(identifier)
+        updateToolbarState()
     }
 
     private func rebuildTabs() {
@@ -317,6 +346,7 @@ public final class WIContainerViewController: NSTabViewController {
         inspectorController.onSelectedTabIDChange = { [weak self] tabID in
             guard let self else { return }
             self.syncNativeSelection(with: tabID)
+            self.updateToolbarState()
         }
     }
 
@@ -346,6 +376,222 @@ public final class WIContainerViewController: NSTabViewController {
         }
         inspectorController.synchronizeSelectedTabFromNativeUI(tabDescriptors[resolvedIndex].id)
     }
+
+    private func installToolbarIfNeeded() {
+        guard let window = view.window else {
+            return
+        }
+
+        if window.toolbar?.identifier != Self.toolbarIdentifier {
+            let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+            toolbar.delegate = self
+            toolbar.displayMode = .iconOnly
+            toolbar.allowsUserCustomization = false
+            toolbar.autosavesConfiguration = false
+            window.toolbar = toolbar
+        }
+
+        appKitToolbar = window.toolbar
+        updateToolbarLayout()
+    }
+
+    private func startObservingToolbarStateIfNeeded() {
+        guard toolbarObservationTask == nil else {
+            return
+        }
+
+        let inspectorController = self.inspectorController
+        toolbarObservationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationsCompatStream {
+                AppKitToolbarObservedState(
+                    selectedTabID: inspectorController.selectedTabID,
+                    domHasPageWebView: inspectorController.dom.hasPageWebView,
+                    domIsSelectingElement: inspectorController.dom.isSelectingElement,
+                    networkCanFetchBodies: Self.canFetchSelectedBodies(in: inspectorController.network)
+                )
+            }
+            for await _ in stream {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.updateToolbarState()
+            }
+        }
+    }
+
+    private func stopObservingToolbarState() {
+        toolbarObservationTask?.cancel()
+        toolbarObservationTask = nil
+    }
+
+    private func updateToolbarLayout() {
+        guard let toolbar = appKitToolbar else {
+            return
+        }
+
+        let desiredIdentifiers: [NSToolbarItem.Identifier]
+        switch inspectorController.selectedTabID {
+        case Self.domTabID:
+            desiredIdentifiers = [.wiDOMPick, .flexibleSpace, .wiDOMReload]
+        case Self.networkTabID:
+            desiredIdentifiers = [.flexibleSpace, .wiNetworkFetchBody]
+        default:
+            desiredIdentifiers = []
+        }
+
+        let currentIdentifiers = toolbar.items.map(\.itemIdentifier)
+        guard currentIdentifiers != desiredIdentifiers else {
+            return
+        }
+
+        for index in stride(from: toolbar.items.count - 1, through: 0, by: -1) {
+            toolbar.removeItem(at: index)
+        }
+        for (index, identifier) in desiredIdentifiers.enumerated() {
+            toolbar.insertItem(withItemIdentifier: identifier, at: index)
+        }
+    }
+
+    private func updateToolbarState() {
+        updateToolbarLayout()
+        guard let toolbar = appKitToolbar else {
+            return
+        }
+
+        if let pickItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMPick }) {
+            pickItem.isEnabled = inspectorController.dom.hasPageWebView
+            pickItem.image = Self.pickToolbarImage(isSelecting: inspectorController.dom.isSelectingElement)
+        }
+
+        if let reloadItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMReload }) {
+            reloadItem.isEnabled = inspectorController.dom.hasPageWebView
+        }
+
+        if let fetchBodyItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFetchBody }) {
+            fetchBodyItem.isEnabled = Self.canFetchSelectedBodies(in: inspectorController.network)
+        }
+    }
+
+    private static func canFetchSelectedBodies(in networkInspector: WINetworkPaneViewModel) -> Bool {
+        guard
+            let selectedEntryID = networkInspector.selectedEntryID,
+            let entry = networkInspector.store.entry(forEntryID: selectedEntryID)
+        else {
+            return false
+        }
+
+        if let requestBody = entry.requestBody, requestBody.canFetchBody {
+            return true
+        }
+        if let responseBody = entry.responseBody, responseBody.canFetchBody {
+            return true
+        }
+        return false
+    }
+
+    private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
+        let baseImage = NSImage(systemSymbolName: "scope", accessibilityDescription: wiLocalized("dom.controls.pick"))
+        guard #available(macOS 12.0, *), let baseImage else {
+            return baseImage
+        }
+        let color = isSelecting ? NSColor.systemBlue : NSColor.secondaryLabelColor
+        let configuration = NSImage.SymbolConfiguration(hierarchicalColor: color)
+        return baseImage.withSymbolConfiguration(configuration)
+    }
+
+    @objc
+    private func handleDOMPickToolbarAction(_ sender: Any?) {
+        inspectorController.dom.toggleSelectionMode()
+        updateToolbarState()
+    }
+
+    @objc
+    private func handleDOMReloadToolbarAction(_ sender: Any?) {
+        Task {
+            await inspectorController.dom.reloadInspector()
+        }
+    }
+
+    @objc
+    private func handleNetworkFetchBodyToolbarAction(_ sender: Any?) {
+        Task {
+            guard
+                let selectedEntryID = inspectorController.network.selectedEntryID,
+                let entry = inspectorController.network.store.entry(forEntryID: selectedEntryID)
+            else {
+                return
+            }
+
+            if let requestBody = entry.requestBody {
+                await inspectorController.network.fetchBodyIfNeeded(for: entry, body: requestBody, force: true)
+            }
+            if let responseBody = entry.responseBody {
+                await inspectorController.network.fetchBodyIfNeeded(for: entry, body: responseBody, force: true)
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            updateToolbarState()
+        }
+    }
+
+    public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.wiDOMPick, .wiDOMReload, .wiNetworkFetchBody, .flexibleSpace]
+    }
+
+    public override func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.wiDOMPick, .flexibleSpace, .wiDOMReload]
+    }
+
+    public override func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.target = self
+        item.isBordered = true
+
+        switch itemIdentifier {
+        case .wiDOMPick:
+            item.label = wiLocalized("dom.controls.pick")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.image = Self.pickToolbarImage(isSelecting: inspectorController.dom.isSelectingElement)
+            item.action = #selector(handleDOMPickToolbarAction(_:))
+            return item
+        case .wiDOMReload:
+            item.label = wiLocalized("reload")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: item.label)
+            item.action = #selector(handleDOMReloadToolbarAction(_:))
+            return item
+        case .wiNetworkFetchBody:
+            item.label = wiLocalized("network.body.fetch", default: "Fetch Body")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.image = NSImage(systemSymbolName: "arrow.down.document", accessibilityDescription: item.label)
+            item.action = #selector(handleNetworkFetchBodyToolbarAction(_:))
+            return item
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizeAppKitTabs(_ tabs: [WIPaneDescriptor]) -> [WIPaneDescriptor] {
+        let hasDOMTab = tabs.contains(where: { $0.id == "wi_dom" })
+        guard hasDOMTab else {
+            return tabs
+        }
+        return tabs.filter { $0.id != "wi_element" }
+    }
+}
+
+private extension NSToolbarItem.Identifier {
+    static let wiDOMPick = NSToolbarItem.Identifier("WIContainerToolbar.DOMPick")
+    static let wiDOMReload = NSToolbarItem.Identifier("WIContainerToolbar.DOMReload")
+    static let wiNetworkFetchBody = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFetchBody")
 }
 
 #endif
