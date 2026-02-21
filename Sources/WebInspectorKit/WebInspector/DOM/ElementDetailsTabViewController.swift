@@ -2,6 +2,7 @@ import WebInspectorKitCore
 
 #if canImport(UIKit)
 import UIKit
+import SwiftUI
 
 private protocol DiffableStableID: Hashable, Sendable {}
 private protocol DiffableCellKind: Hashable, Sendable {}
@@ -891,6 +892,12 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
     private var debounceTask: Task<Void, Never>?
     private var isApplyingValue = false
     private var suppressNextCommit = false
+    private lazy var keyboardAccessoryToolbar = ElementKeyboardAccessoryToolbar(onClose: { [weak self] in
+        guard let self else {
+            return
+        }
+        self.valueTextView.resignFirstResponder()
+    })
 
     var currentEditingKey: ElementAttributeEditingKey? {
         editingKey
@@ -1052,6 +1059,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         valueTextView.smartDashesType = .no
         valueTextView.smartQuotesType = .no
         valueTextView.spellCheckingType = .no
+        valueTextView.inputAccessoryView = keyboardAccessoryToolbar
         valueTextView.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
             for: .monospacedSystemFont(
                 ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
@@ -1100,6 +1108,59 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
             return
         }
         delegate?.elementAttributeEditorCellNeedsRelayout(self)
+    }
+}
+
+
+final class ElementKeyboardAccessoryToolbar: UIToolbar {
+
+    private let onClose: () -> Void
+    private var hostingVC: UIViewController?
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        super.init(frame: .zero)
+
+        isTranslucent = true
+
+        let swiftUIView = KeyboardToolbarView(onClose: { [weak self] in
+            self?.onClose()
+        })
+        let hostingVC = UIHostingController(rootView: swiftUIView)
+        hostingVC.view.backgroundColor = .clear
+        
+        self.hostingVC = hostingVC
+        let customButton = UIBarButtonItem(customView:hostingVC.view )
+        if #available(iOS 26.0, *) {
+            customButton.hidesSharedBackground = false
+            customButton.sharesBackground = true
+        }
+        setItems([customButton], animated: false)
+        sizeToFit()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+private struct KeyboardToolbarView: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Button{
+                onClose()
+            }label:{
+                Image(systemName:"chevron.down")
+                    .frame(maxHeight: .infinity)
+            }
+            .foregroundStyle(.secondary)
+            .containerShape(.capsule)
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .background(.clear)
+            .tint(.clear)
+            .clipShape(.capsule)
+        }
     }
 }
 
