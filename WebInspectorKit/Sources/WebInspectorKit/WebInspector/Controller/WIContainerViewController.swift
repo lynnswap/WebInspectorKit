@@ -324,16 +324,23 @@ public final class WIContainerViewController: NSTabViewController {
         guard tabDescriptors.isEmpty == false else {
             return
         }
+        // During rebuild, selection callbacks can arrive before NSTabViewItem creation.
+        // Avoid touching selectedTabViewItemIndex while no tab items exist.
+        let availableTabCount = min(tabDescriptors.count, tabViewItems.count)
+        guard availableTabCount > 0 else {
+            return
+        }
 
         if let tabID,
-           let index = tabDescriptors.firstIndex(where: { $0.id == tabID }) {
+           let index = tabDescriptors.firstIndex(where: { $0.id == tabID }),
+           index < availableTabCount {
             if selectedTabViewItemIndex != index {
                 selectedTabViewItemIndex = index
             }
             return
         }
 
-        let resolvedIndex = tabDescriptors.indices.contains(selectedTabViewItemIndex) ? selectedTabViewItemIndex : 0
+        let resolvedIndex = (0..<availableTabCount).contains(selectedTabViewItemIndex) ? selectedTabViewItemIndex : 0
         if selectedTabViewItemIndex != resolvedIndex {
             selectedTabViewItemIndex = resolvedIndex
         }
