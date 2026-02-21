@@ -42,8 +42,16 @@ if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__insta
         clear: clearNetworkRecords,
         getBody: getBody,
         getBodyForHandle: getBodyForHandle,
+        bootstrapAuthToken: bootstrapNetworkAuthToken,
         __installed: true
     };
+
+    Object.defineProperty(window, "__wiBootstrapNetworkAuthToken", {
+        value: bootstrapNetworkAuthToken,
+        writable: false,
+        configurable: true,
+        enumerable: false
+    });
 
     Object.defineProperty(window, "webInspectorNetworkAgent", {
         value: Object.freeze(webInspectorNetworkAgent),

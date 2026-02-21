@@ -287,6 +287,37 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func replacingAgentOnExistingWebViewRefreshesControlToken() async throws {
+        let firstAgent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+
+        firstAgent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 3)
+        await loadHTML("<html><body><p>first-agent</p></body></html>", in: webView)
+
+        let firstBody = await firstAgent.fetchBody(bodyRef: nil, bodyHandle: "first-agent" as NSString, role: .response)
+        #expect(firstBody?.full == "first-agent")
+
+        firstAgent.detachPageWebView(preparing: .active)
+
+        let secondAgent = NetworkPageAgent()
+        secondAgent.attachPageWebView(webView)
+        secondAgent.setMode(.active)
+        await waitForScripts(on: controller, atLeast: 3)
+        await loadHTML("<html><body><p>second-agent</p></body></html>", in: webView)
+
+        var secondBody: NetworkBody?
+        for _ in 0..<200 {
+            secondBody = await secondAgent.fetchBody(bodyRef: nil, bodyHandle: "second-agent" as NSString, role: .response)
+            if secondBody?.full == "second-agent" {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(secondBody?.full == "second-agent")
+    }
+
+    @Test
     func applyNetworkPayloadHandlesBatchedResourceTiming() throws {
         let agent = NetworkPageAgent()
         let start: Double = 1_200

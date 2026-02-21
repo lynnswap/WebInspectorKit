@@ -17,6 +17,7 @@ private let networkPrivateUnavailableSentinel = "__wi_private_unavailable__"
 private let networkControlTokenWindowKey = "__wiNetworkControlToken"
 private let networkPageHookModeWindowKey = "__wiNetworkPageHookMode"
 @MainActor private var networkBridgeScriptInstalledKey: UInt8 = 0
+@MainActor private var networkTokenBootstrapSignatureKey: UInt8 = 0
 
 @MainActor
 private extension WKUserContentController {
@@ -30,6 +31,20 @@ private extension WKUserContentController {
                 &networkBridgeScriptInstalledKey,
                 NSNumber(value: newValue),
                 .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            )
+        }
+    }
+
+    var wi_networkTokenBootstrapSignature: String? {
+        get {
+            objc_getAssociatedObject(self, &networkTokenBootstrapSignatureKey) as? String
+        }
+        set {
+            objc_setAssociatedObject(
+                self,
+                &networkTokenBootstrapSignatureKey,
+                newValue,
+                .OBJC_ASSOCIATION_COPY_NONATOMIC
             )
         }
     }
@@ -268,25 +283,15 @@ private extension NetworkPageAgent {
 
     func installNetworkAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
-        if controller.wi_networkBridgeScriptInstalled {
-            return
-        }
-
-        let scriptSource: String
-        do {
-            scriptSource = try WebInspectorScripts.networkAgent()
-        } catch {
-            networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
-            return
-        }
         let escapedToken = networkMessageAuthToken
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let pageHookMode = resolvedPageHookMode()
+        let tokenBootstrapSignature = "\(networkMessageAuthToken)|\(pageHookMode)"
         let tokenBootstrapScript = """
-        (function(pageHookMode) {
+        (function(token, pageHookMode) {
             Object.defineProperty(window, "\(networkControlTokenWindowKey)", {
-                value: "\(escapedToken)",
+                value: token,
                 configurable: true,
                 writable: false,
                 enumerable: false
@@ -297,15 +302,46 @@ private extension NetworkPageAgent {
                 writable: false,
                 enumerable: false
             });
-        })("\(pageHookMode)");
+            if (typeof window.__wiBootstrapNetworkAuthToken === "function") {
+                window.__wiBootstrapNetworkAuthToken(token);
+            }
+            if (
+                window.webInspectorNetworkAgent &&
+                typeof window.webInspectorNetworkAgent.bootstrapAuthToken === "function"
+            ) {
+                window.webInspectorNetworkAgent.bootstrapAuthToken(token);
+            }
+        })("\(escapedToken)", "\(pageHookMode)");
         """
-
         let tokenScript = WKUserScript(
             source: tokenBootstrapScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true,
             in: .page
         )
+
+        if controller.wi_networkBridgeScriptInstalled {
+            // Avoid repeatedly appending the same bootstrap script on reconfigure/reattach.
+            if controller.wi_networkTokenBootstrapSignature != tokenBootstrapSignature {
+                controller.addUserScript(tokenScript)
+                controller.wi_networkTokenBootstrapSignature = tokenBootstrapSignature
+            }
+            do {
+                _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
+            } catch {
+                networkLogger.error("failed to refresh network control token: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+
+        let scriptSource: String
+        do {
+            scriptSource = try WebInspectorScripts.networkAgent()
+        } catch {
+            networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
         let userScript = WKUserScript(
             source: scriptSource,
             injectionTime: .atDocumentStart,
@@ -319,6 +355,7 @@ private extension NetworkPageAgent {
             in: .page
         )
         controller.addUserScript(tokenScript)
+        controller.wi_networkTokenBootstrapSignature = tokenBootstrapSignature
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
         controller.wi_networkBridgeScriptInstalled = true

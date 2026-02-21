@@ -12,7 +12,9 @@ declare global {
         };
         webInspectorNetworkAgent?: {
             __installed?: boolean;
+            bootstrapAuthToken?: (authToken: unknown) => void;
         };
+        __wiBootstrapNetworkAuthToken?: (authToken: unknown) => void;
         webkit?: {
             createJSHandle?: (value: unknown) => unknown;
             serializeNode?: (node: Node) => unknown;
