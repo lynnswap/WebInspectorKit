@@ -1,32 +1,32 @@
 # WebInspectorKit
 
-[日本語版 README](README.ja.md)
+[English README](README.md)
 
 ![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
 
-Web Inspector for `WKWebView` (iOS / macOS).
+`WKWebView`（iOS / macOS）向けの Web Inspector です。
 
-## Products
+## 製品
 
-- `WebInspectorKit`: Container UI, pane descriptors, Observation state
-- `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
+- `WebInspectorKit`: コンテナ UI、ペイン記述子、Observation ベースの状態管理
+- `WebInspectorKitCore`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
-`WebInspectorKit` depends on `WebInspectorKitCore`.
+`WebInspectorKit` は `WebInspectorKitCore` に依存します。
 
-## Features
+## 機能
 
-- DOM tree browsing (element picking, highlights, deletion, attribute editing)
-- Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable panes via `WIPaneDescriptor`
-- Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
+- Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
+- `WIPaneDescriptor` によるペイン構成のカスタマイズ
+- `WISessionController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
 
-## Requirements
+## 要件
 
 - Swift 6.2+
 - iOS 18 / macOS 15+
-- WKWebView with JavaScript enabled
+- JavaScript が有効な WKWebView
 
-## Quick Start
+## クイックスタート
 
 ### UIKit
 
@@ -82,7 +82,7 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## Custom Pane
+## カスタムペイン
 
 ```swift
 let customPane = WIPaneDescriptor(
@@ -105,13 +105,13 @@ let container = WIContainerViewController(
 )
 ```
 
-## Migration
+## 移行
 
-See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
+破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
 
-## Testing
+## テスト
 
-Run tests with `xcodebuild` from the repository root. Execute both macOS and iOS Simulator test suites.
+リポジトリルートで `xcodebuild` を実行します。macOS と iOS Simulator の両方のテストを実行してください。
 
 ```bash
 # macOS: Package tests (Core)
@@ -139,19 +139,19 @@ xcodebuild -workspace WebInspectorKit.xcworkspace \
   test
 ```
 
-If the destination does not exist on your machine, check available simulators with:
+手元に destination がない場合は、次で利用可能な Simulator を確認してください。
 
 ```bash
 xcrun simctl list devices available
 ```
 
-Run TypeScript tests (Vitest) from the repository root:
+TypeScript テスト（Vitest）はリポジトリルートで次を実行してください。
 
 ```bash
 pnpm -s run test:ts
 pnpm -s run typecheck:ts
 ```
 
-## License
+## ライセンス
 
-See [LICENSE](LICENSE).
+[LICENSE](LICENSE) を参照してください。
