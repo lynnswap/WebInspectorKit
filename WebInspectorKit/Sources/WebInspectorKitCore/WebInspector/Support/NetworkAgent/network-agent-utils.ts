@@ -1153,7 +1153,9 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
         status = resourceEntry.responseStatus;
     }
     const requestMethod = (resourceEntry as { requestMethod?: string }).requestMethod;
-    const method = typeof requestMethod === "string" ? requestMethod.toUpperCase() : undefined;
+    const method = typeof requestMethod === "string" && requestMethod.trim().length > 0
+        ? requestMethod.toUpperCase()
+        : "GET";
     return {
         kind: "resourceTiming",
         requestId: requestId,

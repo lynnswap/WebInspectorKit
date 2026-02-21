@@ -229,6 +229,48 @@ struct NetworkInspectorTests {
         #expect(entry.responseBody == nil)
     }
 
+    @Test
+    func selectionPolicySelectsFirstEntryWhenSelectionIsMissing() throws {
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 41,
+            url: "https://example.com/first",
+            initiator: "document",
+            monotonicMs: 1_000
+        )
+        try applyRequestStart(
+            to: inspector,
+            requestID: 42,
+            url: "https://example.com/second",
+            initiator: "script",
+            monotonicMs: 1_010
+        )
+        inspector.sortDescriptors = [
+            SortDescriptor(\.requestID, order: .reverse)
+        ]
+
+        inspector.selectedEntryID = UUID()
+        let resolved = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: inspector.displayEntries
+        )
+
+        #expect(resolved == inspector.displayEntries.first?.id)
+    }
+
+    @Test
+    func selectionPolicyReturnsNilWhenEntriesAreEmpty() {
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
+        inspector.selectedEntryID = UUID()
+
+        let resolved = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: inspector.displayEntries
+        )
+        #expect(resolved == nil)
+    }
+
     private func makeEntry() -> NetworkEntry {
         NetworkEntry(
             sessionID: "session",

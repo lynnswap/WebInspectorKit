@@ -19,6 +19,9 @@ let package = Package(
             targets: ["WebInspectorKit"]
         )
     ],
+    dependencies: [
+        .package(path: "../../ObservationsCompat")
+    ],
     targets: [
         .target(
             name: "WebInspectorKitCore",
@@ -30,7 +33,8 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorKitCore"
+                "WebInspectorKitCore",
+                .product(name: "ObservationsCompat", package: "ObservationsCompat")
             ],
             path: "Sources/WebInspectorKit",
             resources: [

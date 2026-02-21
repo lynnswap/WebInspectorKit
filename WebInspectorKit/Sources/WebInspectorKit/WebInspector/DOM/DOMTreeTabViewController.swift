@@ -1,5 +1,24 @@
 import WebKit
 import WebInspectorKitCore
+import ObservationsCompat
+
+@MainActor
+private struct DOMTreeObservedState: Sendable, Equatable {
+    let errorMessage: String?
+    let hasPageWebView: Bool
+    let isSelectingElement: Bool
+    let selectionNodeID: Int?
+}
+
+@MainActor
+private func domTreeObservedState(from inspector: WIDOMPaneViewModel) -> DOMTreeObservedState {
+    DOMTreeObservedState(
+        errorMessage: inspector.errorMessage,
+        hasPageWebView: inspector.hasPageWebView,
+        isSelectingElement: inspector.isSelectingElement,
+        selectionNodeID: inspector.selection.nodeId
+    )
+}
 
 #if canImport(UIKit)
 import UIKit
@@ -7,7 +26,7 @@ import UIKit
 @MainActor
 final class DOMTreeTabViewController: UIViewController {
     private let inspector: WIDOMPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationTask: Task<Void, Never>?
 
     private lazy var pickItem: UIBarButtonItem = {
         UIBarButtonItem(
@@ -35,7 +54,7 @@ final class DOMTreeTabViewController: UIViewController {
     }
 
     deinit {
-        observationToken.invalidate()
+        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -96,15 +115,21 @@ final class DOMTreeTabViewController: UIViewController {
     }
 
     private func observeState() {
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.errorMessage
-            _ = self.inspector.hasPageWebView
-            _ = self.inspector.isSelectingElement
-            _ = self.inspector.selection.nodeId
-        }, onChange: { [weak self] in
-            self?.updateUI()
-        })
+        guard observationTask == nil else {
+            return
+        }
+        let inspector = self.inspector
+        observationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationsCompatStream {
+                domTreeObservedState(from: inspector)
+            }
+            for await _ in stream {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.updateUI()
+            }
+        }
     }
 
     private func updateUI() {
@@ -143,7 +168,7 @@ import AppKit
 @MainActor
 final class DOMTreeTabViewController: NSViewController {
     private let inspector: WIDOMPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationTask: Task<Void, Never>?
 
     private let errorLabel = NSTextField(labelWithString: "")
     private var inspectorWebView: InspectorWebView?
@@ -185,7 +210,7 @@ final class DOMTreeTabViewController: NSViewController {
     }
 
     deinit {
-        observationToken.invalidate()
+        observationTask?.cancel()
     }
 
     override func loadView() {
@@ -233,15 +258,21 @@ final class DOMTreeTabViewController: NSViewController {
     }
 
     private func observeState() {
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.errorMessage
-            _ = self.inspector.hasPageWebView
-            _ = self.inspector.isSelectingElement
-            _ = self.inspector.selection.nodeId
-        }, onChange: { [weak self] in
-            self?.updateUI()
-        })
+        guard observationTask == nil else {
+            return
+        }
+        let inspector = self.inspector
+        observationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationsCompatStream {
+                domTreeObservedState(from: inspector)
+            }
+            for await _ in stream {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.updateUI()
+            }
+        }
     }
 
     private func makeCopyMenu() -> NSMenu {

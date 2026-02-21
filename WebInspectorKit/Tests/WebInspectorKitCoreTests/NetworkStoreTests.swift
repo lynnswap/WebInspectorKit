@@ -109,6 +109,23 @@ struct NetworkStoreTests {
     }
 
     @Test
+    func resourceTimingDefaultsMethodToGETWhenMissing() throws {
+        let store = NetworkStore()
+        let event = try NetworkTestHelpers.decodeEvent([
+            "kind": "resourceTiming",
+            "requestId": 500,
+            "url": "https://example.com/asset.js",
+            "startTime": NetworkTestHelpers.timePayload(monotonicMs: 5_000.0, wallMs: 1_700_000_005_000.0),
+            "endTime": NetworkTestHelpers.timePayload(monotonicMs: 5_020.0, wallMs: 1_700_000_005_020.0)
+        ], sessionID: "resource-session")
+
+        store.applyEvent(event)
+
+        let entry = try #require(store.entry(forRequestID: 500, sessionID: "resource-session"))
+        #expect(entry.method == "GET")
+    }
+
+    @Test
     func websocketHandshakeAndErrorEventsAreApplied() throws {
         let store = NetworkStore()
         let createdCandidate = WSNetworkEvent(dictionary: [

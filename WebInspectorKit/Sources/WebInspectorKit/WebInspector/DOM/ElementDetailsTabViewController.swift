@@ -1,4 +1,57 @@
 import WebInspectorKitCore
+import ObservationsCompat
+
+@MainActor
+private struct ElementDetailsObservedState: Sendable, Equatable {
+    let nodeID: Int?
+    let preview: String
+    let selectorPath: String
+    let matchedStylesRevision: Int
+    let attributesRevision: Int
+    let isLoadingMatchedStyles: Bool
+    let matchedStylesTruncated: Bool
+    let blockedStylesheetCount: Int
+    let hasPageWebView: Bool
+    let isSelectingElement: Bool
+}
+
+@MainActor
+private func elementDetailsObservedState(from inspector: WIDOMPaneViewModel) -> ElementDetailsObservedState {
+    let selection = inspector.selection
+    var matchedStylesHasher = Hasher()
+    matchedStylesHasher.combine(selection.matchedStyles.count)
+    for style in selection.matchedStyles {
+        matchedStylesHasher.combine(style.selectorText)
+        matchedStylesHasher.combine(style.sourceLabel)
+        matchedStylesHasher.combine(style.declarations.count)
+        for declaration in style.declarations {
+            matchedStylesHasher.combine(declaration.name)
+            matchedStylesHasher.combine(declaration.value)
+            matchedStylesHasher.combine(declaration.important)
+        }
+    }
+
+    var attributesHasher = Hasher()
+    attributesHasher.combine(selection.attributes.count)
+    for attribute in selection.attributes {
+        attributesHasher.combine(attribute.nodeId)
+        attributesHasher.combine(attribute.name)
+        attributesHasher.combine(attribute.value)
+    }
+
+    return ElementDetailsObservedState(
+        nodeID: selection.nodeId,
+        preview: selection.preview,
+        selectorPath: selection.selectorPath,
+        matchedStylesRevision: matchedStylesHasher.finalize(),
+        attributesRevision: attributesHasher.finalize(),
+        isLoadingMatchedStyles: selection.isLoadingMatchedStyles,
+        matchedStylesTruncated: selection.matchedStylesTruncated,
+        blockedStylesheetCount: selection.blockedStylesheetCount,
+        hasPageWebView: inspector.hasPageWebView,
+        isSelectingElement: inspector.isSelectingElement
+    )
+}
 
 #if canImport(UIKit)
 import UIKit
@@ -121,7 +174,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
     }
 
     private let inspector: WIDOMPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationTask: Task<Void, Never>?
     private var sections: [DetailSection] = []
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var editingDraftValue: String?
@@ -162,7 +215,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
 
     deinit {
         pendingReloadDataTask?.cancel()
-        observationToken.invalidate()
+        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -172,21 +225,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         collectionView.collectionViewLayout = makeLayout()
         setupNavigationItems()
 
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.selection.nodeId
-            _ = self.inspector.selection.preview
-            _ = self.inspector.selection.selectorPath
-            _ = self.inspector.selection.matchedStyles
-            _ = self.inspector.selection.attributes
-            _ = self.inspector.selection.isLoadingMatchedStyles
-            _ = self.inspector.selection.matchedStylesTruncated
-            _ = self.inspector.selection.blockedStylesheetCount
-            _ = self.inspector.hasPageWebView
-            _ = self.inspector.isSelectingElement
-        }, onChange: { [weak self] in
-            self?.refreshUI()
-        })
+        startObservingStateIfNeeded()
 
         refreshUI()
     }
@@ -203,6 +242,24 @@ final class ElementDetailsTabViewController: UICollectionViewController {
 
     private func setupNavigationItems() {
         navigationItem.rightBarButtonItems = [secondaryActionsItem, pickItem]
+    }
+
+    private func startObservingStateIfNeeded() {
+        guard observationTask == nil else {
+            return
+        }
+        let inspector = self.inspector
+        observationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationsCompatStream {
+                elementDetailsObservedState(from: inspector)
+            }
+            for await _ in stream {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.refreshUI()
+            }
+        }
     }
 
     private func makeSecondaryMenu() -> UIMenu {
@@ -1233,7 +1290,7 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
     }
 
     private let inspector: WIDOMPaneViewModel
-    private let observationToken = WIObservationToken()
+    private var observationTask: Task<Void, Never>?
     private var payloadByStableID: [ItemStableID: ItemKind] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotApplyOnNextAppearance = false
@@ -1288,7 +1345,7 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
     }
 
     deinit {
-        observationToken.invalidate()
+        observationTask?.cancel()
     }
 
     override func loadView() {
@@ -1326,21 +1383,7 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
         doubleClick.numberOfClicksRequired = 2
         collectionView.addGestureRecognizer(doubleClick)
 
-        observationToken.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.selection.nodeId
-            _ = self.inspector.selection.preview
-            _ = self.inspector.selection.selectorPath
-            _ = self.inspector.selection.matchedStyles
-            _ = self.inspector.selection.attributes
-            _ = self.inspector.selection.isLoadingMatchedStyles
-            _ = self.inspector.selection.matchedStylesTruncated
-            _ = self.inspector.selection.blockedStylesheetCount
-            _ = self.inspector.hasPageWebView
-            _ = self.inspector.isSelectingElement
-        }, onChange: { [weak self] in
-            self?.refreshUI()
-        })
+        startObservingStateIfNeeded()
 
         refreshUI()
     }
@@ -1388,6 +1431,24 @@ final class ElementDetailsTabViewController: NSViewController, NSCollectionViewD
         reloadButton.isEnabled = inspector.hasPageWebView
         deleteButton.isEnabled = inspector.selection.nodeId != nil
         requestSnapshotUpdate(animatingDifferences: true)
+    }
+
+    private func startObservingStateIfNeeded() {
+        guard observationTask == nil else {
+            return
+        }
+        let inspector = self.inspector
+        observationTask = Task { @MainActor [weak self] in
+            let stream = makeObservationsCompatStream {
+                elementDetailsObservedState(from: inspector)
+            }
+            for await _ in stream {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self?.refreshUI()
+            }
+        }
     }
 
     private func applySnapshot(animatingDifferences: Bool) {

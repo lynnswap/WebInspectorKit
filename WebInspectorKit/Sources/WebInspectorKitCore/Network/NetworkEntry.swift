@@ -81,7 +81,8 @@ public class NetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     convenience init(startPayload payload: HTTPNetworkEvent) {
-        let method = (payload.method?.isEmpty == false ? payload.method : nil) ?? "UNKNOWN"
+        let fallbackMethod = payload.kind == .resourceTiming ? "GET" : "UNKNOWN"
+        let method = (payload.method?.isEmpty == false ? payload.method : nil) ?? fallbackMethod
         let url = payload.url ?? ""
         self.init(
             sessionID: payload.sessionID,

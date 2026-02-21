@@ -111,6 +111,28 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func modeTransitionResourceTimingWithoutMethodDefaultsToGET() throws {
+        let agent = NetworkPageAgent()
+        let batch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": "method-fallback",
+            "seq": 1,
+            "events": [[
+                "kind": "resourceTiming",
+                "requestId": 900,
+                "url": "https://example.com/fallback.css",
+                "startTime": NetworkTestHelpers.timePayload(monotonicMs: 9_000.0, wallMs: 1_700_000_009_000.0),
+                "endTime": NetworkTestHelpers.timePayload(monotonicMs: 9_010.0, wallMs: 1_700_000_009_010.0)
+            ]]
+        ])
+
+        agent.store.applyNetworkBatch(batch)
+
+        let entry = try #require(agent.store.entry(forRequestID: 900, sessionID: "method-fallback"))
+        #expect(entry.method == "GET")
+    }
+
+    @Test
     func clearNetworkLogsResetsEntriesAndSelection() throws {
         let agent = NetworkPageAgent()
         let store = agent.store

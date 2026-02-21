@@ -1,4 +1,5 @@
 import Foundation
+import ObservationsCompat
 import WebInspectorKitCore
 
 #if canImport(UIKit)
@@ -15,7 +16,7 @@ private struct DiffableRenderState<ID: DiffableStableID, Payload> {
 @MainActor
 final class NetworkTabViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let inspector: WINetworkPaneViewModel
-    private var observationToken: WIObservationToken?
+    private var observationTask: Task<Void, Never>?
 
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
@@ -33,7 +34,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         listViewController.onSelectEntry = { [weak self] entry in
             guard let self else { return }
             self.inspector.selectedEntryID = entry?.id
-            self.detailViewController.display(entry)
+            self.detailViewController.display(entry, hasEntries: !self.inspector.store.entries.isEmpty)
             guard entry != nil else {
                 if self.isCollapsed {
                     self.show(.primary)
@@ -59,7 +60,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
     }
 
     deinit {
-        observationToken?.invalidate()
+        observationTask?.cancel()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -74,63 +75,39 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
     }
 
     private func syncDetailSelection() {
+        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: inspector.displayEntries
+        )
+        if inspector.selectedEntryID != resolvedSelection {
+            inspector.selectedEntryID = resolvedSelection
+        }
         let entry = inspector.store.entry(forEntryID: inspector.selectedEntryID)
-        detailViewController.display(entry)
+        detailViewController.display(entry, hasEntries: !inspector.store.entries.isEmpty)
         listViewController.selectEntry(with: inspector.selectedEntryID)
         ensurePrimaryColumnIfNeeded()
     }
 
     private func startObservingInspectorIfNeeded() {
-        guard observationToken == nil else {
+        guard observationTask == nil else {
             return
         }
-        let token = WIObservationToken()
-        observationToken = token
-        token.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.selectedEntryID
-            _ = self.inspector.store.entries
-            self.observeSelectedEntryFields()
-        }, onChange: { [weak self] in
-            self?.syncDetailSelection()
-        })
+        observationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            for await _ in NetworkListEventStream.makeDetailStream(inspector: self.inspector) {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self.syncDetailSelection()
+            }
+        }
     }
 
     private func stopObservingInspector() {
-        observationToken?.invalidate()
-        observationToken = nil
-    }
-
-    private func observeSelectedEntryFields() {
-        guard let selectedEntry = inspector.store.entry(forEntryID: inspector.selectedEntryID) else {
-            return
-        }
-
-        _ = selectedEntry.url
-        _ = selectedEntry.method
-        _ = selectedEntry.statusCode
-        _ = selectedEntry.statusText
-        _ = selectedEntry.fileTypeLabel
-        _ = selectedEntry.duration
-        _ = selectedEntry.encodedBodyLength
-        _ = selectedEntry.decodedBodyLength
-        _ = selectedEntry.errorDescription
-        _ = selectedEntry.requestHeaders
-        _ = selectedEntry.responseHeaders
-        _ = selectedEntry.phase
-        observeBodyFields(selectedEntry.requestBody)
-        observeBodyFields(selectedEntry.responseBody)
-    }
-
-    private func observeBodyFields(_ body: NetworkBody?) {
-        guard let body else {
-            return
-        }
-        _ = body.preview
-        _ = body.full
-        _ = body.summary
-        _ = body.fetchState
-        _ = body.isBase64Encoded
+        observationTask?.cancel()
+        observationTask = nil
     }
 
     private func ensurePrimaryColumnIfNeeded() {
@@ -182,12 +159,13 @@ private final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private let inspector: WINetworkPaneViewModel
-    private var observationToken: WIObservationToken?
+    private var observationTask: Task<Void, Never>?
 
     private var displayedEntries: [NetworkEntry] = []
     private var entryByID: [UUID: NetworkEntry] = [:]
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
+    private var lastRenderSignature: Int?
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var snapshotTaskGeneration: UInt64 = 0
@@ -218,7 +196,7 @@ private final class NetworkListViewController: UICollectionViewController, UISea
 
     deinit {
         pendingReloadDataTask?.cancel()
-        observationToken?.invalidate()
+        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -442,9 +420,20 @@ private final class NetworkListViewController: UICollectionViewController, UISea
 
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
+        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: displayedEntries
+        )
+        if inspector.selectedEntryID != resolvedSelection {
+            inspector.selectedEntryID = resolvedSelection
+        }
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate()
-        if isCollectionViewVisible {
+
+        let renderSignature = snapshotRenderSignature(for: displayedEntries)
+        if renderSignature != lastRenderSignature {
+            lastRenderSignature = renderSignature
+            requestSnapshotUpdate()
+        } else if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
         filterItem.menu = makeFilterMenu()
@@ -466,26 +455,40 @@ private final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func startObservingInspectorIfNeeded() {
-        guard observationToken == nil else {
+        guard observationTask == nil else {
             return
         }
-        let token = WIObservationToken()
-        observationToken = token
-        token.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.displayEntries
-            _ = self.inspector.effectiveResourceFilters
-            _ = self.inspector.store.entries
-            _ = self.inspector.searchText
-        }, onChange: { [weak self] in
-            self?.reloadDataFromInspector()
-        })
+        observationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            for await _ in NetworkListEventStream.makeListStream(inspector: self.inspector) {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self.reloadDataFromInspector()
+            }
+        }
         reloadDataFromInspector()
     }
 
     private func stopObservingInspector() {
-        observationToken?.invalidate()
-        observationToken = nil
+        observationTask?.cancel()
+        observationTask = nil
+    }
+
+    private func snapshotRenderSignature(for entries: [NetworkEntry]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(entries.count)
+        for entry in entries {
+            hasher.combine(entry.id)
+            hasher.combine(entry.displayName)
+            hasher.combine(entry.fileTypeLabel)
+            hasher.combine(entry.statusLabel)
+            hasher.combine(entry.statusSeverity)
+            hasher.combine(entry.method)
+        }
+        return hasher.finalize()
     }
 
     private func configureListCell(_ cell: UICollectionViewListCell, item: ItemIdentifier) {
@@ -767,7 +770,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        display(nil)
+        display(nil, hasEntries: false)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -775,7 +778,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         flushPendingSnapshotUpdateIfNeeded()
     }
 
-    func display(_ entry: NetworkEntry?) {
+    func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
         self.entry = entry
         guard let entry else {
             title = nil
@@ -783,7 +786,19 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
             requestSnapshotUpdate()
             collectionView.isHidden = true
             navigationItem.rightBarButtonItem = nil
-            contentUnavailableConfiguration = nil
+            var configuration = UIContentUnavailableConfiguration.empty()
+            if hasEntries {
+                configuration.text = wiLocalized("network.empty.selection.title", default: "No request selected")
+                configuration.secondaryText = wiLocalized(
+                    "network.empty.selection.description",
+                    default: "Select a request from the list to inspect details."
+                )
+            } else {
+                configuration.text = wiLocalized("network.empty.title")
+                configuration.secondaryText = wiLocalized("network.empty.description")
+            }
+            configuration.image = UIImage(systemName: "waveform.path.ecg.rectangle")
+            contentUnavailableConfiguration = configuration
             return
         }
 
@@ -1582,18 +1597,10 @@ private func decodedBodyText(from body: NetworkBody) -> String? {
 #elseif canImport(AppKit)
 import AppKit
 
-private protocol DiffableStableID: Hashable, Sendable {}
-private protocol DiffableCellKind: Hashable, Sendable {}
-
-private struct DiffableRenderState<ID: DiffableStableID, Payload> {
-    let payloadByID: [ID: Payload]
-    let revisionByID: [ID: Int]
-}
-
 @MainActor
 final class NetworkTabViewController: NSSplitViewController {
     private let inspector: WINetworkPaneViewModel
-    private var observationToken: WIObservationToken?
+    private var observationTask: Task<Void, Never>?
 
     private let listViewController: NetworkMacListViewController
     private let detailViewController: NetworkMacDetailViewController
@@ -1611,7 +1618,7 @@ final class NetworkTabViewController: NSSplitViewController {
     }
 
     deinit {
-        observationToken?.invalidate()
+        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -1625,7 +1632,7 @@ final class NetworkTabViewController: NSSplitViewController {
         listViewController.onSelectEntry = { [weak self] entry in
             guard let self else { return }
             self.inspector.selectedEntryID = entry?.id
-            self.detailViewController.display(entry)
+            self.detailViewController.display(entry, hasEntries: !self.inspector.store.entries.isEmpty)
         }
 
         syncDetailSelection()
@@ -1643,119 +1650,71 @@ final class NetworkTabViewController: NSSplitViewController {
     }
 
     private func syncDetailSelection() {
+        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: inspector.displayEntries
+        )
+        if inspector.selectedEntryID != resolvedSelection {
+            inspector.selectedEntryID = resolvedSelection
+        }
         let entry = inspector.store.entry(forEntryID: inspector.selectedEntryID)
-        detailViewController.display(entry)
+        detailViewController.display(entry, hasEntries: !inspector.store.entries.isEmpty)
         listViewController.selectEntry(with: inspector.selectedEntryID)
     }
 
     private func startObservingInspectorIfNeeded() {
-        guard observationToken == nil else {
+        guard observationTask == nil else {
             return
         }
-        let token = WIObservationToken()
-        observationToken = token
-        token.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.selectedEntryID
-            _ = self.inspector.store.entries
-            self.observeSelectedEntryFields()
-        }, onChange: { [weak self] in
-            self?.syncDetailSelection()
-        })
+        observationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            for await _ in NetworkListEventStream.makeDetailStream(inspector: self.inspector) {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self.syncDetailSelection()
+            }
+        }
     }
 
     private func stopObservingInspector() {
-        observationToken?.invalidate()
-        observationToken = nil
-    }
-
-    private func observeSelectedEntryFields() {
-        guard let selectedEntry = inspector.store.entry(forEntryID: inspector.selectedEntryID) else {
-            return
-        }
-
-        _ = selectedEntry.url
-        _ = selectedEntry.method
-        _ = selectedEntry.statusCode
-        _ = selectedEntry.statusText
-        _ = selectedEntry.fileTypeLabel
-        _ = selectedEntry.duration
-        _ = selectedEntry.encodedBodyLength
-        _ = selectedEntry.decodedBodyLength
-        _ = selectedEntry.errorDescription
-        _ = selectedEntry.requestHeaders
-        _ = selectedEntry.responseHeaders
-        _ = selectedEntry.phase
-        observeBodyFields(selectedEntry.requestBody)
-        observeBodyFields(selectedEntry.responseBody)
-    }
-
-    private func observeBodyFields(_ body: NetworkBody?) {
-        guard let body else {
-            return
-        }
-        _ = body.preview
-        _ = body.full
-        _ = body.summary
-        _ = body.fetchState
-        _ = body.isBase64Encoded
+        observationTask?.cancel()
+        observationTask = nil
     }
 }
 
 @MainActor
-private final class NetworkMacListViewController: NSViewController, NSCollectionViewDelegate, NSSearchFieldDelegate {
-    private enum SectionIdentifier: Hashable {
-        case main
-    }
-
-    private enum ItemCellKind: String, DiffableCellKind {
-        case macListItem
-    }
-
-    private enum ItemStableKey: DiffableStableID {
-        case entry(id: UUID)
-    }
-
-    private struct ItemStableID: DiffableStableID {
-        let key: ItemStableKey
-        let cellKind: ItemCellKind
-    }
-
-    private struct ItemIdentifier: Hashable, Sendable {
-        let stableID: ItemStableID
-    }
-
-    private struct ItemPayload {
-        let entryID: UUID
-        let displayName: String
-        let statusLabel: String
-        let fileTypeLabel: String
-        let statusSeverity: NetworkStatusSeverity
-    }
-
+private final class NetworkMacListViewController: NSViewController, NSTableViewDelegate, NSTableViewDataSource, NSSearchFieldDelegate {
     private let inspector: WINetworkPaneViewModel
-    private var observationToken: WIObservationToken?
+    private var observationTask: Task<Void, Never>?
 
     private let searchField = NSSearchField()
     private let filterButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private let clearButton = NSButton(title: "", target: nil, action: nil)
-    private lazy var collectionView: NSCollectionView = {
-        let view = NSCollectionView(frame: .zero)
-        view.collectionViewLayout = makeLayout()
+    private lazy var tableView: NSTableView = {
+        let view = NSTableView(frame: .zero)
         view.delegate = self
-        view.register(
-            NetworkMacListItem.self,
-            forItemWithIdentifier: NetworkMacListItem.reuseIdentifier
-        )
+        view.dataSource = self
+        view.headerView = nil
+        view.rowHeight = 62
+        view.intercellSpacing = NSSize(width: 0, height: 4)
+        view.usesAutomaticRowHeights = false
+        view.focusRingType = .none
+        view.backgroundColor = .clear
+        view.selectionHighlightStyle = .regular
+        let column = NSTableColumn(identifier: NetworkMacListCellView.reuseIdentifier)
+        column.resizingMask = .autoresizingMask
+        view.addTableColumn(column)
         return view
     }()
-    private lazy var dataSource = makeDataSource()
 
     private var displayedEntries: [NetworkEntry] = []
     private var entryByID: [UUID: NetworkEntry] = [:]
-    private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
-    private var revisionByStableID: [ItemStableID: Int] = [:]
-    private var needsSnapshotApplyOnNextAppearance = false
+    private var lastRenderSignature: Int?
+    private var needsTableReloadOnNextAppearance = false
+    private var isApplyingSelection = false
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
     init(inspector: WINetworkPaneViewModel) {
@@ -1769,7 +1728,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 
     deinit {
-        observationToken?.invalidate()
+        observationTask?.cancel()
     }
 
     override func loadView() {
@@ -1797,7 +1756,7 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
         toolbar.translatesAutoresizingMaskIntoConstraints = false
 
         let scrollView = NSScrollView()
-        scrollView.documentView = collectionView
+        scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -1815,13 +1774,12 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
         startObservingInspectorIfNeeded()
-        flushPendingSnapshotUpdateIfNeeded()
+        flushPendingTableReloadIfNeeded()
     }
 
     override func viewDidDisappear() {
@@ -1833,137 +1791,97 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
         inspector.searchText = searchField.stringValue
     }
 
-    private func makeLayout() -> NSCollectionViewLayout {
-        let layout = NSCollectionViewFlowLayout()
-        layout.minimumLineSpacing = 4
-        layout.minimumInteritemSpacing = 0
-        layout.sectionInset = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        layout.estimatedItemSize = NSSize(width: 240, height: 40)
-        return layout
-    }
-
-    private func makeDataSource() -> NSCollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier> {
-        NSCollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] collectionView, indexPath, item in
-            guard
-                let self,
-                let viewItem = collectionView.makeItem(
-                    withIdentifier: NetworkMacListItem.reuseIdentifier,
-                    for: indexPath
-                ) as? NetworkMacListItem
-            else {
-                return NSCollectionViewItem()
-            }
-            guard item.stableID.cellKind == .macListItem else {
-                assertionFailure("Unexpected cell kind for NetworkMacListItem")
-                return NSCollectionViewItem()
-            }
-            if let payload = self.payloadByStableID[item.stableID],
-               let entry = self.entryByID[payload.entryID] {
-                viewItem.configure(entry: entry)
-            }
-            return viewItem
-        }
-    }
-
     func selectEntry(with id: UUID?) {
         guard let id else {
-            collectionView.deselectAll(nil)
+            isApplyingSelection = true
+            tableView.deselectAll(nil)
+            isApplyingSelection = false
             return
         }
-        let item = ItemIdentifier(stableID: ItemStableID(key: .entry(id: id), cellKind: .macListItem))
-        guard let indexPath = dataSource.indexPath(for: item) else {
-            collectionView.deselectAll(nil)
+        guard let index = displayedEntries.firstIndex(where: { $0.id == id }) else {
+            isApplyingSelection = true
+            tableView.deselectAll(nil)
+            isApplyingSelection = false
             return
         }
-        collectionView.selectItems(at: Set([indexPath]), scrollPosition: .centeredVertically)
+        let rowIndexes = IndexSet(integer: index)
+        if tableView.selectedRowIndexes != rowIndexes {
+            isApplyingSelection = true
+            tableView.selectRowIndexes(rowIndexes, byExtendingSelection: false)
+            isApplyingSelection = false
+        }
+        tableView.scrollRowToVisible(index)
     }
 
     private func reloadDataFromInspector() {
         displayedEntries = inspector.displayEntries
+        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntryID,
+            entries: displayedEntries
+        )
+        if inspector.selectedEntryID != resolvedSelection {
+            inspector.selectedEntryID = resolvedSelection
+        }
+
         entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        requestSnapshotUpdate()
-        if isCollectionViewVisible {
+        let renderSignature = tableRenderSignature(for: displayedEntries)
+        if renderSignature != lastRenderSignature {
+            lastRenderSignature = renderSignature
+            requestTableReload()
+        } else if isTableViewVisible {
             selectEntry(with: inspector.selectedEntryID)
         }
+
         clearButton.isEnabled = !inspector.store.entries.isEmpty
         rebuildFilterMenu()
     }
 
     private func startObservingInspectorIfNeeded() {
-        guard observationToken == nil else {
+        guard observationTask == nil else {
             return
         }
-        let token = WIObservationToken()
-        observationToken = token
-        token.observe({ [weak self] in
-            guard let self else { return }
-            _ = self.inspector.displayEntries
-            _ = self.inspector.effectiveResourceFilters
-            _ = self.inspector.store.entries
-            _ = self.inspector.searchText
-        }, onChange: { [weak self] in
-            self?.reloadDataFromInspector()
-        })
+        observationTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            for await _ in NetworkListEventStream.makeListStream(inspector: self.inspector) {
+                guard !Task.isCancelled else {
+                    break
+                }
+                self.reloadDataFromInspector()
+            }
+        }
         reloadDataFromInspector()
     }
 
     private func stopObservingInspector() {
-        observationToken?.invalidate()
-        observationToken = nil
+        observationTask?.cancel()
+        observationTask = nil
     }
 
-    private func applySnapshot() {
-        let render = buildRenderState()
-        let stableIDs = render.stableIDs
-        precondition(
-            stableIDs.count == Set(stableIDs).count,
-            "Duplicate diffable IDs detected in NetworkMacListViewController"
-        )
-        let previousRevisionByStableID = revisionByStableID
-        payloadByStableID = render.state.payloadByID
-        revisionByStableID = render.state.revisionByID
-
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
-        snapshot.appendSections([.main])
-        let identifiers = stableIDs.map { stableID in
-            ItemIdentifier(stableID: stableID)
-        }
-        snapshot.appendItems(identifiers, toSection: .main)
-        let reloaded = stableIDs.compactMap { stableID -> ItemIdentifier? in
-            guard
-                let previousRevision = previousRevisionByStableID[stableID],
-                let nextRevision = render.state.revisionByID[stableID],
-                previousRevision != nextRevision
-            else {
-                return nil
-            }
-            return ItemIdentifier(stableID: stableID)
-        }
-        if !reloaded.isEmpty {
-            snapshot.reloadItems(reloaded)
-        }
-        dataSource.apply(snapshot, animatingDifferences: false)
-    }
-
-    private var isCollectionViewVisible: Bool {
+    private var isTableViewVisible: Bool {
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate() {
-        guard isCollectionViewVisible else {
-            needsSnapshotApplyOnNextAppearance = true
+    private func requestTableReload() {
+        guard isTableViewVisible else {
+            needsTableReloadOnNextAppearance = true
             return
         }
-        needsSnapshotApplyOnNextAppearance = false
-        applySnapshot()
+        needsTableReloadOnNextAppearance = false
+        applyTableReload()
     }
 
-    private func flushPendingSnapshotUpdateIfNeeded() {
-        guard needsSnapshotApplyOnNextAppearance, isCollectionViewVisible else {
+    private func flushPendingTableReloadIfNeeded() {
+        guard needsTableReloadOnNextAppearance, isTableViewVisible else {
             return
         }
-        needsSnapshotApplyOnNextAppearance = false
-        applySnapshot()
+        needsTableReloadOnNextAppearance = false
+        applyTableReload()
+    }
+
+    private func applyTableReload() {
+        tableView.reloadData()
         selectEntry(with: inspector.selectedEntryID)
     }
 
@@ -1996,51 +1914,47 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
         filterButton.menu = menu
     }
 
-    func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-        guard
-            let indexPath = indexPaths.first,
-            let item = dataSource.itemIdentifier(for: indexPath),
-            let payload = payloadByStableID[item.stableID],
-            let entry = entryByID[payload.entryID]
-        else {
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        displayedEntries.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row >= 0, row < displayedEntries.count else {
+            return nil
+        }
+        let entry = displayedEntries[row]
+        let view = (tableView.makeView(
+            withIdentifier: NetworkMacListCellView.reuseIdentifier,
+            owner: self
+        ) as? NetworkMacListCellView) ?? NetworkMacListCellView()
+        view.identifier = NetworkMacListCellView.reuseIdentifier
+        view.configure(entry: entry)
+        return view
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !isApplyingSelection else {
+            return
+        }
+        let row = tableView.selectedRow
+        guard row >= 0, row < displayedEntries.count else {
             onSelectEntry?(nil)
             return
         }
-        onSelectEntry?(entry)
+        onSelectEntry?(displayedEntries[row])
     }
 
-    private func buildRenderState() -> (stableIDs: [ItemStableID], state: DiffableRenderState<ItemStableID, ItemPayload>) {
-        var stableIDs: [ItemStableID] = []
-        var payloadByID: [ItemStableID: ItemPayload] = [:]
-        var revisionByID: [ItemStableID: Int] = [:]
-
-        for entry in displayedEntries {
-            let stableID = ItemStableID(key: .entry(id: entry.id), cellKind: .macListItem)
-            let payload = ItemPayload(
-                entryID: entry.id,
-                displayName: entry.displayName,
-                statusLabel: entry.statusLabel,
-                fileTypeLabel: entry.fileTypeLabel,
-                statusSeverity: entry.statusSeverity
-            )
-            stableIDs.append(stableID)
-            payloadByID[stableID] = payload
-            revisionByID[stableID] = revision(for: payload)
-        }
-
-        return (
-            stableIDs: stableIDs,
-            state: DiffableRenderState(payloadByID: payloadByID, revisionByID: revisionByID)
-        )
-    }
-
-    private func revision(for payload: ItemPayload) -> Int {
+    private func tableRenderSignature(for entries: [NetworkEntry]) -> Int {
         var hasher = Hasher()
-        hasher.combine(payload.entryID)
-        hasher.combine(payload.displayName)
-        hasher.combine(payload.statusLabel)
-        hasher.combine(payload.fileTypeLabel)
-        hasher.combine(payload.statusSeverity)
+        hasher.combine(entries.count)
+        for entry in entries {
+            hasher.combine(entry.id)
+            hasher.combine(entry.displayName)
+            hasher.combine(entry.method)
+            hasher.combine(entry.fileTypeLabel)
+            hasher.combine(entry.statusLabel)
+            hasher.combine(entry.statusSeverity)
+        }
         return hasher.finalize()
     }
 
@@ -2091,26 +2005,37 @@ private final class NetworkMacListViewController: NSViewController, NSCollection
     }
 }
 
-private final class NetworkMacListItem: NSCollectionViewItem {
-    static let reuseIdentifier = NSUserInterfaceItemIdentifier("NetworkMacListItem")
+private final class NetworkMacListCellView: NSTableCellView {
+    static let reuseIdentifier = NSUserInterfaceItemIdentifier("NetworkMacListCellView")
 
     private let nameLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let stackView = NSStackView()
 
-    override func loadView() {
-        view = NSView(frame: .zero)
-        view.wantsLayer = true
-        view.layer?.cornerRadius = 8
-        view.layer?.borderWidth = 1
-        view.layer?.borderColor = NSColor.separatorColor.cgColor
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupUI()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    private func setupUI() {
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        translatesAutoresizingMaskIntoConstraints = false
 
         stackView.orientation = .vertical
         stackView.spacing = 2
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         nameLabel.font = WIUIStyle.macOS.bodyFont
+        nameLabel.lineBreakMode = .byTruncatingMiddle
         detailLabel.font = WIUIStyle.macOS.detailFont
         detailLabel.textColor = .secondaryLabelColor
         metaLabel.font = WIUIStyle.macOS.detailFont
@@ -2119,13 +2044,13 @@ private final class NetworkMacListItem: NSCollectionViewItem {
         stackView.addArrangedSubview(nameLabel)
         stackView.addArrangedSubview(detailLabel)
         stackView.addArrangedSubview(metaLabel)
-        view.addSubview(stackView)
+        addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
-            stackView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            stackView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            stackView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6)
+            stackView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
         ])
     }
 
@@ -2229,14 +2154,18 @@ private final class NetworkMacDetailViewController: NSViewController {
             emptyLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24)
         ])
 
-        display(nil)
+        display(nil, hasEntries: false)
     }
 
-    func display(_ entry: NetworkEntry?) {
+    func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
         self.entry = entry
 
         guard let entry else {
-            emptyLabel.stringValue = "\(wiLocalized("network.empty.title"))\n\n\(wiLocalized("network.empty.description"))"
+            if hasEntries {
+                emptyLabel.stringValue = "\(wiLocalized("network.empty.selection.title", default: "No request selected"))\n\n\(wiLocalized("network.empty.selection.description", default: "Select a request from the list to inspect details."))"
+            } else {
+                emptyLabel.stringValue = "\(wiLocalized("network.empty.title"))\n\n\(wiLocalized("network.empty.description"))"
+            }
             emptyLabel.isHidden = false
             contentStackView.isHidden = true
             fetchButton.isEnabled = false
