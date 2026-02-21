@@ -321,10 +321,7 @@ private final class NetworkListViewController: UICollectionViewController, UISea
         }
         let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
             collectionView: collectionView
-        ) { [weak self] collectionView, indexPath, item in
-            guard let self else {
-                return UICollectionViewCell()
-            }
+        ) { collectionView, indexPath, item in
             guard item.stableID.cellKind == .list else {
                 assertionFailure("Unexpected cell kind for network list registration")
                 return UICollectionViewCell()
@@ -839,10 +836,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
 
         let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
             collectionView: collectionView
-        ) { [weak self] collectionView, indexPath, item in
-            guard let self else {
-                return UICollectionViewCell()
-            }
+        ) { collectionView, indexPath, item in
             guard item.stableID.cellKind == .list else {
                 assertionFailure("Unexpected cell kind for network detail list registration")
                 return UICollectionViewCell()
@@ -853,10 +847,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
                 item: item
             )
         }
-        dataSource.supplementaryViewProvider = { [weak self] collectionView, _, indexPath in
-            guard let self else {
-                return UICollectionReusableView()
-            }
+        dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
             return collectionView.dequeueConfiguredReusableSupplementary(
                 using: headerRegistration,
                 for: indexPath

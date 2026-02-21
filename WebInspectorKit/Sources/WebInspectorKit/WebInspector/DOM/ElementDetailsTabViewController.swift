@@ -412,10 +412,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
                 )
             }
         }
-        dataSource.supplementaryViewProvider = { [weak self] collectionView, _, indexPath in
-            guard let self else {
-                return UICollectionReusableView()
-            }
+        dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
             return collectionView.dequeueConfiguredReusableSupplementary(
                 using: headerRegistration,
                 for: indexPath
