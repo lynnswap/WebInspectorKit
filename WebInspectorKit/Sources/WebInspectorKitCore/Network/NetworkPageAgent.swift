@@ -105,6 +105,10 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         scheduleConfigure(mode: mode, clearExisting: false, on: webView)
     }
 
+    func waitForPendingConfigurationForTesting() async {
+        await configureTask?.value
+    }
+
     func clearNetworkLogs() {
         store.clear()
         scheduleClear(on: webView)

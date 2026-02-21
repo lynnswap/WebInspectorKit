@@ -305,15 +305,9 @@ struct NetworkPageAgentTests {
         secondAgent.setMode(.active)
         await waitForScripts(on: controller, atLeast: 3)
         await loadHTML("<html><body><p>second-agent</p></body></html>", in: webView)
+        await secondAgent.waitForPendingConfigurationForTesting()
 
-        var secondBody: NetworkBody?
-        for _ in 0..<200 {
-            secondBody = await secondAgent.fetchBody(bodyRef: nil, bodyHandle: "second-agent" as NSString, role: .response)
-            if secondBody?.full == "second-agent" {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 25_000_000)
-        }
+        let secondBody = await secondAgent.fetchBody(bodyRef: nil, bodyHandle: "second-agent" as NSString, role: .response)
         #expect(secondBody?.full == "second-agent")
     }
 
