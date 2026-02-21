@@ -42,7 +42,7 @@ private protocol ElementAttributeEditorCellDelegate: AnyObject {
 }
 
 @MainActor
-final class ElementDetailsTabViewController: UIViewController, UICollectionViewDelegate {
+final class ElementDetailsTabViewController: UICollectionViewController {
     private struct SectionIdentifier: Hashable, Sendable {
         let index: Int
         let title: String
@@ -132,12 +132,6 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
 
-    private lazy var collectionView: UICollectionView = {
-        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.delegate = self
-        return collectionView
-    }()
     private lazy var dataSource = makeDataSource()
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -157,7 +151,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
 
     init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
-        super.init(nibName: nil, bundle: nil)
+        super.init(collectionViewLayout: UICollectionViewLayout())
     }
 
     @available(*, unavailable)
@@ -174,14 +168,8 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         super.viewDidLoad()
         title = nil
         navigationItem.title = ""
+        collectionView.collectionViewLayout = makeLayout()
         setupNavigationItems()
-        view.addSubview(collectionView)
-        NSLayoutConstraint.activate([
-            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
 
         observationToken.observe({ [weak self] in
             guard let self else { return }
@@ -736,11 +724,11 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         )
     }
 
-    func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+    override func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         false
     }
 
-    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+    override func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         flushPendingAttributeEditorRelayoutIfNeeded()
     }
 
@@ -760,7 +748,7 @@ final class ElementDetailsTabViewController: UIViewController, UICollectionViewD
         return configuration
     }
 
-    func collectionView(
+    override func collectionView(
         _ collectionView: UICollectionView,
         contextMenuConfigurationForItemAt indexPath: IndexPath,
         point: CGPoint
