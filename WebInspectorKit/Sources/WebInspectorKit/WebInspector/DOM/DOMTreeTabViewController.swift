@@ -167,7 +167,7 @@ final class DOMTreeTabViewController: UIViewController {
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode()
+        inspector.deleteSelectedNode(undoManager: undoManager)
     }
 }
 
@@ -325,9 +325,7 @@ final class DOMTreeTabViewController: NSViewController {
         guard let nodeID else {
             return
         }
-        Task {
-            await inspector.session.removeNode(nodeId: nodeID)
-        }
+        inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {

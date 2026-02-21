@@ -2,6 +2,19 @@ import {inspector, type AnyNode} from "./dom-agent-state";
 import {clearHighlight} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./dom-agent-snapshot";
 
+type RemovedNodeUndoEntry = {
+    token: number;
+    node: AnyNode;
+    parent: AnyNode;
+    nextSibling: AnyNode | null;
+    removed: boolean;
+};
+
+var removeUndoTokenSequence = 0;
+var removedNodeUndoEntries = new Map<number, RemovedNodeUndoEntry>();
+var removedNodeUndoOrder: number[] = [];
+var maxRemovedNodeUndoEntries = 128;
+
 function resolveNode(identifier: number) {
     var map = inspector.map;
     if (!map || !map.size) {
@@ -332,7 +345,114 @@ export function removeNodeHandle(handle: unknown) {
     return removeResolvedNode(resolveHandleNode(handle));
 }
 
+export function removeNodeWithUndo(identifier: number) {
+    var node = resolveNode(identifier);
+    return removeResolvedNodeWithUndo(node);
+}
+
+export function removeNodeHandleWithUndo(handle: unknown) {
+    return removeResolvedNodeWithUndo(resolveHandleNode(handle));
+}
+
+export function undoRemoveNode(token: number | null | undefined) {
+    var resolvedToken = normalizeUndoToken(token);
+    if (!resolvedToken) {
+        return false;
+    }
+    var entry = removedNodeUndoEntries.get(resolvedToken);
+    if (!entry || !entry.removed) {
+        return false;
+    }
+
+    var parent = entry.parent;
+    var node = entry.node;
+    if (!parent || !node) {
+        return false;
+    }
+
+    var restored = false;
+    suppressSnapshotAutoUpdate("undo-remove-node");
+    try {
+        var nextSibling = entry.nextSibling;
+        if (nextSibling && nextSibling.parentNode === parent && typeof parent.insertBefore === "function") {
+            parent.insertBefore(node, nextSibling);
+            restored = true;
+        } else if (typeof parent.appendChild === "function") {
+            parent.appendChild(node);
+            restored = true;
+        }
+    } catch {
+        restored = false;
+    } finally {
+        resumeSnapshotAutoUpdate("undo-remove-node");
+    }
+
+    if (!restored) {
+        return false;
+    }
+
+    entry.removed = false;
+    clearHighlight();
+    triggerSnapshotUpdate("undo-remove-node");
+    return true;
+}
+
+export function redoRemoveNode(token: number | null | undefined) {
+    var resolvedToken = normalizeUndoToken(token);
+    if (!resolvedToken) {
+        return false;
+    }
+    var entry = removedNodeUndoEntries.get(resolvedToken);
+    if (!entry || entry.removed) {
+        return false;
+    }
+
+    var node = entry.node;
+    if (!node || !node.parentNode) {
+        return false;
+    }
+
+    entry.parent = node.parentNode as AnyNode;
+    entry.nextSibling = node.nextSibling as AnyNode | null;
+
+    var removed = performNodeRemoval(node, "redo-remove-node");
+    if (removed) {
+        entry.removed = true;
+    }
+    return removed;
+}
+
 function removeResolvedNode(node: AnyNode | null) {
+    return performNodeRemoval(node, "remove-node");
+}
+
+function removeResolvedNodeWithUndo(node: AnyNode | null) {
+    if (!node) {
+        return 0;
+    }
+    var parent = node.parentNode;
+    if (!parent) {
+        return 0;
+    }
+    var nextSibling = node.nextSibling as AnyNode | null;
+
+    var removed = performNodeRemoval(node, "remove-node");
+    if (!removed) {
+        return 0;
+    }
+
+    var entry: RemovedNodeUndoEntry = {
+        token: nextRemoveUndoToken(),
+        node: node,
+        parent: parent as AnyNode,
+        nextSibling: nextSibling,
+        removed: true
+    };
+    rememberRemovedNodeUndoEntry(entry);
+    return entry.token;
+}
+
+function performNodeRemoval(node: AnyNode | null, reason: string) {
     if (!node) {
         return false;
     }
@@ -342,7 +462,7 @@ function removeResolvedNode(node: AnyNode | null) {
     }
 
     var removed = false;
-    suppressSnapshotAutoUpdate("remove-node");
+    suppressSnapshotAutoUpdate(reason);
     try {
         if (typeof parent.removeChild === "function") {
             parent.removeChild(node);
@@ -353,15 +473,40 @@ function removeResolvedNode(node: AnyNode | null) {
         }
     } catch {
     } finally {
-        resumeSnapshotAutoUpdate("remove-node");
+        resumeSnapshotAutoUpdate(reason);
     }
 
     if (removed) {
         clearHighlight();
-        triggerSnapshotUpdate("remove-node");
+        triggerSnapshotUpdate(reason);
     }
 
     return removed;
+}
+
+function nextRemoveUndoToken() {
+    removeUndoTokenSequence += 1;
+    return removeUndoTokenSequence;
+}
+
+function rememberRemovedNodeUndoEntry(entry: RemovedNodeUndoEntry) {
+    removedNodeUndoEntries.set(entry.token, entry);
+    removedNodeUndoOrder.push(entry.token);
+
+    while (removedNodeUndoOrder.length > maxRemovedNodeUndoEntries) {
+        var oldestToken = removedNodeUndoOrder.shift();
+        if (typeof oldestToken !== "number") {
+            continue;
+        }
+        removedNodeUndoEntries.delete(oldestToken);
+    }
+}
+
+function normalizeUndoToken(token: number | null | undefined) {
+    if (typeof token === "number" && Number.isFinite(token) && token > 0) {
+        return Math.floor(token);
+    }
+    return 0;
 }
 
 export function setAttributeForNode(identifier: number, name: string | null | undefined, value: string | null | undefined) {

@@ -319,6 +319,43 @@ struct DOMSessionTests {
         #expect(payload.rules.contains(where: { $0.selectorText == ".match-target" }))
     }
 
+    @Test
+    func removeNodeSupportsUndoAndRedo() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
+        let (webView, _) = makeTestWebView()
+        let html = """
+        <html>
+            <body>
+                <div id="container">
+                    <div id="target">Target</div>
+                </div>
+            </body>
+        </html>
+        """
+
+        session.attach(to: webView)
+        await loadHTML(html, in: webView)
+        let snapshot = try await session.captureSnapshot(maxDepth: 5)
+        guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target nodeId was not found in snapshot")
+            return
+        }
+
+        guard let undoToken = await session.removeNodeWithUndo(nodeId: nodeId) else {
+            Issue.record("removeNodeWithUndo should return a valid token")
+            return
+        }
+        #expect(await domNodeExists(withID: "target", in: webView) == false)
+
+        let restored = await session.undoRemoveNode(undoToken: undoToken)
+        #expect(restored == true)
+        #expect(await domNodeExists(withID: "target", in: webView) == true)
+
+        let removedAgain = await session.redoRemoveNode(undoToken: undoToken)
+        #expect(removedAgain == true)
+        #expect(await domNodeExists(withID: "target", in: webView) == false)
+    }
+
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
         let controller = RecordingUserContentController()
         let configuration = WKWebViewConfiguration()
@@ -421,6 +458,16 @@ struct DOMSessionTests {
             }
         }
         return nil
+    }
+
+    private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return document.getElementById(identifier) !== null;",
+            arguments: ["identifier": id],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
 }
 

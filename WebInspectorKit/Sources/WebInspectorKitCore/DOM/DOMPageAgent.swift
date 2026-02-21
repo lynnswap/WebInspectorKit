@@ -234,6 +234,82 @@ public extension DOMPageAgent {
         }
     }
 
+    func removeNodeWithUndo(nodeId: Int) async -> Int? {
+        guard let webView else {
+            return nil
+        }
+        do {
+            let rawValue = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOM.removeNodeWithUndo(identifier)",
+                arguments: ["identifier": nodeId],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            if let number = rawValue as? NSNumber {
+                let token = number.intValue
+                if token > 0 {
+                    handleCache.removeHandle(for: nodeId)
+                    return token
+                }
+                return nil
+            }
+            if let token = rawValue as? Int, token > 0 {
+                handleCache.removeHandle(for: nodeId)
+                return token
+            }
+            return nil
+        } catch {
+            domLogger.error("remove node with undo failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func undoRemoveNode(undoToken: Int) async -> Bool {
+        guard let webView else {
+            return false
+        }
+        do {
+            let rawValue = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOM.undoRemoveNode(token)",
+                arguments: ["token": undoToken],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            if let boolValue = rawValue as? Bool {
+                return boolValue
+            }
+            if let number = rawValue as? NSNumber {
+                return number.boolValue
+            }
+            return false
+        } catch {
+            domLogger.error("undo remove node failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
+        guard let webView else {
+            return false
+        }
+        do {
+            let rawValue = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOM.redoRemoveNode(token)",
+                arguments: ["token": undoToken],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            let succeeded = (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
+            if succeeded, let nodeId {
+                handleCache.removeHandle(for: nodeId)
+            }
+            return succeeded
+        } catch {
+            domLogger.error("redo remove node failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     func setAttribute(nodeId: Int, name: String, value: String) async {
         guard let webView else {
             return

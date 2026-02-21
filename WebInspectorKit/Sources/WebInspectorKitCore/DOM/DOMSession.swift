@@ -153,6 +153,18 @@ public extension DOMSession {
         await pageAgent.removeNode(nodeId: nodeId)
     }
 
+    func removeNodeWithUndo(nodeId: Int) async -> Int? {
+        await pageAgent.removeNodeWithUndo(nodeId: nodeId)
+    }
+
+    func undoRemoveNode(undoToken: Int) async -> Bool {
+        await pageAgent.undoRemoveNode(undoToken: undoToken)
+    }
+
+    func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
+        await pageAgent.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
+    }
+
     func setAttribute(nodeId: Int, name: String, value: String) async {
         await pageAgent.setAttribute(nodeId: nodeId, name: name, value: value)
     }

@@ -16,6 +16,9 @@ import {
 import {
     debugStatus,
     outerHTMLForNode,
+    redoRemoveNode,
+    removeNodeHandleWithUndo,
+    removeNodeWithUndo,
     removeAttributeForHandle,
     removeAttributeForNode,
     removeNodeHandle,
@@ -23,6 +26,7 @@ import {
     selectorPathForNode,
     setAttributeForHandle,
     setAttributeForNode,
+    undoRemoveNode,
     xpathForNode
 } from "./DOMAgent/dom-agent-dom-utils";
 import {matchedStylesForNode} from "./DOMAgent/dom-agent-styles";
@@ -54,6 +58,10 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         createNodeHandle: createNodeHandle,
         removeNode: removeNode,
         removeNodeHandle: removeNodeHandle,
+        removeNodeWithUndo: removeNodeWithUndo,
+        removeNodeHandleWithUndo: removeNodeHandleWithUndo,
+        undoRemoveNode: undoRemoveNode,
+        redoRemoveNode: redoRemoveNode,
         setAttributeForNode: setAttributeForNode,
         setAttributeForHandle: setAttributeForHandle,
         removeAttributeForNode: removeAttributeForNode,

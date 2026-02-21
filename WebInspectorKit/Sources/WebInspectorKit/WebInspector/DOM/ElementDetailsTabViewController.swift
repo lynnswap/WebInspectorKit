@@ -889,7 +889,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode()
+        inspector.deleteSelectedNode(undoManager: undoManager)
     }
 }
 

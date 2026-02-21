@@ -10,6 +10,7 @@ import AppKit
 #endif
 
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMPaneViewModel")
+private let domDeleteUndoHistoryLimit = 128
 
 @MainActor
 @Observable
@@ -22,6 +23,9 @@ public final class WIDOMPaneViewModel {
     public private(set) var isSelectingElement = false
 
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingDeleteTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingDeleteGeneration: UInt64 = 0
+    @ObservationIgnored private weak var deleteUndoManager: UndoManager?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
 #endif
@@ -124,10 +128,16 @@ public final class WIDOMPaneViewModel {
     }
 
     public func deleteSelectedNode() {
-        guard let nodeId = selection.nodeId else { return }
-        Task {
-            await session.removeNode(nodeId: nodeId)
-        }
+        deleteSelectedNode(undoManager: nil)
+    }
+
+    public func deleteSelectedNode(undoManager: UndoManager?) {
+        deleteNode(nodeId: selection.nodeId, undoManager: undoManager)
+    }
+
+    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) {
+        guard let nodeId else { return }
+        enqueueDelete(nodeId: nodeId, undoManager: undoManager)
     }
 
     public func updateAttributeValue(name: String, value: String) {
@@ -182,9 +192,45 @@ private extension WIDOMPaneViewModel {
 
     func resetInteractionState() {
         cancelSelectionMode()
+        pendingDeleteTask?.cancel()
+        pendingDeleteTask = nil
+        clearDeleteUndoHistory()
 #if canImport(UIKit)
         restorePageScrollingState()
 #endif
+    }
+
+    func enqueueDelete(nodeId: Int, undoManager: UndoManager?) {
+        let previousTask = pendingDeleteTask
+        pendingDeleteGeneration &+= 1
+        let generation = pendingDeleteGeneration
+        pendingDeleteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let previousTask {
+                await previousTask.value
+            }
+            guard !Task.isCancelled else { return }
+            defer {
+                if pendingDeleteGeneration == generation {
+                    pendingDeleteTask = nil
+                }
+            }
+
+            guard let undoManager else {
+                await session.removeNode(nodeId: nodeId)
+                return
+            }
+            rememberDeleteUndoManager(undoManager)
+            guard let undoToken = await session.removeNodeWithUndo(nodeId: nodeId) else {
+                await session.removeNode(nodeId: nodeId)
+                return
+            }
+            registerUndoDelete(
+                undoToken: undoToken,
+                nodeId: nodeId,
+                undoManager: undoManager
+            )
+        }
     }
 
     func copyToPasteboard(_ text: String) {
@@ -195,6 +241,83 @@ private extension WIDOMPaneViewModel {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 #endif
+    }
+
+    func registerUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+        rememberDeleteUndoManager(undoManager)
+        undoManager.registerUndo(withTarget: self) { target in
+            target.performUndoDelete(
+                undoToken: undoToken,
+                nodeId: nodeId,
+                undoManager: undoManager
+            )
+        }
+        undoManager.setActionName(wiLocalized("inspector.delete_node"))
+    }
+
+    func performUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+        registerRedoDelete(
+            undoToken: undoToken,
+            nodeId: nodeId,
+            undoManager: undoManager
+        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let restored = await session.undoRemoveNode(undoToken: undoToken)
+            guard restored else {
+                clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            selection.clear()
+            selection.nodeId = nodeId
+            await reloadInspector(preserveState: true)
+        }
+    }
+
+    func registerRedoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+        rememberDeleteUndoManager(undoManager)
+        undoManager.registerUndo(withTarget: self) { target in
+            target.performRedoDelete(
+                undoToken: undoToken,
+                nodeId: nodeId,
+                undoManager: undoManager
+            )
+        }
+        undoManager.setActionName(wiLocalized("inspector.delete_node"))
+    }
+
+    func performRedoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+        registerUndoDelete(
+            undoToken: undoToken,
+            nodeId: nodeId,
+            undoManager: undoManager
+        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let removed = await session.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
+            guard removed else {
+                clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            if selection.nodeId == nodeId {
+                selection.clear()
+            }
+        }
+    }
+
+    func rememberDeleteUndoManager(_ undoManager: UndoManager) {
+        if undoManager.levelsOfUndo == 0 || undoManager.levelsOfUndo > domDeleteUndoHistoryLimit {
+            undoManager.levelsOfUndo = domDeleteUndoHistoryLimit
+        }
+        deleteUndoManager = undoManager
+    }
+
+    func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {
+        let manager = undoManager ?? deleteUndoManager
+        manager?.removeAllActions(withTarget: self)
+        if let manager, manager === deleteUndoManager {
+            deleteUndoManager = nil
+        }
     }
 
 #if canImport(UIKit)
