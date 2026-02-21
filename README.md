@@ -2,7 +2,7 @@
 
 [日本語版 README](README.ja.md)
 
-![WebInspectorKit preview](Resources/preview.webp)
+![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
 
 Web Inspector for `WKWebView` (iOS / macOS).
 
@@ -108,6 +108,49 @@ let container = WIContainerViewController(
 ## Migration
 
 See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
+
+## Testing
+
+Run tests with `xcodebuild` from the repository root.
+
+```bash
+# macOS: Package tests (Core)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitCoreTests \
+  -destination 'platform=macOS' \
+  test
+
+# macOS: Package tests (Feature)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitFeatureTests \
+  -destination 'platform=macOS' \
+  test
+
+# iOS Simulator: Package tests (Core)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitCoreTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  test
+
+# iOS Simulator: Package tests (Feature)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitFeatureTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  test
+```
+
+If the destination does not exist on your machine, check available simulators with:
+
+```bash
+xcrun simctl list devices available
+```
+
+Run TypeScript tests (Vitest) from the repository root:
+
+```bash
+pnpm -s run test:ts
+pnpm -s run typecheck:ts
+```
 
 ## License
 

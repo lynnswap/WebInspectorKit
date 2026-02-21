@@ -9,17 +9,14 @@ struct WebInspectorKitObfuscatePlugin: BuildToolPlugin {
         }
 
         let packageDir = context.package.directoryURL
+        let obfuscateDir = try resolveObfuscateDirectory(from: packageDir)
         let scriptsDir = packageDir
             .appendingPathComponent("Sources")
             .appendingPathComponent("WebInspectorKitCore")
             .appendingPathComponent("WebInspector")
-        let configPath = packageDir
-            .appendingPathComponent("Tools")
-            .appendingPathComponent("ObfuscateJS")
+        let configPath = obfuscateDir
             .appendingPathComponent("obfuscate.config.json")
-        let scriptPath = packageDir
-            .appendingPathComponent("Tools")
-            .appendingPathComponent("ObfuscateJS")
+        let scriptPath = obfuscateDir
             .appendingPathComponent("obfuscate.js")
         let outputFile = context.pluginWorkDirectoryURL
             .appendingPathComponent("BundledJavaScriptData.generated.swift")
@@ -83,6 +80,24 @@ struct WebInspectorKitObfuscatePlugin: BuildToolPlugin {
             }
         }
         return "auto"
+    }
+
+    private func resolveObfuscateDirectory(from packageDir: URL) throws -> URL {
+        let fileManager = FileManager.default
+        let repoDir = packageDir.deletingLastPathComponent()
+        let candidates = [
+            packageDir.appendingPathComponent("ObfuscateJS"),
+            repoDir.appendingPathComponent("ObfuscateJS")
+        ]
+
+        for candidate in candidates {
+            let script = candidate.appendingPathComponent("obfuscate.js")
+            if fileManager.fileExists(atPath: script.path) {
+                return candidate
+            }
+        }
+
+        throw PluginError("ObfuscateJS/obfuscate.js not found relative to package directory: \(packageDir.path)")
     }
 
     private func resolveNodeExecutable() throws -> URL {

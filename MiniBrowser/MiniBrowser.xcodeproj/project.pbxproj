@@ -202,7 +202,7 @@
 			mainGroup = ABA353BF2EDFF1EC00489A00;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference "../.." */,
+				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference "../WebInspectorKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ABA353C92EDFF1EC00489A00 /* Products */;
@@ -648,9 +648,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference "../.." */ = {
+		ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference "../WebInspectorKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../..;
+			relativePath = ../WebInspectorKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 

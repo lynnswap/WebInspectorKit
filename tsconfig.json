@@ -22,9 +22,9 @@
     "esModuleInterop": true
   },
   "include": [
-    "Sources/WebInspectorKitCore/WebInspector/**/*.ts",
-    "Sources/WebInspectorKit/WebInspector/**/*.ts",
-    "Tests/TypeScript/**/*.ts",
+    "WebInspectorKit/Sources/WebInspectorKitCore/WebInspector/**/*.ts",
+    "WebInspectorKit/Sources/WebInspectorKit/WebInspector/**/*.ts",
+    "WebInspectorKit/Tests/TypeScript/**/*.ts",
     "vitest.config.ts"
   ]
 }

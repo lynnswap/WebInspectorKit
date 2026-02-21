@@ -2,7 +2,7 @@
 
 [English README](README.md)
 
-![WebInspectorKit preview](Resources/preview.webp)
+![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
 
 `WKWebView`（iOS / macOS）向けの Web Inspector です。
 
@@ -108,6 +108,49 @@ let container = WIContainerViewController(
 ## 移行
 
 破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
+
+## テスト
+
+リポジトリルートで `xcodebuild` を実行します。
+
+```bash
+# macOS: Package tests (Core)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitCoreTests \
+  -destination 'platform=macOS' \
+  test
+
+# macOS: Package tests (Feature)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitFeatureTests \
+  -destination 'platform=macOS' \
+  test
+
+# iOS Simulator: Package tests (Core)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitCoreTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  test
+
+# iOS Simulator: Package tests (Feature)
+xcodebuild -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitFeatureTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  test
+```
+
+手元に destination がない場合は、次で利用可能な Simulator を確認してください。
+
+```bash
+xcrun simctl list devices available
+```
+
+TypeScript テスト（Vitest）はリポジトリルートで次を実行してください。
+
+```bash
+pnpm -s run test:ts
+pnpm -s run typecheck:ts
+```
 
 ## ライセンス
 

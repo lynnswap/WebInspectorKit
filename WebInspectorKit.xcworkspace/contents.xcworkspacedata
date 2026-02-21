@@ -2,6 +2,9 @@
 <Workspace
    version = "1.0">
    <FileRef
-      location = "group:Tools/MiniBrowser/MiniBrowser.xcodeproj">
+      location = "group:WebInspectorKit/">
+   </FileRef>
+   <FileRef
+      location = "group:MiniBrowser/MiniBrowser.xcodeproj">
    </FileRef>
 </Workspace>
