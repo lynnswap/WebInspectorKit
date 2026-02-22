@@ -538,11 +538,10 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
-        let baseImage = NSImage(systemSymbolName: "scope", accessibilityDescription: wiLocalized("dom.controls.pick"))
-        guard #available(macOS 12.0, *), let baseImage else {
-            return baseImage
+        guard let baseImage = NSImage(systemSymbolName: "scope", accessibilityDescription: wiLocalized("dom.controls.pick")) else {
+            return nil
         }
-        let color = isSelecting ? NSColor.systemBlue : NSColor.secondaryLabelColor
+        let color = isSelecting ? NSColor.controlAccentColor : NSColor.labelColor
         let configuration = NSImage.SymbolConfiguration(hierarchicalColor: color)
         return baseImage.withSymbolConfiguration(configuration)
     }
