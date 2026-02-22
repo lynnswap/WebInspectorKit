@@ -234,7 +234,9 @@ public final class WIContainerViewController: NSTabViewController {
     private weak var pageWebView: WKWebView?
     private var tabDescriptors: [WIPaneDescriptor]
     private weak var appKitToolbar: NSToolbar?
+    private weak var tabPickerControl: NSSegmentedControl?
     private var toolbarObservationTask: Task<Void, Never>?
+    private var isApplyingPickerSelection = false
 
     public init(
         _ inspectorController: WISessionController,
@@ -294,7 +296,8 @@ public final class WIContainerViewController: NSTabViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        tabStyle = .segmentedControlOnTop
+        tabStyle = .unspecified
+        tabView.tabViewType = .noTabsNoBorder
 
         bindSelectionCallback()
         rebuildTabs()
@@ -340,6 +343,7 @@ public final class WIContainerViewController: NSTabViewController {
             return item
         }
         syncNativeSelection(with: inspectorController.selectedTabID)
+        refreshTabPickerState()
     }
 
     private func bindSelectionCallback() {
@@ -352,6 +356,7 @@ public final class WIContainerViewController: NSTabViewController {
 
     private func syncNativeSelection(with tabID: WIPaneDescriptor.ID?) {
         guard tabDescriptors.isEmpty == false else {
+            refreshTabPickerState()
             return
         }
         // During rebuild, selection callbacks can arrive before NSTabViewItem creation.
@@ -367,6 +372,7 @@ public final class WIContainerViewController: NSTabViewController {
             if selectedTabViewItemIndex != index {
                 selectedTabViewItemIndex = index
             }
+            refreshTabPickerState()
             return
         }
 
@@ -375,6 +381,7 @@ public final class WIContainerViewController: NSTabViewController {
             selectedTabViewItemIndex = resolvedIndex
         }
         inspectorController.synchronizeSelectedTabFromNativeUI(tabDescriptors[resolvedIndex].id)
+        refreshTabPickerState()
     }
 
     private func installToolbarIfNeeded() {
@@ -432,11 +439,11 @@ public final class WIContainerViewController: NSTabViewController {
         let desiredIdentifiers: [NSToolbarItem.Identifier]
         switch inspectorController.selectedTabID {
         case Self.domTabID:
-            desiredIdentifiers = [.wiDOMPick, .flexibleSpace, .wiDOMReload]
+            desiredIdentifiers = [.wiTabPicker, .flexibleSpace, .wiDOMPick, .wiDOMReload]
         case Self.networkTabID:
-            desiredIdentifiers = [.flexibleSpace, .wiNetworkFetchBody]
+            desiredIdentifiers = [.wiTabPicker, .flexibleSpace, .wiNetworkFetchBody]
         default:
-            desiredIdentifiers = []
+            desiredIdentifiers = [.wiTabPicker]
         }
 
         let currentIdentifiers = toolbar.items.map(\.itemIdentifier)
@@ -454,6 +461,7 @@ public final class WIContainerViewController: NSTabViewController {
 
     private func updateToolbarState() {
         updateToolbarLayout()
+        refreshTabPickerState()
         guard let toolbar = appKitToolbar else {
             return
         }
@@ -470,6 +478,46 @@ public final class WIContainerViewController: NSTabViewController {
         if let fetchBodyItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFetchBody }) {
             fetchBodyItem.isEnabled = Self.canFetchSelectedBodies(in: inspectorController.network)
         }
+    }
+
+    private func refreshTabPickerState() {
+        guard let tabPickerControl else {
+            return
+        }
+
+        let titles = tabDescriptors.map(\.title)
+        if tabPickerControl.segmentCount != titles.count {
+            tabPickerControl.segmentCount = titles.count
+        }
+        for (index, title) in titles.enumerated() {
+            tabPickerControl.setLabel(title, forSegment: index)
+            tabPickerControl.setWidth(0, forSegment: index)
+        }
+
+        guard titles.isEmpty == false else {
+            tabPickerControl.selectedSegment = -1
+            tabPickerControl.isEnabled = false
+            return
+        }
+
+        tabPickerControl.isEnabled = true
+        let selectedIndex = resolvedTabPickerSelectionIndex()
+        if tabPickerControl.selectedSegment != selectedIndex {
+            isApplyingPickerSelection = true
+            tabPickerControl.selectedSegment = selectedIndex
+            isApplyingPickerSelection = false
+        }
+    }
+
+    private func resolvedTabPickerSelectionIndex() -> Int {
+        if let selectedTabID = inspectorController.selectedTabID,
+           let index = tabDescriptors.firstIndex(where: { $0.id == selectedTabID }) {
+            return index
+        }
+        if (0..<tabDescriptors.count).contains(selectedTabViewItemIndex) {
+            return selectedTabViewItemIndex
+        }
+        return 0
     }
 
     private static func canFetchSelectedBodies(in networkInspector: WINetworkPaneViewModel) -> Bool {
@@ -535,12 +583,34 @@ public final class WIContainerViewController: NSTabViewController {
         }
     }
 
+    @objc
+    private func handleTabPickerSelectionChanged(_ sender: NSSegmentedControl) {
+        guard isApplyingPickerSelection == false else {
+            return
+        }
+        let selectedIndex = sender.selectedSegment
+        guard selectedIndex >= 0 else {
+            return
+        }
+        guard selectedIndex < tabDescriptors.count, selectedIndex < tabViewItems.count else {
+            refreshTabPickerState()
+            return
+        }
+
+        let selectedTabID = tabDescriptors[selectedIndex].id
+        if selectedTabViewItemIndex != selectedIndex {
+            selectedTabViewItemIndex = selectedIndex
+        }
+        inspectorController.synchronizeSelectedTabFromNativeUI(selectedTabID)
+        updateToolbarState()
+    }
+
     public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.wiDOMPick, .wiDOMReload, .wiNetworkFetchBody, .flexibleSpace]
+        [.wiTabPicker, .wiDOMPick, .wiDOMReload, .wiNetworkFetchBody, .flexibleSpace]
     }
 
     public override func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.wiDOMPick, .flexibleSpace, .wiDOMReload]
+        [.wiTabPicker, .flexibleSpace, .wiDOMPick, .wiDOMReload]
     }
 
     public override func toolbar(
@@ -553,6 +623,25 @@ public final class WIContainerViewController: NSTabViewController {
         item.isBordered = true
 
         switch itemIdentifier {
+        case .wiTabPicker:
+            let labels = tabDescriptors.map(\.title)
+            let picker = NSSegmentedControl(
+                labels: labels,
+                trackingMode: .selectOne,
+                target: self,
+                action: #selector(handleTabPickerSelectionChanged(_:))
+            )
+            picker.segmentStyle = .texturedRounded
+            picker.setContentHuggingPriority(.required, for: .horizontal)
+            tabPickerControl = picker
+            refreshTabPickerState()
+
+            item.label = wiLocalized("inspector.tabs", default: "Tabs")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.isNavigational = true
+            item.view = picker
+            return item
         case .wiDOMPick:
             item.label = wiLocalized("dom.controls.pick")
             item.paletteLabel = item.label
@@ -589,6 +678,7 @@ public final class WIContainerViewController: NSTabViewController {
 }
 
 private extension NSToolbarItem.Identifier {
+    static let wiTabPicker = NSToolbarItem.Identifier("WIContainerToolbar.TabPicker")
     static let wiDOMPick = NSToolbarItem.Identifier("WIContainerToolbar.DOMPick")
     static let wiDOMReload = NSToolbarItem.Identifier("WIContainerToolbar.DOMReload")
     static let wiNetworkFetchBody = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFetchBody")
