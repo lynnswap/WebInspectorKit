@@ -82,7 +82,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
         bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
 
-    @MainActor deinit {
+    isolated deinit {
         detachPageWebView()
     }
 

@@ -33,7 +33,7 @@ private enum NetworkTabPreviewScenario {
         let inspector = WINetworkPaneViewModel(session: session)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
-            inspector.selectedEntryID = inspector.displayEntries.first?.id
+            inspector.selectedEntry = inspector.displayEntries.first
         default:
             break
         }
@@ -304,7 +304,7 @@ private final class NetworkDetailPreviewHostViewController: UIViewController {
         guard let inspector else {
             return
         }
-        detailViewController?.display(inspector.store.entry(forEntryID: inspector.selectedEntryID))
+        detailViewController?.display(inspector.selectedEntry)
     }
 }
 

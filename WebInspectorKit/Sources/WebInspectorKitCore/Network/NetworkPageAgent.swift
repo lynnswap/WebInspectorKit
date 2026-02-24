@@ -90,7 +90,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         super.init()
     }
 
-    @MainActor deinit {
+    isolated deinit {
         configureTask?.cancel()
         clearTask?.cancel()
         detachPageWebView()

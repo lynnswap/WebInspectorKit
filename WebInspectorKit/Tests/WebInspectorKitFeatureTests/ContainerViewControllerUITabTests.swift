@@ -130,6 +130,36 @@ struct ContainerViewControllerUITabTests {
         #expect(container.selectedTab?.identifier == firstIdentifier)
     }
 
+    @Test
+    func selectingNetworkTabDoesNotCrashWhenNetworkPaneLoads() {
+        let controller = WISessionController()
+        let container = WIContainerViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        container.viewWillAppear(false)
+
+        guard
+            let domTab = container.tabs.first(where: { $0.identifier == "wi_dom" }),
+            let networkTab = container.tabs.first(where: { $0.identifier == "wi_network" })
+        else {
+            Issue.record("Expected DOM and Network tabs")
+            return
+        }
+
+        container.selectedTab = networkTab
+        container.tabBarController(container, didSelectTab: networkTab, previousTab: domTab)
+
+        #expect(container.selectedTab?.identifier == "wi_network")
+        #expect(controller.selectedTabID == "wi_network")
+
+        container.selectedViewController?.loadViewIfNeeded()
+        #expect(container.selectedViewController is NetworkTabViewController)
+    }
+
     private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
         WIPaneDescriptor(
             id: id,

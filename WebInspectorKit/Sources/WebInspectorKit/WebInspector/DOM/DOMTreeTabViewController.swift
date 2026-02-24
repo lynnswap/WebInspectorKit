@@ -53,7 +53,7 @@ final class DOMTreeTabViewController: UIViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         observationTask?.cancel()
     }
 
@@ -192,7 +192,7 @@ final class DOMTreeTabViewController: NSViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         observationTask?.cancel()
     }
 

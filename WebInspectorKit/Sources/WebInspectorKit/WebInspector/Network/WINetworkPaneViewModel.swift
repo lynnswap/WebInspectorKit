@@ -8,7 +8,7 @@ import WebInspectorKitCore
 public final class WINetworkPaneViewModel {
     let session: NetworkSession
 
-    public var selectedEntryID: UUID?
+    public var selectedEntry: NetworkEntry?
     public var searchText: String = ""
 
     public var activeResourceFilters: Set<NetworkResourceFilter> = [] {
@@ -59,12 +59,12 @@ public final class WINetworkPaneViewModel {
     }
 
     func detach() {
-        selectedEntryID = nil
+        selectedEntry = nil
         session.detach()
     }
 
     public func clear() {
-        selectedEntryID = nil
+        selectedEntry = nil
         session.clearNetworkLogs()
     }
 

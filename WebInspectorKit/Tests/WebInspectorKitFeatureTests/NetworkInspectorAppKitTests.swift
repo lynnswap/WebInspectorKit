@@ -29,7 +29,7 @@ struct NetworkInspectorAppKitTests {
         let controller = NetworkTabViewController(inspector: inspector)
         controller.loadViewIfNeeded()
 
-        #expect(inspector.selectedEntryID == inspector.displayEntries.first?.id)
+        #expect(inspector.selectedEntry?.id == inspector.displayEntries.first?.id)
     }
 
     @Test

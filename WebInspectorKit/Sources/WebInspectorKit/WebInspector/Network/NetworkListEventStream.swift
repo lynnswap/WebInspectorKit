@@ -10,7 +10,7 @@ struct NetworkListRenderModel: Sendable, Equatable {
     }
 
     let entries: [Entry]
-    let selectedEntryID: UUID?
+    let selectedEntryIdentity: UUID?
     let searchText: String
     let effectiveFilterRawValues: [String]
     let storeEntryCount: Int
@@ -18,22 +18,36 @@ struct NetworkListRenderModel: Sendable, Equatable {
 
 @MainActor
 struct NetworkDetailRenderModel: Sendable, Equatable {
-    let selectedEntryID: UUID?
+    let selectedEntryIdentity: UUID?
     let selectedEntryRevision: Int?
     let storeEntryCount: Int
 }
 
 @MainActor
 enum NetworkListSelectionPolicy {
-    static func resolvedSelection(current selectedEntryID: UUID?, entries: [NetworkEntry]) -> UUID? {
+    enum MissingSelectionBehavior: Sendable, Equatable {
+        case none
+        case firstEntry
+    }
+
+    static func resolvedSelection(
+        current selectedEntry: NetworkEntry?,
+        entries: [NetworkEntry],
+        whenMissing missingSelectionBehavior: MissingSelectionBehavior = .firstEntry
+    ) -> NetworkEntry? {
         guard !entries.isEmpty else {
             return nil
         }
-        if let selectedEntryID,
-           entries.contains(where: { $0.id == selectedEntryID }) {
-            return selectedEntryID
+        if let selectedEntry,
+           let matchedEntry = entries.first(where: { $0.id == selectedEntry.id }) {
+            return matchedEntry
         }
-        return entries.first?.id
+        switch missingSelectionBehavior {
+        case .none:
+            return nil
+        case .firstEntry:
+            return entries.first
+        }
     }
 }
 
@@ -49,7 +63,7 @@ enum NetworkListEventStream {
                 entries: entries.map {
                     NetworkListRenderModel.Entry(id: $0.id, revision: networkListRevision(for: $0))
                 },
-                selectedEntryID: inspector.selectedEntryID,
+                selectedEntryIdentity: inspector.selectedEntry?.id,
                 searchText: inspector.searchText,
                 effectiveFilterRawValues: inspector.effectiveResourceFilters.map(\.rawValue).sorted(),
                 storeEntryCount: inspector.store.entries.count
@@ -62,9 +76,9 @@ enum NetworkListEventStream {
         backend: ObservationsCompatBackend = .automatic
     ) -> ObservationsCompatStream<NetworkDetailRenderModel> {
         makeObservationsCompatStream(backend: backend) {
-            let selected = inspector.store.entry(forEntryID: inspector.selectedEntryID)
+            let selected = inspector.selectedEntry
             return NetworkDetailRenderModel(
-                selectedEntryID: inspector.selectedEntryID,
+                selectedEntryIdentity: selected?.id,
                 selectedEntryRevision: selected.map(networkDetailRevision(for:)),
                 storeEntryCount: inspector.store.entries.count
             )

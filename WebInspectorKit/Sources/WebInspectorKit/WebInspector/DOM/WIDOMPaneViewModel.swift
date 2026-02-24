@@ -40,6 +40,15 @@ public final class WIDOMPaneViewModel {
         self.frontendStore.onRecoverableError = onRecoverableError
     }
 
+    isolated deinit {
+        selectionTask?.cancel()
+        pendingDeleteTask?.cancel()
+        clearDeleteUndoHistory()
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
+    }
+
     public var hasPageWebView: Bool {
         session.hasPageWebView
     }
@@ -166,7 +175,8 @@ private extension WIDOMPaneViewModel {
         isSelectingElement = true
         Task { await session.hideHighlight() }
         selectionTask?.cancel()
-        selectionTask = Task {
+        selectionTask = Task { [weak self] in
+            guard let self else { return }
             defer {
                 self.isSelectingElement = false
                 self.selectionTask = nil

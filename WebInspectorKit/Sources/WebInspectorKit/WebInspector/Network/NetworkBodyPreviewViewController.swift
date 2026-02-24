@@ -80,7 +80,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         nil
     }
 
-    deinit {
+    isolated deinit {
         renderTask?.cancel()
     }
 

@@ -167,8 +167,9 @@ final class DOMFrontendStore: NSObject {
         webView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
     }
 
-    @MainActor deinit {
+    isolated deinit {
         cancelMatchedStylesRequest()
+        cancelPendingBundleFlush()
         if let webView {
             detachMessageHandlers(from: webView)
         }
@@ -189,12 +190,13 @@ final class DOMFrontendStore: NSObject {
     private func schedulePendingBundleFlush() {
         guard pendingBundleFlushTask == nil else { return }
         let interval = bundleFlushInterval()
-        pendingBundleFlushTask = Task { @MainActor in
+        pendingBundleFlushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             let delay = UInt64(interval * 1_000_000_000)
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
-            await flushPendingBundlesNow()
+            await self.flushPendingBundlesNow()
         }
     }
 

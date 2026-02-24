@@ -154,7 +154,7 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func clearResetsSelectedEntryID() throws {
+    func clearResetsSelectedEntry() throws {
         let inspector = WINetworkPaneViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
@@ -164,12 +164,12 @@ struct NetworkInspectorTests {
             monotonicMs: 1_000
         )
 
-        let selectedID = try #require(inspector.store.entries.first?.id)
-        inspector.selectedEntryID = selectedID
+        let selectedEntry = try #require(inspector.store.entries.first)
+        inspector.selectedEntry = selectedEntry
 
         inspector.clear()
 
-        #expect(inspector.selectedEntryID == nil)
+        #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
     }
 
@@ -183,14 +183,14 @@ struct NetworkInspectorTests {
             initiator: "script",
             monotonicMs: 1_000
         )
-        let selectedID = try #require(inspector.store.entries.first?.id)
-        inspector.selectedEntryID = selectedID
+        let selectedEntry = try #require(inspector.store.entries.first)
+        inspector.selectedEntry = selectedEntry
         inspector.searchText = "filter-target"
         inspector.activeResourceFilters = [.script]
 
         inspector.clear()
 
-        #expect(inspector.selectedEntryID == nil)
+        #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
         #expect(inspector.searchText == "filter-target")
         #expect(inspector.activeResourceFilters == [.script])
@@ -250,22 +250,50 @@ struct NetworkInspectorTests {
             SortDescriptor(\.requestID, order: .reverse)
         ]
 
-        inspector.selectedEntryID = UUID()
+        inspector.selectedEntry = makeEntry()
         let resolved = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntryID,
+            current: inspector.selectedEntry,
             entries: inspector.displayEntries
         )
 
-        #expect(resolved == inspector.displayEntries.first?.id)
+        #expect(resolved?.id == inspector.displayEntries.first?.id)
+    }
+
+    @Test
+    func selectionPolicyCanKeepSelectionEmptyWhenMissingBehaviorIsNone() throws {
+        let inspector = WINetworkPaneViewModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 51,
+            url: "https://example.com/first",
+            initiator: "document",
+            monotonicMs: 1_000
+        )
+        try applyRequestStart(
+            to: inspector,
+            requestID: 52,
+            url: "https://example.com/second",
+            initiator: "script",
+            monotonicMs: 1_010
+        )
+        inspector.selectedEntry = makeEntry()
+
+        let resolved = NetworkListSelectionPolicy.resolvedSelection(
+            current: inspector.selectedEntry,
+            entries: inspector.displayEntries,
+            whenMissing: .none
+        )
+
+        #expect(resolved == nil)
     }
 
     @Test
     func selectionPolicyReturnsNilWhenEntriesAreEmpty() {
         let inspector = WINetworkPaneViewModel(session: NetworkSession())
-        inspector.selectedEntryID = UUID()
+        inspector.selectedEntry = makeEntry()
 
         let resolved = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntryID,
+            current: inspector.selectedEntry,
             entries: inspector.displayEntries
         )
         #expect(resolved == nil)
@@ -276,14 +304,14 @@ struct NetworkInspectorTests {
         let entryID = UUID()
         let first = NetworkListRenderModel(
             entries: [.init(id: entryID, revision: 1)],
-            selectedEntryID: entryID,
+            selectedEntryIdentity: entryID,
             searchText: "abc",
             effectiveFilterRawValues: ["script"],
             storeEntryCount: 1
         )
         let second = NetworkListRenderModel(
             entries: [.init(id: entryID, revision: 1)],
-            selectedEntryID: entryID,
+            selectedEntryIdentity: entryID,
             searchText: "abc",
             effectiveFilterRawValues: ["script"],
             storeEntryCount: 1

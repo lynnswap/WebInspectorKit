@@ -1,5 +1,6 @@
 import WebKit
 import ObservationsCompat
+import WebInspectorKitCore
 
 #if canImport(UIKit)
 import UIKit
@@ -215,6 +216,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
 
 #elseif canImport(AppKit)
 import AppKit
+import ObjectiveC.runtime
 
 @MainActor
 public final class WIContainerViewController: NSTabViewController {
@@ -222,7 +224,11 @@ public final class WIContainerViewController: NSTabViewController {
         let selectedTabID: WIPaneDescriptor.ID?
         let domHasPageWebView: Bool
         let domIsSelectingElement: Bool
+        let networkHasEntries: Bool
         let networkCanFetchBodies: Bool
+        let networkSearchText: String
+        let networkActiveFilters: Set<NetworkResourceFilter>
+        let networkEffectiveFilters: Set<NetworkResourceFilter>
     }
 
     private static let toolbarIdentifier = NSToolbar.Identifier("WIContainerToolbar")
@@ -235,6 +241,7 @@ public final class WIContainerViewController: NSTabViewController {
     private var tabDescriptors: [WIPaneDescriptor]
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
+    private weak var networkSearchField: NSSearchField?
     private var toolbarObservationTask: Task<Void, Never>?
     private var isApplyingPickerSelection = false
 
@@ -254,7 +261,7 @@ public final class WIContainerViewController: NSTabViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         toolbarObservationTask?.cancel()
     }
 
@@ -414,7 +421,11 @@ public final class WIContainerViewController: NSTabViewController {
                     selectedTabID: inspectorController.selectedTabID,
                     domHasPageWebView: inspectorController.dom.hasPageWebView,
                     domIsSelectingElement: inspectorController.dom.isSelectingElement,
-                    networkCanFetchBodies: Self.canFetchSelectedBodies(in: inspectorController.network)
+                    networkHasEntries: !inspectorController.network.store.entries.isEmpty,
+                    networkCanFetchBodies: Self.canFetchSelectedBodies(in: inspectorController.network),
+                    networkSearchText: inspectorController.network.searchText,
+                    networkActiveFilters: inspectorController.network.activeResourceFilters,
+                    networkEffectiveFilters: inspectorController.network.effectiveResourceFilters
                 )
             }
             for await _ in stream {
@@ -441,7 +452,14 @@ public final class WIContainerViewController: NSTabViewController {
         case Self.domTabID:
             desiredIdentifiers = [.wiTabPicker, .flexibleSpace, .wiDOMPick, .wiDOMReload]
         case Self.networkTabID:
-            desiredIdentifiers = [.wiTabPicker, .flexibleSpace, .wiNetworkFetchBody]
+            desiredIdentifiers = [
+                .wiTabPicker,
+                .wiNetworkFilter,
+                .wiNetworkClear,
+                .wiNetworkSearch,
+                .flexibleSpace,
+                .wiNetworkFetchBody
+            ]
         default:
             desiredIdentifiers = [.wiTabPicker]
         }
@@ -477,6 +495,34 @@ public final class WIContainerViewController: NSTabViewController {
 
         if let fetchBodyItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFetchBody }) {
             fetchBodyItem.isEnabled = Self.canFetchSelectedBodies(in: inspectorController.network)
+        }
+
+        if let filterItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFilter }) as? NSMenuToolbarItem {
+            let isFiltering = !inspectorController.network.effectiveResourceFilters.isEmpty
+            filterItem.menu = makeNetworkFilterMenu()
+            let didApplyButtonStyle = Self.applyNetworkFilterToolbarAppearance(
+                to: filterItem,
+                isFiltering: isFiltering
+            )
+            filterItem.image = Self.networkFilterToolbarImage(
+                isFiltering: didApplyButtonStyle ? false : isFiltering,
+                preserveTemplate: didApplyButtonStyle
+            )
+        }
+
+        if let clearItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkClear }) {
+            let canClear = !inspectorController.network.store.entries.isEmpty
+            clearItem.isEnabled = canClear
+            if let clearButton = clearItem.view as? NSButton {
+                clearButton.isEnabled = canClear
+            }
+        }
+
+        if let searchField = networkSearchField {
+            let currentSearchText = inspectorController.network.searchText
+            if searchField.stringValue != currentSearchText {
+                searchField.stringValue = currentSearchText
+            }
         }
     }
 
@@ -522,8 +568,8 @@ public final class WIContainerViewController: NSTabViewController {
 
     private static func canFetchSelectedBodies(in networkInspector: WINetworkPaneViewModel) -> Bool {
         guard
-            let selectedEntryID = networkInspector.selectedEntryID,
-            let entry = networkInspector.store.entry(forEntryID: selectedEntryID)
+            let selectedID = networkInspector.selectedEntry?.id,
+            let entry = networkInspector.store.entry(forEntryID: selectedID)
         else {
             return false
         }
@@ -546,6 +592,117 @@ public final class WIContainerViewController: NSTabViewController {
         return baseImage.withSymbolConfiguration(configuration)
     }
 
+    private static func networkFilterToolbarImage(isFiltering: Bool, preserveTemplate: Bool = false) -> NSImage? {
+        let title = wiLocalized("network.controls.filter", default: "Filter")
+        guard let baseImage = NSImage(systemSymbolName: "line.3.horizontal.decrease", accessibilityDescription: title) else {
+            return nil
+        }
+        if preserveTemplate {
+            return baseImage
+        }
+        let color = isFiltering ? NSColor.controlAccentColor : NSColor.labelColor
+        let configuration = NSImage.SymbolConfiguration(hierarchicalColor: color)
+        return baseImage.withSymbolConfiguration(configuration)
+    }
+
+    private static func applyNetworkFilterToolbarAppearance(
+        to item: NSMenuToolbarItem,
+        isFiltering: Bool
+    ) -> Bool {
+        if #available(macOS 26.0, *) {
+            item.style = isFiltering ? .prominent : .plain
+            item.backgroundTintColor = isFiltering ? .controlAccentColor : nil
+            return true
+        }
+
+        guard let control = menuToolbarControl(from: item) else {
+            return false
+        }
+
+        if let segmentedControl = control as? NSSegmentedControl {
+            for index in 0..<segmentedControl.segmentCount {
+                segmentedControl.setSelected(isFiltering, forSegment: index)
+            }
+            segmentedControl.selectedSegment = isFiltering ? 0 : -1
+            segmentedControl.selectedSegmentBezelColor = isFiltering ? .controlAccentColor : nil
+            segmentedControl.needsDisplay = true
+            return true
+        }
+
+        if let button = control as? NSButton {
+            button.state = isFiltering ? .on : .off
+            button.bezelColor = isFiltering ? .controlAccentColor : nil
+            button.contentTintColor = isFiltering ? .white : nil
+            button.needsDisplay = true
+            return true
+        }
+
+        return false
+    }
+
+    private static func menuToolbarControl(from item: NSMenuToolbarItem) -> NSView? {
+        if let control = item.view {
+            return control
+        }
+        guard
+            let controlIvar = class_getInstanceVariable(NSMenuToolbarItem.self, "_control"),
+            let controlObject = object_getIvar(item, controlIvar)
+        else {
+            return nil
+        }
+        return controlObject as? NSView
+    }
+
+    private func makeNetworkFilterMenu() -> NSMenu {
+        let menu = NSMenu(title: wiLocalized("network.controls.filter", default: "Filter"))
+
+        let allItem = NSMenuItem(
+            title: wiLocalized("network.filter.all", default: "All"),
+            action: #selector(handleNetworkFilterMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        allItem.target = self
+        allItem.representedObject = NetworkResourceFilter.all.rawValue
+        allItem.state = inspectorController.network.effectiveResourceFilters.isEmpty ? .on : .off
+        menu.addItem(allItem)
+        menu.addItem(.separator())
+
+        for filter in NetworkResourceFilter.pickerCases {
+            let item = NSMenuItem(
+                title: localizedNetworkFilterTitle(for: filter),
+                action: #selector(handleNetworkFilterMenuAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = filter.rawValue
+            item.state = inspectorController.network.activeResourceFilters.contains(filter) ? .on : .off
+            menu.addItem(item)
+        }
+
+        return menu
+    }
+
+    private func localizedNetworkFilterTitle(for filter: NetworkResourceFilter) -> String {
+        switch filter {
+        case .all:
+            return wiLocalized("network.filter.all", default: "All")
+        case .document:
+            return wiLocalized("network.filter.document", default: "Document")
+        case .stylesheet:
+            return wiLocalized("network.filter.stylesheet", default: "Stylesheet")
+        case .image:
+            return wiLocalized("network.filter.image", default: "Image")
+        case .font:
+            return wiLocalized("network.filter.font", default: "Font")
+        case .script:
+            return wiLocalized("network.filter.script", default: "Script")
+        case .xhrFetch:
+            return wiLocalized("network.filter.xhr_fetch", default: "XHR/Fetch")
+        case .other:
+            return wiLocalized("network.filter.other", default: "Other")
+        }
+    }
+
     @objc
     private func handleDOMPickToolbarAction(_ sender: Any?) {
         inspectorController.dom.toggleSelectionMode()
@@ -562,10 +719,12 @@ public final class WIContainerViewController: NSTabViewController {
     @objc
     private func handleNetworkFetchBodyToolbarAction(_ sender: Any?) {
         Task {
-            guard
-                let selectedEntryID = inspectorController.network.selectedEntryID,
-                let entry = inspectorController.network.store.entry(forEntryID: selectedEntryID)
-            else {
+            guard let selectedID = inspectorController.network.selectedEntry?.id else {
+                return
+            }
+            guard let entry = inspectorController.network.store.entry(forEntryID: selectedID) else {
+                inspectorController.network.selectedEntry = nil
+                updateToolbarState()
                 return
             }
 
@@ -580,6 +739,37 @@ public final class WIContainerViewController: NSTabViewController {
             }
             updateToolbarState()
         }
+    }
+
+    @objc
+    private func handleNetworkFilterMenuAction(_ sender: NSMenuItem) {
+        guard
+            let rawValue = sender.representedObject as? String,
+            let filter = NetworkResourceFilter(rawValue: rawValue)
+        else {
+            return
+        }
+
+        if filter == .all {
+            inspectorController.network.setResourceFilter(.all, isEnabled: true)
+            updateToolbarState()
+            return
+        }
+
+        let currentlyEnabled = inspectorController.network.activeResourceFilters.contains(filter)
+        inspectorController.network.setResourceFilter(filter, isEnabled: !currentlyEnabled)
+        updateToolbarState()
+    }
+
+    @objc
+    private func handleNetworkClearToolbarAction(_ sender: Any?) {
+        inspectorController.network.clear()
+        updateToolbarState()
+    }
+
+    @objc
+    private func handleNetworkSearchToolbarAction(_ sender: NSSearchField) {
+        inspectorController.network.searchText = sender.stringValue
     }
 
     @objc
@@ -605,7 +795,16 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.wiTabPicker, .wiDOMPick, .wiDOMReload, .wiNetworkFetchBody, .flexibleSpace]
+        [
+            .wiTabPicker,
+            .wiDOMPick,
+            .wiDOMReload,
+            .wiNetworkFilter,
+            .wiNetworkClear,
+            .wiNetworkSearch,
+            .wiNetworkFetchBody,
+            .flexibleSpace
+        ]
     }
 
     public override func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -617,12 +816,11 @@ public final class WIContainerViewController: NSTabViewController {
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.target = self
-        item.isBordered = true
-
         switch itemIdentifier {
         case .wiTabPicker:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.target = self
+            item.isBordered = true
             let labels = tabDescriptors.map(\.title)
             let picker = NSSegmentedControl(
                 labels: labels,
@@ -641,7 +839,50 @@ public final class WIContainerViewController: NSTabViewController {
             item.isNavigational = true
             item.view = picker
             return item
+        case .wiNetworkFilter:
+            let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = wiLocalized("network.controls.filter", default: "Filter")
+            item.paletteLabel = item.label
+            item.toolTip = item.label
+            item.title = item.label
+            item.isBordered = true
+            item.image = Self.networkFilterToolbarImage(
+                isFiltering: !inspectorController.network.effectiveResourceFilters.isEmpty
+            )
+            item.menu = makeNetworkFilterMenu()
+            item.showsIndicator = true
+            return item
+        case .wiNetworkClear:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            let clearTitle = wiLocalized("network.controls.clear", default: "Clear")
+            let clearButton = NSButton(title: clearTitle, target: self, action: #selector(handleNetworkClearToolbarAction(_:)))
+            clearButton.bezelStyle = .rounded
+            clearButton.setContentHuggingPriority(.required, for: .horizontal)
+            item.label = clearTitle
+            item.paletteLabel = clearTitle
+            item.toolTip = clearTitle
+            item.view = clearButton
+            return item
+        case .wiNetworkSearch:
+            let item = NSSearchToolbarItem(itemIdentifier: itemIdentifier)
+            let placeholder = wiLocalized("network.search.placeholder", default: "Search requests")
+            item.label = wiLocalized("network.controls.search", default: "Search")
+            item.paletteLabel = item.label
+            item.toolTip = placeholder
+            item.preferredWidthForSearchField = 280
+            let searchField = item.searchField
+            searchField.placeholderString = placeholder
+            searchField.target = self
+            searchField.action = #selector(handleNetworkSearchToolbarAction(_:))
+            searchField.sendsSearchStringImmediately = true
+            searchField.sendsWholeSearchString = false
+            searchField.stringValue = inspectorController.network.searchText
+            networkSearchField = searchField
+            return item
         case .wiDOMPick:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.target = self
+            item.isBordered = true
             item.label = wiLocalized("dom.controls.pick")
             item.paletteLabel = item.label
             item.toolTip = item.label
@@ -649,6 +890,9 @@ public final class WIContainerViewController: NSTabViewController {
             item.action = #selector(handleDOMPickToolbarAction(_:))
             return item
         case .wiDOMReload:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.target = self
+            item.isBordered = true
             item.label = wiLocalized("reload")
             item.paletteLabel = item.label
             item.toolTip = item.label
@@ -656,6 +900,9 @@ public final class WIContainerViewController: NSTabViewController {
             item.action = #selector(handleDOMReloadToolbarAction(_:))
             return item
         case .wiNetworkFetchBody:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.target = self
+            item.isBordered = true
             item.label = wiLocalized("network.body.fetch", default: "Fetch Body")
             item.paletteLabel = item.label
             item.toolTip = item.label
@@ -680,6 +927,9 @@ private extension NSToolbarItem.Identifier {
     static let wiTabPicker = NSToolbarItem.Identifier("WIContainerToolbar.TabPicker")
     static let wiDOMPick = NSToolbarItem.Identifier("WIContainerToolbar.DOMPick")
     static let wiDOMReload = NSToolbarItem.Identifier("WIContainerToolbar.DOMReload")
+    static let wiNetworkFilter = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFilter")
+    static let wiNetworkClear = NSToolbarItem.Identifier("WIContainerToolbar.NetworkClear")
+    static let wiNetworkSearch = NSToolbarItem.Identifier("WIContainerToolbar.NetworkSearch")
     static let wiNetworkFetchBody = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFetchBody")
 }
 

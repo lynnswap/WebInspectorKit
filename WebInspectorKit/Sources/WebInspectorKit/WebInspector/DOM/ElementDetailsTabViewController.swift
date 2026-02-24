@@ -213,7 +213,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         nil
     }
 
-    deinit {
+    isolated deinit {
         pendingReloadDataTask?.cancel()
         observationTask?.cancel()
     }
@@ -976,7 +976,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         nil
     }
 
-    deinit {
+    isolated deinit {
         debounceTask?.cancel()
     }
 
