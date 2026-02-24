@@ -1,14 +1,6 @@
 #if canImport(UIKit)
 import UIKit
 
-@inline(__always)
-func wiSecondaryActionSymbolName() -> String {
-    if #available(iOS 26.0, *) {
-        return "ellipsis"
-    }
-    return "ellipsis.circle"
-}
-
 @MainActor
 func wiApplyClearNavigationBarStyle(to navigationController: UINavigationController) {
     navigationController.view.backgroundColor = .clear

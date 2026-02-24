@@ -196,12 +196,6 @@ final class ElementDetailsTabViewController: UICollectionViewController {
             action: #selector(toggleSelectionMode)
         )
     }()
-    private lazy var secondaryActionsItem: UIBarButtonItem = {
-        UIBarButtonItem(
-            image: UIImage(systemName: wiSecondaryActionSymbolName()),
-            menu: makeSecondaryMenu()
-        )
-    }()
 
     init(inspector: WIDOMPaneViewModel) {
         self.inspector = inspector
@@ -249,7 +243,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
     }
 
     private func setupNavigationItems() {
-        navigationItem.rightBarButtonItems = [secondaryActionsItem, pickItem]
+        navigationItem.rightBarButtonItems = [pickItem]
     }
 
     private func startObservingStateIfNeeded() {
@@ -299,16 +293,15 @@ final class ElementDetailsTabViewController: UICollectionViewController {
     }
 
     private func refreshUI() {
-        let hasSelection = inspector.selection.nodeId != nil
-        let hasPageWebView = inspector.hasPageWebView
         let currentSelectionNodeID = inspector.selection.nodeId
         if currentSelectionNodeID != lastSelectionNodeID {
             clearInlineEditingState()
             lastSelectionNodeID = currentSelectionNodeID
         }
 
-        secondaryActionsItem.menu = makeSecondaryMenu()
-        secondaryActionsItem.isEnabled = hasSelection || hasPageWebView
+        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+        }
         pickItem.isEnabled = inspector.hasPageWebView
         pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
