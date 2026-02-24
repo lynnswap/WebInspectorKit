@@ -416,7 +416,7 @@ public final class WIContainerViewController: NSTabViewController {
 
         let inspectorController = self.inspectorController
         toolbarObservationTask = Task { @MainActor [weak self] in
-            let stream = makeObservationsCompatStream {
+            let stream = ObservationsCompat {
                 AppKitToolbarObservedState(
                     selectedTabID: inspectorController.selectedTabID,
                     domHasPageWebView: inspectorController.dom.hasPageWebView,

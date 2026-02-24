@@ -122,7 +122,7 @@ final class DOMTreeTabViewController: UIViewController {
         }
         let inspector = self.inspector
         observationTask = Task { @MainActor [weak self] in
-            let stream = makeObservationsCompatStream {
+            let stream = ObservationsCompat {
                 domTreeObservedState(from: inspector)
             }
             for await _ in stream {
@@ -233,7 +233,7 @@ final class DOMTreeTabViewController: NSViewController {
         }
         let inspector = self.inspector
         observationTask = Task { @MainActor [weak self] in
-            let stream = makeObservationsCompatStream {
+            let stream = ObservationsCompat {
                 domTreeObservedState(from: inspector)
             }
             for await _ in stream {

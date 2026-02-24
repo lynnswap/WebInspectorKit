@@ -252,7 +252,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         }
         let inspector = self.inspector
         observationTask = Task { @MainActor [weak self] in
-            let stream = makeObservationsCompatStream {
+            let stream = ObservationsCompat {
                 elementDetailsObservedState(from: inspector)
             }
             for await _ in stream {

@@ -56,8 +56,8 @@ enum NetworkListEventStream {
     static func makeListStream(
         inspector: WINetworkPaneViewModel,
         backend: ObservationsCompatBackend = .automatic
-    ) -> ObservationsCompatStream<NetworkListRenderModel> {
-        makeObservationsCompatStream(backend: backend) {
+    ) -> ObservationsCompat<NetworkListRenderModel> {
+        ObservationsCompat(backend: backend) {
             let entries = inspector.displayEntries
             return NetworkListRenderModel(
                 entries: entries.map {
@@ -74,8 +74,8 @@ enum NetworkListEventStream {
     static func makeDetailStream(
         inspector: WINetworkPaneViewModel,
         backend: ObservationsCompatBackend = .automatic
-    ) -> ObservationsCompatStream<NetworkDetailRenderModel> {
-        makeObservationsCompatStream(backend: backend) {
+    ) -> ObservationsCompat<NetworkDetailRenderModel> {
+        ObservationsCompat(backend: backend) {
             let selected = inspector.selectedEntry
             return NetworkDetailRenderModel(
                 selectedEntryIdentity: selected?.id,
