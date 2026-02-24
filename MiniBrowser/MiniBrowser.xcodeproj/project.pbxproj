@@ -39,11 +39,6 @@
 			path = MiniBrowser;
 			sourceTree = "<group>";
 		};
-		ABA353D82EDFF1ED00489A00 /* MiniBrowserTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MiniBrowserTests;
-			sourceTree = "<group>";
-		};
 		ABA353E22EDFF1ED00489A00 /* MiniBrowserUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = MiniBrowserUITests;
@@ -81,7 +76,6 @@
 			isa = PBXGroup;
 			children = (
 				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
-				ABA353D82EDFF1ED00489A00 /* MiniBrowserTests */,
 				ABA353E22EDFF1ED00489A00 /* MiniBrowserUITests */,
 				ABA353C92EDFF1EC00489A00 /* Products */,
 			);
@@ -135,9 +129,6 @@
 			);
 			dependencies = (
 				ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				ABA353D82EDFF1ED00489A00 /* MiniBrowserTests */,
 			);
 			name = MiniBrowserTests;
 			packageProductDependencies = (
