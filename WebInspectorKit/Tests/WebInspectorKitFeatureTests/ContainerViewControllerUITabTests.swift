@@ -156,8 +156,13 @@ struct ContainerViewControllerUITabTests {
         #expect(container.selectedTab?.identifier == "wi_network")
         #expect(controller.selectedTabID == "wi_network")
 
-        container.selectedViewController?.loadViewIfNeeded()
-        #expect(container.selectedViewController is NetworkTabViewController)
+        guard let networkController = container.children.first(where: { $0 is NetworkTabViewController }) else {
+            Issue.record("Expected network tab view controller")
+            return
+        }
+
+        networkController.loadViewIfNeeded()
+        #expect(networkController is NetworkTabViewController)
     }
 
     private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {

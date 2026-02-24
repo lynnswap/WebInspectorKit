@@ -216,7 +216,7 @@ struct ContainerViewControllerAppKitTabTests {
             return
         }
 
-        _ = (target as AnyObject).perform(action, with: scriptItem)
+        #expect(NSApp.sendAction(action, to: target, from: scriptItem))
         drainMainQueue()
 
         #expect(controller.network.activeResourceFilters.contains(.script))
@@ -233,7 +233,7 @@ struct ContainerViewControllerAppKitTabTests {
             return
         }
 
-        _ = (allTarget as AnyObject).perform(allAction, with: allItem)
+        #expect(NSApp.sendAction(allAction, to: allTarget, from: allItem))
         drainMainQueue()
 
         #expect(controller.network.effectiveResourceFilters.isEmpty)

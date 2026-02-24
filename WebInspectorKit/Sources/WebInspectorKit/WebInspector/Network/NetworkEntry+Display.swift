@@ -57,9 +57,16 @@ extension NetworkEntry {
 
     func durationText(for value: TimeInterval) -> String {
         if value < 1 {
-            return String(format: "%.0f ms", value * 1000)
+            let milliseconds = Int((value * 1000).rounded())
+            return "\(milliseconds) ms"
         }
-        return String(format: "%.2f s", value)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        formatter.usesGroupingSeparator = false
+        let seconds = formatter.string(from: NSNumber(value: value)) ?? String(value)
+        return "\(seconds) s"
     }
 
     func sizeText(for length: Int) -> String {

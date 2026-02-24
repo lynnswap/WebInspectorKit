@@ -309,6 +309,21 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func repeatedConfigureWithSameTokenDoesNotDuplicateBootstrapScript() async {
+        let agent = NetworkPageAgent()
+        let (webView, controller) = makeTestWebView()
+
+        agent.attachPageWebView(webView)
+        await waitForScripts(on: controller, atLeast: 3)
+        let firstScriptCount = controller.userScripts.count
+
+        agent.setMode(.active)
+        await agent.waitForPendingConfigurationForTesting()
+
+        #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
     func replacingAgentOnExistingWebViewRefreshesControlToken() async throws {
         let firstAgent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
