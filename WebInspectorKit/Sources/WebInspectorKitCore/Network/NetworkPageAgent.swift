@@ -1,6 +1,5 @@
 import Foundation
 import OSLog
-import ObjectiveC.runtime
 import WebKit
 
 public enum NetworkLoggingMode: String, Sendable {
@@ -16,39 +15,6 @@ private let networkPresenceProbeScript: String = """
 private let networkPrivateUnavailableSentinel = "__wi_private_unavailable__"
 private let networkControlTokenWindowKey = "__wiNetworkControlToken"
 private let networkPageHookModeWindowKey = "__wiNetworkPageHookMode"
-@MainActor private var networkBridgeScriptInstalledKey: UInt8 = 0
-@MainActor private var networkTokenBootstrapSignatureKey: UInt8 = 0
-
-@MainActor
-private extension WKUserContentController {
-    var wi_networkBridgeScriptInstalled: Bool {
-        get {
-            (objc_getAssociatedObject(self, &networkBridgeScriptInstalledKey) as? NSNumber)?.boolValue ?? false
-        }
-        set {
-            objc_setAssociatedObject(
-                self,
-                &networkBridgeScriptInstalledKey,
-                NSNumber(value: newValue),
-                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-            )
-        }
-    }
-
-    var wi_networkTokenBootstrapSignature: String? {
-        get {
-            objc_getAssociatedObject(self, &networkTokenBootstrapSignatureKey) as? String
-        }
-        set {
-            objc_setAssociatedObject(
-                self,
-                &networkTokenBootstrapSignatureKey,
-                newValue,
-                .OBJC_ASSOCIATION_COPY_NONATOMIC
-            )
-        }
-    }
-}
 
 @MainActor
 public final class NetworkPageAgent: NSObject, PageAgent {
@@ -77,6 +43,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     private let nativeObserverIncludesFetchAndXHR = false
 
     private let runtime: WISPIRuntime
+    private let controllerStateRegistry: WIUserContentControllerStateRegistry
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
 
@@ -84,8 +51,9 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
-    override init() {
+    init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
         runtime = .shared
+        self.controllerStateRegistry = controllerStateRegistry
         bridgeMode = runtime.startupMode()
         super.init()
     }
@@ -324,11 +292,11 @@ private extension NetworkPageAgent {
             in: .page
         )
 
-        if controller.wi_networkBridgeScriptInstalled {
+        if controllerStateRegistry.networkBridgeScriptInstalled(on: controller) {
             // Avoid repeatedly appending the same bootstrap script on reconfigure/reattach.
-            if controller.wi_networkTokenBootstrapSignature != tokenBootstrapSignature {
+            if controllerStateRegistry.networkTokenBootstrapSignature(on: controller) != tokenBootstrapSignature {
                 controller.addUserScript(tokenScript)
-                controller.wi_networkTokenBootstrapSignature = tokenBootstrapSignature
+                controllerStateRegistry.setNetworkTokenBootstrapSignature(tokenBootstrapSignature, on: controller)
             }
             do {
                 _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
@@ -359,10 +327,10 @@ private extension NetworkPageAgent {
             in: .page
         )
         controller.addUserScript(tokenScript)
-        controller.wi_networkTokenBootstrapSignature = tokenBootstrapSignature
+        controllerStateRegistry.setNetworkTokenBootstrapSignature(tokenBootstrapSignature, on: controller)
         controller.addUserScript(userScript)
         controller.addUserScript(checkScript)
-        controller.wi_networkBridgeScriptInstalled = true
+        controllerStateRegistry.setNetworkBridgeScriptInstalled(true, on: controller)
 
         do {
             _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
@@ -380,7 +348,7 @@ private extension NetworkPageAgent {
     ) async {
         guard let webView = targetWebView ?? self.webView else { return }
         let controller = webView.configuration.userContentController
-        let networkInstalled = controller.wi_networkBridgeScriptInstalled
+        let networkInstalled = controllerStateRegistry.networkBridgeScriptInstalled(on: controller)
         let modeRequiresAgent = mode != .stopped
         let shouldInstallNetworkAgent = modeRequiresAgent || (networkInstalled && clearExisting)
 
@@ -388,7 +356,7 @@ private extension NetworkPageAgent {
             await installNetworkAgentScriptIfNeeded(on: webView)
         }
 
-        let networkReady = webView.configuration.userContentController.wi_networkBridgeScriptInstalled
+        let networkReady = controllerStateRegistry.networkBridgeScriptInstalled(on: controller)
         let nativeObserverShouldOwnResources = nativeObserverEnabled && mode == .active
         let resourceObserverMode = nativeObserverShouldOwnResources ? "disabled" : "enabled"
         let pageHookMode = resolvedPageHookMode()

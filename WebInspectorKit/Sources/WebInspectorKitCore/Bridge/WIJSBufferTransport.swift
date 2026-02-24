@@ -12,6 +12,7 @@ package enum WIJSBufferTransport {
     private static let privateAddSelector = NSSelectorFromString(WISPISymbols.privateAddBufferSelector)
     private static let publicRemoveSelector = NSSelectorFromString(WISPISymbols.publicRemoveBufferSelector)
     private static let privateRemoveSelector = NSSelectorFromString(WISPISymbols.privateRemoveBufferSelector)
+    private static let bridgeClient: WISPIBridgeClient = WISPIObjCBridgeClient()
 
     package static func isAvailable(
         on controller: WKUserContentController,
@@ -34,31 +35,41 @@ package enum WIJSBufferTransport {
             return false
         }
 
-        guard let buffer = makeBufferObject(data: data) else {
+        guard
+            let buffer = bridgeClient.makeJSBuffer(
+                data: data,
+                classNames: [
+                    WISPISymbols.publicJSScriptingBufferClass,
+                    WISPISymbols.privateJSBufferClass,
+                ],
+                allocSelectorName: WISPISymbols.allocSelector,
+                initSelectorName: WISPISymbols.initWithDataSelector
+            )
+        else {
             jsBufferTransportLogger.error("runtime_probe_failed: buffer init failed")
             return false
         }
 
         if controller.responds(to: publicAddSelector) {
-            invokePublicAdd(
+            return bridgeClient.addBuffer(
                 controller: controller,
-                selector: publicAddSelector,
+                selectorName: WISPISymbols.publicAddBufferSelector,
                 buffer: buffer,
                 name: name,
-                contentWorld: contentWorld
+                world: contentWorld,
+                isPublicSignature: true
             )
-            return true
         }
 
         if controller.responds(to: privateAddSelector) {
-            invokePrivateAdd(
+            return bridgeClient.addBuffer(
                 controller: controller,
-                selector: privateAddSelector,
+                selectorName: WISPISymbols.privateAddBufferSelector,
                 buffer: buffer,
                 name: name,
-                contentWorld: contentWorld
+                world: contentWorld,
+                isPublicSignature: false
             )
-            return true
         }
 
         jsBufferTransportLogger.error("selector_missing selector=addBuffer")
@@ -71,98 +82,25 @@ package enum WIJSBufferTransport {
         contentWorld: WKContentWorld
     ) {
         if controller.responds(to: publicRemoveSelector) {
-            invokeRemove(
+            _ = bridgeClient.removeBuffer(
                 controller: controller,
-                selector: publicRemoveSelector,
+                selectorName: WISPISymbols.publicRemoveBufferSelector,
                 name: name,
-                contentWorld: contentWorld
+                world: contentWorld
             )
             return
         }
 
         if controller.responds(to: privateRemoveSelector) {
-            invokeRemove(
+            _ = bridgeClient.removeBuffer(
                 controller: controller,
-                selector: privateRemoveSelector,
+                selectorName: WISPISymbols.privateRemoveBufferSelector,
                 name: name,
-                contentWorld: contentWorld
+                world: contentWorld
             )
             return
         }
 
         jsBufferTransportLogger.error("selector_missing selector=removeBuffer")
-    }
-}
-
-private extension WIJSBufferTransport {
-    static func makeBufferObject(data: Data) -> AnyObject? {
-        let classNames = [WISPISymbols.publicJSScriptingBufferClass, WISPISymbols.privateJSBufferClass]
-        let allocSelector = NSSelectorFromString(WISPISymbols.allocSelector)
-        let initSelector = NSSelectorFromString(WISPISymbols.initWithDataSelector)
-
-        for className in classNames {
-            guard let bufferClass = NSClassFromString(className) as? NSObject.Type else {
-                continue
-            }
-            guard bufferClass.instancesRespond(to: initSelector) else {
-                continue
-            }
-
-            guard
-                let allocated = (bufferClass as AnyObject)
-                    .perform(allocSelector)?.takeUnretainedValue() as? NSObject
-            else {
-                continue
-            }
-
-            guard
-                let initialized = allocated
-                    .perform(initSelector, with: data as NSData)?.takeUnretainedValue()
-            else {
-                continue
-            }
-
-            return initialized as AnyObject
-        }
-
-        return nil
-    }
-
-    static func invokePublicAdd(
-        controller: WKUserContentController,
-        selector: Selector,
-        buffer: AnyObject,
-        name: String,
-        contentWorld: WKContentWorld
-    ) {
-        typealias AddPublic = @convention(c) (AnyObject, Selector, AnyObject, NSString, WKContentWorld) -> Void
-        let implementation = controller.method(for: selector)
-        let function = unsafeBitCast(implementation, to: AddPublic.self)
-        function(controller, selector, buffer, name as NSString, contentWorld)
-    }
-
-    static func invokePrivateAdd(
-        controller: WKUserContentController,
-        selector: Selector,
-        buffer: AnyObject,
-        name: String,
-        contentWorld: WKContentWorld
-    ) {
-        typealias AddPrivate = @convention(c) (AnyObject, Selector, AnyObject, WKContentWorld, NSString) -> Void
-        let implementation = controller.method(for: selector)
-        let function = unsafeBitCast(implementation, to: AddPrivate.self)
-        function(controller, selector, buffer, contentWorld, name as NSString)
-    }
-
-    static func invokeRemove(
-        controller: WKUserContentController,
-        selector: Selector,
-        name: String,
-        contentWorld: WKContentWorld
-    ) {
-        typealias Remove = @convention(c) (AnyObject, Selector, NSString, WKContentWorld) -> Void
-        let implementation = controller.method(for: selector)
-        let function = unsafeBitCast(implementation, to: Remove.self)
-        function(controller, selector, name as NSString, contentWorld)
     }
 }

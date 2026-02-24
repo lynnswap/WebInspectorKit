@@ -28,15 +28,35 @@ let package = Package(
     targets: [
         .target(
             name: "WebInspectorKitCore",
+            dependencies: [
+                "WebInspectorKitSPIObjC",
+            ],
             path: "WebInspectorKit/Sources/WebInspectorKitCore",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .defaultIsolation(nil),
+                .strictMemorySafety(),
+                .treatAllWarnings(as: .error),
+            ],
             plugins: [
                 .plugin(name: "WebInspectorKitObfuscatePlugin")
+            ]
+        ),
+        .target(
+            name: "WebInspectorKitSPIObjC",
+            path: "WebInspectorKit/Sources/WebInspectorKitSPIObjC",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
             ]
         ),
         .target(
             name: "WebInspectorKit",
             dependencies: [
                 "WebInspectorKitCore",
+                "WebInspectorKitSPIObjC",
                 .product(name: "ObservationsCompat", package: "ObservationsCompat")
             ],
             path: "WebInspectorKit/Sources/WebInspectorKit",
@@ -45,6 +65,12 @@ let package = Package(
                 .process("WebInspector/Views/DOMTreeView/dom-tree-view.html"),
                 .process("WebInspector/Views/DOMTreeView/dom-tree-view.css"),
                 .process("WebInspector/Views/DOMTreeView/DisclosureTriangles.svg")
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .defaultIsolation(nil),
+                .strictMemorySafety(),
+                .treatAllWarnings(as: .error),
             ]
         ),
         .testTarget(
@@ -57,6 +83,12 @@ let package = Package(
             sources: [
                 "WebInspectorKitCoreTests",
                 "WebInspectorKitFeatureTests"
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .defaultIsolation(nil),
+                .strictMemorySafety(),
+                .treatAllWarnings(as: .error),
             ]
         ),
         .plugin(

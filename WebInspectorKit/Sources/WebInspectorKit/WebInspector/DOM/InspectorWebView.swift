@@ -157,8 +157,12 @@ final class InspectorWebView: WKWebView {
         let clampedX = max(0, min(point.x, bounds.width))
         let clampedY = max(0, min(point.y, bounds.height))
         let viewportY = isFlipped ? clampedY : (bounds.height - clampedY)
-        let jsX = String(format: "%.4f", clampedX)
-        let jsY = String(format: "%.4f", viewportY)
+        let jsCoordinateStyle = FloatingPointFormatStyle<Double>.number
+            .locale(Locale(identifier: "en_US_POSIX"))
+            .grouping(.never)
+            .precision(.fractionLength(4))
+        let jsX = Double(clampedX).formatted(jsCoordinateStyle)
+        let jsY = Double(viewportY).formatted(jsCoordinateStyle)
         let script = """
         (function() {
             const hoveredNodeID = Number(window.__wiLastDOMTreeHoveredNodeId);

@@ -1,6 +1,5 @@
 import Foundation
 import OSLog
-import ObjectiveC.runtime
 import WebKit
 
 private let domLogger = Logger(subsystem: "WebInspectorKit", category: "DOMPageAgent")
@@ -9,25 +8,7 @@ private let domAgentPresenceProbeScript: String = """
 """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
-private let unavailablePrivateAPISentinel = "__wi_private_unavailable__"
-@MainActor private var domBridgeScriptInstalledKey: UInt8 = 0
-
-@MainActor
-private extension WKUserContentController {
-    var wi_domBridgeScriptInstalled: Bool {
-        get {
-            (objc_getAssociatedObject(self, &domBridgeScriptInstalledKey) as? NSNumber)?.boolValue ?? false
-        }
-        set {
-            objc_setAssociatedObject(
-                self,
-                &domBridgeScriptInstalledKey,
-                NSNumber(value: newValue),
-                .OBJC_ASSOCIATION_RETAIN_NONATOMIC
-            )
-        }
-    }
-}
+private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
@@ -67,6 +48,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
 
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
+    private let controllerStateRegistry: WIUserContentControllerStateRegistry
     private let handleCache = WIJSHandleCache(capacity: 128)
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
@@ -75,9 +57,17 @@ public final class DOMPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
-    public init(configuration: DOMConfiguration) {
+    public convenience init(configuration: DOMConfiguration) {
+        self.init(configuration: configuration, controllerStateRegistry: .shared)
+    }
+
+    package init(
+        configuration: DOMConfiguration,
+        controllerStateRegistry: WIUserContentControllerStateRegistry
+    ) {
         self.configuration = configuration
         runtime = .shared
+        self.controllerStateRegistry = controllerStateRegistry
         bridgeMode = runtime.startupMode()
         bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
@@ -480,7 +470,7 @@ private extension DOMPageAgent {
 
     func installDOMAgentScriptIfNeeded(on webView: WKWebView) {
         let controller = webView.configuration.userContentController
-        if controller.wi_domBridgeScriptInstalled {
+        if controllerStateRegistry.domBridgeScriptInstalled(on: controller) {
             return
         }
 
@@ -508,7 +498,7 @@ private extension DOMPageAgent {
                 in: bridgeWorld
             )
         )
-        controller.wi_domBridgeScriptInstalled = true
+        controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
 
         // Install into already-loaded documents too.
         Task {
@@ -663,7 +653,7 @@ private extension DOMPageAgent {
                 contentWorld: bridgeWorld
             )
 
-            if let sentinel = rawResult as? String, sentinel == unavailablePrivateAPISentinel {
+            if let sentinel = rawResult as? String, sentinel == unavailableBridgeSentinel {
                 lockToLegacyMode("selector_missing=\(command.functionName)")
                 return false
             }
@@ -701,13 +691,13 @@ private extension DOMPageAgent {
                 """,
                 arguments: [
                     "identifier": nodeId,
-                    "unavailable": unavailablePrivateAPISentinel,
+                    "unavailable": unavailableBridgeSentinel,
                 ],
                 in: nil,
                 contentWorld: bridgeWorld
             )
 
-            if let sentinel = rawResult as? String, sentinel == unavailablePrivateAPISentinel {
+            if let sentinel = rawResult as? String, sentinel == unavailableBridgeSentinel {
                 lockToLegacyMode("selector_missing=createNodeHandle")
                 return nil
             }
@@ -730,7 +720,7 @@ private extension DOMPageAgent {
     private func makeHandleInvocation(command: HandleCommand, handle: AnyObject) -> (script: String, arguments: [String: Any]) {
         var arguments: [String: Any] = [
             "handle": handle,
-            "unavailable": unavailablePrivateAPISentinel,
+            "unavailable": unavailableBridgeSentinel,
         ]
 
         let script: String

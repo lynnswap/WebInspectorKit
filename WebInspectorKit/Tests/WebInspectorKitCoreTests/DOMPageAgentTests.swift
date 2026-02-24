@@ -198,6 +198,21 @@ struct DOMSessionTests {
     }
 
     @Test
+    func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() {
+        let firstSession = DOMSession(configuration: .init())
+        let secondSession = DOMSession(configuration: .init())
+        let (webView, controller) = makeTestWebView()
+
+        firstSession.attach(to: webView)
+        let firstScriptCount = controller.userScripts.count
+        #expect(firstScriptCount == 2)
+
+        secondSession.attach(to: webView)
+
+        #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
     func setAutoSnapshotAfterAttachEventuallyConfiguresAgent() async throws {
         let session = DOMSession(configuration: .init(snapshotDepth: 7, subtreeDepth: 2, autoUpdateDebounce: 0.2))
         let (webView, _) = makeTestWebView()

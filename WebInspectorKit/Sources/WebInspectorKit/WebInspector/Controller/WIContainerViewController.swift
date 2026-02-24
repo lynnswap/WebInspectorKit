@@ -216,7 +216,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
 
 #elseif canImport(AppKit)
 import AppKit
-import ObjectiveC.runtime
+import WebInspectorKitSPIObjC
 
 @MainActor
 public final class WIContainerViewController: NSTabViewController {
@@ -285,7 +285,7 @@ public final class WIContainerViewController: NSTabViewController {
         if isViewLoaded {
             rebuildTabs()
             inspectorController.connect(to: pageWebView)
-            if view.window != nil {
+            if Self.window(for: view) != nil {
                 startObservingToolbarStateIfNeeded()
             }
             updateToolbarState()
@@ -322,7 +322,7 @@ public final class WIContainerViewController: NSTabViewController {
     public override func viewDidDisappear() {
         super.viewDidDisappear()
         stopObservingToolbarState()
-        if view.window == nil {
+        if Self.window(for: view) == nil {
             inspectorController.suspend()
         }
     }
@@ -392,7 +392,7 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     private func installToolbarIfNeeded() {
-        guard let window = view.window else {
+        guard let window = Self.window(for: view) else {
             return
         }
 
@@ -641,16 +641,11 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     private static func menuToolbarControl(from item: NSMenuToolbarItem) -> NSView? {
-        if let control = item.view {
-            return control
-        }
-        guard
-            let controlIvar = class_getInstanceVariable(NSMenuToolbarItem.self, "_control"),
-            let controlObject = object_getIvar(item, controlIvar)
-        else {
-            return nil
-        }
-        return controlObject as? NSView
+        WIKRuntimeBridge.menuToolbarControl(from: item)
+    }
+
+    private static func window(for view: NSView) -> NSWindow? {
+        WIKRuntimeBridge.window(for: view)
     }
 
     private func makeNetworkFilterMenu() -> NSMenu {

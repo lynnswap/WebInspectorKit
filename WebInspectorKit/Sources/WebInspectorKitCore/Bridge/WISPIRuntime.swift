@@ -1,7 +1,6 @@
 import Foundation
 import OSLog
 import WebKit
-import ObjectiveC.runtime
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -139,8 +138,11 @@ package final class WISPIRuntime {
     private var startupCapabilitiesCache: WISPICapabilities?
     private var startupModeCache: WIBridgeMode?
     private var cachedWorldByName: [String: WKContentWorld] = [:]
+    private let bridgeClient: WISPIBridgeClient
 
-    private init() {}
+    private init(bridgeClient: WISPIBridgeClient = WISPIObjCBridgeClient()) {
+        self.bridgeClient = bridgeClient
+    }
 
     package func startupCapabilities() -> WISPICapabilities {
         if let startupCapabilitiesCache {
@@ -240,11 +242,11 @@ package final class WISPIRuntime {
             return false
         }
 
-        typealias Setter = @convention(c) (AnyObject, Selector, AnyObject?) -> Void
-        let implementation = webView.method(for: Self.setResourceLoadDelegateSelector)
-        let function = unsafeBitCast(implementation, to: Setter.self)
-        function(webView, Self.setResourceLoadDelegateSelector, delegate)
-        return true
+        return bridgeClient.setResourceLoadDelegate(
+            on: webView,
+            selectorName: WISPISymbols.setResourceLoadDelegateSelector,
+            delegate: delegate
+        )
     }
 
     #if canImport(UIKit)
@@ -264,11 +266,10 @@ package final class WISPIRuntime {
         guard barButtonItem.responds(to: Self.updateForAutomaticSelectionSelector) else {
             return
         }
-
-        typealias Invoker = @convention(c) (AnyObject, Selector) -> Void
-        let implementation = barButtonItem.method(for: Self.updateForAutomaticSelectionSelector)
-        let function = unsafeBitCast(implementation, to: Invoker.self)
-        function(barButtonItem, Self.updateForAutomaticSelectionSelector)
+        _ = bridgeClient.invokeVoid(
+            target: barButtonItem,
+            selectorName: WISPISymbols.updateForAutomaticSelectionSelector
+        )
     }
 
     package func setMenuActionState(_ action: UIAction, to state: UIMenuElement.State) {
@@ -276,22 +277,22 @@ package final class WISPIRuntime {
             action.state = state
             return
         }
-
-        typealias Setter = @convention(c) (AnyObject, Selector, Int, Bool) -> Void
-        let implementation = action.method(for: Self.setActionStateNotifyingObserversSelector)
-        let function = unsafeBitCast(implementation, to: Setter.self)
-        function(action, Self.setActionStateNotifyingObserversSelector, state.rawValue, true)
+        _ = bridgeClient.invokeActionState(
+            target: action,
+            selectorName: WISPISymbols.setActionStateNotifyingObserversSelector,
+            stateRawValue: state.rawValue,
+            notify: true
+        )
     }
 
     package func requestUpdate(for barButtonItem: UIBarButtonItem) {
         guard barButtonItem.responds(to: Self.updateViewSelector) else {
             return
         }
-
-        typealias Invoker = @convention(c) (AnyObject, Selector) -> Void
-        let implementation = barButtonItem.method(for: Self.updateViewSelector)
-        let function = unsafeBitCast(implementation, to: Invoker.self)
-        function(barButtonItem, Self.updateViewSelector)
+        _ = bridgeClient.invokeVoid(
+            target: barButtonItem,
+            selectorName: WISPISymbols.updateViewSelector
+        )
     }
 
     package func updateVisibleMenu(
@@ -331,58 +332,26 @@ extension WISPIRuntime {
         guard startupMode() != .legacyJSON else {
             return nil
         }
-        guard let configurationClass = NSClassFromString(WISPISymbols.contentWorldConfigurationClass) as? NSObject.Type else {
-            return nil
+
+        var setters: [String: Bool] = [:]
+        for setter in WISPISymbols.enableJSHandleSetterNames {
+            setters[setter] = true
         }
-
-        let configuration = configurationClass.init()
-        let didEnableJSHandle = setBooleanIfPossible(
-            true,
-            on: configuration,
-            setterNames: WISPISymbols.enableJSHandleSetterNames
-        )
-        let didEnableNodeSerialization = setBooleanIfPossible(
-            true,
-            on: configuration,
-            setterNames: WISPISymbols.enableNodeSerializationSetterNames
-        )
-
-        guard didEnableJSHandle || didEnableNodeSerialization else {
-            spiRuntimeLogger.error("runtime_probe_failed: unable to configure content world flags")
-            return nil
-        }
-
-        guard WKContentWorld.responds(to: Self.worldWithConfigurationSelector) else {
-            spiRuntimeLogger.error("selector_missing selector=\(WISPISymbols.worldWithConfigurationSelector, privacy: .public)")
-            return nil
+        for setter in WISPISymbols.enableNodeSerializationSetterNames {
+            setters[setter] = true
         }
 
         guard
-            let result = (WKContentWorld.self as AnyObject)
-                .perform(Self.worldWithConfigurationSelector, with: configuration)?.takeUnretainedValue() as? WKContentWorld
+            let world = bridgeClient.makeContentWorld(
+                configurationClassName: WISPISymbols.contentWorldConfigurationClass,
+                worldSelectorName: WISPISymbols.worldWithConfigurationSelector,
+                setters: setters
+            )
         else {
             spiRuntimeLogger.error("runtime_probe_failed: worldWithConfiguration invocation failed")
             return nil
         }
 
-        return result
-    }
-
-    func setBooleanIfPossible(_ value: Bool, on object: NSObject, setterNames: [String]) -> Bool {
-        for setterName in setterNames {
-            let selector = NSSelectorFromString(setterName)
-            guard object.responds(to: selector) else {
-                continue
-            }
-            guard let method = class_getInstanceMethod(type(of: object), selector) else {
-                continue
-            }
-            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
-            let implementation = method_getImplementation(method)
-            let function = unsafeBitCast(implementation, to: Setter.self)
-            function(object, selector, value)
-            return true
-        }
-        return false
+        return world
     }
 }
