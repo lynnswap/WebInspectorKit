@@ -206,6 +206,12 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
     }
 
     private func updateSecondaryMenu() {
+        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+        }
+    }
+
+    private func makeSecondaryMenu() -> UIMenu {
         let fetchAction = UIAction(
             title: wiLocalized("network.body.fetch", default: "Fetch Body"),
             image: UIImage(systemName: "arrow.clockwise"),
@@ -213,10 +219,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         ) { [weak self] _ in
             self?.fetch(force: true)
         }
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            image: UIImage(systemName: wiSecondaryActionSymbolName()),
-            menu: UIMenu(children: [fetchAction])
-        )
+        return UIMenu(children: [fetchAction])
     }
 
     private func fetch(force: Bool) {

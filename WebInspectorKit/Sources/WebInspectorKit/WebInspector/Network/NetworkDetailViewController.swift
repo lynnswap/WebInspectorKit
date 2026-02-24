@@ -136,12 +136,14 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
 
     func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
         self.entry = entry
+        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+        }
         guard let entry else {
             title = nil
             sections = []
             requestSnapshotUpdate()
             collectionView.isHidden = true
-            navigationItem.rightBarButtonItem = nil
             return
         }
 
@@ -149,7 +151,6 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         sections = makeSections(for: entry)
         collectionView.isHidden = false
         requestSnapshotUpdate()
-        navigationItem.rightBarButtonItem = makeSecondaryActionsItem(for: entry)
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -498,18 +499,21 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         return sections
     }
 
-    private func makeSecondaryActionsItem(for entry: NetworkEntry) -> UIBarButtonItem? {
-        guard canFetchBodies(for: entry) else {
-            return nil
+    private func makeSecondaryMenu() -> UIMenu {
+        let canFetch: Bool
+        if let entry {
+            canFetch = canFetchBodies(for: entry)
+        } else {
+            canFetch = false
         }
         let fetchAction = UIAction(
             title: wiLocalized("network.body.fetch", default: "Fetch Body"),
-            image: UIImage(systemName: "arrow.clockwise")
+            image: UIImage(systemName: "arrow.clockwise"),
+            attributes: canFetch ? [] : [.disabled]
         ) { [weak self] _ in
             self?.fetchBodies(force: true)
         }
-        let menu = UIMenu(children: [fetchAction])
-        return UIBarButtonItem(image: UIImage(systemName: wiSecondaryActionSymbolName()), menu: menu)
+        return UIMenu(children: [fetchAction])
     }
 
     private func canFetchBodies(for entry: NetworkEntry) -> Bool {

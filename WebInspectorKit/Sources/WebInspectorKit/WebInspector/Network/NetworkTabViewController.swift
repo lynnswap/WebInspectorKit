@@ -191,12 +191,6 @@ fileprivate struct ItemPayload {
         }
     )
     private lazy var dataSource = makeDataSource()
-    private lazy var secondaryActionsItem: UIBarButtonItem = {
-        UIBarButtonItem(
-            image: UIImage(systemName: wiSecondaryActionSymbolName()),
-            menu: makeSecondaryMenu()
-        )
-    }()
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
     init(inspector: WINetworkPaneViewModel) {
@@ -228,7 +222,7 @@ fileprivate struct ItemPayload {
         searchController.searchBar.text = inspector.searchText
         navigationItem.searchController = searchController
 
-        navigationItem.rightBarButtonItems = [secondaryActionsItem, filterMenuController.item]
+        navigationItem.rightBarButtonItems = [filterMenuController.item]
         syncFilterPresentation(notifyingVisibleMenu: false)
 
     }
@@ -455,8 +449,9 @@ fileprivate struct ItemPayload {
             selectEntry(with: inspector.selectedEntry?.id)
         }
         syncFilterPresentation(notifyingVisibleMenu: false)
-        secondaryActionsItem.menu = makeSecondaryMenu()
-        secondaryActionsItem.isEnabled = !inspector.store.entries.isEmpty
+        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+        }
 
         let shouldShowEmptyState = displayedEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
