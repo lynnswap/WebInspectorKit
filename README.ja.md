@@ -107,38 +107,7 @@ let container = WIContainerViewController(
 
 ## 移行
 
-破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
-
-## テスト
-
-リポジトリルートで `xcodebuild` を実行します。macOS と iOS Simulator の両方のテストを実行してください。
-
-```bash
-# macOS: Package tests
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitTests \
-  -destination 'platform=macOS' \
-  test
-
-# iOS Simulator: Package tests
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-```
-
-手元に destination がない場合は、次で利用可能な Simulator を確認してください。
-
-```bash
-xcrun simctl list devices available
-```
-
-TypeScript テスト（Vitest）はリポジトリルートで次を実行してください。
-
-```bash
-pnpm -s run test:ts
-pnpm -s run typecheck:ts
-```
+破壊的変更の詳細は [`MIGRATION.md`](Docs/MIGRATION.md) を参照してください。
 
 ## ライセンス
 
