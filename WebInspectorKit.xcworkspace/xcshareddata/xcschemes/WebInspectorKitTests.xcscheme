@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorKitCoreTests"
-               BuildableName = "WebInspectorKitCoreTests"
-               BlueprintName = "WebInspectorKitCoreTests"
-               ReferencedContainer = "container:WebInspectorKit">
+               BlueprintIdentifier = "WebInspectorKitTests"
+               BuildableName = "WebInspectorKitTests"
+               BlueprintName = "WebInspectorKitTests"
+               ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -34,10 +34,10 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "WebInspectorKitCoreTests"
-               BuildableName = "WebInspectorKitCoreTests"
-               BlueprintName = "WebInspectorKitCoreTests"
-               ReferencedContainer = "container:WebInspectorKit">
+               BlueprintIdentifier = "WebInspectorKitTests"
+               BuildableName = "WebInspectorKitTests"
+               BlueprintName = "WebInspectorKitTests"
+               ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
       </Testables>

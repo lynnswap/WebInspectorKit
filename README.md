@@ -114,27 +114,15 @@ See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
 Run tests with `xcodebuild` from the repository root. Execute both macOS and iOS Simulator test suites.
 
 ```bash
-# macOS: Package tests (Core)
+# macOS: Package tests
 xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
+  -scheme WebInspectorKitTests \
   -destination 'platform=macOS' \
   test
 
-# macOS: Package tests (Feature)
+# iOS Simulator: Package tests
 xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=macOS' \
-  test
-
-# iOS Simulator: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-
-# iOS Simulator: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
+  -scheme WebInspectorKitTests \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
   test
 ```

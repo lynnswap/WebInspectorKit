@@ -10,10 +10,7 @@ struct WebInspectorKitObfuscatePlugin: BuildToolPlugin {
 
         let packageDir = context.package.directoryURL
         let obfuscateDir = try resolveObfuscateDirectory(from: packageDir)
-        let scriptsDir = packageDir
-            .appendingPathComponent("Sources")
-            .appendingPathComponent("WebInspectorKitCore")
-            .appendingPathComponent("WebInspector")
+        let scriptsDir = try resolveScriptsDirectory(from: packageDir)
         let configPath = obfuscateDir
             .appendingPathComponent("obfuscate.config.json")
         let scriptPath = obfuscateDir
@@ -98,6 +95,37 @@ struct WebInspectorKitObfuscatePlugin: BuildToolPlugin {
         }
 
         throw PluginError("ObfuscateJS/obfuscate.js not found relative to package directory: \(packageDir.path)")
+    }
+
+    private func resolveScriptsDirectory(from packageDir: URL) throws -> URL {
+        let fileManager = FileManager.default
+        let repoDir = packageDir.deletingLastPathComponent()
+        let candidates = [
+            packageDir
+                .appendingPathComponent("Sources")
+                .appendingPathComponent("WebInspectorKitCore")
+                .appendingPathComponent("WebInspector"),
+            packageDir
+                .appendingPathComponent("WebInspectorKit")
+                .appendingPathComponent("Sources")
+                .appendingPathComponent("WebInspectorKitCore")
+                .appendingPathComponent("WebInspector"),
+            repoDir
+                .appendingPathComponent("WebInspectorKit")
+                .appendingPathComponent("Sources")
+                .appendingPathComponent("WebInspectorKitCore")
+                .appendingPathComponent("WebInspector")
+        ]
+
+        for candidate in candidates {
+            if fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        throw PluginError(
+            "WebInspector script directory not found relative to package directory: \(packageDir.path)"
+        )
     }
 
     private func resolveNodeExecutable() throws -> URL {

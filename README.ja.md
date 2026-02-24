@@ -114,27 +114,15 @@ let container = WIContainerViewController(
 リポジトリルートで `xcodebuild` を実行します。macOS と iOS Simulator の両方のテストを実行してください。
 
 ```bash
-# macOS: Package tests (Core)
+# macOS: Package tests
 xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
+  -scheme WebInspectorKitTests \
   -destination 'platform=macOS' \
   test
 
-# macOS: Package tests (Feature)
+# iOS Simulator: Package tests
 xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=macOS' \
-  test
-
-# iOS Simulator: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-
-# iOS Simulator: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
+  -scheme WebInspectorKitTests \
   -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
   test
 ```

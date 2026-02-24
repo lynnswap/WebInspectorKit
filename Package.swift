@@ -28,7 +28,7 @@ let package = Package(
     targets: [
         .target(
             name: "WebInspectorKitCore",
-            path: "Sources/WebInspectorKitCore",
+            path: "WebInspectorKit/Sources/WebInspectorKitCore",
             plugins: [
                 .plugin(name: "WebInspectorKitObfuscatePlugin")
             ]
@@ -39,7 +39,7 @@ let package = Package(
                 "WebInspectorKitCore",
                 .product(name: "ObservationsCompat", package: "ObservationsCompat")
             ],
-            path: "Sources/WebInspectorKit",
+            path: "WebInspectorKit/Sources/WebInspectorKit",
             resources: [
                 .process("Localizable.xcstrings"),
                 .process("WebInspector/Views/DOMTreeView/dom-tree-view.html"),
@@ -48,21 +48,21 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "WebInspectorKitCoreTests",
-            dependencies: ["WebInspectorKitCore"],
-            path: "Tests/WebInspectorKitCoreTests"
-        ),
-        .testTarget(
-            name: "WebInspectorKitFeatureTests",
+            name: "WebInspectorKitTests",
             dependencies: [
                 "WebInspectorKit",
                 "WebInspectorKitCore"
             ],
-            path: "Tests/WebInspectorKitFeatureTests"
+            path: "WebInspectorKit/Tests",
+            sources: [
+                "WebInspectorKitCoreTests",
+                "WebInspectorKitFeatureTests"
+            ]
         ),
         .plugin(
             name: "WebInspectorKitObfuscatePlugin",
-            capability: .buildTool()
+            capability: .buildTool(),
+            path: "WebInspectorKit/Plugins/WebInspectorKitObfuscatePlugin"
         )
 
     ]
