@@ -8,7 +8,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: Container UI, pane descriptors, Observation state
+- `WebInspectorKit`: Container UI, tab descriptors, Observation state
 - `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorKitCore`.
@@ -17,7 +17,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable panes via `WIPaneDescriptor`
+- Configurable tabs via `WITabDescriptor`
 - Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
 
 ## Requirements
@@ -82,11 +82,11 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## Custom Pane
+## Custom Tab
 
 ```swift
-let customPane = WIPaneDescriptor(
-    id: "my_custom_pane",
+let customTab = WITabDescriptor(
+    id: "my_custom_tab",
     title: "Custom",
     systemImage: "folder",
     role: .other
@@ -101,7 +101,7 @@ let customPane = WIPaneDescriptor(
 let container = WIContainerViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customPane]
+    tabs: [.dom(), .element(), .network(), customTab]
 )
 ```
 

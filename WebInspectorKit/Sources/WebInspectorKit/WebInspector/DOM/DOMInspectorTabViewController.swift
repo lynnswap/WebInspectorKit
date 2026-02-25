@@ -3,11 +3,11 @@ import AppKit
 
 @MainActor
 final class DOMInspectorTabViewController: NSSplitViewController {
-    private let inspector: WIDOMPaneViewModel
+    private let inspector: WIDOMTabViewModel
     private let domTreeViewController: DOMTreeTabViewController
     private let elementDetailsViewController: ElementDetailsTabViewController
 
-    init(inspector: WIDOMPaneViewModel) {
+    init(inspector: WIDOMTabViewModel) {
         self.inspector = inspector
         self.domTreeViewController = DOMTreeTabViewController(inspector: inspector)
         self.elementDetailsViewController = ElementDetailsTabViewController(inspector: inspector)

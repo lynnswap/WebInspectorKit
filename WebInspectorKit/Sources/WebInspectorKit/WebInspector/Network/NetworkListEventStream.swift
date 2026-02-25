@@ -54,7 +54,7 @@ enum NetworkListSelectionPolicy {
 @MainActor
 enum NetworkListEventStream {
     static func makeListStream(
-        inspector: WINetworkPaneViewModel,
+        inspector: WINetworkTabViewModel,
         backend: ObservationsCompatBackend = .automatic
     ) -> ObservationsCompat<NetworkListRenderModel> {
         ObservationsCompat(backend: backend) {
@@ -72,7 +72,7 @@ enum NetworkListEventStream {
     }
 
     static func makeDetailStream(
-        inspector: WINetworkPaneViewModel,
+        inspector: WINetworkTabViewModel,
         backend: ObservationsCompatBackend = .automatic
     ) -> ObservationsCompat<NetworkDetailRenderModel> {
         ObservationsCompat(backend: backend) {

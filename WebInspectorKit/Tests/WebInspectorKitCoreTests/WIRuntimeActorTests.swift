@@ -13,45 +13,45 @@ struct WIRuntimeActorTests {
         )
 
         await runtime.dispatch(
-            .configurePanes([
-                WIPaneRuntimeDescriptor(id: "wi_dom", requires: [.dom], activation: .init(domLiveUpdates: true)),
-                WIPaneRuntimeDescriptor(id: "wi_network", requires: [.network], activation: .init(networkLiveLogging: true))
+            .configureTabs([
+                WITabRuntimeDescriptor(id: "wi_dom", requires: [.dom], activation: .init(domLiveUpdates: true)),
+                WITabRuntimeDescriptor(id: "wi_network", requires: [.network], activation: .init(networkLiveLogging: true))
             ])
         )
-        await runtime.dispatch(.selectPane("wi_network"))
+        await runtime.dispatch(.selectTab("wi_network"))
         await runtime.dispatch(.connected)
 
         var state = await runtime.currentState()
         #expect(state.lifecycle == .active)
-        #expect(state.selectedPaneID == "wi_network")
+        #expect(state.selectedTabID == "wi_network")
 
         await runtime.dispatch(.suspended)
         state = await runtime.currentState()
         #expect(state.lifecycle == .suspended)
-        #expect(state.selectedPaneID == "wi_network")
+        #expect(state.selectedTabID == "wi_network")
 
         await runtime.dispatch(.disconnected)
         state = await runtime.currentState()
         #expect(state.lifecycle == .disconnected)
-        #expect(state.selectedPaneID == nil)
+        #expect(state.selectedTabID == nil)
     }
 
     @Test
-    func configurePanesNormalizesInvalidSelection() async {
+    func configureTabsNormalizesInvalidSelection() async {
         let runtime = WIRuntimeActor(
             domRuntime: WIDOMRuntimeActor(session: DOMSession()),
             networkRuntime: WINetworkRuntimeActor(session: NetworkSession())
         )
 
         await runtime.dispatch(
-            .configurePanes([
-                WIPaneRuntimeDescriptor(id: "a"),
-                WIPaneRuntimeDescriptor(id: "b")
+            .configureTabs([
+                WITabRuntimeDescriptor(id: "a"),
+                WITabRuntimeDescriptor(id: "b")
             ])
         )
-        await runtime.dispatch(.selectPane("missing"))
+        await runtime.dispatch(.selectTab("missing"))
 
         let state = await runtime.currentState()
-        #expect(state.selectedPaneID == "a")
+        #expect(state.selectedTabID == "a")
     }
 }

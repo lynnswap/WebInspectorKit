@@ -11,7 +11,7 @@ private struct DOMTreeObservedState: Sendable, Equatable {
 }
 
 @MainActor
-private func domTreeObservedState(from inspector: WIDOMPaneViewModel) -> DOMTreeObservedState {
+private func domTreeObservedState(from inspector: WIDOMTabViewModel) -> DOMTreeObservedState {
     DOMTreeObservedState(
         errorMessage: inspector.errorMessage,
         hasPageWebView: inspector.hasPageWebView,
@@ -25,7 +25,7 @@ import UIKit
 
 @MainActor
 final class DOMTreeTabViewController: UIViewController {
-    private let inspector: WIDOMPaneViewModel
+    private let inspector: WIDOMTabViewModel
     private var observationTask: Task<Void, Never>?
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -37,7 +37,7 @@ final class DOMTreeTabViewController: UIViewController {
         )
     }()
 
-    init(inspector: WIDOMPaneViewModel) {
+    init(inspector: WIDOMTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -168,13 +168,13 @@ import AppKit
 
 @MainActor
 final class DOMTreeTabViewController: NSViewController {
-    private let inspector: WIDOMPaneViewModel
+    private let inspector: WIDOMTabViewModel
     private var observationTask: Task<Void, Never>?
     private var contextMenuNodeID: Int?
 
     private let errorLabel = NSTextField(labelWithString: "")
 
-    init(inspector: WIDOMPaneViewModel) {
+    init(inspector: WIDOMTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }

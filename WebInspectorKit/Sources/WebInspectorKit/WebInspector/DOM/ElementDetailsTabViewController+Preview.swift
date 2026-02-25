@@ -11,8 +11,8 @@ private enum ElementDetailsPreviewScenario {
         case selectedEditableAttributes
     }
 
-    static func makeInspector(mode: Mode) -> WIDOMPaneViewModel {
-        let inspector = WIDOMPaneViewModel(session: DOMSession())
+    static func makeInspector(mode: Mode) -> WIDOMTabViewModel {
+        let inspector = WIDOMTabViewModel(session: DOMSession())
         switch mode {
         case .empty:
             break

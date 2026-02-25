@@ -32,8 +32,8 @@ public final class WISessionStore {
         viewState.network
     }
 
-    public var selectedPaneID: String? {
-        viewState.selectedPaneID
+    public var selectedTabID: String? {
+        viewState.selectedTabID
     }
 
     public var lifecycle: WISessionLifecycle {

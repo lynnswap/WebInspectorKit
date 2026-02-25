@@ -30,7 +30,7 @@ public struct WIRequiredFeatures: OptionSet, Hashable, Sendable {
     public static let network = WIRequiredFeatures(rawValue: 1 << 1)
 }
 
-public struct WIPaneActivation: Hashable, Sendable {
+public struct WITabActivation: Hashable, Sendable {
     public var domLiveUpdates: Bool
     public var networkLiveLogging: Bool
 
@@ -40,12 +40,12 @@ public struct WIPaneActivation: Hashable, Sendable {
     }
 }
 
-public struct WIPaneRuntimeDescriptor: Hashable, Sendable {
+public struct WITabRuntimeDescriptor: Hashable, Sendable {
     public let id: String
     public let requires: WIRequiredFeatures
-    public let activation: WIPaneActivation
+    public let activation: WITabActivation
 
-    public init(id: String, requires: WIRequiredFeatures = [], activation: WIPaneActivation = .init()) {
+    public init(id: String, requires: WIRequiredFeatures = [], activation: WITabActivation = .init()) {
         self.id = id
         self.requires = requires
         self.activation = activation
@@ -62,8 +62,8 @@ public enum WISessionCommand: Sendable {
     case connected
     case suspended
     case disconnected
-    case configurePanes([WIPaneRuntimeDescriptor])
-    case selectPane(String?)
+    case configureTabs([WITabRuntimeDescriptor])
+    case selectTab(String?)
     case refreshState
     case recoverableError(String)
 }
@@ -105,20 +105,20 @@ public struct WINetworkViewState: Sendable {
 
 public struct WISessionViewState: Sendable {
     public var lifecycle: WISessionLifecycle
-    public var selectedPaneID: String?
+    public var selectedTabID: String?
     public var dom: WIDOMViewState
     public var network: WINetworkViewState
     public var lastRecoverableError: String?
 
     public init(
         lifecycle: WISessionLifecycle = .disconnected,
-        selectedPaneID: String? = nil,
+        selectedTabID: String? = nil,
         dom: WIDOMViewState = .init(),
         network: WINetworkViewState = .init(),
         lastRecoverableError: String? = nil
     ) {
         self.lifecycle = lifecycle
-        self.selectedPaneID = selectedPaneID
+        self.selectedTabID = selectedTabID
         self.dom = dom
         self.network = network
         self.lastRecoverableError = lastRecoverableError
@@ -174,8 +174,8 @@ public actor WIRuntimeActor {
     private let continuation: AsyncStream<WISessionEvent>.Continuation
 
     private var lifecycle: WISessionLifecycle = .disconnected
-    private var selectedPaneID: String?
-    private var panes: [WIPaneRuntimeDescriptor] = []
+    private var selectedTabID: String?
+    private var tabs: [WITabRuntimeDescriptor] = []
     private var lastRecoverableError: String?
 
     public init(domRuntime: WIDOMRuntimeActor, networkRuntime: WINetworkRuntimeActor) {
@@ -206,23 +206,23 @@ public actor WIRuntimeActor {
 
         case .disconnected:
             lifecycle = .disconnected
-            selectedPaneID = nil
+            selectedTabID = nil
             await emitState()
 
-        case let .configurePanes(descriptors):
-            panes = descriptors
-            normalizeSelectedPaneID()
+        case let .configureTabs(descriptors):
+            tabs = descriptors
+            normalizeSelectedTabID()
             await emitState()
 
-        case let .selectPane(id):
+        case let .selectTab(id):
             if let id {
-                if panes.isEmpty || panes.contains(where: { $0.id == id }) {
-                    selectedPaneID = id
+                if tabs.isEmpty || tabs.contains(where: { $0.id == id }) {
+                    selectedTabID = id
                 } else {
-                    selectedPaneID = panes.first?.id
+                    selectedTabID = tabs.first?.id
                 }
             } else {
-                selectedPaneID = nil
+                selectedTabID = nil
             }
             await emitState()
 
@@ -241,7 +241,7 @@ public actor WIRuntimeActor {
         let networkState = await networkRuntime.snapshot()
         return WISessionViewState(
             lifecycle: lifecycle,
-            selectedPaneID: selectedPaneID,
+            selectedTabID: selectedTabID,
             dom: domState,
             network: networkState,
             lastRecoverableError: lastRecoverableError
@@ -250,15 +250,15 @@ public actor WIRuntimeActor {
 }
 
 private extension WIRuntimeActor {
-    func normalizeSelectedPaneID() {
-        if panes.isEmpty {
+    func normalizeSelectedTabID() {
+        if tabs.isEmpty {
             return
         }
-        if let selectedPaneID,
-           panes.contains(where: { $0.id == selectedPaneID }) {
+        if let selectedTabID,
+           tabs.contains(where: { $0.id == selectedTabID }) {
             return
         }
-        selectedPaneID = panes.first?.id
+        selectedTabID = tabs.first?.id
     }
 
     func emitState() async {

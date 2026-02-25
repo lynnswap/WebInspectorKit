@@ -14,7 +14,7 @@ struct WISessionStoreTests {
             .stateChanged(
                 WISessionViewState(
                     lifecycle: .active,
-                    selectedPaneID: "wi_dom",
+                    selectedTabID: "wi_dom",
                     dom: WIDOMViewState(hasAttachedPage: true, selectedNodeID: 101, isAutoSnapshotEnabled: true),
                     network: WINetworkViewState(hasAttachedPage: true, mode: .buffering, isRecording: true, entryCount: 7)
                 )
@@ -23,7 +23,7 @@ struct WISessionStoreTests {
         continuation.yield(.recoverableError("payload decode failed"))
 
         for _ in 0..<40 {
-            if store.viewState.selectedPaneID == "wi_dom",
+            if store.viewState.selectedTabID == "wi_dom",
                store.viewState.lastRecoverableError == "payload decode failed" {
                 break
             }
@@ -31,7 +31,7 @@ struct WISessionStoreTests {
         }
 
         #expect(store.viewState.lifecycle == .active)
-        #expect(store.viewState.selectedPaneID == "wi_dom")
+        #expect(store.viewState.selectedTabID == "wi_dom")
         #expect(store.viewState.dom.selectedNodeID == 101)
         #expect(store.viewState.network.entryCount == 7)
         #expect(store.viewState.lastRecoverableError == "payload decode failed")
@@ -49,7 +49,7 @@ struct WISessionStoreTests {
             .stateChanged(
                 WISessionViewState(
                     lifecycle: .active,
-                    selectedPaneID: "wi_dom",
+                    selectedTabID: "wi_dom",
                     dom: WIDOMViewState(hasAttachedPage: true, selectedNodeID: 5, isAutoSnapshotEnabled: true),
                     network: WINetworkViewState(hasAttachedPage: true, mode: .buffering, isRecording: true, entryCount: 2),
                     lastRecoverableError: nil
@@ -61,7 +61,7 @@ struct WISessionStoreTests {
             .stateChanged(
                 WISessionViewState(
                     lifecycle: .suspended,
-                    selectedPaneID: "wi_network",
+                    selectedTabID: "wi_network",
                     dom: WIDOMViewState(hasAttachedPage: false, selectedNodeID: nil, isAutoSnapshotEnabled: false),
                     network: WINetworkViewState(hasAttachedPage: false, mode: .stopped, isRecording: false, entryCount: 2),
                     lastRecoverableError: "first error"
@@ -73,7 +73,7 @@ struct WISessionStoreTests {
             .stateChanged(
                 WISessionViewState(
                     lifecycle: .active,
-                    selectedPaneID: "wi_network",
+                    selectedTabID: "wi_network",
                     dom: WIDOMViewState(hasAttachedPage: true, selectedNodeID: 99, isAutoSnapshotEnabled: false),
                     network: WINetworkViewState(hasAttachedPage: true, mode: .active, isRecording: true, entryCount: 12),
                     lastRecoverableError: "second error"
@@ -84,7 +84,7 @@ struct WISessionStoreTests {
         for _ in 0..<40 {
             let viewState = store.viewState
             if viewState.lifecycle == .active,
-               viewState.selectedPaneID == "wi_network",
+               viewState.selectedTabID == "wi_network",
                viewState.network.mode == .active,
                viewState.lastRecoverableError == "second error" {
                 break
@@ -93,7 +93,7 @@ struct WISessionStoreTests {
         }
 
         #expect(store.viewState.lifecycle == .active)
-        #expect(store.viewState.selectedPaneID == "wi_network")
+        #expect(store.viewState.selectedTabID == "wi_network")
         #expect(store.viewState.dom.hasAttachedPage == true)
         #expect(store.viewState.dom.selectedNodeID == 99)
         #expect(store.viewState.network.hasAttachedPage == true)

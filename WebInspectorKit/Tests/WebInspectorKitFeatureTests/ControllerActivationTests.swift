@@ -8,7 +8,7 @@ struct ControllerActivationTests {
     @Test
     func connectWithNoNetworkTabsDoesNotAttachNetworkSession() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), domSecondaryPane()])
+        controller.configureTabs([.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -48,7 +48,7 @@ struct ControllerActivationTests {
     @Test
     func selectedTabSwitchesDOMAutoSnapshot() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), domSecondaryPane()])
+        controller.configureTabs([.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -101,7 +101,7 @@ struct ControllerActivationTests {
     @Test
     func configureTabsWhileConnectedReconnectsNewlyRequiredSessions() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), domSecondaryPane()])
+        controller.configureTabs([.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -114,14 +114,14 @@ struct ControllerActivationTests {
     @Test
     func configureTabsWhileConnectedWithSameRequirementsKeepsDOMSelection() {
         let controller = WISessionController()
-        controller.configureTabs([.dom(), domSecondaryPane()])
+        controller.configureTabs([.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
         controller.dom.selection.nodeId = 42
         controller.dom.selection.preview = "<div id='selected'>"
 
-        controller.configureTabs([.dom(title: "DOM"), domSecondaryPane(title: "Elements")])
+        controller.configureTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
 
         #expect(controller.dom.selection.nodeId == 42)
         #expect(controller.dom.selection.preview == "<div id='selected'>")
@@ -235,7 +235,7 @@ struct ControllerActivationTests {
         await waitForStoreState(
             controller.store,
             lifecycle: .active,
-            selectedPaneID: "wi_network",
+            selectedTabID: "wi_network",
             hasAttachedPage: true,
             networkMode: .active
         )
@@ -244,7 +244,7 @@ struct ControllerActivationTests {
         await waitForStoreState(
             controller.store,
             lifecycle: .suspended,
-            selectedPaneID: "wi_network",
+            selectedTabID: "wi_network",
             hasAttachedPage: false,
             networkMode: .stopped
         )
@@ -253,7 +253,7 @@ struct ControllerActivationTests {
         await waitForStoreState(
             controller.store,
             lifecycle: .active,
-            selectedPaneID: "wi_network",
+            selectedTabID: "wi_network",
             hasAttachedPage: true,
             networkMode: .active
         )
@@ -266,8 +266,8 @@ struct ControllerActivationTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func domSecondaryPane(title: String = "Element") -> WIPaneDescriptor {
-        WIPaneDescriptor(
+    private func domSecondaryTab(title: String = "Element") -> WITabDescriptor {
+        WITabDescriptor(
             id: "wi_element",
             title: title,
             systemImage: "info.circle",
@@ -288,14 +288,14 @@ struct ControllerActivationTests {
     private func waitForStoreState(
         _ store: WISessionStore,
         lifecycle: WISessionLifecycle,
-        selectedPaneID: String?,
+        selectedTabID: String?,
         hasAttachedPage: Bool,
         networkMode: NetworkLoggingMode
     ) async {
         for _ in 0..<80 {
             let state = store.viewState
             if state.lifecycle == lifecycle,
-               state.selectedPaneID == selectedPaneID,
+               state.selectedTabID == selectedTabID,
                state.dom.hasAttachedPage == hasAttachedPage,
                state.network.hasAttachedPage == hasAttachedPage,
                state.network.mode == networkMode {

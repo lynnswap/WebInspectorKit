@@ -16,7 +16,7 @@ struct TabDescriptorTests {
         let controller = WISessionController()
         let webView = makeTestWebView()
 
-        let first = WIPaneDescriptor(
+        let first = WITabDescriptor(
             id: "duplicate",
             title: "First",
             systemImage: "1.circle",
@@ -27,7 +27,7 @@ struct TabDescriptorTests {
             makeDummyController()
         }
 
-        let second = WIPaneDescriptor(
+        let second = WITabDescriptor(
             id: "duplicate",
             title: "Second",
             systemImage: "2.circle",
@@ -50,14 +50,14 @@ struct TabDescriptorTests {
         let controller = WISessionController()
 
         controller.configureTabs([
-            WIPaneDescriptor(
+            WITabDescriptor(
                 id: "tab_a",
                 title: "A",
                 systemImage: "a.circle"
             ) { _ in
                 makeDummyController()
             },
-            WIPaneDescriptor(
+            WITabDescriptor(
                 id: "tab_b",
                 title: "B",
                 systemImage: "b.circle"
@@ -73,14 +73,14 @@ struct TabDescriptorTests {
     func configureTabsReplacesInvalidSelectionWithFirstTab() {
         let controller = WISessionController()
         controller.configureTabs([
-            WIPaneDescriptor(
+            WITabDescriptor(
                 id: "tab_a",
                 title: "A",
                 systemImage: "a.circle"
             ) { _ in
                 makeDummyController()
             },
-            WIPaneDescriptor(
+            WITabDescriptor(
                 id: "tab_b",
                 title: "B",
                 systemImage: "b.circle"
@@ -91,7 +91,7 @@ struct TabDescriptorTests {
         controller.selectedTabID = "tab_b"
 
         controller.configureTabs([
-            WIPaneDescriptor(
+            WITabDescriptor(
                 id: "tab_c",
                 title: "C",
                 systemImage: "c.circle"
@@ -135,8 +135,8 @@ struct TabDescriptorTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
-        WIPaneDescriptor(
+    private func makeDescriptor(id: String, title: String) -> WITabDescriptor {
+        WITabDescriptor(
             id: id,
             title: title,
             systemImage: "circle"

@@ -10,7 +10,7 @@ import AppKit
 struct NetworkInspectorAppKitTests {
     @Test
     func networkTabSelectsFirstEntryWhenEntriesExist() throws {
-        let inspector = WINetworkPaneViewModel(session: NetworkSession())
+        let inspector = WINetworkTabViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
             requestID: 101,
@@ -34,7 +34,7 @@ struct NetworkInspectorAppKitTests {
 
     @Test
     func networkTabLifecycleCanRepeatWithoutLeaking() async throws {
-        let inspector = WINetworkPaneViewModel(session: NetworkSession())
+        let inspector = WINetworkTabViewModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
             requestID: 201,
@@ -68,7 +68,7 @@ struct NetworkInspectorAppKitTests {
     }
 
     private func applyRequestStart(
-        to inspector: WINetworkPaneViewModel,
+        to inspector: WINetworkTabViewModel,
         requestID: Int,
         url: String,
         initiator: String,

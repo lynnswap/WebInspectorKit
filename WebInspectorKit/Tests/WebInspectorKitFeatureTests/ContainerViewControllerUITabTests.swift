@@ -131,7 +131,7 @@ struct ContainerViewControllerUITabTests {
     }
 
     @Test
-    func selectingNetworkTabDoesNotCrashWhenNetworkPaneLoads() {
+    func selectingNetworkTabDoesNotCrashWhenNetworkTabLoads() {
         let controller = WISessionController()
         let container = WIContainerViewController(
             controller,
@@ -165,8 +165,8 @@ struct ContainerViewControllerUITabTests {
         #expect(networkController is NetworkTabViewController)
     }
 
-    private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
-        WIPaneDescriptor(
+    private func makeDescriptor(id: String, title: String) -> WITabDescriptor {
+        WITabDescriptor(
             id: id,
             title: title,
             systemImage: "circle"

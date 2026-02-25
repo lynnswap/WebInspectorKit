@@ -10,9 +10,9 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
     public private(set) var inspectorController: WISessionController
 
     private weak var pageWebView: WKWebView?
-    private var tabDescriptors: [WIPaneDescriptor]
-    private var canonicalIdentifierByUITabIdentifier: [String: WIPaneDescriptor.ID] = [:]
-    private var primaryUITabIdentifierByCanonicalIdentifier: [WIPaneDescriptor.ID: String] = [:]
+    private var tabDescriptors: [WITabDescriptor]
+    private var canonicalIdentifierByUITabIdentifier: [String: WITabDescriptor.ID] = [:]
+    private var primaryUITabIdentifierByCanonicalIdentifier: [WITabDescriptor.ID: String] = [:]
     private var uiTabByIdentifier: [String: UITab] = [:]
     private var orderedUITabIdentifiers: [String] = []
     private var isApplyingSelectionFromController = false
@@ -20,7 +20,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
     public init(
         _ inspectorController: WISessionController,
         webView: WKWebView?,
-        tabs: [WIPaneDescriptor] = [.dom(), .element(), .network()]
+        tabs: [WITabDescriptor] = [.dom(), .element(), .network()]
     ) {
         self.inspectorController = inspectorController
         self.pageWebView = webView
@@ -56,7 +56,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
         }
     }
 
-    public func setTabs(_ tabs: [WIPaneDescriptor]) {
+    public func setTabs(_ tabs: [WITabDescriptor]) {
         tabDescriptors = tabs
         inspectorController.configureTabs(tabDescriptors)
         if isViewLoaded {
@@ -88,7 +88,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
 
     private func rebuildTabs() {
         inspectorController.configureTabs(tabDescriptors)
-        let context = WIPaneContext(controller: inspectorController)
+        let context = WITabContext(controller: inspectorController)
         var usedUITabIdentifiers = Set<String>()
         var builtTabs: [UITab] = []
         builtTabs.reserveCapacity(tabDescriptors.count)
@@ -133,7 +133,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
         }
     }
 
-    private func syncNativeSelection(with tabID: WIPaneDescriptor.ID?) {
+    private func syncNativeSelection(with tabID: WITabDescriptor.ID?) {
         guard orderedUITabIdentifiers.isEmpty == false else {
             return
         }
@@ -172,7 +172,7 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
     }
 
     private func makeUniqueUITabIdentifier(
-        for canonicalIdentifier: WIPaneDescriptor.ID,
+        for canonicalIdentifier: WITabDescriptor.ID,
         index: Int,
         used: inout Set<String>
     ) -> String {
@@ -221,7 +221,7 @@ import WebInspectorKitSPIObjC
 @MainActor
 public final class WIContainerViewController: NSTabViewController {
     private struct AppKitToolbarObservedState: Sendable, Equatable {
-        let selectedTabID: WIPaneDescriptor.ID?
+        let selectedTabID: WITabDescriptor.ID?
         let domHasPageWebView: Bool
         let domIsSelectingElement: Bool
         let networkHasEntries: Bool
@@ -238,7 +238,7 @@ public final class WIContainerViewController: NSTabViewController {
     public private(set) var inspectorController: WISessionController
 
     private weak var pageWebView: WKWebView?
-    private var tabDescriptors: [WIPaneDescriptor]
+    private var tabDescriptors: [WITabDescriptor]
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
@@ -248,7 +248,7 @@ public final class WIContainerViewController: NSTabViewController {
     public init(
         _ inspectorController: WISessionController,
         webView: WKWebView?,
-        tabs: [WIPaneDescriptor] = [.dom(), .network()]
+        tabs: [WITabDescriptor] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
         self.pageWebView = webView
@@ -292,7 +292,7 @@ public final class WIContainerViewController: NSTabViewController {
         }
     }
 
-    public func setTabs(_ tabs: [WIPaneDescriptor]) {
+    public func setTabs(_ tabs: [WITabDescriptor]) {
         tabDescriptors = Self.normalizeAppKitTabs(tabs)
         inspectorController.configureTabs(tabDescriptors)
         if isViewLoaded {
@@ -340,7 +340,7 @@ public final class WIContainerViewController: NSTabViewController {
 
     private func rebuildTabs() {
         inspectorController.configureTabs(tabDescriptors)
-        let context = WIPaneContext(controller: inspectorController)
+        let context = WITabContext(controller: inspectorController)
         tabViewItems = tabDescriptors.map { descriptor in
             let viewController = descriptor.makeViewController(context: context)
             let item = NSTabViewItem(viewController: viewController)
@@ -361,7 +361,7 @@ public final class WIContainerViewController: NSTabViewController {
         }
     }
 
-    private func syncNativeSelection(with tabID: WIPaneDescriptor.ID?) {
+    private func syncNativeSelection(with tabID: WITabDescriptor.ID?) {
         guard tabDescriptors.isEmpty == false else {
             refreshTabPickerState()
             return
@@ -566,7 +566,7 @@ public final class WIContainerViewController: NSTabViewController {
         return 0
     }
 
-    private static func canFetchSelectedBodies(in networkInspector: WINetworkPaneViewModel) -> Bool {
+    private static func canFetchSelectedBodies(in networkInspector: WINetworkTabViewModel) -> Bool {
         guard
             let selectedID = networkInspector.selectedEntry?.id,
             let entry = networkInspector.store.entry(forEntryID: selectedID)
@@ -909,7 +909,7 @@ public final class WIContainerViewController: NSTabViewController {
         }
     }
 
-    private static func normalizeAppKitTabs(_ tabs: [WIPaneDescriptor]) -> [WIPaneDescriptor] {
+    private static func normalizeAppKitTabs(_ tabs: [WITabDescriptor]) -> [WITabDescriptor] {
         let hasDOMTab = tabs.contains(where: { $0.id == "wi_dom" })
         guard hasDOMTab else {
             return tabs

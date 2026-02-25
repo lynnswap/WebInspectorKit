@@ -82,7 +82,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
         let stableIDs: [ItemStableID]
     }
 
-    private let inspector: WINetworkPaneViewModel
+    private let inspector: WINetworkTabViewModel
 
     private var sections: [DetailSection] = []
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
@@ -100,7 +100,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     private lazy var dataSource = makeDataSource()
     private var entry: NetworkEntry?
 
-    init(inspector: WINetworkPaneViewModel) {
+    init(inspector: WINetworkTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }

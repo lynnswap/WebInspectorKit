@@ -33,7 +33,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
     }
 
     private let entry: NetworkEntry
-    private let inspector: WINetworkPaneViewModel
+    private let inspector: WINetworkTabViewModel
     private let bodyState: NetworkBody
 
     private var mode: NetworkBodyPreviewRenderModel.Mode = .text
@@ -68,7 +68,7 @@ final class NetworkBodyPreviewViewController: UIViewController, UICollectionView
         return view
     }()
 
-    init(entry: NetworkEntry, inspector: WINetworkPaneViewModel, bodyState: NetworkBody) {
+    init(entry: NetworkEntry, inspector: WINetworkTabViewModel, bodyState: NetworkBody) {
         self.entry = entry
         self.inspector = inspector
         self.bodyState = bodyState

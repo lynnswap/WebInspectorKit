@@ -5,7 +5,7 @@ import WebInspectorKitCore
 
 @MainActor
 @Observable
-public final class WINetworkPaneViewModel {
+public final class WINetworkTabViewModel {
     let session: NetworkSession
 
     public var selectedEntry: NetworkEntry?

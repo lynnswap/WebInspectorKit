@@ -9,12 +9,12 @@ import UIKit
 import AppKit
 #endif
 
-private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMPaneViewModel")
+private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMTabViewModel")
 private let domDeleteUndoHistoryLimit = 128
 
 @MainActor
 @Observable
-public final class WIDOMPaneViewModel {
+public final class WIDOMTabViewModel {
     public let session: DOMSession
     public let selection: DOMSelection
     let frontendStore: DOMFrontendStore
@@ -166,7 +166,7 @@ public final class WIDOMPaneViewModel {
     }
 }
 
-private extension WIDOMPaneViewModel {
+private extension WIDOMTabViewModel {
     func startSelectionMode() {
         guard session.hasPageWebView else { return }
 #if canImport(UIKit)

@@ -5,32 +5,32 @@ import WebInspectorKitCore
 @MainActor
 @Observable
 public final class WISessionController {
-    public var selectedTabID: WIPaneDescriptor.ID? {
+    public var selectedTabID: WITabDescriptor.ID? {
         didSet {
             if suppressTabActivation {
                 return
             }
             applyTabActivation(for: selectedTabID)
             onSelectedTabIDChange?(selectedTabID)
-            dispatchRuntime(.selectPane(selectedTabID))
+            dispatchRuntime(.selectTab(selectedTabID))
         }
     }
 
-    public let dom: WIDOMPaneViewModel
-    public let network: WINetworkPaneViewModel
+    public let dom: WIDOMTabViewModel
+    public let network: WINetworkTabViewModel
     public let runtime: WIRuntimeActor
     public let store: WISessionStore
 
     private let pageBridge: WIWeakPageRuntimeBridge
 
-    private var tabs: [WIPaneDescriptor] = []
-    private var activationByTabID: [WIPaneDescriptor.ID: WIPaneDescriptor.Activation] = [:]
-    private var configuredRequirements: WIPaneDescriptor.FeatureRequirements?
+    private var tabs: [WITabDescriptor] = []
+    private var activationByTabID: [WITabDescriptor.ID: WITabDescriptor.Activation] = [:]
+    private var configuredRequirements: WITabDescriptor.FeatureRequirements?
     private var suppressTabActivation = false
     private weak var connectedPageWebView: WKWebView?
 
     // Observed by native container to keep selected tab synchronized.
-    var onSelectedTabIDChange: ((WIPaneDescriptor.ID?) -> Void)?
+    var onSelectedTabIDChange: ((WITabDescriptor.ID?) -> Void)?
 
     public init(configuration: WIConfiguration = .init()) {
         let domSession = DOMSession(configuration: configuration.dom)
@@ -43,12 +43,12 @@ public final class WISessionController {
         self.pageBridge = WIWeakPageRuntimeBridge()
         self.runtime = runtimeActor
 
-        self.dom = WIDOMPaneViewModel(session: domSession) { [runtimeActor] message in
+        self.dom = WIDOMTabViewModel(session: domSession) { [runtimeActor] message in
             Task {
                 await runtimeActor.dispatch(.recoverableError(message))
             }
         }
-        self.network = WINetworkPaneViewModel(session: networkSession)
+        self.network = WINetworkTabViewModel(session: networkSession)
         self.store = WISessionStore()
 
         Task { [runtimeActor, store] in
@@ -113,23 +113,23 @@ public final class WISessionController {
         dispatchRuntime(.refreshState)
     }
 
-    internal func synchronizeSelectedTabFromNativeUI(_ tabID: WIPaneDescriptor.ID?) {
+    internal func synchronizeSelectedTabFromNativeUI(_ tabID: WITabDescriptor.ID?) {
         guard connectedPageWebView != nil else {
             return
         }
         selectedTabID = tabID
     }
 
-    internal func configureTabs(_ tabs: [WIPaneDescriptor]) {
+    internal func configureTabs(_ tabs: [WITabDescriptor]) {
         let previousRequirements = configuredRequirements
         self.tabs = tabs
-        configuredRequirements = tabs.reduce(into: WIPaneDescriptor.FeatureRequirements()) { partialResult, tab in
+        configuredRequirements = tabs.reduce(into: WITabDescriptor.FeatureRequirements()) { partialResult, tab in
             partialResult.formUnion(tab.requires)
         }
 
 #if DEBUG
-        var seenIDs = Set<WIPaneDescriptor.ID>()
-        var duplicateIDs = Set<WIPaneDescriptor.ID>()
+        var seenIDs = Set<WITabDescriptor.ID>()
+        var duplicateIDs = Set<WITabDescriptor.ID>()
         for tab in tabs {
             if seenIDs.insert(tab.id).inserted == false {
                 duplicateIDs.insert(tab.id)
@@ -159,14 +159,14 @@ public final class WISessionController {
             applyRequirementTransition(from: previous, to: current, using: webView)
         }
 
-        dispatchRuntime(.configurePanes(tabs.map(\.runtimeDescriptor)))
-        dispatchRuntime(.selectPane(selectedTabID))
+        dispatchRuntime(.configureTabs(tabs.map(\.runtimeDescriptor)))
+        dispatchRuntime(.selectTab(selectedTabID))
         dispatchRuntime(.refreshState)
 
         onSelectedTabIDChange?(selectedTabID)
     }
 
-    internal func applyTabActivation(_ tab: WIPaneDescriptor?) {
+    internal func applyTabActivation(_ tab: WITabDescriptor?) {
         let activation = resolvedActivation(for: tab)
         let requirements = effectiveRequirements
 
@@ -187,14 +187,14 @@ private extension WISessionController {
         }
     }
 
-    func resolvedActivationForTabID(_ tabID: WIPaneDescriptor.ID?) -> WIPaneDescriptor.Activation {
+    func resolvedActivationForTabID(_ tabID: WITabDescriptor.ID?) -> WITabDescriptor.Activation {
         guard let tabID else {
             return resolvedActivation(for: nil)
         }
         return resolvedActivation(for: tabs.first(where: { $0.id == tabID }))
     }
 
-    func resolvedActivation(for tab: WIPaneDescriptor?) -> WIPaneDescriptor.Activation {
+    func resolvedActivation(for tab: WITabDescriptor?) -> WITabDescriptor.Activation {
         if let tab, let tabActivation = activationByTabID[tab.id] {
             return tabActivation
         }
@@ -204,11 +204,11 @@ private extension WISessionController {
         return .init()
     }
 
-    var effectiveRequirements: WIPaneDescriptor.FeatureRequirements {
+    var effectiveRequirements: WITabDescriptor.FeatureRequirements {
         configuredRequirements ?? [.dom, .network]
     }
 
-    func applyTabActivation(for tabID: WIPaneDescriptor.ID?) {
+    func applyTabActivation(for tabID: WITabDescriptor.ID?) {
         guard let tabID else {
             applyTabActivation(nil)
             return
@@ -217,8 +217,8 @@ private extension WISessionController {
     }
 
     func applyRequirementTransition(
-        from previous: WIPaneDescriptor.FeatureRequirements,
-        to current: WIPaneDescriptor.FeatureRequirements,
+        from previous: WITabDescriptor.FeatureRequirements,
+        to current: WITabDescriptor.FeatureRequirements,
         using webView: WKWebView
     ) {
         let hadDOM = previous.contains(.dom)

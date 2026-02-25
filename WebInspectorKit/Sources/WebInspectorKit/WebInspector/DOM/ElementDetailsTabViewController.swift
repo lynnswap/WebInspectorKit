@@ -16,7 +16,7 @@ private struct ElementDetailsObservedState: Sendable, Equatable {
 }
 
 @MainActor
-private func elementDetailsObservedState(from inspector: WIDOMPaneViewModel) -> ElementDetailsObservedState {
+private func elementDetailsObservedState(from inspector: WIDOMTabViewModel) -> ElementDetailsObservedState {
     let selection = inspector.selection
     var matchedStylesHasher = Hasher()
     matchedStylesHasher.combine(selection.matchedStyles.count)
@@ -173,7 +173,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         let stableIDs: [ItemStableID]
     }
 
-    private let inspector: WIDOMPaneViewModel
+    private let inspector: WIDOMTabViewModel
     private var observationTask: Task<Void, Never>?
     private var sections: [DetailSection] = []
     private var editingAttributeKey: ElementAttributeEditingKey?
@@ -197,7 +197,7 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         )
     }()
 
-    init(inspector: WIDOMPaneViewModel) {
+    init(inspector: WIDOMTabViewModel) {
         self.inspector = inspector
         super.init(collectionViewLayout: UICollectionViewLayout())
     }
@@ -1226,10 +1226,10 @@ import SwiftUI
 
 @MainActor
 final class ElementDetailsTabViewController: NSViewController {
-    private let inspector: WIDOMPaneViewModel
+    private let inspector: WIDOMTabViewModel
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
 
-    init(inspector: WIDOMPaneViewModel) {
+    init(inspector: WIDOMTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -1275,7 +1275,7 @@ private struct ElementDetailsMacRootView: View {
         }
     }
 
-    @Bindable var inspector: WIDOMPaneViewModel
+    @Bindable var inspector: WIDOMTabViewModel
     @State private var attributeEditorState: AttributeEditorState?
     @State private var attributeEditorDraft = ""
 

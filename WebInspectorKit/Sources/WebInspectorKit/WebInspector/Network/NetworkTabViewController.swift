@@ -15,13 +15,13 @@ private struct DiffableRenderState<ID: DiffableStableID, Payload> {
 
 @MainActor
 final class NetworkTabViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WINetworkPaneViewModel
+    private let inspector: WINetworkTabViewModel
     private var observationTask: Task<Void, Never>?
 
     private let listViewController: NetworkListViewController
     private let detailViewController: NetworkDetailViewController
 
-    init(inspector: WINetworkPaneViewModel) {
+    init(inspector: WINetworkTabViewModel) {
         self.inspector = inspector
         self.listViewController = NetworkListViewController(inspector: inspector)
         self.detailViewController = NetworkDetailViewController(inspector: inspector)
@@ -170,7 +170,7 @@ fileprivate struct ItemPayload {
         let statusSeverity: NetworkStatusSeverity
     }
 
-    private let inspector: WINetworkPaneViewModel
+    private let inspector: WINetworkTabViewModel
     private var observationTask: Task<Void, Never>?
 
     private var displayedEntries: [NetworkEntry] = []
@@ -193,7 +193,7 @@ fileprivate struct ItemPayload {
     private lazy var dataSource = makeDataSource()
     var onSelectEntry: ((NetworkEntry?) -> Void)?
 
-    init(inspector: WINetworkPaneViewModel) {
+    init(inspector: WINetworkTabViewModel) {
         self.inspector = inspector
         super.init(collectionViewLayout: Self.makeListLayout())
     }
@@ -746,12 +746,12 @@ import SwiftUI
 
 @MainActor
 final class NetworkTabViewController: NSSplitViewController {
-    private let inspector: WINetworkPaneViewModel
+    private let inspector: WINetworkTabViewModel
     private var observationTask: Task<Void, Never>?
-    private var listHostingController: NSHostingController<NetworkMacListPane>?
+    private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
-    init(inspector: WINetworkPaneViewModel) {
+    init(inspector: WINetworkTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -769,7 +769,7 @@ final class NetworkTabViewController: NSSplitViewController {
         super.viewDidLoad()
         inspector.selectedEntry = nil
 
-        let listHost = NSHostingController(rootView: NetworkMacListPane(inspector: inspector))
+        let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector))
         let detailController = NetworkMacDetailViewController(inspector: inspector)
         listHostingController = listHost
         detailViewController = detailController
@@ -841,11 +841,11 @@ final class NetworkTabViewController: NSSplitViewController {
 
 @MainActor
 private final class NetworkMacDetailViewController: NSViewController {
-    private let inspector: WINetworkPaneViewModel
-    private var hostingController: NSHostingController<NetworkMacDetailPane>?
+    private let inspector: WINetworkTabViewModel
+    private var hostingController: NSHostingController<NetworkMacDetailTab>?
     private var fetchTask: Task<Void, Never>?
 
-    init(inspector: WINetworkPaneViewModel) {
+    init(inspector: WINetworkTabViewModel) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -866,7 +866,7 @@ private final class NetworkMacDetailViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let hostingController = NSHostingController(rootView: NetworkMacDetailPane(inspector: inspector))
+        let hostingController = NSHostingController(rootView: NetworkMacDetailTab(inspector: inspector))
         self.hostingController = hostingController
         addChild(hostingController)
         let hostedView = hostingController.view
@@ -934,8 +934,8 @@ private final class NetworkMacDetailViewController: NSViewController {
 }
 
 @MainActor
-private struct NetworkMacListPane: View {
-    @Bindable var inspector: WINetworkPaneViewModel
+private struct NetworkMacListTab: View {
+    @Bindable var inspector: WINetworkTabViewModel
 
     var body: some View {
         Group {
@@ -1031,8 +1031,8 @@ private struct NetworkMacListPane: View {
 }
 
 @MainActor
-private struct NetworkMacDetailPane: View {
-    @Bindable var inspector: WINetworkPaneViewModel
+private struct NetworkMacDetailTab: View {
+    @Bindable var inspector: WINetworkTabViewModel
 
     private var entry: NetworkEntry? {
         inspector.selectedEntry

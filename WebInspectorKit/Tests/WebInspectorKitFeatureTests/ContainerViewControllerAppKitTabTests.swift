@@ -242,8 +242,8 @@ struct ContainerViewControllerAppKitTabTests {
         }
     }
 
-    private func makeDescriptor(id: String, title: String) -> WIPaneDescriptor {
-        WIPaneDescriptor(
+    private func makeDescriptor(id: String, title: String) -> WITabDescriptor {
+        WITabDescriptor(
             id: id,
             title: title,
             systemImage: "circle"

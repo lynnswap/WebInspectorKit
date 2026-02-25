@@ -7,14 +7,14 @@ public typealias WIPlatformViewController = NSViewController
 #endif
 import WebInspectorKitCore
 
-public struct WIPaneContext {
+public struct WITabContext {
     public let controller: WISessionController
 
-    public var domInspector: WIDOMPaneViewModel {
+    public var domInspector: WIDOMTabViewModel {
         controller.dom
     }
 
-    public var networkInspector: WINetworkPaneViewModel {
+    public var networkInspector: WINetworkTabViewModel {
         controller.network
     }
 
@@ -23,7 +23,7 @@ public struct WIPaneContext {
     }
 }
 
-public struct WIPaneDescriptor: Identifiable, Hashable {
+public struct WITabDescriptor: Identifiable, Hashable {
     public typealias ID = String
 
     public enum Role: Hashable, Sendable {
@@ -59,7 +59,7 @@ public struct WIPaneDescriptor: Identifiable, Hashable {
     public let requires: FeatureRequirements
     public let activation: Activation
 
-    private let makeViewControllerImpl: @MainActor (WIPaneContext) -> WIPlatformViewController
+    private let makeViewControllerImpl: @MainActor (WITabContext) -> WIPlatformViewController
 
     @MainActor
     public init(
@@ -69,7 +69,7 @@ public struct WIPaneDescriptor: Identifiable, Hashable {
         role: Role = .other,
         requires: FeatureRequirements = [],
         activation: Activation = .init(),
-        makeViewController: @escaping @MainActor (WIPaneContext) -> WIPlatformViewController
+        makeViewController: @escaping @MainActor (WITabContext) -> WIPlatformViewController
     ) {
         self.id = id
         self.title = title
@@ -81,11 +81,11 @@ public struct WIPaneDescriptor: Identifiable, Hashable {
     }
 
     @MainActor
-    public func makeViewController(context: WIPaneContext) -> WIPlatformViewController {
+    public func makeViewController(context: WITabContext) -> WIPlatformViewController {
         makeViewControllerImpl(context)
     }
 
-    public static func == (lhs: WIPaneDescriptor, rhs: WIPaneDescriptor) -> Bool {
+    public static func == (lhs: WITabDescriptor, rhs: WITabDescriptor) -> Bool {
         lhs.id == rhs.id
     }
 
@@ -94,7 +94,7 @@ public struct WIPaneDescriptor: Identifiable, Hashable {
     }
 }
 
-extension WIPaneDescriptor.FeatureRequirements {
+extension WITabDescriptor.FeatureRequirements {
     var runtimeFeatures: WIRequiredFeatures {
         var result: WIRequiredFeatures = []
         if contains(.dom) {
@@ -107,15 +107,15 @@ extension WIPaneDescriptor.FeatureRequirements {
     }
 }
 
-extension WIPaneDescriptor.Activation {
-    var runtimeActivation: WIPaneActivation {
-        WIPaneActivation(domLiveUpdates: domLiveUpdates, networkLiveLogging: networkLiveLogging)
+extension WITabDescriptor.Activation {
+    var runtimeActivation: WITabActivation {
+        WITabActivation(domLiveUpdates: domLiveUpdates, networkLiveLogging: networkLiveLogging)
     }
 }
 
-extension WIPaneDescriptor {
-    var runtimeDescriptor: WIPaneRuntimeDescriptor {
-        WIPaneRuntimeDescriptor(
+extension WITabDescriptor {
+    var runtimeDescriptor: WITabRuntimeDescriptor {
+        WITabRuntimeDescriptor(
             id: id,
             requires: requires.runtimeFeatures,
             activation: activation.runtimeActivation

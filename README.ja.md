@@ -8,7 +8,7 @@
 
 ## 製品
 
-- `WebInspectorKit`: コンテナ UI、ペイン記述子、Observation ベースの状態管理
+- `WebInspectorKit`: コンテナ UI、タブ記述子、Observation ベースの状態管理
 - `WebInspectorKitCore`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
 `WebInspectorKit` は `WebInspectorKitCore` に依存します。
@@ -17,7 +17,7 @@
 
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
-- `WIPaneDescriptor` によるペイン構成のカスタマイズ
+- `WITabDescriptor` によるタブ構成のカスタマイズ
 - `WISessionController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
 
 ## 要件
@@ -82,11 +82,11 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## カスタムペイン
+## カスタムタブ
 
 ```swift
-let customPane = WIPaneDescriptor(
-    id: "my_custom_pane",
+let customTab = WITabDescriptor(
+    id: "my_custom_tab",
     title: "Custom",
     systemImage: "folder",
     role: .other
@@ -101,7 +101,7 @@ let customPane = WIPaneDescriptor(
 let container = WIContainerViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customPane]
+    tabs: [.dom(), .element(), .network(), customTab]
 )
 ```
 
