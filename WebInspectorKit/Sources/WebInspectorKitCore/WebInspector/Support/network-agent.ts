@@ -10,22 +10,21 @@ import {
 if (!(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed)) {
     const bootstrapTokenKey = "__wiNetworkControlToken";
     const bootstrapPageHookModeKey = "__wiNetworkPageHookMode";
-    const bootstrapToken = (() => {
-        const bag = window as Window & Record<string, unknown>;
-        const value = bag[bootstrapTokenKey];
+    const consumeBootstrapWindowValue = (key: string): unknown => {
+        const bag = window as unknown as Record<string, unknown>;
+        const value = bag[key];
         try {
-            delete bag[bootstrapTokenKey];
+            delete bag[key];
         } catch {
         }
+        return value;
+    };
+    const bootstrapToken = (() => {
+        const value = consumeBootstrapWindowValue(bootstrapTokenKey);
         return typeof value === "string" ? value : "";
     })();
     const bootstrapPageHookMode = (() => {
-        const bag = window as Window & Record<string, unknown>;
-        const value = bag[bootstrapPageHookModeKey];
-        try {
-            delete bag[bootstrapPageHookModeKey];
-        } catch {
-        }
+        const value = consumeBootstrapWindowValue(bootstrapPageHookModeKey);
         return value === "disabled" ? "disabled" : "enabled";
     })();
 
