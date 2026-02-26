@@ -6,8 +6,6 @@ import WebInspectorEngine
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
 #endif
 
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMModel")
@@ -71,11 +69,9 @@ public final class WIDOMModel {
         frontendStore.pendingMutationBundleCount
     }
 
-#if canImport(AppKit)
-    package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        frontendStore.setDOMContextMenuProvider(provider)
+    func withFrontendStore(_ body: (DOMFrontendStore) -> Void) {
+        body(frontendStore)
     }
-#endif
 
     func attach(to webView: WKWebView) {
         resetInteractionState()
@@ -358,13 +354,7 @@ private extension WIDOMModel {
     }
 
     func copyToPasteboard(_ text: String) {
-#if canImport(UIKit)
-        UIPasteboard.general.string = text
-#elseif canImport(AppKit)
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-#endif
+        copyToSystemPasteboard(text)
     }
 
     func registerUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
@@ -445,6 +435,10 @@ private extension WIDOMModel {
     }
 
 #if canImport(UIKit)
+    func copyToSystemPasteboard(_ text: String) {
+        UIPasteboard.general.string = text
+    }
+
     func disablePageScrollingForSelection() {
         guard let scrollView = session.pageWebView?.scrollView else { return }
         if scrollBackup == nil {

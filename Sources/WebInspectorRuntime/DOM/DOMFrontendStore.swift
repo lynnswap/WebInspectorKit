@@ -3,9 +3,6 @@ import OSLog
 import WebInspectorEngine
 import WebInspectorBridge
 import WebKit
-#if canImport(AppKit)
-import AppKit
-#endif
 
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "DOMFrontendStore")
 
@@ -104,12 +101,6 @@ final class DOMFrontendStore: NSObject {
         self.configuration = configuration
         mutationPipeline.updateConfiguration(configuration)
     }
-
-#if canImport(AppKit)
-    func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        webView?.domContextMenuProvider = provider
-    }
-#endif
 
     private func applyConfigurationToInspector() async {
         guard let webView else { return }

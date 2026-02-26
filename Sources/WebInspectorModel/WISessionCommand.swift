@@ -1,12 +1,6 @@
 import Foundation
 import WebInspectorEngine
 
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
-import AppKit
-#endif
-
 public struct WISessionFeatureRequirements: OptionSet, Hashable, Sendable {
     public let rawValue: Int
 

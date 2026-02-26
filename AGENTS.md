@@ -26,7 +26,7 @@ Run from repository root:
 - Follow Swift API Design Guidelines:
   - Types: `UpperCamelCase`
   - Properties/functions: `lowerCamelCase`
-- Keep platform-specific files explicit using suffixes like `+iOS.swift` and `+macOS.swift`.
+- Keep platform-specific files explicit with `+UIKit.swift` (UIKit family) and `+AppKit.swift` (native macOS only). Do not introduce `+Shared.swift`; extract shared logic into module-local support/coordinator types.
 - Prefer small, focused types over large view/controller files.
 
 ## Testing Guidelines
