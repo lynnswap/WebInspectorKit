@@ -43,18 +43,28 @@ final class BrowserViewController: UIViewController {
         let container = WIContainerViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         container.modalPresentationStyle = .pageSheet
         if let sheet = container.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
-            sheet.prefersGrabberVisible = true
         }
         present(container, animated: true)
     }
 }
 ```
+
+On iOS, `WIContainerViewController` defaults to `DOM + Network`.
+
+- `compact` (`horizontalSizeClass == .compact`): `DOM`, `Element` (auto inserted when missing), `Network`
+- `regular/unspecified` (`horizontalSizeClass != .compact`): `DOM` (split DOM + Element), `Network`
+- In `regular/unspecified`, `wi_element` is always merged into `wi_dom` and never shown as a standalone tab.
+- `UISplitViewController` is used only in `regular/unspecified` (`DOM`, `Network`). `compact` keeps single-column tab flows.
+- `compact`: hosted by `UITabBarController`; each tab root is wrapped in `UINavigationController`.
+- `regular/unspecified`: hosted by `UINavigationController` with a centered segmented tab switcher.
+- Network search/filter use standard UIKit navigation APIs (`UISearchController`, `UIBarButtonItem` menu).
+- `WIContainerViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
 
 ### AppKit
 
@@ -71,7 +81,7 @@ final class BrowserWindowController: NSWindowController {
         let container = WIContainerViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         let inspectorWindow = NSWindow(contentViewController: container)
         inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -101,7 +111,7 @@ let customTab = WITabDescriptor(
 let container = WIContainerViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customTab]
+    tabs: [.dom(), .network(), customTab]
 )
 ```
 

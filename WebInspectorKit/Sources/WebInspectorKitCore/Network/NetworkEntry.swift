@@ -6,7 +6,7 @@ public class NetworkEntry: Identifiable, Equatable, Hashable {
     public static nonisolated func == (lhs: NetworkEntry, rhs: NetworkEntry) -> Bool { lhs.id == rhs.id }
     public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
-    public enum Phase: String {
+    public enum Phase: String,Sendable {
         case pending
         case completed
         case failed

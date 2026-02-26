@@ -1,58 +1,6 @@
 import WebInspectorKitCore
 import ObservationsCompat
 
-@MainActor
-private struct ElementDetailsObservedState: Sendable, Equatable {
-    let nodeID: Int?
-    let preview: String
-    let selectorPath: String
-    let matchedStylesRevision: Int
-    let attributesRevision: Int
-    let isLoadingMatchedStyles: Bool
-    let matchedStylesTruncated: Bool
-    let blockedStylesheetCount: Int
-    let hasPageWebView: Bool
-    let isSelectingElement: Bool
-}
-
-@MainActor
-private func elementDetailsObservedState(from inspector: WIDOMTabViewModel) -> ElementDetailsObservedState {
-    let selection = inspector.selection
-    var matchedStylesHasher = Hasher()
-    matchedStylesHasher.combine(selection.matchedStyles.count)
-    for style in selection.matchedStyles {
-        matchedStylesHasher.combine(style.selectorText)
-        matchedStylesHasher.combine(style.sourceLabel)
-        matchedStylesHasher.combine(style.declarations.count)
-        for declaration in style.declarations {
-            matchedStylesHasher.combine(declaration.name)
-            matchedStylesHasher.combine(declaration.value)
-            matchedStylesHasher.combine(declaration.important)
-        }
-    }
-
-    var attributesHasher = Hasher()
-    attributesHasher.combine(selection.attributes.count)
-    for attribute in selection.attributes {
-        attributesHasher.combine(attribute.nodeId)
-        attributesHasher.combine(attribute.name)
-        attributesHasher.combine(attribute.value)
-    }
-
-    return ElementDetailsObservedState(
-        nodeID: selection.nodeId,
-        preview: selection.preview,
-        selectorPath: selection.selectorPath,
-        matchedStylesRevision: matchedStylesHasher.finalize(),
-        attributesRevision: attributesHasher.finalize(),
-        isLoadingMatchedStyles: selection.isLoadingMatchedStyles,
-        matchedStylesTruncated: selection.matchedStylesTruncated,
-        blockedStylesheetCount: selection.blockedStylesheetCount,
-        hasPageWebView: inspector.hasPageWebView,
-        isSelectingElement: inspector.isSelectingElement
-    )
-}
-
 #if canImport(UIKit)
 import UIKit
 import SwiftUI
@@ -174,7 +122,10 @@ final class ElementDetailsTabViewController: UICollectionViewController {
     }
 
     private let inspector: WIDOMTabViewModel
-    private var observationTask: Task<Void, Never>?
+    private let showsNavigationControls: Bool
+    private var hasStartedObservingState = false
+    private let navigationUpdateCoalescer = UIUpdateCoalescer()
+    private let contentUpdateCoalescer = UIUpdateCoalescer()
     private var sections: [DetailSection] = []
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var editingDraftValue: String?
@@ -197,8 +148,9 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         )
     }()
 
-    init(inspector: WIDOMTabViewModel) {
+    init(inspector: WIDOMTabViewModel, showsNavigationControls: Bool = true) {
         self.inspector = inspector
+        self.showsNavigationControls = showsNavigationControls
         super.init(collectionViewLayout: UICollectionViewLayout())
     }
 
@@ -209,7 +161,6 @@ final class ElementDetailsTabViewController: UICollectionViewController {
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
-        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -220,12 +171,14 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         setupNavigationItems()
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.refreshUI()
+            self.scheduleNavigationControlsUpdate()
+            self.scheduleContentUpdate()
         }
 
         startObservingStateIfNeeded()
 
-        refreshUI()
+        updateNavigationControls()
+        updateContent()
     }
 
     private var pickSymbolName: String {
@@ -243,24 +196,89 @@ final class ElementDetailsTabViewController: UICollectionViewController {
     }
 
     private func setupNavigationItems() {
+        guard showsNavigationControls else {
+            navigationItem.rightBarButtonItems = nil
+            return
+        }
         navigationItem.rightBarButtonItems = [pickItem]
     }
 
     private func startObservingStateIfNeeded() {
-        guard observationTask == nil else {
+        guard hasStartedObservingState == false else {
             return
         }
-        let inspector = self.inspector
-        observationTask = Task { @MainActor [weak self] in
-            let stream = ObservationsCompat {
-                elementDetailsObservedState(from: inspector)
-            }
-            for await _ in stream {
-                guard !Task.isCancelled else {
-                    break
-                }
-                self?.refreshUI()
-            }
+        hasStartedObservingState = true
+
+        inspector.observe(
+            \.hasPageWebView,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        inspector.observe(
+            \.isSelectingElement,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        inspector.selection.observe(
+            \.nodeId,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.preview,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.selectorPath,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.attributes,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.matchedStyles,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.isLoadingMatchedStyles,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.matchedStylesTruncated,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
+        }
+        inspector.selection.observe(
+            \.blockedStylesheetCount,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleContentUpdate()
         }
     }
 
@@ -292,19 +310,37 @@ final class ElementDetailsTabViewController: UICollectionViewController {
         )
     }
 
-    private func refreshUI() {
+    private func scheduleNavigationControlsUpdate() {
+        navigationUpdateCoalescer.schedule { [weak self] in
+            self?.updateNavigationControls()
+        }
+    }
+
+    private func scheduleContentUpdate() {
+        contentUpdateCoalescer.schedule { [weak self] in
+            self?.updateContent()
+        }
+    }
+
+    private func updateNavigationControls() {
+        if showsNavigationControls {
+            navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+                completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+            }
+            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.image = UIImage(systemName: pickSymbolName)
+            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+        } else {
+            navigationItem.additionalOverflowItems = nil
+        }
+    }
+
+    private func updateContent() {
         let currentSelectionNodeID = inspector.selection.nodeId
         if currentSelectionNodeID != lastSelectionNodeID {
             clearInlineEditingState()
             lastSelectionNodeID = currentSelectionNodeID
         }
-
-        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
-        }
-        pickItem.isEnabled = inspector.hasPageWebView
-        pickItem.image = UIImage(systemName: pickSymbolName)
-        pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
 
         if inspector.selection.nodeId == nil {
             var configuration = UIContentUnavailableConfiguration.empty()

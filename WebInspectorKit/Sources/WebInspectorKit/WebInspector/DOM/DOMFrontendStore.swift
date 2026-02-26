@@ -16,16 +16,10 @@ final class DOMFrontendStore: NSObject {
         case domSelector = "webInspectorDomSelector"
     }
 
-    private struct PendingBundle {
-        let bundle: Any
-        let preserveState: Bool
-    }
-
     let session: DOMSession
     private(set) var webView: InspectorWebView?
     private var isReady = false
-    private var pendingBundles: [PendingBundle] = []
-    private var pendingBundleFlushTask: Task<Void, Never>?
+    private let mutationPipeline: DOMMutationPipeline
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
     private var configuration: DOMConfiguration
@@ -33,12 +27,16 @@ final class DOMFrontendStore: NSObject {
     private var matchedStylesRequestToken = 0
     private let protocolRouter: DOMProtocolRouter
     private let bridgeRuntime = WISPIRuntime.shared
-    private var jsBufferSequence = 0
     var onRecoverableError: (@MainActor (String) -> Void)?
 
     init(session: DOMSession) {
         self.session = session
         configuration = session.configuration
+        mutationPipeline = DOMMutationPipeline(
+            session: session,
+            bridgeRuntime: bridgeRuntime,
+            configuration: session.configuration
+        )
         protocolRouter = DOMProtocolRouter(session: session)
         super.init()
         session.bundleSink = self
@@ -47,6 +45,7 @@ final class DOMFrontendStore: NSObject {
     func makeInspectorWebView() -> InspectorWebView {
         if let webView {
             attachInspectorWebView()
+            mutationPipeline.attachWebView(webView)
             return webView
         }
 
@@ -54,6 +53,7 @@ final class DOMFrontendStore: NSObject {
 
         webView = newWebView
         attachInspectorWebView()
+        mutationPipeline.attachWebView(newWebView)
         loadInspector(in: newWebView)
         return newWebView
     }
@@ -62,21 +62,20 @@ final class DOMFrontendStore: NSObject {
         guard let webView else { return }
         detachInspectorWebView(ifMatches: webView)
         resetInspectorState()
+        mutationPipeline.attachWebView(nil)
         self.webView = nil
     }
 
     func enqueueMutationBundle(_ bundle: Any, preserveState: Bool) {
-        let payload = PendingBundle(bundle: bundle, preserveState: preserveState)
-        applyMutationBundle(payload)
+        mutationPipeline.enqueueMutationBundle(bundle, preserveState: preserveState)
     }
 
     func clearPendingMutationBundles() {
-        pendingBundles.removeAll()
-        cancelPendingBundleFlush()
+        mutationPipeline.clearPendingMutationBundles()
     }
 
     var pendingMutationBundleCount: Int {
-        pendingBundles.count
+        mutationPipeline.pendingMutationBundleCount
     }
 
     func setPreferredDepth(_ depth: Int) {
@@ -99,6 +98,7 @@ final class DOMFrontendStore: NSObject {
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
         self.configuration = configuration
+        mutationPipeline.updateConfiguration(configuration)
     }
 
     private func applyConfigurationToInspector() async {
@@ -140,8 +140,7 @@ final class DOMFrontendStore: NSObject {
     private func resetInspectorState() {
         cancelMatchedStylesRequest()
         isReady = false
-        pendingBundles.removeAll()
-        cancelPendingBundleFlush()
+        mutationPipeline.reset()
         pendingPreferredDepth = nil
         pendingDocumentRequest = nil
     }
@@ -164,142 +163,16 @@ final class DOMFrontendStore: NSObject {
             return
         }
         isReady = false
+        mutationPipeline.setReady(false)
         webView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
     }
 
     isolated deinit {
         cancelMatchedStylesRequest()
-        cancelPendingBundleFlush()
+        mutationPipeline.reset()
         if let webView {
             detachMessageHandlers(from: webView)
         }
-    }
-
-    private func applyMutationBundle(_ payload: PendingBundle) {
-        pendingBundles.append(payload)
-        if isReady {
-            schedulePendingBundleFlush()
-        }
-    }
-
-    private func bundleFlushInterval() -> TimeInterval {
-        let baseInterval = configuration.autoUpdateDebounce / 4
-        return max(0.05, min(0.2, baseInterval))
-    }
-
-    private func schedulePendingBundleFlush() {
-        guard pendingBundleFlushTask == nil else { return }
-        let interval = bundleFlushInterval()
-        pendingBundleFlushTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            let delay = UInt64(interval * 1_000_000_000)
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: delay)
-            }
-            await self.flushPendingBundlesNow()
-        }
-    }
-
-    private func flushPendingBundlesNow() async {
-        pendingBundleFlushTask?.cancel()
-        pendingBundleFlushTask = nil
-        guard isReady else { return }
-        let bundles = pendingBundles
-        pendingBundles.removeAll()
-        if bundles.isEmpty {
-            return
-        }
-        await applyBundlesNow(bundles)
-    }
-
-    private func cancelPendingBundleFlush() {
-        pendingBundleFlushTask?.cancel()
-        pendingBundleFlushTask = nil
-    }
-
-    private func applyBundlesNow(_ bundles: [PendingBundle]) async {
-        guard let webView, !bundles.isEmpty else { return }
-
-        let payloads: [[String: Any]] = bundles.map {
-            [
-                "bundle": $0.bundle,
-                "preserveState": $0.preserveState,
-            ]
-        }
-
-        if await applyBundlesWithBufferIfNeeded(payloads, on: webView) {
-            return
-        }
-
-        do {
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.applyMutationBundles?.(bundles)",
-                arguments: ["bundles": payloads],
-                contentWorld: .page
-            )
-        } catch {
-            inspectorLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func applyBundlesWithBufferIfNeeded(
-        _ payloads: [[String: Any]],
-        on webView: InspectorWebView
-    ) async -> Bool {
-        guard session.bridgeMode == .privateFull else {
-            return false
-        }
-
-        guard
-            let data = try? JSONSerialization.data(withJSONObject: payloads),
-            data.count > WIJSBufferTransport.bufferThresholdBytes
-        else {
-            return false
-        }
-
-        let controller = webView.configuration.userContentController
-        guard WIJSBufferTransport.isAvailable(on: controller, runtime: bridgeRuntime) else {
-            return false
-        }
-
-        let bufferName = nextBufferName()
-        guard WIJSBufferTransport.addBuffer(
-            data: data,
-            name: bufferName,
-            to: controller,
-            contentWorld: .page,
-            runtime: bridgeRuntime
-        ) else {
-            return false
-        }
-
-        defer {
-            WIJSBufferTransport.removeBuffer(named: bufferName, from: controller, contentWorld: .page)
-        }
-
-        do {
-            let rawResult = try await webView.callAsyncJavaScript(
-                """
-                if (!window.webInspectorDOMFrontend || typeof window.webInspectorDOMFrontend.applyMutationBuffer !== "function") {
-                    return false;
-                }
-                return window.webInspectorDOMFrontend.applyMutationBuffer(bufferName);
-                """,
-                arguments: ["bufferName": bufferName],
-                in: nil,
-                contentWorld: .page
-            )
-            let didApply = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
-            return didApply
-        } catch {
-            inspectorLogger.error("send mutation buffer failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
-    }
-
-    private func nextBufferName() -> String {
-        jsBufferSequence += 1
-        return "wi_dom_bundle_\(jsBufferSequence)"
     }
 
     private func applyPreferredDepthNow(_ depth: Int) async {
@@ -362,6 +235,7 @@ extension DOMFrontendStore: WKScriptMessageHandler {
 private extension DOMFrontendStore {
     private func handleReadyMessage() {
         isReady = true
+        mutationPipeline.setReady(true)
         Task {
             await applyConfigurationToInspector()
             await flushPendingWork()
@@ -427,7 +301,7 @@ private extension DOMFrontendStore {
             await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
             pendingDocumentRequest = nil
         }
-        await flushPendingBundlesNow()
+        await mutationPipeline.flushPendingBundlesNow()
     }
 
     private func startMatchedStylesRequest(nodeId: Int) {
@@ -526,15 +400,16 @@ extension DOMFrontendStore: WKNavigationDelegate {
 #if DEBUG
 extension DOMFrontendStore {
     var testBundleFlushInterval: TimeInterval {
-        bundleFlushInterval()
+        mutationPipeline.currentBundleFlushInterval
     }
 
     var testHasPendingBundleFlushTask: Bool {
-        pendingBundleFlushTask != nil
+        mutationPipeline.hasPendingBundleFlushTask
     }
 
     func testSetReady(_ ready: Bool) {
         isReady = ready
+        mutationPipeline.setReady(ready)
     }
 
     var testMatchedStylesRequestToken: Int {

@@ -43,7 +43,7 @@ final class BrowserViewController: UIViewController {
         let container = WIContainerViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         container.modalPresentationStyle = .pageSheet
         if let sheet = container.sheetPresentationController {
@@ -55,6 +55,17 @@ final class BrowserViewController: UIViewController {
     }
 }
 ```
+
+`WIContainerViewController` は iOS ではデフォルト `DOM + Network` です。
+
+- `compact`（`horizontalSizeClass == .compact`）: `DOM` / `Element`（未指定時は自動追加）/ `Network`
+- `regular/unspecified`（`horizontalSizeClass != .compact`）: `DOM`（DOM + Element の split）/ `Network`
+- `regular/unspecified` では `wi_element` は常に `wi_dom` に統合され、独立タブとしては表示されません。
+- `UISplitViewController` は `regular/unspecified` のみで利用します（`DOM` / `Network`）。`compact` は単一カラムのタブ遷移です。
+- `compact` は `UITabBarController` ベースで、各タブ root は `UINavigationController` にラップされます。
+- `regular/unspecified` は `UINavigationController` ベースで、中央の segmented control でタブ切り替えします。
+- Network の検索/フィルタは UIKit 標準 API（`UISearchController` / `UIBarButtonItem` メニュー）を使用します。
+- `WIContainerViewController` は `UIViewController` 継承に変更されています（`UITabBarController` 継承ではありません）。
 
 ### AppKit
 
@@ -71,7 +82,7 @@ final class BrowserWindowController: NSWindowController {
         let container = WIContainerViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         let inspectorWindow = NSWindow(contentViewController: container)
         inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -101,7 +112,7 @@ let customTab = WITabDescriptor(
 let container = WIContainerViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customTab]
+    tabs: [.dom(), .network(), customTab]
 )
 ```
 

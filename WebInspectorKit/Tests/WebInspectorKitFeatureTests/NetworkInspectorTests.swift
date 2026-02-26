@@ -300,24 +300,63 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func networkListRenderModelTreatsSameStateAsEqual() {
-        let entryID = UUID()
-        let first = NetworkListRenderModel(
-            entries: [.init(id: entryID, revision: 1)],
-            selectedEntryIdentity: entryID,
-            searchText: "abc",
-            effectiveFilterRawValues: ["script"],
-            storeEntryCount: 1
-        )
-        let second = NetworkListRenderModel(
-            entries: [.init(id: entryID, revision: 1)],
-            selectedEntryIdentity: entryID,
-            searchText: "abc",
-            effectiveFilterRawValues: ["script"],
-            storeEntryCount: 1
-        )
+    func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
+        let inspector = WINetworkTabViewModel(session: NetworkSession())
+        var emittedValues: [String] = []
 
-        #expect(first == second)
+        let handle = inspector.observeTask(
+            \.searchText,
+            retention: .manual,
+            removeDuplicates: true
+        ) { value in
+            emittedValues.append(value)
+        }
+        defer {
+            handle.cancel()
+        }
+
+        let receivedInitial = await waitUntil { emittedValues.count >= 1 }
+        #expect(receivedInitial)
+
+        inspector.searchText = "dup-keyword"
+        let receivedUpdated = await waitUntil { emittedValues.count >= 2 }
+        #expect(receivedUpdated)
+
+        inspector.searchText = "dup-keyword"
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(emittedValues.count == 2)
+        #expect(emittedValues.last == "dup-keyword")
+    }
+
+    @Test
+    func observeSearchTextStopsEmittingAfterCancel() async {
+        let inspector = WINetworkTabViewModel(session: NetworkSession())
+        var callbackCount = 0
+
+        let handle = inspector.observeTask(
+            \.searchText,
+            retention: .manual,
+            removeDuplicates: true
+        ) { _ in
+            callbackCount += 1
+        }
+
+        let receivedInitial = await waitUntil { callbackCount >= 1 }
+        #expect(receivedInitial)
+
+        handle.cancel()
+        await Task.yield()
+        let countAfterCancel = callbackCount
+
+        inspector.searchText = "after-cancel"
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(callbackCount == countAfterCancel)
     }
 
     private func makeEntry() -> NetworkEntry {
@@ -358,5 +397,18 @@ struct NetworkInspectorTests {
         let data = try JSONSerialization.data(withJSONObject: payload)
         let decoded = try JSONDecoder().decode(NetworkEventPayload.self, from: data)
         return try #require(HTTPNetworkEvent(payload: decoded, sessionID: sessionID))
+    }
+
+    private func waitUntil(
+        maxTicks: Int = 512,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxTicks {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return condition()
     }
 }

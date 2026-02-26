@@ -83,6 +83,7 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     }
 
     private let inspector: WINetworkTabViewModel
+    private let showsNavigationControls: Bool
 
     private var sections: [DetailSection] = []
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
@@ -100,8 +101,9 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
     private lazy var dataSource = makeDataSource()
     private var entry: NetworkEntry?
 
-    init(inspector: WINetworkTabViewModel) {
+    init(inspector: WINetworkTabViewModel, showsNavigationControls: Bool = true) {
         self.inspector = inspector
+        self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -136,8 +138,12 @@ final class NetworkDetailViewController: UIViewController, UICollectionViewDeleg
 
     func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
         self.entry = entry
-        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+        if showsNavigationControls {
+            navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+                completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+            }
+        } else {
+            navigationItem.additionalOverflowItems = nil
         }
         guard let entry else {
             title = nil

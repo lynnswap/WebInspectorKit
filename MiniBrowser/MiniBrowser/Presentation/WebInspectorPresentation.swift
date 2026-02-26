@@ -14,7 +14,7 @@ func presentWebInspector(
     }
 
     if let existing = findPresentedContainer(from: presenter) {
-        existing.setTabs([.dom(), .element(), .network()])
+        existing.setTabs([.dom(), .network()])
         existing.setInspectorController(inspectorController)
         existing.setPageWebView(model.webView)
         return
@@ -23,7 +23,7 @@ func presentWebInspector(
     let container = WIContainerViewController(
         inspectorController,
         webView: model.webView,
-        tabs: [.dom(), .element(), .network()]
+        tabs: [.dom(), .network()]
     )
     container.modalPresentationStyle = .pageSheet
     applyDefaultDetents(to: container)
@@ -32,13 +32,13 @@ func presentWebInspector(
 
 @MainActor
 private func findPresentedContainer(from presenter: UIViewController) -> WIContainerViewController? {
-    if let direct = presenter.presentedViewController as? WIContainerViewController {
+    if let direct = presenter.presentedViewController.flatMap(inspectorContainer(in:)) {
         return direct
     }
 
     var cursor: UIViewController? = presenter
     while let current = cursor {
-        if let container = current as? WIContainerViewController {
+        if let container = inspectorContainer(in: current) {
             return container
         }
         cursor = current.presentedViewController
@@ -46,12 +46,38 @@ private func findPresentedContainer(from presenter: UIViewController) -> WIConta
 
     cursor = presenter
     while let current = cursor {
-        if let container = current as? WIContainerViewController {
+        if let container = inspectorContainer(in: current) {
             return container
         }
         cursor = current.presentingViewController
     }
 
+    return nil
+}
+
+@MainActor
+private func inspectorContainer(in viewController: UIViewController) -> WIContainerViewController? {
+    if let container = viewController as? WIContainerViewController {
+        return container
+    }
+    if let navigationController = viewController as? UINavigationController {
+        for child in navigationController.viewControllers {
+            if let container = inspectorContainer(in: child) {
+                return container
+            }
+        }
+    }
+    if let tabController = viewController as? UITabBarController,
+       let selected = tabController.selectedViewController {
+        return inspectorContainer(in: selected)
+    }
+    if let splitController = viewController as? UISplitViewController {
+        for child in splitController.viewControllers {
+            if let container = inspectorContainer(in: child) {
+                return container
+            }
+        }
+    }
     return nil
 }
 
@@ -78,7 +104,7 @@ private func applyDefaultDetents(to controller: UIViewController) {
     }
     sheet.detents = [.medium(), .large()]
     sheet.selectedDetentIdentifier = .medium
-    sheet.prefersGrabberVisible = true
+    sheet.prefersGrabberVisible = false
     sheet.prefersScrollingExpandsWhenScrolledToEdge = false
     sheet.largestUndimmedDetentIdentifier = .large
 }

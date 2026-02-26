@@ -21,10 +21,10 @@ extension WITabDescriptor {
             activation: .init(domLiveUpdates: true)
         ) { context in
             #if canImport(UIKit)
-            let root = DOMTreeTabViewController(inspector: context.domInspector)
-            let nc = UINavigationController(rootViewController: root)
-            wiApplyClearNavigationBarStyle(to: nc)
-            return nc
+            if context.horizontalSizeClass == .compact {
+                return DOMTreeTabViewController(inspector: context.domInspector)
+            }
+            return DOMInspectorTabViewController(inspector: context.domInspector)
             #elseif canImport(AppKit)
             return DOMInspectorTabViewController(inspector: context.domInspector)
             #endif
@@ -43,10 +43,7 @@ extension WITabDescriptor {
             role: .inspector,
             requires: [.dom]
         ) { context in
-            let root = ElementDetailsTabViewController(inspector: context.domInspector)
-            let nc = UINavigationController(rootViewController: root)
-            wiApplyClearNavigationBarStyle(to: nc)
-            return nc
+            ElementDetailsTabViewController(inspector: context.domInspector)
         }
     }
     #endif
@@ -64,7 +61,12 @@ extension WITabDescriptor {
             activation: .init(networkLiveLogging: true)
         ) { context in
             #if canImport(UIKit)
-            let vc = NetworkTabViewController(inspector: context.networkInspector)
+            let vc: UIViewController
+            if context.horizontalSizeClass == .compact {
+                vc = NetworkCompactTabViewController(inspector: context.networkInspector)
+            } else {
+                vc = NetworkTabViewController(inspector: context.networkInspector)
+            }
             vc.view.backgroundColor = .clear
             return vc
             #elseif canImport(AppKit)

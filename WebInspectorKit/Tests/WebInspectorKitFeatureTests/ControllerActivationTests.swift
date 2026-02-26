@@ -232,8 +232,8 @@ struct ControllerActivationTests {
 
         controller.connect(to: webView)
         controller.selectedTabID = "wi_network"
-        await waitForStoreState(
-            controller.store,
+        await waitForControllerState(
+            controller,
             lifecycle: .active,
             selectedTabID: "wi_network",
             hasAttachedPage: true,
@@ -241,8 +241,8 @@ struct ControllerActivationTests {
         )
 
         controller.connect(to: nil)
-        await waitForStoreState(
-            controller.store,
+        await waitForControllerState(
+            controller,
             lifecycle: .suspended,
             selectedTabID: "wi_network",
             hasAttachedPage: false,
@@ -250,8 +250,8 @@ struct ControllerActivationTests {
         )
 
         controller.connect(to: webView)
-        await waitForStoreState(
-            controller.store,
+        await waitForControllerState(
+            controller,
             lifecycle: .active,
             selectedTabID: "wi_network",
             hasAttachedPage: true,
@@ -285,25 +285,24 @@ struct ControllerActivationTests {
         }
     }
 
-    private func waitForStoreState(
-        _ store: WISessionStore,
+    private func waitForControllerState(
+        _ controller: WISessionController,
         lifecycle: WISessionLifecycle,
         selectedTabID: String?,
         hasAttachedPage: Bool,
         networkMode: NetworkLoggingMode
     ) async {
         for _ in 0..<80 {
-            let state = store.viewState
-            if state.lifecycle == lifecycle,
-               state.selectedTabID == selectedTabID,
-               state.dom.hasAttachedPage == hasAttachedPage,
-               state.network.hasAttachedPage == hasAttachedPage,
-               state.network.mode == networkMode {
+            if controller.lifecycle == lifecycle,
+               controller.selectedTabID == selectedTabID,
+               controller.dom.session.hasPageWebView == hasAttachedPage,
+               controller.network.session.hasAttachedPageWebView == hasAttachedPage,
+               controller.network.session.mode == networkMode {
                 return
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        Issue.record("Timed out waiting for synchronized store state")
+        Issue.record("Timed out waiting for synchronized controller state")
     }
 }

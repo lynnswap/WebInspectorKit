@@ -5,7 +5,7 @@ import WebInspectorKitCore
 
 @MainActor
 @Observable
-public final class WINetworkTabViewModel {
+public final class WINetworkTabViewModel: Sendable {
     let session: NetworkSession
 
     public var selectedEntry: NetworkEntry?

@@ -9,129 +9,197 @@ import UIKit
 @MainActor
 struct ContainerViewControllerUITabTests {
     @Test
-    func rebuildTabsBuildsUITabsFromDescriptors() {
-        let controller = WISessionController()
-        let descriptors = [
-            makeDescriptor(id: "tab_a", title: "A"),
-            makeDescriptor(id: "tab_b", title: "B"),
-            makeDescriptor(id: "tab_c", title: "C")
-        ]
-        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
+    func compactLayoutAutoInsertsElementTabWhenOnlyDOMAndNetworkRequested() {
+        let resolved = WIUIKitTabLayoutPolicy.resolveTabs(
+            from: [.dom(), .network()],
+            horizontalSizeClass: .compact
+        )
 
-        container.loadViewIfNeeded()
-
-        #expect(container.tabs.count == descriptors.count)
-        #expect(container.tabs.map(\.identifier) == ["tab_a", "tab_b", "tab_c"])
+        #expect(resolved.map(\.id) == ["wi_dom", "wi_element", "wi_network"])
     }
 
     @Test
-    func selectedTabMatchesControllerSelection() {
-        let controller = WISessionController()
-        controller.selectedTabID = "tab_b"
-        let descriptors = [
-            makeDescriptor(id: "tab_a", title: "A"),
-            makeDescriptor(id: "tab_b", title: "B")
-        ]
-        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
+    func regularLayoutRemovesElementTabEvenWhenExplicitlyRequested() {
+        let resolved = WIUIKitTabLayoutPolicy.resolveTabs(
+            from: [.dom(), .element(), .network()],
+            horizontalSizeClass: .regular
+        )
 
-        container.loadViewIfNeeded()
-
-        #expect(container.selectedTab?.identifier == "tab_b")
+        #expect(resolved.map(\.id) == ["wi_dom", "wi_network"])
     }
 
     @Test
-    func invalidSelectionFallsBackToCurrentSelectionAndNormalizesController() {
+    func unspecifiedLayoutAlsoRemovesElementTab() {
+        let resolved = WIUIKitTabLayoutPolicy.resolveTabs(
+            from: [.dom(), .element(), .network()],
+            horizontalSizeClass: .unspecified
+        )
+
+        #expect(resolved.map(\.id) == ["wi_dom", "wi_network"])
+    }
+
+    @Test
+    func regularLayoutRemovesElementWhenNoDOMTabExists() {
+        let resolved = WIUIKitTabLayoutPolicy.resolveTabs(
+            from: [.element()],
+            horizontalSizeClass: .regular
+        )
+
+        #expect(resolved.map(\.id).isEmpty)
+    }
+
+    @Test
+    func normalizedSelectedTabMovesElementSelectionToDOMWhenElementDisappears() {
+        let normalized = WIUIKitTabLayoutPolicy.normalizedSelectedTabID(
+            currentSelectedTabID: "wi_element",
+            resolvedTabs: [.dom(), .network()]
+        )
+
+        #expect(normalized == "wi_dom")
+    }
+
+    @Test
+    func containerUsesCompactHostWhenSizeClassIsCompact() {
         let controller = WISessionController()
-        let descriptors = [
-            makeDescriptor(id: "tab_a", title: "A"),
-            makeDescriptor(id: "tab_b", title: "B")
-        ]
         let container = WIContainerViewController(
             controller,
-            webView: makeTestWebView(),
-            tabs: descriptors
+            webView: nil,
+            tabs: [.dom(), .network()]
         )
 
         container.loadViewIfNeeded()
-        container.viewWillAppear(false)
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
 
-        guard
-            let first = container.tabs.first,
-            let second = container.tabs.last
-        else {
-            Issue.record("Expected two tabs")
-            return
-        }
-
-        container.selectedTab = second
-        container.tabBarController(container, didSelectTab: second, previousTab: first)
-        #expect(controller.selectedTabID == "tab_b")
-
-        controller.selectedTabID = "missing"
-        #expect(container.selectedTab?.identifier == "tab_b")
-        #expect(controller.selectedTabID == "tab_b")
+        #expect(container.activeHostKindForTesting == "compact")
+        #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "wi_network"])
     }
 
     @Test
-    func didSelectTabDelegateUpdatesControllerSelectionWhenConnected() {
+    func containerSwitchesHostWhenSizeClassChanges() {
         let controller = WISessionController()
-        let descriptors = [
-            makeDescriptor(id: "tab_a", title: "A"),
-            makeDescriptor(id: "tab_b", title: "B")
-        ]
         let container = WIContainerViewController(
             controller,
-            webView: makeTestWebView(),
-            tabs: descriptors
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+
+        configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .network()])
+
+        #expect(container.activeHostKindForTesting == "regular")
+        #expect(container.activeHostViewControllerForTesting is WIRegularTabHostViewController)
+        #expect(container.activeHostViewControllerForTesting is UINavigationController)
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+    }
+
+    @Test
+    func regularHostHidesElementTabEvenWhenExplicitlyRequested() {
+        let controller = WISessionController()
+        let custom = makeDescriptor(id: "custom", title: "Custom")
+        let container = WIContainerViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .element(), custom, .network()]
         )
 
         container.loadViewIfNeeded()
-        container.viewWillAppear(false)
+        configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .element(), custom, .network()])
 
-        guard
-            let first = container.tabs.first,
-            let second = container.tabs.last
-        else {
-            Issue.record("Expected two tabs")
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "custom", "wi_network"])
+
+        guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
+            Issue.record("Expected regular host")
             return
         }
 
-        container.tabBarController(container, didSelectTab: second, previousTab: first)
-
-        #expect(controller.selectedTabID == "tab_b")
+        #expect(regularHost.displayedTabIDsForTesting == ["wi_dom", "custom", "wi_network"])
     }
 
     @Test
-    func duplicateTabIDsCreateUniqueUITabIdentifiersAndKeepPrimarySelectionMapping() {
+    func regularHostNormalizesNilSelectionToFirstTabAndNotifiesController() {
+        let controller = WISessionController()
+        let host = WIRegularTabHostViewController()
+        var notifiedTabIDs: [WITabDescriptor.ID] = []
+        host.onSelectedTabIDChange = { tabID in
+            notifiedTabIDs.append(tabID)
+        }
+
+        host.loadViewIfNeeded()
+        host.setTabDescriptors(
+            [.dom(), .network()],
+            context: WITabContext(controller: controller, horizontalSizeClass: .regular)
+        )
+
+        host.setSelectedTabID("wi_network")
+        host.setSelectedTabID(nil)
+
+        #expect(notifiedTabIDs.last == "wi_dom")
+    }
+
+    @Test
+    func compactToRegularNormalizesElementSelectionToDOM() {
+        let controller = WISessionController()
+        controller.selectedTabID = "wi_element"
+
+        let container = WIContainerViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        controller.selectedTabID = "wi_element"
+        #expect(controller.selectedTabID == "wi_element")
+
+        configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .network()])
+
+        #expect(controller.selectedTabID == "wi_dom")
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+    }
+
+    @Test
+    func compactHostCreatesUniqueUITabIdentifiersForDuplicateDescriptors() {
         let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "duplicate", title: "First"),
             makeDescriptor(id: "duplicate", title: "Second")
         ]
-        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(
+            controller,
+            webView: nil,
+            tabs: descriptors
+        )
 
         container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: descriptors)
 
-        #expect(container.tabs.count == 2)
-        let identifiers = container.tabs.map(\.identifier)
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+
+        let identifiers = compactHost.displayedTabIdentifiersForTesting
+        #expect(identifiers.count == 2)
         #expect(Set(identifiers).count == 2)
 
         guard
             let firstIdentifier = identifiers.first,
-            let secondTab = container.tabs.last
+            let secondTab = compactHost.tabs.last
         else {
             Issue.record("Expected two tabs")
             return
         }
 
-        container.selectedTab = secondTab
+        compactHost.selectedTab = secondTab
         controller.selectedTabID = "duplicate"
 
-        #expect(container.selectedTab?.identifier == firstIdentifier)
+        #expect(compactHost.selectedTab?.identifier == firstIdentifier)
     }
 
     @Test
-    func selectingNetworkTabDoesNotCrashWhenNetworkTabLoads() {
+    func compactHostSelectionUpdatesControllerSelectionWhenConnected() {
         let controller = WISessionController()
         let container = WIContainerViewController(
             controller,
@@ -140,29 +208,114 @@ struct ContainerViewControllerUITabTests {
         )
 
         container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
         container.viewWillAppear(false)
 
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+
         guard
-            let domTab = container.tabs.first(where: { $0.identifier == "wi_dom" }),
-            let networkTab = container.tabs.first(where: { $0.identifier == "wi_network" })
+            let domTab = compactHost.tabs.first(where: { $0.identifier == "wi_dom" }),
+            let networkTab = compactHost.tabs.first(where: { $0.identifier == "wi_network" })
         else {
             Issue.record("Expected DOM and Network tabs")
             return
         }
 
-        container.selectedTab = networkTab
-        container.tabBarController(container, didSelectTab: networkTab, previousTab: domTab)
+        compactHost.selectedTab = networkTab
+        compactHost.tabBarController(compactHost, didSelectTab: networkTab, previousTab: domTab)
 
-        #expect(container.selectedTab?.identifier == "wi_network")
         #expect(controller.selectedTabID == "wi_network")
+    }
 
-        guard let networkController = container.children.first(where: { $0 is NetworkTabViewController }) else {
-            Issue.record("Expected network tab view controller")
+    @Test
+    func compactHostWrapsTabsInNavigationController() {
+        let controller = WISessionController()
+        let container = WIContainerViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
             return
         }
 
-        networkController.loadViewIfNeeded()
-        #expect(networkController is NetworkTabViewController)
+        #expect(compactHost.allTabRootsAreNavigationControllersForTesting)
+        #expect(compactHost.networkTabRootIsNavigationControllerForTesting)
+    }
+
+    @Test
+    func domDescriptorReturnsDOMTreeControllerInCompactSizeClass() {
+        let controller = WISessionController()
+        let descriptor = WITabDescriptor.dom()
+        let viewController = descriptor.makeViewController(
+            context: WITabContext(
+                controller: controller,
+                horizontalSizeClass: .compact
+            )
+        )
+
+        #expect(viewController is DOMTreeTabViewController)
+    }
+
+    @Test
+    func domDescriptorReturnsSplitControllerInRegularSizeClass() {
+        let controller = WISessionController()
+        let descriptor = WITabDescriptor.dom()
+        let viewController = descriptor.makeViewController(
+            context: WITabContext(
+                controller: controller,
+                horizontalSizeClass: .regular
+            )
+        )
+
+        #expect(viewController is DOMInspectorTabViewController)
+    }
+
+    @Test
+    func domDescriptorReturnsSplitControllerWhenSizeClassIsUnspecified() {
+        let controller = WISessionController()
+        let descriptor = WITabDescriptor.dom()
+        let viewController = descriptor.makeViewController(
+            context: WITabContext(controller: controller)
+        )
+
+        #expect(viewController is DOMInspectorTabViewController)
+    }
+
+    @Test
+    func networkDescriptorReturnsCompactControllerInCompactSizeClass() {
+        let controller = WISessionController()
+        let descriptor = WITabDescriptor.network()
+        let viewController = descriptor.makeViewController(
+            context: WITabContext(
+                controller: controller,
+                horizontalSizeClass: .compact
+            )
+        )
+
+        #expect(viewController is NetworkCompactTabViewController)
+    }
+
+    @Test
+    func networkDescriptorReturnsSplitControllerInRegularSizeClass() {
+        let controller = WISessionController()
+        let descriptor = WITabDescriptor.network()
+        let viewController = descriptor.makeViewController(
+            context: WITabContext(
+                controller: controller,
+                horizontalSizeClass: .regular
+            )
+        )
+
+        #expect(viewController is NetworkTabViewController)
     }
 
     private func makeDescriptor(id: String, title: String) -> WITabDescriptor {
@@ -180,6 +333,15 @@ struct ContainerViewControllerUITabTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func configureSizeClass(
+        _ sizeClass: UIUserInterfaceSizeClass,
+        for container: WIContainerViewController,
+        requestedTabs: [WITabDescriptor]
+    ) {
+        container.horizontalSizeClassOverrideForTesting = sizeClass
+        container.setTabs(requestedTabs)
     }
 }
 #endif

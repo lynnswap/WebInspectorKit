@@ -6,25 +6,32 @@ import WebInspectorKitCore
 import UIKit
 
 @MainActor
-public final class WIContainerViewController: UITabBarController, UITabBarControllerDelegate {
+public final class WIContainerViewController: UIViewController {
+    private enum HostKind {
+        case compact
+        case regular
+    }
+
     public private(set) var inspectorController: WISessionController
 
     private weak var pageWebView: WKWebView?
-    private var tabDescriptors: [WITabDescriptor]
-    private var canonicalIdentifierByUITabIdentifier: [String: WITabDescriptor.ID] = [:]
-    private var primaryUITabIdentifierByCanonicalIdentifier: [WITabDescriptor.ID: String] = [:]
-    private var uiTabByIdentifier: [String: UITab] = [:]
-    private var orderedUITabIdentifiers: [String] = []
-    private var isApplyingSelectionFromController = false
+    private var requestedTabDescriptors: [WITabDescriptor]
+    private var resolvedTabDescriptors: [WITabDescriptor]
+
+    private var activeHost: (UIViewController & WIUIKitInspectorHostProtocol)?
+    private var activeHostKind: HostKind?
+
+    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
 
     public init(
         _ inspectorController: WISessionController,
         webView: WKWebView?,
-        tabs: [WITabDescriptor] = [.dom(), .element(), .network()]
+        tabs: [WITabDescriptor] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
         self.pageWebView = webView
-        self.tabDescriptors = tabs
+        self.requestedTabDescriptors = tabs
+        self.resolvedTabDescriptors = tabs
         super.init(nibName: nil, bundle: nil)
         self.view.backgroundColor = .clear
     }
@@ -45,38 +52,50 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
         guard self.inspectorController !== inspectorController else {
             return
         }
+
         let previousController = self.inspectorController
         previousController.onSelectedTabIDChange = nil
         previousController.disconnect()
+
         self.inspectorController = inspectorController
         bindSelectionCallback()
+
         if isViewLoaded {
-            rebuildTabs()
+            rebuildLayout(forceHostReplacement: true)
             inspectorController.connect(to: pageWebView)
         }
     }
 
     public func setTabs(_ tabs: [WITabDescriptor]) {
-        tabDescriptors = tabs
-        inspectorController.configureTabs(tabDescriptors)
+        requestedTabDescriptors = tabs
         if isViewLoaded {
-            rebuildTabs()
+            rebuildLayout()
+        } else {
+            applyResolvedTabDescriptors(
+                WIUIKitTabLayoutPolicy.resolveTabs(
+                    from: tabs,
+                    horizontalSizeClass: effectiveHorizontalSizeClass
+                )
+            )
         }
     }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        delegate = self
-        tabBar.scrollEdgeAppearance = tabBar.standardAppearance
+        view.backgroundColor = .clear
 
         bindSelectionCallback()
-        rebuildTabs()
+        rebuildLayout(forceHostReplacement: true)
+
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
+            self.handleHorizontalSizeClassChange()
+        }
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         inspectorController.connect(to: pageWebView)
-        syncNativeSelection(with: inspectorController.selectedTabID)
+        activeHost?.setSelectedTabID(inspectorController.selectedTabID)
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
@@ -86,131 +105,119 @@ public final class WIContainerViewController: UITabBarController, UITabBarContro
         }
     }
 
-    private func rebuildTabs() {
-        inspectorController.configureTabs(tabDescriptors)
-        let context = WITabContext(controller: inspectorController)
-        var usedUITabIdentifiers = Set<String>()
-        var builtTabs: [UITab] = []
-        builtTabs.reserveCapacity(tabDescriptors.count)
+    var activeHostKindForTesting: String? {
+        switch activeHostKind {
+        case .compact:
+            return "compact"
+        case .regular:
+            return "regular"
+        case nil:
+            return nil
+        }
+    }
 
-        canonicalIdentifierByUITabIdentifier = [:]
-        primaryUITabIdentifierByCanonicalIdentifier = [:]
-        uiTabByIdentifier = [:]
-        orderedUITabIdentifiers = []
-        orderedUITabIdentifiers.reserveCapacity(tabDescriptors.count)
+    var resolvedTabIDsForTesting: [WITabDescriptor.ID] {
+        resolvedTabDescriptors.map(\.id)
+    }
 
-        for (index, descriptor) in tabDescriptors.enumerated() {
-            let viewController = descriptor.makeViewController(context: context)
-            let uiIdentifier = makeUniqueUITabIdentifier(
-                for: descriptor.id,
-                index: index,
-                used: &usedUITabIdentifiers
-            )
-            let tab = UITab(
-                title: descriptor.title,
-                image: UIImage(systemName: descriptor.systemImage),
-                identifier: uiIdentifier
-            ) { _ in
-                viewController
-            }
-            canonicalIdentifierByUITabIdentifier[uiIdentifier] = descriptor.id
-            if primaryUITabIdentifierByCanonicalIdentifier[descriptor.id] == nil {
-                primaryUITabIdentifierByCanonicalIdentifier[descriptor.id] = uiIdentifier
-            }
-            uiTabByIdentifier[uiIdentifier] = tab
-            orderedUITabIdentifiers.append(uiIdentifier)
-            builtTabs.append(tab)
+    var activeHostViewControllerForTesting: UIViewController? {
+        activeHost
+    }
+
+    private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
+        horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
+    }
+
+    private func makeContext() -> WITabContext {
+        WITabContext(
+            controller: inspectorController,
+            horizontalSizeClass: effectiveHorizontalSizeClass
+        )
+    }
+
+    private func rebuildLayout(forceHostReplacement: Bool = false) {
+        let resolvedTabs = WIUIKitTabLayoutPolicy.resolveTabs(
+            from: requestedTabDescriptors,
+            horizontalSizeClass: effectiveHorizontalSizeClass
+        )
+        applyResolvedTabDescriptors(resolvedTabs)
+
+        let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
+        if forceHostReplacement || activeHostKind != targetHostKind {
+            installHost(of: targetHostKind)
         }
 
-        setTabs(builtTabs, animated: false)
-        syncNativeSelection(with: inspectorController.selectedTabID)
+        guard let activeHost else {
+            return
+        }
+
+        activeHost.setTabDescriptors(resolvedTabDescriptors, context: makeContext())
+        activeHost.setSelectedTabID(inspectorController.selectedTabID)
+    }
+
+    private func applyResolvedTabDescriptors(_ resolvedTabs: [WITabDescriptor]) {
+        let normalizedSelectedTabID = WIUIKitTabLayoutPolicy.normalizedSelectedTabID(
+            currentSelectedTabID: inspectorController.selectedTabID,
+            resolvedTabs: resolvedTabs
+        )
+
+        if normalizedSelectedTabID != inspectorController.selectedTabID {
+            inspectorController.selectedTabID = normalizedSelectedTabID
+        }
+
+        resolvedTabDescriptors = resolvedTabs
+        inspectorController.configureTabs(resolvedTabs)
+    }
+
+    private func installHost(of kind: HostKind) {
+        activeHost?.prepareForRemoval()
+        if let current = activeHost {
+            current.willMove(toParent: nil)
+            current.view.removeFromSuperview()
+            current.removeFromParent()
+        }
+
+        let host: (UIViewController & WIUIKitInspectorHostProtocol)
+        switch kind {
+        case .compact:
+            host = WICompactTabHostViewController()
+        case .regular:
+            host = WIRegularTabHostViewController()
+        }
+
+        host.onSelectedTabIDChange = { [weak self] selectedTabID in
+            guard let self else {
+                return
+            }
+            guard inspectorController.selectedTabID != selectedTabID else {
+                return
+            }
+            inspectorController.synchronizeSelectedTabFromNativeUI(selectedTabID)
+        }
+
+        addChild(host)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        host.didMove(toParent: self)
+
+        activeHost = host
+        activeHostKind = kind
+    }
+
+    private func handleHorizontalSizeClassChange() {
+        rebuildLayout()
     }
 
     private func bindSelectionCallback() {
         inspectorController.onSelectedTabIDChange = { [weak self] tabID in
-            guard let self else { return }
-            self.syncNativeSelection(with: tabID)
+            self?.activeHost?.setSelectedTabID(tabID)
         }
-    }
-
-    private func syncNativeSelection(with tabID: WITabDescriptor.ID?) {
-        guard orderedUITabIdentifiers.isEmpty == false else {
-            return
-        }
-
-        if let tabID,
-           let uiIdentifier = primaryUITabIdentifierByCanonicalIdentifier[tabID] {
-            selectTabIfNeeded(withUIIdentifier: uiIdentifier)
-            return
-        }
-
-        let resolvedUIIdentifier: String
-        if let currentlySelectedUIIdentifier = selectedTab?.identifier,
-           canonicalIdentifierByUITabIdentifier[currentlySelectedUIIdentifier] != nil {
-            resolvedUIIdentifier = currentlySelectedUIIdentifier
-        } else {
-            resolvedUIIdentifier = orderedUITabIdentifiers[0]
-        }
-
-        selectTabIfNeeded(withUIIdentifier: resolvedUIIdentifier)
-        if let canonicalTabID = canonicalIdentifierByUITabIdentifier[resolvedUIIdentifier] {
-            inspectorController.synchronizeSelectedTabFromNativeUI(canonicalTabID)
-        }
-    }
-
-    private func selectTabIfNeeded(withUIIdentifier uiIdentifier: String) {
-        guard
-            selectedTab?.identifier != uiIdentifier,
-            let tab = uiTabByIdentifier[uiIdentifier]
-        else {
-            return
-        }
-
-        isApplyingSelectionFromController = true
-        selectedTab = tab
-        isApplyingSelectionFromController = false
-    }
-
-    private func makeUniqueUITabIdentifier(
-        for canonicalIdentifier: WITabDescriptor.ID,
-        index: Int,
-        used: inout Set<String>
-    ) -> String {
-        let base = canonicalIdentifier.isEmpty ? "tab_\(index)" : canonicalIdentifier
-        if used.insert(base).inserted {
-            return base
-        }
-
-        var suffix = 2
-        while true {
-            let candidate = "\(base)__\(suffix)"
-            if used.insert(candidate).inserted {
-                return candidate
-            }
-            suffix += 1
-        }
-    }
-
-    public func tabBarController(_ tabBarController: UITabBarController, shouldSelectTab tab: UITab) -> Bool {
-        canonicalIdentifierByUITabIdentifier[tab.identifier] != nil
-    }
-
-    public func tabBarController(
-        _ tabBarController: UITabBarController,
-        didSelectTab selectedTab: UITab,
-        previousTab: UITab?
-    ) {
-        guard isApplyingSelectionFromController == false else {
-            return
-        }
-
-        guard let canonicalTabID = canonicalIdentifierByUITabIdentifier[selectedTab.identifier] else {
-            return
-        }
-        guard inspectorController.selectedTabID != canonicalTabID else {
-            return
-        }
-        inspectorController.synchronizeSelectedTabFromNativeUI(canonicalTabID)
     }
 }
 
@@ -220,17 +227,6 @@ import WebInspectorKitSPIObjC
 
 @MainActor
 public final class WIContainerViewController: NSTabViewController {
-    private struct AppKitToolbarObservedState: Sendable, Equatable {
-        let selectedTabID: WITabDescriptor.ID?
-        let domHasPageWebView: Bool
-        let domIsSelectingElement: Bool
-        let networkHasEntries: Bool
-        let networkCanFetchBodies: Bool
-        let networkSearchText: String
-        let networkActiveFilters: Set<NetworkResourceFilter>
-        let networkEffectiveFilters: Set<NetworkResourceFilter>
-    }
-
     private static let toolbarIdentifier = NSToolbar.Identifier("WIContainerToolbar")
     private static let domTabID = "wi_dom"
     private static let networkTabID = "wi_network"
@@ -242,7 +238,12 @@ public final class WIContainerViewController: NSTabViewController {
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
-    private var toolbarObservationTask: Task<Void, Never>?
+    private var hasStartedObservingToolbarState = false
+    private var toolbarObservationHandles: [ObservationHandle] = []
+    private var selectedEntryObservationHandles: [ObservationHandle] = []
+    private var selectedEntryBodyFetchStateHandles: [ObservationHandle] = []
+    private var selectedEntryBodyObservedEntryID: UUID?
+    private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
 
     public init(
@@ -262,7 +263,7 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     isolated deinit {
-        toolbarObservationTask?.cancel()
+        stopObservingToolbarState()
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
@@ -285,9 +286,7 @@ public final class WIContainerViewController: NSTabViewController {
         if isViewLoaded {
             rebuildTabs()
             inspectorController.connect(to: pageWebView)
-            if Self.window(for: view) != nil {
-                startObservingToolbarStateIfNeeded()
-            }
+            startObservingToolbarStateIfNeeded()
             updateToolbarState()
         }
     }
@@ -308,6 +307,7 @@ public final class WIContainerViewController: NSTabViewController {
 
         bindSelectionCallback()
         rebuildTabs()
+        startObservingToolbarStateIfNeeded()
     }
 
     public override func viewWillAppear() {
@@ -321,7 +321,6 @@ public final class WIContainerViewController: NSTabViewController {
 
     public override func viewDidDisappear() {
         super.viewDidDisappear()
-        stopObservingToolbarState()
         if Self.window(for: view) == nil {
             inspectorController.suspend()
         }
@@ -357,7 +356,8 @@ public final class WIContainerViewController: NSTabViewController {
         inspectorController.onSelectedTabIDChange = { [weak self] tabID in
             guard let self else { return }
             self.syncNativeSelection(with: tabID)
-            self.updateToolbarState()
+            self.synchronizeSelectedEntryObservation()
+            self.scheduleToolbarStateUpdate()
         }
     }
 
@@ -410,36 +410,187 @@ public final class WIContainerViewController: NSTabViewController {
     }
 
     private func startObservingToolbarStateIfNeeded() {
-        guard toolbarObservationTask == nil else {
+        guard hasStartedObservingToolbarState == false else {
             return
         }
+        hasStartedObservingToolbarState = true
 
-        let inspectorController = self.inspectorController
-        toolbarObservationTask = Task { @MainActor [weak self] in
-            let stream = ObservationsCompat {
-                AppKitToolbarObservedState(
-                    selectedTabID: inspectorController.selectedTabID,
-                    domHasPageWebView: inspectorController.dom.hasPageWebView,
-                    domIsSelectingElement: inspectorController.dom.isSelectingElement,
-                    networkHasEntries: !inspectorController.network.store.entries.isEmpty,
-                    networkCanFetchBodies: Self.canFetchSelectedBodies(in: inspectorController.network),
-                    networkSearchText: inspectorController.network.searchText,
-                    networkActiveFilters: inspectorController.network.activeResourceFilters,
-                    networkEffectiveFilters: inspectorController.network.effectiveResourceFilters
-                )
+        toolbarObservationHandles.append(
+            inspectorController.observe(
+                \.selectedTabID,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
             }
-            for await _ in stream {
-                guard !Task.isCancelled else {
-                    break
-                }
-                self?.updateToolbarState()
+        )
+        toolbarObservationHandles.append(
+            inspectorController.dom.observe(
+                \.hasPageWebView,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
             }
-        }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.dom.observe(
+                \.isSelectingElement,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.network.observeTask(
+                [\.selectedEntry],
+                retention: .automatic
+            ) { [weak self] in
+                self?.synchronizeSelectedEntryObservation()
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.network.observe(
+                \.searchText,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.network.observe(
+                \.activeResourceFilters,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.network.observe(
+                \.effectiveResourceFilters,
+                retention: .automatic,
+                removeDuplicates: true
+            ) { [weak self] _ in
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
+            inspectorController.network.store.observeTask(
+                [\.entries],
+                retention: .automatic
+            ) { [weak self] in
+                self?.synchronizeSelectedEntryObservation()
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        synchronizeSelectedEntryObservation()
     }
 
     private func stopObservingToolbarState() {
-        toolbarObservationTask?.cancel()
-        toolbarObservationTask = nil
+        hasStartedObservingToolbarState = false
+        selectedEntryBodyObservedEntryID = nil
+
+        for handle in toolbarObservationHandles {
+            handle.cancel()
+        }
+        toolbarObservationHandles.removeAll()
+
+        for handle in selectedEntryObservationHandles {
+            handle.cancel()
+        }
+        selectedEntryObservationHandles.removeAll()
+
+        for handle in selectedEntryBodyFetchStateHandles {
+            handle.cancel()
+        }
+        selectedEntryBodyFetchStateHandles.removeAll()
+    }
+
+    private func scheduleToolbarStateUpdate() {
+        toolbarUpdateCoalescer.schedule { [weak self] in
+            self?.updateToolbarState()
+        }
+    }
+
+    private func synchronizeSelectedEntryObservation() {
+        let selectedEntryID = inspectorController.network.selectedEntry?.id
+        guard selectedEntryBodyObservedEntryID != selectedEntryID else {
+            return
+        }
+        selectedEntryBodyObservedEntryID = selectedEntryID
+
+        for handle in selectedEntryObservationHandles {
+            handle.cancel()
+        }
+        selectedEntryObservationHandles.removeAll()
+        for handle in selectedEntryBodyFetchStateHandles {
+            handle.cancel()
+        }
+        selectedEntryBodyFetchStateHandles.removeAll()
+
+        guard
+            let selectedEntryID,
+            let selectedEntry = inspectorController.network.store.entry(forEntryID: selectedEntryID)
+        else {
+            return
+        }
+
+        selectedEntryObservationHandles.append(
+            selectedEntry.observeTask(
+                [\.requestBody],
+                retention: .automatic
+            ) { [weak self, weak selectedEntry] in
+                guard let self else { return }
+                self.scheduleToolbarStateUpdate()
+                guard let selectedEntry else { return }
+                self.synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
+            }
+        )
+        selectedEntryObservationHandles.append(
+            selectedEntry.observeTask(
+                [\.responseBody],
+                retention: .automatic
+            ) { [weak self, weak selectedEntry] in
+                guard let self else { return }
+                self.scheduleToolbarStateUpdate()
+                guard let selectedEntry else { return }
+                self.synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
+            }
+        )
+        synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
+    }
+
+    private func synchronizeSelectedEntryBodyFetchStateObservation(for selectedEntry: NetworkEntry) {
+        for handle in selectedEntryBodyFetchStateHandles {
+            handle.cancel()
+        }
+        selectedEntryBodyFetchStateHandles.removeAll()
+
+        if let requestBody = selectedEntry.requestBody {
+            selectedEntryBodyFetchStateHandles.append(
+                requestBody.observeTask(
+                    [\.fetchState],
+                    retention: .automatic
+                ) { [weak self] in
+                    self?.scheduleToolbarStateUpdate()
+                }
+            )
+        }
+
+        if let responseBody = selectedEntry.responseBody {
+            selectedEntryBodyFetchStateHandles.append(
+                responseBody.observeTask(
+                    [\.fetchState],
+                    retention: .automatic
+                ) { [weak self] in
+                    self?.scheduleToolbarStateUpdate()
+                }
+            )
+        }
     }
 
     private func updateToolbarLayout() {

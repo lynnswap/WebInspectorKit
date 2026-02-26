@@ -2,31 +2,15 @@ import WebKit
 import WebInspectorKitCore
 import ObservationsCompat
 
-@MainActor
-private struct DOMTreeObservedState: Sendable, Equatable {
-    let errorMessage: String?
-    let hasPageWebView: Bool
-    let isSelectingElement: Bool
-    let selectionNodeID: Int?
-}
-
-@MainActor
-private func domTreeObservedState(from inspector: WIDOMTabViewModel) -> DOMTreeObservedState {
-    DOMTreeObservedState(
-        errorMessage: inspector.errorMessage,
-        hasPageWebView: inspector.hasPageWebView,
-        isSelectingElement: inspector.isSelectingElement,
-        selectionNodeID: inspector.selection.nodeId
-    )
-}
-
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
 final class DOMTreeTabViewController: UIViewController {
     private let inspector: WIDOMTabViewModel
-    private var observationTask: Task<Void, Never>?
+    private let showsNavigationControls: Bool
+    private let errorUpdateCoalescer = UIUpdateCoalescer()
+    private let navigationUpdateCoalescer = UIUpdateCoalescer()
 
     private lazy var pickItem: UIBarButtonItem = {
         UIBarButtonItem(
@@ -37,18 +21,16 @@ final class DOMTreeTabViewController: UIViewController {
         )
     }()
 
-    init(inspector: WIDOMTabViewModel) {
+    init(inspector: WIDOMTabViewModel, showsNavigationControls: Bool = true) {
         self.inspector = inspector
+        self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
+        
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        observationTask?.cancel()
     }
 
     override func viewDidLoad() {
@@ -70,11 +52,12 @@ final class DOMTreeTabViewController: UIViewController {
         ])
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.updateUI()
+            self.scheduleNavigationControlsUpdate()
         }
 
         observeState()
-        updateUI()
+        updateErrorPresentation(errorMessage: inspector.errorMessage)
+        updateNavigationControls()
     }
 
     private var pickSymbolName: String {
@@ -82,6 +65,10 @@ final class DOMTreeTabViewController: UIViewController {
     }
 
     private func setupNavigationItems() {
+        guard showsNavigationControls else {
+            navigationItem.rightBarButtonItems = nil
+            return
+        }
         navigationItem.rightBarButtonItems = [pickItem]
     }
 
@@ -117,25 +104,51 @@ final class DOMTreeTabViewController: UIViewController {
     }
 
     private func observeState() {
-        guard observationTask == nil else {
-            return
+        inspector.observe(
+            \.errorMessage,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleErrorPresentationUpdate()
         }
-        let inspector = self.inspector
-        observationTask = Task { @MainActor [weak self] in
-            let stream = ObservationsCompat {
-                domTreeObservedState(from: inspector)
-            }
-            for await _ in stream {
-                guard !Task.isCancelled else {
-                    break
-                }
-                self?.updateUI()
-            }
+        inspector.observe(
+            \.hasPageWebView,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        inspector.observe(
+            \.isSelectingElement,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
+        }
+        inspector.selection.observe(
+            \.nodeId,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.scheduleNavigationControlsUpdate()
         }
     }
 
-    private func updateUI() {
-        if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
+    private func scheduleErrorPresentationUpdate() {
+        errorUpdateCoalescer.schedule { [weak self] in
+            guard let self else { return }
+            self.updateErrorPresentation(errorMessage: self.inspector.errorMessage)
+        }
+    }
+
+    private func scheduleNavigationControlsUpdate() {
+        navigationUpdateCoalescer.schedule { [weak self] in
+            self?.updateNavigationControls()
+        }
+    }
+
+    private func updateErrorPresentation(errorMessage: String?) {
+        if let errorMessage, !errorMessage.isEmpty {
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = errorMessage
             configuration.image = UIImage(systemName: "exclamationmark.triangle")
@@ -143,13 +156,19 @@ final class DOMTreeTabViewController: UIViewController {
         } else {
             contentUnavailableConfiguration = nil
         }
+    }
 
-        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+    private func updateNavigationControls() {
+        if showsNavigationControls {
+            navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
+                completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
+            }
+            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.image = UIImage(systemName: pickSymbolName)
+            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+        } else {
+            navigationItem.additionalOverflowItems = nil
         }
-        pickItem.isEnabled = inspector.hasPageWebView
-        pickItem.image = UIImage(systemName: pickSymbolName)
-        pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
     }
 
     @objc
@@ -169,8 +188,8 @@ import AppKit
 @MainActor
 final class DOMTreeTabViewController: NSViewController {
     private let inspector: WIDOMTabViewModel
-    private var observationTask: Task<Void, Never>?
     private var contextMenuNodeID: Int?
+    private let errorUpdateCoalescer = UIUpdateCoalescer()
 
     private let errorLabel = NSTextField(labelWithString: "")
 
@@ -182,10 +201,6 @@ final class DOMTreeTabViewController: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        observationTask?.cancel()
     }
 
     override func loadView() {
@@ -224,23 +239,18 @@ final class DOMTreeTabViewController: NSViewController {
         ])
 
         observeState()
-        updateUI()
+        updateErrorLabel(errorMessage: inspector.errorMessage)
     }
 
     private func observeState() {
-        guard observationTask == nil else {
-            return
-        }
-        let inspector = self.inspector
-        observationTask = Task { @MainActor [weak self] in
-            let stream = ObservationsCompat {
-                domTreeObservedState(from: inspector)
-            }
-            for await _ in stream {
-                guard !Task.isCancelled else {
-                    break
-                }
-                self?.updateUI()
+        inspector.observe(
+            \.errorMessage,
+            retention: .automatic,
+            removeDuplicates: true
+        ) { [weak self] _ in
+            self?.errorUpdateCoalescer.schedule { [weak self] in
+                guard let self else { return }
+                self.updateErrorLabel(errorMessage: self.inspector.errorMessage)
             }
         }
     }
@@ -285,8 +295,8 @@ final class DOMTreeTabViewController: NSViewController {
         return menu
     }
 
-    private func updateUI() {
-        if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
+    private func updateErrorLabel(errorMessage: String?) {
+        if let errorMessage, !errorMessage.isEmpty {
             errorLabel.stringValue = errorMessage
             errorLabel.isHidden = false
         } else {

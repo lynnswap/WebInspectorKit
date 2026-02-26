@@ -5,6 +5,9 @@ import WebInspectorKitCore
 @MainActor
 @Observable
 public final class WISessionController {
+    public private(set) var lifecycle: WISessionLifecycle = .disconnected
+    public private(set) var lastRecoverableError: String?
+
     public var selectedTabID: WITabDescriptor.ID? {
         didSet {
             if suppressTabActivation {
@@ -12,14 +15,11 @@ public final class WISessionController {
             }
             applyTabActivation(for: selectedTabID)
             onSelectedTabIDChange?(selectedTabID)
-            dispatchRuntime(.selectTab(selectedTabID))
         }
     }
 
     public let dom: WIDOMTabViewModel
     public let network: WINetworkTabViewModel
-    public let runtime: WIRuntimeActor
-    public let store: WISessionStore
 
     private let pageBridge: WIWeakPageRuntimeBridge
 
@@ -35,28 +35,13 @@ public final class WISessionController {
     public init(configuration: WIConfiguration = .init()) {
         let domSession = DOMSession(configuration: configuration.dom)
         let networkSession = NetworkSession(configuration: configuration.network)
-        let runtimeActor = WIRuntimeActor(
-            domRuntime: WIDOMRuntimeActor(session: domSession),
-            networkRuntime: WINetworkRuntimeActor(session: networkSession)
-        )
 
         self.pageBridge = WIWeakPageRuntimeBridge()
-        self.runtime = runtimeActor
 
-        self.dom = WIDOMTabViewModel(session: domSession) { [runtimeActor] message in
-            Task {
-                await runtimeActor.dispatch(.recoverableError(message))
-            }
-        }
+        self.dom = WIDOMTabViewModel(session: domSession)
         self.network = WINetworkTabViewModel(session: networkSession)
-        self.store = WISessionStore()
-
-        Task { [runtimeActor, store] in
-            let events = await runtimeActor.events()
-            await MainActor.run {
-                store.bind(to: events)
-            }
-            await runtimeActor.dispatch(.refreshState)
+        self.dom.frontendStore.onRecoverableError = { [weak self] message in
+            self?.lastRecoverableError = message
         }
     }
 
@@ -87,8 +72,7 @@ public final class WISessionController {
         }
 
         applyTabActivation(for: selectedTabID)
-        dispatchRuntime(.connected)
-        dispatchRuntime(.refreshState)
+        lifecycle = .active
     }
 
     public func suspend() {
@@ -96,8 +80,7 @@ public final class WISessionController {
         pageBridge.setPageWebView(nil)
         dom.suspend()
         network.suspend()
-        dispatchRuntime(.suspended)
-        dispatchRuntime(.refreshState)
+        lifecycle = .suspended
     }
 
     public func disconnect() {
@@ -109,8 +92,7 @@ public final class WISessionController {
         defer { suppressTabActivation = false }
         selectedTabID = nil
         onSelectedTabIDChange?(nil)
-        dispatchRuntime(.disconnected)
-        dispatchRuntime(.refreshState)
+        lifecycle = .disconnected
     }
 
     internal func synchronizeSelectedTabFromNativeUI(_ tabID: WITabDescriptor.ID?) {
@@ -159,10 +141,6 @@ public final class WISessionController {
             applyRequirementTransition(from: previous, to: current, using: webView)
         }
 
-        dispatchRuntime(.configureTabs(tabs.map(\.runtimeDescriptor)))
-        dispatchRuntime(.selectTab(selectedTabID))
-        dispatchRuntime(.refreshState)
-
         onSelectedTabIDChange?(selectedTabID)
     }
 
@@ -176,17 +154,10 @@ public final class WISessionController {
         if requirements.contains(.network) {
             network.session.setMode(activation.networkLiveLogging ? .active : .buffering)
         }
-        dispatchRuntime(.refreshState)
     }
 }
 
 private extension WISessionController {
-    func dispatchRuntime(_ command: WISessionCommand) {
-        Task {
-            await runtime.dispatch(command)
-        }
-    }
-
     func resolvedActivationForTabID(_ tabID: WITabDescriptor.ID?) -> WITabDescriptor.Activation {
         guard let tabID else {
             return resolvedActivation(for: nil)

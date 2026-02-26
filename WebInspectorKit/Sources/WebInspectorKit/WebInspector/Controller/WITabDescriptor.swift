@@ -9,6 +9,9 @@ import WebInspectorKitCore
 
 public struct WITabContext {
     public let controller: WISessionController
+#if canImport(UIKit)
+    public let horizontalSizeClass: UIUserInterfaceSizeClass?
+#endif
 
     public var domInspector: WIDOMTabViewModel {
         controller.dom
@@ -18,9 +21,16 @@ public struct WITabContext {
         controller.network
     }
 
+    #if canImport(UIKit)
+    public init(controller: WISessionController, horizontalSizeClass: UIUserInterfaceSizeClass? = nil) {
+        self.controller = controller
+        self.horizontalSizeClass = horizontalSizeClass
+    }
+    #else
     public init(controller: WISessionController) {
         self.controller = controller
     }
+    #endif
 }
 
 public struct WITabDescriptor: Identifiable, Hashable {
@@ -91,34 +101,5 @@ public struct WITabDescriptor: Identifiable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
-    }
-}
-
-extension WITabDescriptor.FeatureRequirements {
-    var runtimeFeatures: WIRequiredFeatures {
-        var result: WIRequiredFeatures = []
-        if contains(.dom) {
-            result.insert(.dom)
-        }
-        if contains(.network) {
-            result.insert(.network)
-        }
-        return result
-    }
-}
-
-extension WITabDescriptor.Activation {
-    var runtimeActivation: WITabActivation {
-        WITabActivation(domLiveUpdates: domLiveUpdates, networkLiveLogging: networkLiveLogging)
-    }
-}
-
-extension WITabDescriptor {
-    var runtimeDescriptor: WITabRuntimeDescriptor {
-        WITabRuntimeDescriptor(
-            id: id,
-            requires: requires.runtimeFeatures,
-            activation: activation.runtimeActivation
-        )
     }
 }
