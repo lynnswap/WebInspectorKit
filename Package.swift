@@ -3,6 +3,13 @@
 
 import PackageDescription
 
+let strictSwiftSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .defaultIsolation(nil),
+    .strictMemorySafety(),
+    .treatAllWarnings(as: .error),
+]
+
 let package = Package(
     name: "WebInspectorKit",
     defaultLocalization: "en",
@@ -11,8 +18,28 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "WebInspectorKitCore",
-            targets: ["WebInspectorKitCore"]
+            name: "WebInspectorEngine",
+            targets: ["WebInspectorEngine"]
+        ),
+        .library(
+            name: "WebInspectorModel",
+            targets: ["WebInspectorModel"]
+        ),
+        .library(
+            name: "WebInspectorRuntime",
+            targets: ["WebInspectorRuntime"]
+        ),
+        .library(
+            name: "WebInspectorBridge",
+            targets: ["WebInspectorBridge"]
+        ),
+        .library(
+            name: "WebInspectorScripts",
+            targets: ["WebInspectorScripts"]
+        ),
+        .library(
+            name: "WebInspectorUI",
+            targets: ["WebInspectorUI"]
         ),
         .library(
             name: "WebInspectorKit",
@@ -27,24 +54,52 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "WebInspectorKitCore",
+            name: "WebInspectorEngine",
             dependencies: [
-                "WebInspectorKitSPIObjC",
+                "WebInspectorBridge",
+                "WebInspectorScripts",
             ],
-            path: "WebInspectorKit/Sources/WebInspectorKitCore",
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
-                .defaultIsolation(nil),
-                .strictMemorySafety(),
-                .treatAllWarnings(as: .error),
-            ],
-            plugins: [
-                .plugin(name: "WebInspectorKitObfuscatePlugin")
-            ]
+            swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorKitSPIObjC",
-            path: "WebInspectorKit/Sources/WebInspectorKitSPIObjC",
+            name: "WebInspectorModel",
+            dependencies: [
+                "WebInspectorEngine"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorRuntime",
+            dependencies: [
+                "WebInspectorModel",
+                "WebInspectorEngine",
+                "WebInspectorBridge",
+                "WebInspectorScripts",
+                .product(name: "ObservationsCompat", package: "ObservationsCompat")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorBridge",
+            dependencies: [
+                "WebInspectorBridgeObjCShim"
+            ],
+            exclude: ["ObjCShim"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorScripts",
+            resources: [
+                .process("Resources/DOMTreeView")
+            ],
+            swiftSettings: strictSwiftSettings,
+            plugins: [
+                .plugin(name: "WebInspectorKitObfuscatePlugin")
+            ],
+        ),
+        .target(
+            name: "WebInspectorBridgeObjCShim",
+            path: "Sources/WebInspectorBridge/ObjCShim",
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -53,48 +108,47 @@ let package = Package(
             ]
         ),
         .target(
-            name: "WebInspectorKit",
+            name: "WebInspectorUI",
             dependencies: [
-                "WebInspectorKitCore",
-                "WebInspectorKitSPIObjC",
+                "WebInspectorModel",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorBridge",
                 .product(name: "ObservationsCompat", package: "ObservationsCompat")
             ],
-            path: "WebInspectorKit/Sources/WebInspectorKit",
             resources: [
-                .process("Localizable.xcstrings"),
-                .process("WebInspector/Views/DOMTreeView/dom-tree-view.html"),
-                .process("WebInspector/Views/DOMTreeView/dom-tree-view.css"),
-                .process("WebInspector/Views/DOMTreeView/DisclosureTriangles.svg")
+                .process("Localizable.xcstrings")
             ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
-                .defaultIsolation(nil),
-                .strictMemorySafety(),
-                .treatAllWarnings(as: .error),
-            ]
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorKit",
+            dependencies: [
+                "WebInspectorUI",
+                "WebInspectorEngine",
+                "WebInspectorModel",
+                "WebInspectorRuntime",
+                "WebInspectorBridge",
+                "WebInspectorScripts"
+            ],
+            swiftSettings: strictSwiftSettings
         ),
         .testTarget(
             name: "WebInspectorKitTests",
             dependencies: [
                 "WebInspectorKit",
-                "WebInspectorKitCore"
+                "WebInspectorUI",
+                "WebInspectorEngine",
+                "WebInspectorModel",
+                "WebInspectorRuntime",
+                "WebInspectorBridge",
+                "WebInspectorScripts"
             ],
-            path: "WebInspectorKit/Tests",
-            sources: [
-                "WebInspectorKitCoreTests",
-                "WebInspectorKitFeatureTests"
-            ],
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
-                .defaultIsolation(nil),
-                .strictMemorySafety(),
-                .treatAllWarnings(as: .error),
-            ]
+            swiftSettings: strictSwiftSettings
         ),
         .plugin(
             name: "WebInspectorKitObfuscatePlugin",
-            capability: .buildTool(),
-            path: "WebInspectorKit/Plugins/WebInspectorKitObfuscatePlugin"
+            capability: .buildTool()
         )
 
     ]

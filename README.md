@@ -2,16 +2,16 @@
 
 [日本語版 README](README.ja.md)
 
-![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
+![WebInspectorKit preview](Resources/preview.webp)
 
 Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
 - `WebInspectorKit`: Container UI, tab descriptors, Observation state
-- `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
+- `WebInspectorEngine` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
 
-`WebInspectorKit` depends on `WebInspectorKitCore`.
+`WebInspectorKit` depends on `WebInspectorEngine`.
 
 ## Features
 

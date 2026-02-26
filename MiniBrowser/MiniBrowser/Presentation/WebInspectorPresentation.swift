@@ -7,7 +7,7 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISessionController
+    inspectorController: WISession
 ) {
     guard let presenter = resolvePresenter(from: windowScene) else {
         return
@@ -20,7 +20,7 @@ func presentWebInspector(
         return
     }
 
-    let container = WIContainerViewController(
+    let container = WITabViewController(
         inspectorController,
         webView: model.webView,
         tabs: [.dom(), .network()]
@@ -31,7 +31,7 @@ func presentWebInspector(
 }
 
 @MainActor
-private func findPresentedContainer(from presenter: UIViewController) -> WIContainerViewController? {
+private func findPresentedContainer(from presenter: UIViewController) -> WITabViewController? {
     if let direct = presenter.presentedViewController.flatMap(inspectorContainer(in:)) {
         return direct
     }
@@ -56,8 +56,8 @@ private func findPresentedContainer(from presenter: UIViewController) -> WIConta
 }
 
 @MainActor
-private func inspectorContainer(in viewController: UIViewController) -> WIContainerViewController? {
-    if let container = viewController as? WIContainerViewController {
+private func inspectorContainer(in viewController: UIViewController) -> WITabViewController? {
+    if let container = viewController as? WITabViewController {
         return container
     }
     if let navigationController = viewController as? UINavigationController {
@@ -156,10 +156,10 @@ private let inspectorWindowStore = InspectorWindowStore()
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISessionController
+    inspectorController: WISession
 ) {
     if let existingWindow = inspectorWindowStore.window,
-       let existingContainer = existingWindow.contentViewController as? WIContainerViewController {
+       let existingContainer = existingWindow.contentViewController as? WITabViewController {
         existingContainer.setTabs([.dom(), .network()])
         existingContainer.setInspectorController(inspectorController)
         existingContainer.setPageWebView(model.webView)
@@ -168,7 +168,7 @@ func presentWebInspector(
         return
     }
 
-    let container = WIContainerViewController(
+    let container = WITabViewController(
         inspectorController,
         webView: model.webView,
         tabs: [.dom(), .network()]

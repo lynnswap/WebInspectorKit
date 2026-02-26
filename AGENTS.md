@@ -1,20 +1,23 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `WebInspectorKit/Sources/WebInspectorKitCore`: core DOM/Network engines, runtime actors, and script bridge.
-- `WebInspectorKit/Sources/WebInspectorKit`: public UI/container layer and pane controllers.
-- `WebInspectorKit/Sources/WebInspectorKitSPIObjC`: Objective-C runtime bridge used by Swift targets.
-- `WebInspectorKit/Tests/WebInspectorKitCoreTests` and `WebInspectorKit/Tests/WebInspectorKitFeatureTests`: tests.
-- `WebInspectorKit/Tests/TypeScript`: Vitest suites for DOM/network helper scripts.
+- `Sources/WebInspectorEngine`: core DOM/Network engines, runtime actors, and script bridge.
+- `Sources/WebInspectorModel`: session state/command/effect reducer models.
+- `Sources/WebInspectorRuntime`: session runtime, DOM/Network models, and DOM frontend runtime bridge.
+- `Sources/WebInspectorUI`: view controllers and UI presentation layer.
+- `Sources/WebInspectorKit`: public facade/re-export layer.
+- `Sources/WebInspectorBridge`: Swift bridge + Objective-C runtime bridge integration layer.
+- `Tests/WebInspectorKitTests/WebInspectorEngineTests` and `Tests/WebInspectorKitTests/WebInspectorKitFeatureTests`: Swift tests.
+- `Tests/TypeScript`: Vitest suites for DOM/network helper scripts.
 - `MiniBrowser/`: sample host app with app and UI tests.
-- `ObfuscateJS/`: JavaScript obfuscation toolchain used by the build plugin.
+- `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/`: JavaScript obfuscation toolchain used by the build plugin.
 
 ## Test Commands
 Run from repository root:
 - `xcodebuild -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKitTests -destination 'platform=macOS' test`: run package tests on macOS.
 - `xcodebuild -workspace WebInspectorKit.xcworkspace -scheme WebInspectorKitTests -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' test`: run iOS Simulator tests.
-- `pnpm -s run test:ts`: run TypeScript tests with Vitest.
-- `pnpm -s run typecheck:ts`: run strict TypeScript type checks.
+- `pnpm --dir Tests/TypeScript run test`: run TypeScript tests with Vitest.
+- `pnpm --dir Tests/TypeScript run typecheck`: run strict TypeScript type checks.
 - `xcrun simctl list devices available`: list valid simulator destinations when destination names differ locally.
 
 ## Coding Style & Naming Conventions

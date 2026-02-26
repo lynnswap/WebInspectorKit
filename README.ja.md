@@ -2,16 +2,16 @@
 
 [English README](README.md)
 
-![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
+![WebInspectorKit preview](Resources/preview.webp)
 
 `WKWebView`（iOS / macOS）向けの Web Inspector です。
 
 ## 製品
 
 - `WebInspectorKit`: コンテナ UI、タブ記述子、Observation ベースの状態管理
-- `WebInspectorKitCore`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
+- `WebInspectorEngine`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
-`WebInspectorKit` は `WebInspectorKitCore` に依存します。
+`WebInspectorKit` は `WebInspectorEngine` に依存します。
 
 ## 機能
 

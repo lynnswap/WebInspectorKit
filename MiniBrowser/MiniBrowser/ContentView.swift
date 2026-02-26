@@ -4,7 +4,7 @@ import WebInspectorKit
 struct ContentView: View {
     @Environment(\.windowScene) private var windowScene
     @State private var model: BrowserViewModel?
-    @State private var inspectorController: WISessionController?
+    @State private var inspectorController: WISession?
     
     var body: some View {
         if let model, let inspectorController {
@@ -29,7 +29,7 @@ struct ContentView: View {
             Color.clear
                 .onAppear {
                     model = BrowserViewModel(url: URL(string: "https://www.google.com")!)
-                    inspectorController = WISessionController()
+                    inspectorController = WISession()
                 }
         }
     }
