@@ -402,13 +402,19 @@ final class NetworkListPaneViewController: UICollectionViewController, UISearchR
 
         inspector.observeTask(
             [
-                \.selectedEntry,
+                \.selectedEntry
+            ]
+        ) { [weak self] in
+            self?.scheduleReloadDataFromInspector()
+        }
+        inspector.observeTask(
+            [
                 \.searchText,
                 \.activeResourceFilters,
                 \.effectiveResourceFilters,
                 \.sortDescriptors
             ],
-            retention: .automatic
+            options: WIObservationOptions.debounced
         ) { [weak self] in
             self?.scheduleReloadDataFromInspector()
         }
@@ -416,7 +422,7 @@ final class NetworkListPaneViewController: UICollectionViewController, UISearchR
             [
                 \.entries
             ],
-            retention: .automatic
+            options: WIObservationOptions.debounced
         ) { [weak self] in
             self?.scheduleReloadDataFromInspector()
         }
@@ -448,43 +454,37 @@ final class NetworkListPaneViewController: UICollectionViewController, UISearchR
         var handles: [ObservationHandle] = []
         handles.append(entry.observe(
             \.displayName,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })
         handles.append(entry.observe(
             \.fileTypeLabel,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })
         handles.append(entry.observe(
             \.statusLabel,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })
         handles.append(entry.observe(
             \.statusSeverity,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })
         handles.append(entry.observe(
             \.method,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })
         handles.append(entry.observe(
             \.phase,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleReloadDataFromInspector()
         })

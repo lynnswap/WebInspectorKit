@@ -211,72 +211,62 @@ final class ElementDetailsTabViewController: UICollectionViewController {
 
         inspector.observe(
             \.hasPageWebView,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         inspector.observe(
             \.isSelectingElement,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         inspector.selection.observe(
             \.nodeId,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.preview,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.selectorPath,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.attributes,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.matchedStyles,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.isLoadingMatchedStyles,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.matchedStylesTruncated,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
         inspector.selection.observe(
             \.blockedStylesheetCount,
-            retention: .automatic,
-            removeDuplicates: true
+            options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }

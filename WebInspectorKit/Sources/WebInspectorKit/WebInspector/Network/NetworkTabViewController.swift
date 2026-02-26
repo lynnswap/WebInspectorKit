@@ -103,8 +103,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
                 \.activeResourceFilters,
                 \.effectiveResourceFilters,
                 \.sortDescriptors
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleDetailSelectionSync()
@@ -112,8 +111,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
         inspector.store.observeTask(
             [
                 \.entries
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleDetailSelectionSync()
@@ -158,8 +156,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
                     \.phase,
                     \.requestBody,
                     \.responseBody
-                ],
-                retention: .automatic
+                ]
             ) { [weak self, weak selectedEntry] in
                 self?.scheduleDetailSelectionSync()
                 guard let self, let selectedEntry else {
@@ -187,8 +184,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
                         \.reference,
                         \.formEntries,
                         \.fetchState
-                    ],
-                    retention: .automatic
+                    ]
                 ) { [weak self] in
                     self?.scheduleDetailSelectionSync()
                 }
@@ -208,8 +204,7 @@ final class NetworkTabViewController: UISplitViewController, UISplitViewControll
                         \.reference,
                         \.formEntries,
                         \.fetchState
-                    ],
-                    retention: .automatic
+                    ]
                 ) { [weak self] in
                     self?.scheduleDetailSelectionSync()
                 }
@@ -435,16 +430,14 @@ final class NetworkTabViewController: NSSplitViewController {
                 \.activeResourceFilters,
                 \.effectiveResourceFilters,
                 \.sortDescriptors
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.scheduleSelectionSync()
         }
         inspector.store.observeTask(
             [
                 \.entries
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.scheduleSelectionSync()
         }

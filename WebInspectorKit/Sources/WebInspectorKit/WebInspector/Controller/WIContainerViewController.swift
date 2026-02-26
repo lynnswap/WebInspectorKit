@@ -418,8 +418,7 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.observe(
                 \.selectedTabID,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
@@ -427,8 +426,7 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.dom.observe(
                 \.hasPageWebView,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
@@ -436,16 +434,14 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.dom.observe(
                 \.isSelectingElement,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
         )
         toolbarObservationHandles.append(
             inspectorController.network.observeTask(
-                [\.selectedEntry],
-                retention: .automatic
+                [\.selectedEntry]
             ) { [weak self] in
                 self?.synchronizeSelectedEntryObservation()
                 self?.scheduleToolbarStateUpdate()
@@ -454,8 +450,7 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.network.observe(
                 \.searchText,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
@@ -463,8 +458,7 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.network.observe(
                 \.activeResourceFilters,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
@@ -472,16 +466,14 @@ public final class WIContainerViewController: NSTabViewController {
         toolbarObservationHandles.append(
             inspectorController.network.observe(
                 \.effectiveResourceFilters,
-                retention: .automatic,
-                removeDuplicates: true
+                options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
         )
         toolbarObservationHandles.append(
             inspectorController.network.store.observeTask(
-                [\.entries],
-                retention: .automatic
+                [\.entries]
             ) { [weak self] in
                 self?.synchronizeSelectedEntryObservation()
                 self?.scheduleToolbarStateUpdate()
@@ -541,8 +533,7 @@ public final class WIContainerViewController: NSTabViewController {
 
         selectedEntryObservationHandles.append(
             selectedEntry.observeTask(
-                [\.requestBody],
-                retention: .automatic
+                [\.requestBody]
             ) { [weak self, weak selectedEntry] in
                 guard let self else { return }
                 self.scheduleToolbarStateUpdate()
@@ -552,8 +543,7 @@ public final class WIContainerViewController: NSTabViewController {
         )
         selectedEntryObservationHandles.append(
             selectedEntry.observeTask(
-                [\.responseBody],
-                retention: .automatic
+                [\.responseBody]
             ) { [weak self, weak selectedEntry] in
                 guard let self else { return }
                 self.scheduleToolbarStateUpdate()
@@ -573,8 +563,7 @@ public final class WIContainerViewController: NSTabViewController {
         if let requestBody = selectedEntry.requestBody {
             selectedEntryBodyFetchStateHandles.append(
                 requestBody.observeTask(
-                    [\.fetchState],
-                    retention: .automatic
+                    [\.fetchState]
                 ) { [weak self] in
                     self?.scheduleToolbarStateUpdate()
                 }
@@ -584,8 +573,7 @@ public final class WIContainerViewController: NSTabViewController {
         if let responseBody = selectedEntry.responseBody {
             selectedEntryBodyFetchStateHandles.append(
                 responseBody.observeTask(
-                    [\.fetchState],
-                    retention: .automatic
+                    [\.fetchState]
                 ) { [weak self] in
                     self?.scheduleToolbarStateUpdate()
                 }

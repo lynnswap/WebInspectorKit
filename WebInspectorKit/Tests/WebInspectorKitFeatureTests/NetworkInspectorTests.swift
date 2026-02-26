@@ -306,8 +306,7 @@ struct NetworkInspectorTests {
 
         let handle = inspector.observeTask(
             \.searchText,
-            retention: .manual,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { value in
             emittedValues.append(value)
         }
@@ -338,8 +337,7 @@ struct NetworkInspectorTests {
 
         let handle = inspector.observeTask(
             \.searchText,
-            retention: .manual,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { _ in
             callbackCount += 1
         }

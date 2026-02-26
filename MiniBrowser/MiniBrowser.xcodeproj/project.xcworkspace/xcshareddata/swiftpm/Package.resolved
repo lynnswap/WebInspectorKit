@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationsCompat.git",
       "state" : {
-        "revision" : "20c0091640abc4642b1c07642dda2361d22754fa",
-        "version" : "0.2.0"
+        "revision" : "ef41b8f28333a71cd9b5790c3a6a9d3c639ca6d4",
+        "version" : "0.3.0"
       }
     }
   ],

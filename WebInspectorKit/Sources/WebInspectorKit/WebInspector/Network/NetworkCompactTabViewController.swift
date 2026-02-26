@@ -80,8 +80,7 @@ final class NetworkCompactTabViewController: UIViewController, UINavigationContr
                 \.activeResourceFilters,
                 \.effectiveResourceFilters,
                 \.sortDescriptors
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleSelectionSync(animated: false)
@@ -89,8 +88,7 @@ final class NetworkCompactTabViewController: UIViewController, UINavigationContr
         inspector.store.observeTask(
             [
                 \.entries
-            ],
-            retention: .automatic
+            ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleSelectionSync(animated: false)
@@ -135,8 +133,7 @@ final class NetworkCompactTabViewController: UIViewController, UINavigationContr
                     \.phase,
                     \.requestBody,
                     \.responseBody
-                ],
-                retention: .automatic
+                ]
             ) { [weak self, weak selectedEntry] in
                 self?.scheduleSelectionSync(animated: false)
                 guard let self, let selectedEntry else {
@@ -164,8 +161,7 @@ final class NetworkCompactTabViewController: UIViewController, UINavigationContr
                         \.reference,
                         \.formEntries,
                         \.fetchState
-                    ],
-                    retention: .automatic
+                    ]
                 ) { [weak self] in
                     self?.scheduleSelectionSync(animated: false)
                 }
@@ -185,8 +181,7 @@ final class NetworkCompactTabViewController: UIViewController, UINavigationContr
                         \.reference,
                         \.formEntries,
                         \.fetchState
-                    ],
-                    retention: .automatic
+                    ]
                 ) { [weak self] in
                     self?.scheduleSelectionSync(animated: false)
                 }

@@ -106,29 +106,25 @@ final class DOMTreeTabViewController: UIViewController {
     private func observeState() {
         inspector.observe(
             \.errorMessage,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleErrorPresentationUpdate()
         }
         inspector.observe(
             \.hasPageWebView,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         inspector.observe(
             \.isSelectingElement,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         inspector.selection.observe(
             \.nodeId,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
@@ -245,8 +241,7 @@ final class DOMTreeTabViewController: NSViewController {
     private func observeState() {
         inspector.observe(
             \.errorMessage,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.errorUpdateCoalescer.schedule { [weak self] in
                 guard let self else { return }

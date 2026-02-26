@@ -356,22 +356,19 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
 
         domInspector.observe(
             \.hasPageWebView,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleDOMNavigationUpdateIfNeeded()
         }
         domInspector.observe(
             \.isSelectingElement,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleDOMNavigationUpdateIfNeeded()
         }
         domInspector.selection.observe(
             \.nodeId,
-            retention: .automatic,
-            removeDuplicates: true
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleDOMNavigationUpdateIfNeeded()
         }
