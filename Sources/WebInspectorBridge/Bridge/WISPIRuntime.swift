@@ -1,9 +1,6 @@
 import Foundation
 import OSLog
 import WebKit
-#if canImport(UIKit)
-import UIKit
-#endif
 
 private let spiRuntimeLogger = Logger(subsystem: "WebInspectorKit", category: "SPIRuntime")
 
@@ -38,12 +35,6 @@ package enum WISPISymbols {
     package static let setResourceLoadDelegateSelector = deobfuscate([":", "Delegate", "Load", "Resource", "set", "_"])
     package static let allocSelector = deobfuscate(["alloc"])
     package static let initWithDataSelector = deobfuscate([":", "Data", "With", "init"])
-    package static let contextMenuInteractionSelector = deobfuscate(["Interaction", "Menu", "context", "_"])
-    package static let hasVisibleMenuSelector = deobfuscate(["Menu", "Visible", "has", "_"])
-    package static let updateMenuInPlaceSelector = deobfuscate(["Place", "In", "Menu", "update", "_"])
-    package static let updateForAutomaticSelectionSelector = deobfuscate(["Selection", "Automatic", "For", "update", "_"])
-    package static let setActionStateNotifyingObserversSelector = deobfuscate([":", "Observers", "notifying", ":", "State", "set", "_"])
-    package static let updateViewSelector = deobfuscate(["View", "update", "_"])
 
     package static let contentWorldConfigurationClass = deobfuscate(["Configuration", "World", "Content", "WK", "_"])
     package static let privateJSHandleClass = deobfuscate(["Handle", "JS", "WK", "_"])
@@ -126,14 +117,6 @@ package final class WISPIRuntime {
     private static let privateAddBufferSelector = NSSelectorFromString(WISPISymbols.privateAddBufferSelector)
     private static let privateRemoveBufferSelector = NSSelectorFromString(WISPISymbols.privateRemoveBufferSelector)
     private static let setResourceLoadDelegateSelector = NSSelectorFromString(WISPISymbols.setResourceLoadDelegateSelector)
-    #if canImport(UIKit)
-    private static let contextMenuInteractionSelector = NSSelectorFromString(WISPISymbols.contextMenuInteractionSelector)
-    private static let hasVisibleMenuSelector = NSSelectorFromString(WISPISymbols.hasVisibleMenuSelector)
-    private static let updateMenuInPlaceSelector = NSSelectorFromString(WISPISymbols.updateMenuInPlaceSelector)
-    private static let updateForAutomaticSelectionSelector = NSSelectorFromString(WISPISymbols.updateForAutomaticSelectionSelector)
-    private static let setActionStateNotifyingObserversSelector = NSSelectorFromString(WISPISymbols.setActionStateNotifyingObserversSelector)
-    private static let updateViewSelector = NSSelectorFromString(WISPISymbols.updateViewSelector)
-    #endif
 
     private var startupCapabilitiesCache: WISPICapabilities?
     private var startupModeCache: WIBridgeMode?
@@ -249,68 +232,6 @@ package final class WISPIRuntime {
         )
     }
 
-    #if canImport(UIKit)
-    package func hasVisibleMenu(for barButtonItem: UIBarButtonItem) -> Bool {
-        guard let interaction = contextMenuInteractionObject(for: barButtonItem) else {
-            return false
-        }
-        return WISPIObjCInvoker.boolResult(from: interaction, selector: Self.hasVisibleMenuSelector) ?? false
-    }
-
-    @discardableResult
-    package func updateMenuInPlace(for barButtonItem: UIBarButtonItem) -> Bool {
-        WISPIObjCInvoker.boolResult(from: barButtonItem, selector: Self.updateMenuInPlaceSelector) ?? false
-    }
-
-    package func updateForAutomaticSelection(for barButtonItem: UIBarButtonItem) {
-        guard barButtonItem.responds(to: Self.updateForAutomaticSelectionSelector) else {
-            return
-        }
-        _ = bridgeClient.invokeVoid(
-            target: barButtonItem,
-            selectorName: WISPISymbols.updateForAutomaticSelectionSelector
-        )
-    }
-
-    package func setMenuActionState(_ action: UIAction, to state: UIMenuElement.State) {
-        guard action.responds(to: Self.setActionStateNotifyingObserversSelector) else {
-            action.state = state
-            return
-        }
-        _ = bridgeClient.invokeActionState(
-            target: action,
-            selectorName: WISPISymbols.setActionStateNotifyingObserversSelector,
-            stateRawValue: state.rawValue,
-            notify: true
-        )
-    }
-
-    package func requestUpdate(for barButtonItem: UIBarButtonItem) {
-        guard barButtonItem.responds(to: Self.updateViewSelector) else {
-            return
-        }
-        _ = bridgeClient.invokeVoid(
-            target: barButtonItem,
-            selectorName: WISPISymbols.updateViewSelector
-        )
-    }
-
-    package func updateVisibleMenu(
-        for barButtonItem: UIBarButtonItem,
-        menuProvider: @escaping (UIMenu) -> UIMenu
-    ) {
-        guard
-            let interaction = contextMenuInteractionObject(for: barButtonItem) as? UIContextMenuInteraction
-        else {
-            return
-        }
-        interaction.updateVisibleMenu(menuProvider)
-    }
-
-    private func contextMenuInteractionObject(for barButtonItem: UIBarButtonItem) -> NSObject? {
-        WISPIObjCInvoker.objectResult(from: barButtonItem, selector: Self.contextMenuInteractionSelector)
-    }
-    #endif
 }
 
 extension WISPIRuntime {

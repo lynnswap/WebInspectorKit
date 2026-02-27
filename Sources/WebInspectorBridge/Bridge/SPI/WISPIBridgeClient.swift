@@ -3,22 +3,8 @@ import WebKit
 
 @MainActor
 package protocol WISPIBridgeClient {
-    func objectResult(target: NSObject, selectorName: String) -> NSObject?
-    func boolResult(target: NSObject, selectorName: String) -> Bool?
-
     @discardableResult
     func setResourceLoadDelegate(on webView: WKWebView, selectorName: String, delegate: AnyObject?) -> Bool
-
-    @discardableResult
-    func invokeVoid(target: NSObject, selectorName: String) -> Bool
-
-    @discardableResult
-    func invokeActionState(
-        target: NSObject,
-        selectorName: String,
-        stateRawValue: Int,
-        notify: Bool
-    ) -> Bool
 
     func makeContentWorld(
         configurationClassName: String,

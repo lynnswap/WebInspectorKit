@@ -6,29 +6,8 @@ import WebKit
 package struct WISPIObjCBridgeClient: WISPIBridgeClient {
     package init() {}
 
-    package func objectResult(target: NSObject, selectorName: String) -> NSObject? {
-        WIKRuntimeBridge.objectResult(fromTarget: target, selectorName: selectorName)
-    }
-
-    package func boolResult(target: NSObject, selectorName: String) -> Bool? {
-        WIKRuntimeBridge.boolResult(fromTarget: target, selectorName: selectorName)?.boolValue
-    }
-
     package func setResourceLoadDelegate(on webView: WKWebView, selectorName: String, delegate: AnyObject?) -> Bool {
         WIKRuntimeBridge.invokeSetResourceLoadDelegate(on: webView, selectorName: selectorName, delegate: delegate)
-    }
-
-    package func invokeVoid(target: NSObject, selectorName: String) -> Bool {
-        WIKRuntimeBridge.invokeVoid(onTarget: target, selectorName: selectorName)
-    }
-
-    package func invokeActionState(
-        target: NSObject,
-        selectorName: String,
-        stateRawValue: Int,
-        notify: Bool
-    ) -> Bool {
-        WIKRuntimeBridge.invokeActionState(onTarget: target, selectorName: selectorName, stateRawValue: stateRawValue, notifyObservers: notify)
     }
 
     package func makeContentWorld(
