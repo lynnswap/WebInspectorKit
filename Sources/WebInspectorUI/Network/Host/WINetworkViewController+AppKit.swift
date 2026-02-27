@@ -33,7 +33,7 @@ public final class WINetworkViewController: NSSplitViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        inspector.selectEntry(id: nil)
+        inspector.selectEntry(nil)
 
         let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector, queryModel: queryModel))
         let detailController = NetworkMacDetailViewController(inspector: inspector)
@@ -244,7 +244,9 @@ private struct NetworkMacListTab: View {
                 return [selected]
             },
             set: { newSelection in
-                inspector.selectEntry(id: newSelection.first)
+                let selected = newSelection.first
+                let selectedEntry = queryModel.displayEntries.first(where: { $0.id == selected })
+                inspector.selectEntry(selectedEntry)
             }
         )
     }

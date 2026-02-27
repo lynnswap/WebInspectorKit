@@ -38,9 +38,9 @@ enum WINetworkPreviewFixtures {
         inspector.wiApplyPreviewBatch(payload)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
-            inspector.selectEntry(id: inspector.displayEntries.first?.id)
+            inspector.selectEntry(inspector.displayEntries.first)
         case .root, .rootLongTitle:
-            inspector.selectEntry(id: nil)
+            inspector.selectEntry(nil)
         }
     }
 
@@ -49,7 +49,7 @@ enum WINetworkPreviewFixtures {
         guard let entry = inspector.displayEntries.first else {
             return nil
         }
-        inspector.selectEntry(id: entry.id)
+        inspector.selectEntry(entry)
         return (inspector, entry)
     }
 
@@ -61,7 +61,7 @@ enum WINetworkPreviewFixtures {
         else {
             return nil
         }
-        inspector.selectEntry(id: entry.id)
+        inspector.selectEntry(entry)
         return (inspector, entry, body)
     }
 

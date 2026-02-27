@@ -60,7 +60,7 @@ struct NetworkInspectorAppKitTests {
             inspector.displayEntries.first(where: { $0.requestID == 112 })
         )
 
-        inspector.selectEntry(id: selected.id)
+        inspector.selectEntry(selected)
 
         #expect(inspector.selectedEntry?.id == selected.id)
     }

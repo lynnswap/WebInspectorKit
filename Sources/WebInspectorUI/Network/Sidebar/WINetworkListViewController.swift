@@ -6,57 +6,16 @@ import WebInspectorRuntime
 #if canImport(UIKit)
 import UIKit
 
-private protocol DiffableStableID: Hashable, Sendable {}
-private protocol DiffableCellKind: Hashable, Sendable {}
-
-private struct DiffableRenderState<ID: DiffableStableID, Payload> {
-    let payloadByID: [ID: Payload]
-    let revisionByID: [ID: Int]
-}
-
 @MainActor
 public final class WINetworkListViewController: UICollectionViewController {
     private enum SectionIdentifier: Hashable {
         case main
     }
 
-    private enum ItemCellKind: String, DiffableCellKind {
-        case list
-    }
-
-    private enum ItemStableKey: DiffableStableID {
-        case entry(id: UUID)
-    }
-
-    private struct ItemStableID: DiffableStableID {
-        let key: ItemStableKey
-        let cellKind: ItemCellKind
-    }
-
-    private struct ItemIdentifier: Hashable, Sendable {
-        let stableID: ItemStableID
-    }
-
-    private struct ItemPayload {
-        let entryID: UUID
-        let displayName: String
-        let fileTypeLabel: String
-        let statusSeverity: NetworkStatusSeverity
-    }
-
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
-    private var hasStartedObservingInspector = false
-    private var entryObservationHandlesByID: [UUID: [ObservationHandle]] = [:]
-    private let listUpdateCoalescer = UIUpdateCoalescer()
 
-    private var entryByID: [UUID: NetworkEntry] = [:]
-    private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
-    private var revisionByStableID: [ItemStableID: Int] = [:]
-    private var lastRenderSignature: Int?
     private var needsSnapshotReloadOnNextAppearance = false
-    private var pendingReloadDataTask: Task<Void, Never>?
-    private var snapshotTaskGeneration: UInt64 = 0
     private lazy var dataSource = makeDataSource()
     private var searchController: UISearchController {
         queryModel.searchController
@@ -65,6 +24,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     var filterNavigationItem: UIBarButtonItem {
         queryModel.filterBarButtonItem
     }
+
     var hostOverflowItemsForRegularNavigation: UIDeferredMenuElement {
         makeOverflowMenuElement()
     }
@@ -73,26 +33,25 @@ public final class WINetworkListViewController: UICollectionViewController {
         self.inspector = inspector
         self.queryModel = WINetworkQueryModel(inspector: inspector)
         super.init(collectionViewLayout: Self.makeListLayout())
+
+        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
+            self?.reloadDataFromInspector()
+        }
     }
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
         self.queryModel = queryModel
         super.init(collectionViewLayout: Self.makeListLayout())
+
+        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
+            self?.reloadDataFromInspector()
+        }
     }
 
     @available(*, unavailable)
     public required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        pendingReloadDataTask?.cancel()
-        for handles in entryObservationHandlesByID.values {
-            for handle in handles {
-                handle.cancel()
-            }
-        }
     }
 
     public override func viewDidLoad() {
@@ -105,7 +64,6 @@ public final class WINetworkListViewController: UICollectionViewController {
         collectionView.accessibilityIdentifier = "WI.Network.List"
 
         queryModel.syncSearchControllerText()
-        startObservingInspectorIfNeeded()
         reloadDataFromInspector()
     }
 
@@ -117,27 +75,6 @@ public final class WINetworkListViewController: UICollectionViewController {
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         flushPendingSnapshotUpdateIfNeeded()
-    }
-
-    func selectEntry(with id: UUID?) {
-        guard let id else {
-            guard let selectedIndexPath = collectionView.indexPathsForSelectedItems?.first else {
-                return
-            }
-            collectionView.deselectItem(at: selectedIndexPath, animated: true)
-            return
-        }
-        let item = ItemIdentifier(stableID: ItemStableID(key: .entry(id: id), cellKind: .list))
-        guard let indexPath = dataSource.indexPath(for: item) else {
-            guard let selectedIndexPath = collectionView.indexPathsForSelectedItems?.first else {
-                return
-            }
-            collectionView.deselectItem(at: selectedIndexPath, animated: true)
-            return
-        }
-        if collectionView.indexPathsForSelectedItems?.contains(indexPath) != true {
-            collectionView.selectItem(at: indexPath, animated: false, scrollPosition: .centeredVertically)
-        }
     }
 
     func applyNavigationItems(to navigationItem: UINavigationItem) {
@@ -163,7 +100,6 @@ public final class WINetworkListViewController: UICollectionViewController {
         if navigationItem.searchController !== searchController {
             navigationItem.searchController = searchController
         }
-        // iPad regular split list column should not show modal close/back affordance.
         navigationItem.hidesBackButton = true
         navigationItem.leftItemsSupplementBackButton = false
         if #available(iOS 26.0, *) {
@@ -183,18 +119,14 @@ public final class WINetworkListViewController: UICollectionViewController {
         return UICollectionViewCompositionalLayout.list(using: configuration)
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier> {
-        let listCellRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemIdentifier> { [weak self] cell, _, item in
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
+        let listCellRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, NetworkEntry> { [weak self] cell, _, item in
             self?.configureListCell(cell, item: item)
         }
-        let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
+        let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
-            guard item.stableID.cellKind == .list else {
-                assertionFailure("Unexpected cell kind for network list registration")
-                return UICollectionViewCell()
-            }
-            return collectionView.dequeueConfiguredReusableCell(
+            collectionView.dequeueConfiguredReusableCell(
                 using: listCellRegistration,
                 for: indexPath,
                 item: item
@@ -202,88 +134,16 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
         return dataSource
     }
-
-    private func applySnapshot() {
-        pendingReloadDataTask?.cancel()
-        snapshotTaskGeneration &+= 1
-        let generation = snapshotTaskGeneration
-        let snapshot = makeSnapshot()
-        pendingReloadDataTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            defer {
-                if self.snapshotTaskGeneration == generation {
-                    self.pendingReloadDataTask = nil
-                }
-            }
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
-            await self.dataSource.apply(snapshot, animatingDifferences: false)
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
-            self.selectEntry(with: self.inspector.selectedEntry?.id)
-        }
-    }
-
-    private func applySnapshotUsingReloadData() {
-        pendingReloadDataTask?.cancel()
-        snapshotTaskGeneration &+= 1
-        let generation = snapshotTaskGeneration
-        let snapshot = makeSnapshot()
-        pendingReloadDataTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            defer {
-                if self.snapshotTaskGeneration == generation {
-                    self.pendingReloadDataTask = nil
-                }
-            }
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
-            await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
-            self.selectEntry(with: self.inspector.selectedEntry?.id)
-        }
-    }
-
-    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
-        let render = buildRenderState()
-        let stableIDs = render.stableIDs
+    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry> {
+        let identifiers = queryModel.displayEntries
         precondition(
-            stableIDs.count == Set(stableIDs).count,
-            "Duplicate diffable IDs detected in WINetworkListViewController"
+            identifiers.count == Set(identifiers.map(\.id)).count,
+            "Duplicate row IDs detected in WINetworkListViewController"
         )
-        let previousRevisionByStableID = revisionByStableID
-        payloadByStableID = render.state.payloadByID
-        revisionByStableID = render.state.revisionByID
 
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
+        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry>()
         snapshot.appendSections([.main])
-        let identifiers = stableIDs.map { stableID in
-            ItemIdentifier(stableID: stableID)
-        }
         snapshot.appendItems(identifiers, toSection: .main)
-
-        let reconfigured = stableIDs.compactMap { stableID -> ItemIdentifier? in
-            guard
-                let previousRevision = previousRevisionByStableID[stableID],
-                let nextRevision = render.state.revisionByID[stableID],
-                previousRevision != nextRevision
-            else {
-                return nil
-            }
-            return ItemIdentifier(stableID: stableID)
-        }
-        if !reconfigured.isEmpty {
-            snapshot.reconfigureItems(reconfigured)
-        }
         return snapshot
     }
 
@@ -297,7 +157,10 @@ public final class WINetworkListViewController: UICollectionViewController {
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        applySnapshot()
+        Task {
+            let snapshot = self.makeSnapshot()
+            await self.dataSource.apply(snapshot, animatingDifferences: false)
+        }
     }
 
     private func flushPendingSnapshotUpdateIfNeeded() {
@@ -305,23 +168,16 @@ public final class WINetworkListViewController: UICollectionViewController {
             return
         }
         needsSnapshotReloadOnNextAppearance = false
-        applySnapshotUsingReloadData()
+        Task {
+            let snapshot = self.makeSnapshot()
+            await self.dataSource.applySnapshotUsingReloadData(snapshot)
+        }
     }
 
     private func reloadDataFromInspector() {
         queryModel.syncSearchControllerText()
-        let visibleEntries = queryModel.displayEntries
-        entryByID = Dictionary(uniqueKeysWithValues: visibleEntries.map { ($0.id, $0) })
-        synchronizeEntryObservers(with: visibleEntries)
-
-        let renderSignature = snapshotRenderSignature(for: visibleEntries)
-        if renderSignature != lastRenderSignature {
-            lastRenderSignature = renderSignature
-            requestSnapshotUpdate()
-        } else if isCollectionViewVisible {
-            selectEntry(with: inspector.selectedEntry?.id)
-        }
-        let shouldShowEmptyState = visibleEntries.isEmpty
+        requestSnapshotUpdate()
+        let shouldShowEmptyState = queryModel.displayEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
@@ -334,141 +190,9 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
     }
 
-    private func startObservingInspectorIfNeeded() {
-        guard hasStartedObservingInspector == false else {
-            return
-        }
-        hasStartedObservingInspector = true
-
-        inspector.observeTask(
-            [
-                \.selectedEntry
-            ]
-        ) { [weak self] in
-            self?.scheduleReloadDataFromInspector()
-        }
-        inspector.observeTask(
-            [
-                \.sortDescriptors
-            ],
-            options: WIObservationOptions.debounced
-        ) { [weak self] in
-            self?.scheduleReloadDataFromInspector()
-        }
-        queryModel.observeTask(
-            [
-                \.searchText,
-                \.activeFilters,
-                \.effectiveFilters
-            ],
-            options: WIObservationOptions.debounced
-        ) { [weak self] in
-            self?.scheduleReloadDataFromInspector()
-        }
-        inspector.store.observeTask(
-            [
-                \.entries
-            ],
-            options: WIObservationOptions.debounced
-        ) { [weak self] in
-            self?.scheduleReloadDataFromInspector()
-        }
-    }
-
-    private func scheduleReloadDataFromInspector() {
-        listUpdateCoalescer.schedule { [weak self] in
-            self?.reloadDataFromInspector()
-        }
-    }
-
-    private func synchronizeEntryObservers(with visibleEntries: [NetworkEntry]) {
-        let currentIDs = Set(visibleEntries.map(\.id))
-        let removedIDs = Set(entryObservationHandlesByID.keys).subtracting(currentIDs)
-        for removedID in removedIDs {
-            guard let handles = entryObservationHandlesByID.removeValue(forKey: removedID) else {
-                continue
-            }
-            for handle in handles {
-                handle.cancel()
-            }
-        }
-        for entry in visibleEntries where entryObservationHandlesByID[entry.id] == nil {
-            entryObservationHandlesByID[entry.id] = observeEntry(entry)
-        }
-    }
-
-    private func observeEntry(_ entry: NetworkEntry) -> [ObservationHandle] {
-        var handles: [ObservationHandle] = []
-        handles.append(entry.observe(
-            \.displayName,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        handles.append(entry.observe(
-            \.fileTypeLabel,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        handles.append(entry.observe(
-            \.statusLabel,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        handles.append(entry.observe(
-            \.statusSeverity,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        handles.append(entry.observe(
-            \.method,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        handles.append(entry.observe(
-            \.phase,
-            options: WIObservationOptions.dedupeDebounced
-        ) { [weak self] _ in
-            self?.scheduleReloadDataFromInspector()
-        })
-        return handles
-    }
-
-    private func snapshotRenderSignature(for entries: [NetworkEntry]) -> Int {
-        var hasher = Hasher()
-        hasher.combine(entries.count)
-        for entry in entries {
-            hasher.combine(entry.id)
-            hasher.combine(entry.displayName)
-            hasher.combine(entry.fileTypeLabel)
-            hasher.combine(entry.statusLabel)
-            hasher.combine(entry.statusSeverity)
-            hasher.combine(entry.method)
-        }
-        return hasher.finalize()
-    }
-
-    private func configureListCell(_ cell: UICollectionViewListCell, item: ItemIdentifier) {
-        guard item.stableID.cellKind == .list else {
-            assertionFailure("List registration mismatch in WINetworkListViewController")
-            cell.contentConfiguration = nil
-            cell.accessories = []
-            return
-        }
-        guard
-            let payload = payloadByStableID[item.stableID]
-        else {
-            cell.contentConfiguration = nil
-            cell.accessories = []
-            return
-        }
-
+    private func configureListCell(_ cell: UICollectionViewListCell, item: NetworkEntry) {
         var content = UIListContentConfiguration.cell()
-        content.text = payload.displayName
+        content.text = item.displayName
         content.secondaryText = nil
         content.textProperties.numberOfLines = 2
         content.textProperties.lineBreakMode = .byTruncatingMiddle
@@ -479,10 +203,11 @@ public final class WINetworkListViewController: UICollectionViewController {
             )
         )
         cell.contentConfiguration = content
+        
         cell.accessories = [
-            .customView(configuration: statusIndicatorConfiguration(for: payload.statusSeverity)),
+            .customView(configuration: statusIndicatorConfiguration(for: item)),
             .label(
-                text: payload.fileTypeLabel,
+                text: item.fileTypeLabel,
                 options: .init(
                     reservedLayoutWidth: .actual,
                     tintColor: .secondaryLabel,
@@ -492,6 +217,27 @@ public final class WINetworkListViewController: UICollectionViewController {
             ),
             .disclosureIndicator()
         ]
+        
+        item.observe(\.displayName){ [weak cell] newValue in
+            guard var content = cell?.contentConfiguration as? UIListContentConfiguration else { return }
+            content.text = newValue
+        }
+        item.observe([\.fileTypeLabel,\.statusSeverity]){ [weak cell,weak item] in
+            guard let cell,let item else { return }
+            cell.accessories = [
+                .customView(configuration: statusIndicatorConfiguration(for: item)),
+                .label(
+                    text: item.fileTypeLabel,
+                    options: .init(
+                        reservedLayoutWidth: .actual,
+                        tintColor: .secondaryLabel,
+                        font: .preferredFont(forTextStyle: .footnote),
+                        adjustsFontForContentSizeCategory: true
+                    )
+                ),
+                .disclosureIndicator()
+            ]
+        }
     }
 
     private func makeSecondaryMenu() -> UIMenu {
@@ -517,60 +263,25 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     public override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        guard
-            let item = dataSource.itemIdentifier(for: indexPath),
-            let payload = payloadByStableID[item.stableID],
-            let entry = entryByID[payload.entryID]
-        else {
-            inspector.selectEntry(id: nil)
+        guard let entry = dataSource.itemIdentifier(for: indexPath) else {
+            inspector.selectEntry(nil)
             return
         }
-        inspector.selectEntry(id: entry.id)
+        inspector.selectEntry(entry)
     }
+}
+@MainActor
+private func statusIndicatorConfiguration(for item: NetworkEntry) -> UICellAccessory.CustomViewConfiguration {
+    let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
+    dotView.backgroundColor = networkStatusColor(for: item.statusSeverity)
+    dotView.layer.cornerRadius = 4
 
-    private func buildRenderState() -> (stableIDs: [ItemStableID], state: DiffableRenderState<ItemStableID, ItemPayload>) {
-        var stableIDs: [ItemStableID] = []
-        var payloadByID: [ItemStableID: ItemPayload] = [:]
-        var revisionByID: [ItemStableID: Int] = [:]
-
-        for entry in queryModel.displayEntries {
-            let stableID = ItemStableID(key: .entry(id: entry.id), cellKind: .list)
-            let payload = ItemPayload(
-                entryID: entry.id,
-                displayName: entry.displayName,
-                fileTypeLabel: entry.fileTypeLabel,
-                statusSeverity: entry.statusSeverity
-            )
-            stableIDs.append(stableID)
-            payloadByID[stableID] = payload
-            revisionByID[stableID] = revision(for: payload)
-        }
-        return (
-            stableIDs: stableIDs,
-            state: DiffableRenderState(payloadByID: payloadByID, revisionByID: revisionByID)
-        )
-    }
-
-    private func revision(for payload: ItemPayload) -> Int {
-        var hasher = Hasher()
-        hasher.combine(payload.entryID)
-        hasher.combine(payload.displayName)
-        hasher.combine(payload.fileTypeLabel)
-        hasher.combine(payload.statusSeverity)
-        return hasher.finalize()
-    }
-
-    private func statusIndicatorConfiguration(for severity: NetworkStatusSeverity) -> UICellAccessory.CustomViewConfiguration {
-        let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
-        dotView.backgroundColor = networkStatusColor(for: severity)
-        dotView.layer.cornerRadius = 4
-        return .init(
-            customView: dotView,
-            placement: .leading(),
-            reservedLayoutWidth: .custom(8),
-            maintainsFixedSize: true
-        )
-    }
+    return .init(
+        customView: dotView,
+        placement: .leading(),
+        reservedLayoutWidth: .custom(8),
+        maintainsFixedSize: true
+    )
 }
 
 #if DEBUG && canImport(SwiftUI)

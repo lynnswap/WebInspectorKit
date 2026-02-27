@@ -168,12 +168,13 @@ struct NetworkInspectorTests {
         )
 
         let selectedEntry = try #require(inspector.store.entries.first)
-        inspector.selectedEntry = selectedEntry
+        inspector.selectEntry(selectedEntry)
 
         inspector.clear()
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
+        #expect(inspector.displayEntries.isEmpty)
     }
 
     @Test
@@ -187,7 +188,7 @@ struct NetworkInspectorTests {
             monotonicMs: 1_000
         )
         let selectedEntry = try #require(inspector.store.entries.first)
-        inspector.selectedEntry = selectedEntry
+        inspector.selectEntry(selectedEntry)
         inspector.searchText = "filter-target"
         inspector.activeResourceFilters = [.script]
 
@@ -195,6 +196,7 @@ struct NetworkInspectorTests {
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
+        #expect(inspector.displayEntries.isEmpty)
         #expect(inspector.searchText == "filter-target")
         #expect(inspector.activeResourceFilters == [.script])
         #expect(inspector.effectiveResourceFilters == [.script])
@@ -253,7 +255,7 @@ struct NetworkInspectorTests {
         let selectedEntry = try #require(
             inspector.store.entries.first(where: { $0.requestID == 61 })
         )
-        inspector.selectedEntry = selectedEntry
+        inspector.selectEntry(selectedEntry)
         inspector.activeResourceFilters = [.stylesheet]
 
         #expect(inspector.displayEntries.map(\.requestID) == [62])
@@ -273,8 +275,8 @@ struct NetworkInspectorTests {
             monotonicMs: 1_000
         )
 
-        let initiallySelected = try #require(inspector.store.entries.first)
-        inspector.selectedEntry = initiallySelected
+        let initiallySelectedID = try #require(inspector.store.entries.first?.id)
+        inspector.selectEntry(inspector.store.entries.first)
 
         try applyRequestStart(
             to: inspector,
@@ -290,6 +292,38 @@ struct NetworkInspectorTests {
         #expect(cleared)
         #expect(inspector.store.entries.count == 1)
         #expect(inspector.store.entries.first?.requestID == 72)
+        #expect(inspector.store.entries.first?.id != initiallySelectedID)
+    }
+
+    @Test
+    func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 81,
+            url: "https://example.com/stateful",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+        let responseReceived = try decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 81,
+            "status": 404,
+            "statusText": "Not Found",
+            "mimeType": "application/json",
+            "time": [
+                "monotonicMs": 1_020.0,
+                "wallMs": 1_700_000_000_020.0
+            ]
+        ])
+        inspector.store.applyEvent(responseReceived)
+
+        let updated = await waitUntil {
+            inspector.displayEntries.first?.statusLabel == "404"
+        }
+        #expect(updated)
+        #expect(inspector.displayEntries.first?.statusSeverity == .warning)
+        #expect(inspector.displayEntries.first?.fileTypeLabel == "json")
     }
 
     @Test

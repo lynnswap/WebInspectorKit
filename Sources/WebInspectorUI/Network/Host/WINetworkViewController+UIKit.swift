@@ -186,7 +186,7 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         hostNavigationState.additionalOverflowItems = regularState.additionalOverflowItems
     }
 }
-
+@MainActor
 func networkStatusColor(for severity: NetworkStatusSeverity) -> UIColor {
     switch severity {
     case .success:
@@ -201,7 +201,7 @@ func networkStatusColor(for severity: NetworkStatusSeverity) -> UIColor {
         return .secondaryLabel
     }
 }
-
+@MainActor
 func networkBodyTypeLabel(entry: NetworkEntry, body: NetworkBody) -> String? {
     let headerValue: String?
     switch body.role {
@@ -219,7 +219,7 @@ func networkBodyTypeLabel(entry: NetworkEntry, body: NetworkBody) -> String? {
     }
     return body.kind.rawValue.uppercased()
 }
-
+@MainActor
 func networkBodySize(entry: NetworkEntry, body: NetworkBody) -> Int? {
     if let size = body.size {
         return size

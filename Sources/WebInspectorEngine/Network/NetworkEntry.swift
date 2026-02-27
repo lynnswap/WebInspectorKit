@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
+@MainActor
 @Observable
-public class NetworkEntry: Identifiable, Equatable, Hashable {
+public final class NetworkEntry: Identifiable, Equatable, Hashable ,Sendable{
     public static nonisolated func == (lhs: NetworkEntry, rhs: NetworkEntry) -> Bool { lhs.id == rhs.id }
     public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
@@ -15,8 +16,8 @@ public class NetworkEntry: Identifiable, Equatable, Hashable {
     nonisolated public let id: UUID
 
     public let sessionID: String
-    public let requestID: Int
-    public let createdAt: Date
+    nonisolated public let requestID: Int
+    nonisolated public let createdAt: Date
 
     public internal(set) var url: String
     public internal(set) var method: String

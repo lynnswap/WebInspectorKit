@@ -7,7 +7,6 @@ public final class NetworkStore {
     public private(set) var isRecording = true
     public private(set) var entries: [NetworkEntry] = []
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
-    @ObservationIgnored private var indexByEntryID: [UUID: Int] = [:]
     @ObservationIgnored private var maxEntriesStorage: Int?
 
     var maxEntries: Int? {
@@ -112,13 +111,10 @@ public final class NetworkStore {
         }
 
         let bucket = bucket(for: batch.sessionID)
-        let startIndex = entries.count
         entries.append(contentsOf: staged.map(\.entry))
 
-        for (offset, stagedEntry) in staged.enumerated() {
-            let newIndex = startIndex + offset
+        for stagedEntry in staged {
             bucket.set(stagedEntry.entry, requestID: stagedEntry.requestID)
-            indexByEntryID[stagedEntry.entry.id] = newIndex
         }
     }
 
@@ -161,7 +157,6 @@ public final class NetworkStore {
     func reset() {
         sessionBuckets.removeAll()
         entries.removeAll()
-        indexByEntryID.removeAll()
     }
 
     func clear() {
@@ -179,15 +174,6 @@ public final class NetworkStore {
             return nil
         }
         return entry
-    }
-
-    public func entry(forEntryID id: UUID?) -> NetworkEntry? {
-        guard let id,
-              let index = indexByEntryID[id],
-              entries.indices.contains(index) else {
-            return nil
-        }
-        return entries[index]
     }
 
     private func handleStart(_ event: HTTPNetworkEvent) {
@@ -305,10 +291,8 @@ public final class NetworkStore {
     private func appendEntry(_ entry: NetworkEntry) {
         pruneIfNeeded(adding: 1)
         entries.append(entry)
-        let newIndex = entries.count - 1
         let bucket = bucket(for: entry.sessionID)
         bucket.set(entry, requestID: entry.requestID)
-        indexByEntryID[entry.id] = newIndex
     }
 
     private func bucket(for sessionID: String?) -> SessionBucket {
@@ -347,10 +331,8 @@ public final class NetworkStore {
 
     private func rebuildIndexAndBuckets() {
         sessionBuckets.removeAll()
-        indexByEntryID.removeAll()
 
-        for (index, entry) in entries.enumerated() {
-            indexByEntryID[entry.id] = index
+        for entry in entries {
             bucket(for: entry.sessionID).set(entry, requestID: entry.requestID)
         }
     }

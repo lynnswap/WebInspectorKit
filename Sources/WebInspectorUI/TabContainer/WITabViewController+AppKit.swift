@@ -238,6 +238,14 @@ public final class WITabViewController: NSTabViewController {
             }
         )
         toolbarObservationHandles.append(
+            inspectorController.network.store.observeTask(
+                [\.entries]
+            ) { [weak self] in
+                self?.synchronizeSelectedEntryObservation()
+                self?.scheduleToolbarStateUpdate()
+            }
+        )
+        toolbarObservationHandles.append(
             networkQueryModel.observe(
                 \.searchText,
                 options: [.removeDuplicates]
@@ -258,14 +266,6 @@ public final class WITabViewController: NSTabViewController {
                 \.effectiveFilters,
                 options: [.removeDuplicates]
             ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            inspectorController.network.store.observeTask(
-                [\.entries]
-            ) { [weak self] in
-                self?.synchronizeSelectedEntryObservation()
                 self?.scheduleToolbarStateUpdate()
             }
         )
@@ -299,7 +299,8 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private func synchronizeSelectedEntryObservation() {
-        let selectedEntryID = inspectorController.network.selectedEntry?.id
+        let selectedEntry = inspectorController.network.selectedEntry
+        let selectedEntryID = selectedEntry?.id
         guard selectedEntryBodyObservedEntryID != selectedEntryID else {
             return
         }
@@ -314,10 +315,7 @@ public final class WITabViewController: NSTabViewController {
         }
         selectedEntryBodyFetchStateHandles.removeAll()
 
-        guard
-            let selectedEntryID,
-            let selectedEntry = inspectorController.network.store.entry(forEntryID: selectedEntryID)
-        else {
+        guard let selectedEntry else {
             return
         }
 
@@ -496,10 +494,7 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private static func canFetchSelectedBodies(in networkInspector: WINetworkModel) -> Bool {
-        guard
-            let selectedID = networkInspector.selectedEntry?.id,
-            let entry = networkInspector.store.entry(forEntryID: selectedID)
-        else {
+        guard let entry = networkInspector.selectedEntry else {
             return false
         }
 
@@ -622,14 +617,7 @@ public final class WITabViewController: NSTabViewController {
     @objc
     private func handleNetworkFetchBodyToolbarAction(_ sender: Any?) {
         Task {
-            guard let selectedID = inspectorController.network.selectedEntry?.id else {
-                return
-            }
-            guard let entry = inspectorController.network.store.entry(forEntryID: selectedID) else {
-                inspectorController.network.selectEntry(id: nil)
-                updateToolbarState()
-                return
-            }
+            guard let entry = inspectorController.network.selectedEntry else { return }
 
             if let requestBody = entry.requestBody {
                 await inspectorController.network.fetchBodyIfNeeded(for: entry, body: requestBody, force: true)

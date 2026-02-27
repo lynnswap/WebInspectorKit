@@ -106,8 +106,7 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
     }
 
     private func syncDetailSelection(animated: Bool) {
-        let selectedEntry = inspector.revalidateSelectedEntryAgainstStore()
-        listPaneViewController.selectEntry(with: selectedEntry?.id)
+        let selectedEntry = inspector.selectedEntry
 
         guard let selectedEntry else {
             popToListIfNeeded(animated: animated)
@@ -159,9 +158,8 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
             return
         }
 
-        inspector.selectEntry(id: nil)
+        inspector.selectEntry(nil)
         self.detailViewController = nil
-        listPaneViewController.selectEntry(with: nil)
         listPaneViewController.applyNavigationItems(to: navigationItem)
     }
 

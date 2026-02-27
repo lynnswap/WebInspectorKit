@@ -300,9 +300,6 @@ struct NetworkStoreTests {
         #expect(store.entry(forRequestID: 9, sessionID: "batch-session")?.requestID == 9)
         #expect(store.entry(forRequestID: 10, sessionID: "batch-session")?.requestID == 10)
 
-        for entry in store.entries {
-            #expect(store.entry(forEntryID: entry.id) === entry)
-        }
     }
 
     @Test
@@ -318,8 +315,6 @@ struct NetworkStoreTests {
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
         store.applyEvent(first)
-        let prunedEntryID = store.entries.first?.id
-
         let second = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
             "requestId": 2,
@@ -343,12 +338,6 @@ struct NetworkStoreTests {
         #expect(store.entry(forRequestID: 2, sessionID: nil)?.requestID == 2)
         #expect(store.entry(forRequestID: 3, sessionID: nil)?.requestID == 3)
 
-        let removedID = try #require(prunedEntryID)
-        #expect(store.entry(forEntryID: removedID) == nil)
-
-        for entry in store.entries {
-            #expect(store.entry(forEntryID: entry.id) === entry)
-        }
     }
 
     @Test
