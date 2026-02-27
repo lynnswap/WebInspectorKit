@@ -15,6 +15,7 @@ public final class WITabViewController: UIViewController {
 
     public private(set) var inspectorController: WISession
 
+    private var networkQueryModel: WINetworkQueryModel
     private weak var pageWebView: WKWebView?
     private var requestedTabDescriptors: [WITabDescriptor]
     private var resolvedTabDescriptors: [WITabDescriptor]
@@ -30,6 +31,7 @@ public final class WITabViewController: UIViewController {
         tabs: [WITabDescriptor] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
+        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         self.pageWebView = webView
         self.requestedTabDescriptors = tabs
         self.resolvedTabDescriptors = tabs
@@ -59,6 +61,7 @@ public final class WITabViewController: UIViewController {
         previousController.disconnect()
 
         self.inspectorController = inspectorController
+        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         self.inspectorController.enableUICommandRouting()
         bindSelectionCallback()
 
@@ -134,6 +137,7 @@ public final class WITabViewController: UIViewController {
     private func makeContext() -> WITabContext {
         WITabContext(
             controller: inspectorController,
+            networkQueryModel: networkQueryModel,
             horizontalSizeClass: effectiveHorizontalSizeClass
         )
     }

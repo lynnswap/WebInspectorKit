@@ -58,9 +58,7 @@ public enum WIDOMCommand {
 }
 
 public enum WINetworkCommand {
-    case setSearchText(String)
     case selectEntry(id: UUID?)
-    case setResourceFilter(NetworkResourceFilter, isEnabled: Bool)
     case clear
     case fetchBody(entry: NetworkEntry, body: NetworkBody, force: Bool)
 }
@@ -79,7 +77,4 @@ public enum WIDOMEvent {
 
 public enum WINetworkEvent {
     case selectedEntryChanged(UUID?)
-    case searchTextChanged(String)
-    case activeFiltersChanged(Set<NetworkResourceFilter>)
-    case effectiveFiltersChanged(Set<NetworkResourceFilter>)
 }

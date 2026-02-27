@@ -145,13 +145,13 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func setResourceFilterAllClearsSpecificSelection() {
+    func assigningEmptyActiveFiltersClearsEffectiveFilters() {
         let inspector = WINetworkModel(session: NetworkSession())
 
         inspector.activeResourceFilters = [.image, .script]
         #expect(inspector.effectiveResourceFilters == [.image, .script])
 
-        inspector.setResourceFilter(.all, isEnabled: true)
+        inspector.activeResourceFilters = []
         #expect(inspector.activeResourceFilters.isEmpty)
         #expect(inspector.effectiveResourceFilters.isEmpty)
     }

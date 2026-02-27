@@ -228,15 +228,6 @@ private extension WISession {
         network.observeTask([\.selectedEntry]) { [weak self] in
             self?.send(.event(.network(.selectedEntryChanged(self?.network.selectedEntry?.id))))
         }
-        network.observe(\.searchText, options: [.removeDuplicates]) { [weak self] searchText in
-            self?.send(.event(.network(.searchTextChanged(searchText))))
-        }
-        network.observe(\.activeResourceFilters, options: [.removeDuplicates]) { [weak self] filters in
-            self?.send(.event(.network(.activeFiltersChanged(filters))))
-        }
-        network.observe(\.effectiveResourceFilters, options: [.removeDuplicates]) { [weak self] filters in
-            self?.send(.event(.network(.effectiveFiltersChanged(filters))))
-        }
     }
 
     func resolvedActivationForTabID(_ tabID: String?) -> WISessionTabActivation {

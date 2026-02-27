@@ -10,13 +10,22 @@ import SwiftUI
 @MainActor
 public final class WINetworkViewController: NSSplitViewController {
     private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private var hasStartedObservingInspector = false
     private let selectionUpdateCoalescer = UIUpdateCoalescer()
     private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
-    public init(inspector: WINetworkModel) {
+    public convenience init(inspector: WINetworkModel) {
+        self.init(
+            inspector: inspector,
+            queryModel: WINetworkQueryModel(inspector: inspector)
+        )
+    }
+
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
+        self.queryModel = queryModel
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -29,7 +38,7 @@ public final class WINetworkViewController: NSSplitViewController {
         super.viewDidLoad()
         inspector.selectEntry(id: nil)
 
-        let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector))
+        let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector, queryModel: queryModel))
         let detailController = NetworkMacDetailViewController(inspector: inspector)
         listHostingController = listHost
         detailViewController = detailController
@@ -56,7 +65,7 @@ public final class WINetworkViewController: NSSplitViewController {
     private func syncSelection() {
         let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
             current: inspector.selectedEntry,
-            entries: inspector.displayEntries
+            entries: queryModel.displayEntries
         )
         if inspector.selectedEntry?.id != resolvedSelection?.id {
             inspector.selectEntry(id: resolvedSelection?.id)
@@ -79,10 +88,16 @@ public final class WINetworkViewController: NSSplitViewController {
         inspector.observeTask(
             [
                 \.selectedEntry,
-                \.searchText,
-                \.activeResourceFilters,
-                \.effectiveResourceFilters,
                 \.sortDescriptors
+            ]
+        ) { [weak self] in
+            self?.scheduleSelectionSync()
+        }
+        queryModel.observeTask(
+            [
+                \.searchText,
+                \.activeFilters,
+                \.effectiveFilters
             ]
         ) { [weak self] in
             self?.scheduleSelectionSync()
@@ -200,13 +215,14 @@ private final class NetworkMacDetailViewController: NSViewController {
 @MainActor
 private struct NetworkMacListTab: View {
     @Bindable var inspector: WINetworkModel
+    @Bindable var queryModel: WINetworkQueryModel
 
     var body: some View {
         Group {
-            if inspector.displayEntries.isEmpty {
+            if queryModel.displayEntries.isEmpty {
                 emptyState
             } else {
-                Table(inspector.displayEntries, selection: tableSelection) {
+                Table(queryModel.displayEntries, selection: tableSelection) {
                     TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
                         Text(entry.displayName)
                             .lineLimit(1)
@@ -282,11 +298,11 @@ private struct NetworkMacListTab: View {
             },
             set: { newSelection in
                 let nextSelectedEntry = newSelection.first.flatMap { nextSelectedID in
-                    inspector.displayEntries.first(where: { $0.id == nextSelectedID })
+                    queryModel.displayEntries.first(where: { $0.id == nextSelectedID })
                 }
                 let resolved = NetworkListSelectionPolicy.resolvedSelection(
                     current: nextSelectedEntry,
-                    entries: inspector.displayEntries
+                    entries: queryModel.displayEntries
                 )
                 inspector.selectEntry(id: resolved?.id)
             }

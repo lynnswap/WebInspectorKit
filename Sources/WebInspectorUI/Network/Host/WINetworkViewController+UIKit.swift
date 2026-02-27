@@ -14,15 +14,16 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
     }
 
     private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private let compactRootViewController: WINetworkCompactViewController
     private let compactNavigationController: UINavigationController
     private let regularHostViewController: WINetworkRegularSplitViewController
 
     private weak var activeHostViewController: UIViewController?
     private var activeHostKind: HostKind?
+    public let hostNavigationState = WIHostNavigationState()
+    private var regularHostNavigationObservationHandles: [ObservationHandle] = []
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
-
-    public var onHostNavigationItemsDidChange: (() -> Void)?
 
     private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
         horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
@@ -47,22 +48,30 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         true
     }
 
-    public init(inspector: WINetworkModel) {
+    public convenience init(inspector: WINetworkModel) {
+        self.init(
+            inspector: inspector,
+            queryModel: WINetworkQueryModel(inspector: inspector)
+        )
+    }
+
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
-        self.compactRootViewController = WINetworkCompactViewController(inspector: inspector)
+        self.queryModel = queryModel
+        self.compactRootViewController = WINetworkCompactViewController(
+            inspector: inspector,
+            queryModel: queryModel
+        )
         let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
         wiApplyClearNavigationBarStyle(to: compactNavigationController)
         self.compactNavigationController = compactNavigationController
-        self.regularHostViewController = WINetworkRegularSplitViewController(inspector: inspector)
+        self.regularHostViewController = WINetworkRegularSplitViewController(
+            inspector: inspector,
+            queryModel: queryModel
+        )
 
         super.init(nibName: nil, bundle: nil)
-
-        self.regularHostViewController.onHostNavigationItemsDidChange = { [weak self] in
-            guard let self, self.activeHostKind == .regular else {
-                return
-            }
-            self.onHostNavigationItemsDidChange?()
-        }
+        bindRegularHostNavigationState()
     }
 
     @available(*, unavailable)
@@ -85,18 +94,6 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         rebuildHost()
     }
 
-    public func applyHostNavigationItems(to navigationItem: UINavigationItem) {
-        if activeHostKind == nil {
-            rebuildHost(force: true)
-        }
-
-        guard activeHostKind == .regular else {
-            clearHostManagedNavigationControls(from: navigationItem)
-            return
-        }
-        regularHostViewController.applyHostNavigationItems(to: navigationItem)
-    }
-
     private func rebuildHost(force: Bool = false) {
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
         guard force || activeHostKind != targetHostKind else {
@@ -112,7 +109,7 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
             nextHost = regularHostViewController
         }
         installHost(nextHost)
-        onHostNavigationItemsDidChange?()
+        syncHostNavigationStateFromActiveHost()
     }
 
     private func installHost(_ host: UIViewController) {
@@ -141,18 +138,59 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         activeHostViewController = host
     }
 
-    private func clearHostManagedNavigationControls(from navigationItem: UINavigationItem) {
-        navigationItem.titleView = nil
-        navigationItem.searchController = nil
-        navigationItem.additionalOverflowItems = nil
-        navigationItem.setLeftBarButtonItems(nil, animated: false)
-        navigationItem.setRightBarButtonItems(nil, animated: false)
+    private func bindRegularHostNavigationState() {
+        let regularState = regularHostViewController.hostNavigationState
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.searchController) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.preferredSearchBarPlacement) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.hidesSearchBarWhenScrolling) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.leftBarButtonItems) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.rightBarButtonItems) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+        regularHostNavigationObservationHandles.append(
+            regularState.observe(\.additionalOverflowItems) { [weak self] _ in
+                self?.syncHostNavigationStateFromActiveHost()
+            }
+        )
+    }
+
+    private func syncHostNavigationStateFromActiveHost() {
+        guard activeHostKind == .regular else {
+            hostNavigationState.clearManagedItems()
+            return
+        }
+        let regularState = regularHostViewController.hostNavigationState
+        hostNavigationState.searchController = regularState.searchController
+        hostNavigationState.preferredSearchBarPlacement = regularState.preferredSearchBarPlacement
+        hostNavigationState.hidesSearchBarWhenScrolling = regularState.hidesSearchBarWhenScrolling
+        hostNavigationState.leftBarButtonItems = regularState.leftBarButtonItems
+        hostNavigationState.rightBarButtonItems = regularState.rightBarButtonItems
+        hostNavigationState.additionalOverflowItems = regularState.additionalOverflowItems
     }
 }
 
 @MainActor
 private final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate, WIHostNavigationItemProvider {
     private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private var hasStartedObservingInspector = false
     private let selectionUpdateCoalescer = UIUpdateCoalescer()
     private var observedSelectedEntryID: UUID?
@@ -163,11 +201,12 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
     private let listNavigationController: UINavigationController
     private let detailViewController: WINetworkDetailViewController
     private let detailNavigationController: UINavigationController
-    var onHostNavigationItemsDidChange: (() -> Void)?
+    let hostNavigationState = WIHostNavigationState()
 
-    init(inspector: WINetworkModel) {
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
-        let listPaneViewController = WINetworkListViewController(inspector: inspector)
+        self.queryModel = queryModel
+        let listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
         self.listPaneViewController = listPaneViewController
         let listNavigationController = UINavigationController(rootViewController: listPaneViewController)
         wiApplyClearNavigationBarStyle(to: listNavigationController)
@@ -213,6 +252,7 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
         super.viewDidLoad()
         listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
         startObservingInspectorIfNeeded()
+        updateHostNavigationState()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -223,7 +263,7 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
-        listPaneViewController.applyHostNavigationItems(to: navigationItem)
+        updateHostNavigationState()
         syncDetailSelection()
     }
 
@@ -235,13 +275,20 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
         inspector.observeTask(
             [
                 \.selectedEntry,
-                \.searchText,
                 \.sortDescriptors
             ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleDetailSelectionSync()
-            self?.onHostNavigationItemsDidChange?()
+        }
+        queryModel.observeTask(
+            [
+                \.searchText,
+                \.activeFilters,
+                \.effectiveFilters
+            ]
+        ) { [weak self] in
+            self?.scheduleDetailSelectionSync()
         }
         inspector.store.observeTask(
             [
@@ -250,7 +297,6 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
             self?.scheduleDetailSelectionSync()
-            self?.onHostNavigationItemsDidChange?()
         }
         synchronizeSelectedEntryObservation()
     }
@@ -365,7 +411,7 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
     private func syncDetailSelection() {
         let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
             current: inspector.selectedEntry,
-            entries: inspector.displayEntries,
+            entries: queryModel.displayEntries,
             whenMissing: .firstEntry
         )
         if inspector.selectedEntry?.id != resolvedSelection?.id {
@@ -391,9 +437,13 @@ private final class WINetworkRegularSplitViewController: UISplitViewController, 
         show(.primary)
     }
 
-    func applyHostNavigationItems(to navigationItem: UINavigationItem) {
-        listPaneViewController.applyHostNavigationItems(to: navigationItem)
-        navigationItem.setRightBarButtonItems([listPaneViewController.filterNavigationItem], animated: false)
+    private func updateHostNavigationState() {
+        hostNavigationState.searchController = nil
+        hostNavigationState.preferredSearchBarPlacement = nil
+        hostNavigationState.hidesSearchBarWhenScrolling = false
+        hostNavigationState.leftBarButtonItems = nil
+        hostNavigationState.rightBarButtonItems = [listPaneViewController.filterNavigationItem]
+        hostNavigationState.additionalOverflowItems = listPaneViewController.hostOverflowItemsForRegularNavigation
     }
 
     func splitViewController(

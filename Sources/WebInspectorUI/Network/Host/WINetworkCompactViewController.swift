@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 final class WINetworkCompactViewController: UIViewController, UINavigationControllerDelegate {
     private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private let listPaneViewController: WINetworkListViewController
     private var detailViewController: WINetworkDetailViewController?
     private var hasStartedObservingInspector = false
@@ -18,9 +19,10 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
     private var selectedEntryBodyObservationHandles: [ObservationHandle] = []
     private weak var previousNavigationControllerDelegate: UINavigationControllerDelegate?
 
-    init(inspector: WINetworkModel) {
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
-        self.listPaneViewController = WINetworkListViewController(inspector: inspector)
+        self.queryModel = queryModel
+        self.listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
         super.init(nibName: nil, bundle: nil)
         title = nil
     }
@@ -77,13 +79,19 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
         inspector.observeTask(
             [
                 \.selectedEntry,
-                \.searchText,
-                \.activeResourceFilters,
-                \.effectiveResourceFilters,
                 \.sortDescriptors
             ]
         ) { [weak self] in
             self?.synchronizeSelectedEntryObservation()
+            self?.scheduleSelectionSync(animated: false)
+        }
+        queryModel.observeTask(
+            [
+                \.searchText,
+                \.activeFilters,
+                \.effectiveFilters
+            ]
+        ) { [weak self] in
             self?.scheduleSelectionSync(animated: false)
         }
         inspector.store.observeTask(
@@ -226,7 +234,7 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
     private func syncDetailSelection(animated: Bool) {
         let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
             current: inspector.selectedEntry,
-            entries: inspector.displayEntries,
+            entries: queryModel.displayEntries,
             whenMissing: .none
         )
         if inspector.selectedEntry?.id != resolvedSelection?.id {
@@ -306,9 +314,11 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
 import SwiftUI
 #Preview("Network Compact Host (UIKit)") {
     WIUIKitPreviewContainer {
-        UINavigationController(
+        let inspector = WINetworkPreviewFixtures.makeInspector(mode: .detail)
+        return UINavigationController(
             rootViewController: WINetworkCompactViewController(
-                inspector: WINetworkPreviewFixtures.makeInspector(mode: .detail)
+                inspector: inspector,
+                queryModel: WINetworkQueryModel(inspector: inspector)
             )
         )
     }

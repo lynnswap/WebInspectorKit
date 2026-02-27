@@ -60,11 +60,17 @@ extension WITabDescriptor {
             activation: .init(networkLiveLogging: true)
         ) { context in
             #if canImport(UIKit)
-            let viewController = WINetworkViewController(inspector: context.networkInspector)
+            let viewController = WINetworkViewController(
+                inspector: context.networkInspector,
+                queryModel: context.networkQueryModel
+            )
             viewController.horizontalSizeClassOverrideForTesting = context.horizontalSizeClass
             return viewController
             #elseif canImport(AppKit)
-            return WINetworkViewController(inspector: context.networkInspector)
+            return WINetworkViewController(
+                inspector: context.networkInspector,
+                queryModel: context.networkQueryModel
+            )
             #endif
         }
     }

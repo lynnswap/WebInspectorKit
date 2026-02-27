@@ -50,22 +50,9 @@ public enum WISessionReducer {
 
     private static func reduceNetwork(state: inout WISessionState, command: WINetworkCommand) -> [WISessionEffect] {
         switch command {
-        case let .setSearchText(text):
-            state.network.searchText = text
-            return [.network(.setSearchText(text))]
-
         case let .selectEntry(id):
             state.network.selectedEntryID = id
             return [.network(.selectEntry(id: id))]
-
-        case let .setResourceFilter(filter, isEnabled):
-            state.network.activeResourceFilters = nextFilters(
-                from: state.network.activeResourceFilters,
-                filter: filter,
-                isEnabled: isEnabled
-            )
-            state.network.effectiveResourceFilters = NetworkResourceFilter.normalizedSelection(state.network.activeResourceFilters)
-            return [.network(.setResourceFilter(filter, isEnabled: isEnabled))]
 
         case .clear:
             state.network.selectedEntryID = nil
@@ -94,30 +81,7 @@ public enum WISessionReducer {
             switch networkEvent {
             case let .selectedEntryChanged(entryID):
                 state.network.selectedEntryID = entryID
-            case let .searchTextChanged(searchText):
-                state.network.searchText = searchText
-            case let .activeFiltersChanged(filters):
-                state.network.activeResourceFilters = filters
-            case let .effectiveFiltersChanged(filters):
-                state.network.effectiveResourceFilters = filters
             }
         }
-    }
-
-    private static func nextFilters(
-        from current: Set<NetworkResourceFilter>,
-        filter: NetworkResourceFilter,
-        isEnabled: Bool
-    ) -> Set<NetworkResourceFilter> {
-        if filter == .all {
-            return isEnabled ? [] : current
-        }
-        var next = current
-        if isEnabled {
-            next.insert(filter)
-        } else {
-            next.remove(filter)
-        }
-        return next
     }
 }

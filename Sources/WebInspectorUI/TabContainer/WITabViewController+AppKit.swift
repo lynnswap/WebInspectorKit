@@ -17,6 +17,7 @@ public final class WITabViewController: NSTabViewController {
 
     private weak var pageWebView: WKWebView?
     private var tabDescriptors: [WITabDescriptor]
+    private var networkQueryModel: WINetworkQueryModel
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
@@ -36,6 +37,7 @@ public final class WITabViewController: NSTabViewController {
         self.inspectorController = inspectorController
         self.pageWebView = webView
         self.tabDescriptors = Self.normalizeAppKitTabs(tabs)
+        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -63,6 +65,7 @@ public final class WITabViewController: NSTabViewController {
         previousController.onSelectedTabIDChange = nil
         previousController.disconnect()
         self.inspectorController = inspectorController
+        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         self.inspectorController.enableUICommandRouting()
         bindSelectionCallback()
         stopObservingToolbarState()
@@ -123,7 +126,10 @@ public final class WITabViewController: NSTabViewController {
 
     private func rebuildTabs() {
         inspectorController.configureTabs(tabDescriptors.map(\.sessionTabDefinition))
-        let context = WITabContext(controller: inspectorController)
+        let context = WITabContext(
+            controller: inspectorController,
+            networkQueryModel: networkQueryModel
+        )
         tabViewItems = tabDescriptors.map { descriptor in
             let viewController = descriptor.makeViewController(context: context)
             let item = NSTabViewItem(viewController: viewController)
@@ -232,7 +238,7 @@ public final class WITabViewController: NSTabViewController {
             }
         )
         toolbarObservationHandles.append(
-            inspectorController.network.observe(
+            networkQueryModel.observe(
                 \.searchText,
                 options: [.removeDuplicates]
             ) { [weak self] _ in
@@ -240,16 +246,16 @@ public final class WITabViewController: NSTabViewController {
             }
         )
         toolbarObservationHandles.append(
-            inspectorController.network.observe(
-                \.activeResourceFilters,
+            networkQueryModel.observe(
+                \.activeFilters,
                 options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
             }
         )
         toolbarObservationHandles.append(
-            inspectorController.network.observe(
-                \.effectiveResourceFilters,
+            networkQueryModel.observe(
+                \.effectiveFilters,
                 options: [.removeDuplicates]
             ) { [weak self] _ in
                 self?.scheduleToolbarStateUpdate()
@@ -421,7 +427,7 @@ public final class WITabViewController: NSTabViewController {
         }
 
         if let filterItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFilter }) as? NSMenuToolbarItem {
-            let isFiltering = !inspectorController.network.effectiveResourceFilters.isEmpty
+            let isFiltering = !networkQueryModel.effectiveFilters.isEmpty
             filterItem.menu = makeNetworkFilterMenu()
             let didApplyButtonStyle = Self.applyNetworkFilterToolbarAppearance(
                 to: filterItem,
@@ -442,7 +448,7 @@ public final class WITabViewController: NSTabViewController {
         }
 
         if let searchField = networkSearchField {
-            let currentSearchText = inspectorController.network.searchText
+            let currentSearchText = networkQueryModel.searchText
             if searchField.stringValue != currentSearchText {
                 searchField.stringValue = currentSearchText
             }
@@ -575,50 +581,29 @@ public final class WITabViewController: NSTabViewController {
         let menu = NSMenu(title: wiLocalized("network.controls.filter", default: "Filter"))
 
         let allItem = NSMenuItem(
-            title: wiLocalized("network.filter.all", default: "All"),
+            title: NetworkResourceFilter.all.localizedTitle,
             action: #selector(handleNetworkFilterMenuAction(_:)),
             keyEquivalent: ""
         )
         allItem.target = self
         allItem.representedObject = NetworkResourceFilter.all.rawValue
-        allItem.state = inspectorController.network.effectiveResourceFilters.isEmpty ? .on : .off
+        allItem.state = networkQueryModel.effectiveFilters.isEmpty ? .on : .off
         menu.addItem(allItem)
         menu.addItem(.separator())
 
         for filter in NetworkResourceFilter.pickerCases {
             let item = NSMenuItem(
-                title: localizedNetworkFilterTitle(for: filter),
+                title: filter.localizedTitle,
                 action: #selector(handleNetworkFilterMenuAction(_:)),
                 keyEquivalent: ""
             )
             item.target = self
             item.representedObject = filter.rawValue
-            item.state = inspectorController.network.activeResourceFilters.contains(filter) ? .on : .off
+            item.state = networkQueryModel.activeFilters.contains(filter) ? .on : .off
             menu.addItem(item)
         }
 
         return menu
-    }
-
-    private func localizedNetworkFilterTitle(for filter: NetworkResourceFilter) -> String {
-        switch filter {
-        case .all:
-            return wiLocalized("network.filter.all", default: "All")
-        case .document:
-            return wiLocalized("network.filter.document", default: "Document")
-        case .stylesheet:
-            return wiLocalized("network.filter.stylesheet", default: "Stylesheet")
-        case .image:
-            return wiLocalized("network.filter.image", default: "Image")
-        case .font:
-            return wiLocalized("network.filter.font", default: "Font")
-        case .script:
-            return wiLocalized("network.filter.script", default: "Script")
-        case .xhrFetch:
-            return wiLocalized("network.filter.xhr_fetch", default: "XHR/Fetch")
-        case .other:
-            return wiLocalized("network.filter.other", default: "Other")
-        }
     }
 
     @objc
@@ -669,13 +654,12 @@ public final class WITabViewController: NSTabViewController {
         }
 
         if filter == .all {
-            inspectorController.network.setResourceFilter(.all, isEnabled: true)
+            networkQueryModel.setFilter(.all, enabled: true)
             updateToolbarState()
             return
         }
 
-        let currentlyEnabled = inspectorController.network.activeResourceFilters.contains(filter)
-        inspectorController.network.setResourceFilter(filter, isEnabled: !currentlyEnabled)
+        networkQueryModel.toggleFilter(filter)
         updateToolbarState()
     }
 
@@ -687,7 +671,7 @@ public final class WITabViewController: NSTabViewController {
 
     @objc
     private func handleNetworkSearchToolbarAction(_ sender: NSSearchField) {
-        inspectorController.network.setSearchText(sender.stringValue)
+        networkQueryModel.setSearchText(sender.stringValue)
     }
 
     @objc
@@ -765,7 +749,7 @@ public final class WITabViewController: NSTabViewController {
             item.title = item.label
             item.isBordered = true
             item.image = Self.networkFilterToolbarImage(
-                isFiltering: !inspectorController.network.effectiveResourceFilters.isEmpty
+                isFiltering: !networkQueryModel.effectiveFilters.isEmpty
             )
             item.menu = makeNetworkFilterMenu()
             item.showsIndicator = true
@@ -794,7 +778,7 @@ public final class WITabViewController: NSTabViewController {
             searchField.action = #selector(handleNetworkSearchToolbarAction(_:))
             searchField.sendsSearchStringImmediately = true
             searchField.sendsWholeSearchString = false
-            searchField.stringValue = inspectorController.network.searchText
+            searchField.stringValue = networkQueryModel.searchText
             networkSearchField = searchField
             return item
         case .wiDOMPick:
@@ -859,7 +843,7 @@ import SwiftUI
         WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)
-        WITabViewController(
+        return WITabViewController(
             session,
             webView: previewWebView,
             tabs: [.dom(), .network()]

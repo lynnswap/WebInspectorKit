@@ -8,14 +8,6 @@ enum WISessionStateProjector {
             session.selectedTabID = state.selectedTabID
         }
 
-        if session.network.searchText != state.network.searchText {
-            session.network.searchText = state.network.searchText
-        }
-
-        if session.network.activeResourceFilters != state.network.activeResourceFilters {
-            session.network.activeResourceFilters = state.network.activeResourceFilters
-        }
-
         if session.network.selectedEntry?.id != state.network.selectedEntryID {
             if let entryID = state.network.selectedEntryID {
                 session.network.selectedEntry = session.network.store.entries.first(where: { $0.id == entryID })
@@ -38,10 +30,7 @@ extension WISessionState {
                 snapshotDepth: dom.session.configuration.snapshotDepth
             ),
             network: WINetworkState(
-                selectedEntryID: network.selectedEntry?.id,
-                searchText: network.searchText,
-                activeResourceFilters: network.activeResourceFilters,
-                effectiveResourceFilters: network.effectiveResourceFilters
+                selectedEntryID: network.selectedEntry?.id
             )
         )
     }

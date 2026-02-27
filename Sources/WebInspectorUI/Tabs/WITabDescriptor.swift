@@ -10,6 +10,7 @@ import WebInspectorModel
 @MainActor
 public struct WITabContext {
     public let controller: WISession
+    let networkQueryModel: WINetworkQueryModel
 #if canImport(UIKit)
     public let horizontalSizeClass: UIUserInterfaceSizeClass?
 #endif
@@ -25,11 +26,28 @@ public struct WITabContext {
     #if canImport(UIKit)
     public init(controller: WISession, horizontalSizeClass: UIUserInterfaceSizeClass? = nil) {
         self.controller = controller
+        self.networkQueryModel = WINetworkQueryModel(inspector: controller.network)
+        self.horizontalSizeClass = horizontalSizeClass
+    }
+
+    init(
+        controller: WISession,
+        networkQueryModel: WINetworkQueryModel,
+        horizontalSizeClass: UIUserInterfaceSizeClass?
+    ) {
+        self.controller = controller
+        self.networkQueryModel = networkQueryModel
         self.horizontalSizeClass = horizontalSizeClass
     }
     #else
     public init(controller: WISession) {
         self.controller = controller
+        self.networkQueryModel = WINetworkQueryModel(inspector: controller.network)
+    }
+
+    init(controller: WISession, networkQueryModel: WINetworkQueryModel) {
+        self.controller = controller
+        self.networkQueryModel = networkQueryModel
     }
     #endif
 }

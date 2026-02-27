@@ -10,10 +10,10 @@ public final class WINetworkModel {
     let session: NetworkSession
 
     public var selectedEntry: NetworkEntry?
-    public var searchText: String = ""
+    package var searchText: String = ""
     @ObservationIgnored var commandSink: ((WINetworkCommand) -> Void)?
 
-    public var activeResourceFilters: Set<NetworkResourceFilter> = [] {
+    package var activeResourceFilters: Set<NetworkResourceFilter> = [] {
         didSet {
             let normalized = NetworkResourceFilter.normalizedSelection(activeResourceFilters)
             if effectiveResourceFilters != normalized {
@@ -22,7 +22,7 @@ public final class WINetworkModel {
         }
     }
 
-    public private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
+    package private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
 
     public var sortDescriptors: [SortDescriptor<NetworkEntry>] = [
         SortDescriptor<NetworkEntry>(\.createdAt, order: .reverse),
@@ -65,16 +65,6 @@ public final class WINetworkModel {
         session.detach()
     }
 
-    public func setSearchText(_ text: String) {
-        guard searchText != text else {
-            return
-        }
-        if dispatch(.setSearchText(text)) {
-            return
-        }
-        searchText = text
-    }
-
     public func selectEntry(id: UUID?) {
         if dispatch(.selectEntry(id: id)) {
             return
@@ -87,13 +77,6 @@ public final class WINetworkModel {
             return
         }
         clearImpl()
-    }
-
-    public func setResourceFilter(_ filter: NetworkResourceFilter, isEnabled: Bool) {
-        if dispatch(.setResourceFilter(filter, isEnabled: isEnabled)) {
-            return
-        }
-        setResourceFilterImpl(filter, isEnabled: isEnabled)
     }
 
     public func fetchBodyIfNeeded(
@@ -109,15 +92,8 @@ public final class WINetworkModel {
 
     func execute(_ command: WINetworkCommand) async {
         switch command {
-        case let .setSearchText(text):
-            guard searchText != text else {
-                return
-            }
-            searchText = text
         case let .selectEntry(id):
             selectEntryImpl(id: id)
-        case let .setResourceFilter(filter, isEnabled):
-            setResourceFilterImpl(filter, isEnabled: isEnabled)
         case .clear:
             clearImpl()
         case let .fetchBody(entry, body, force):
@@ -150,21 +126,6 @@ private extension WINetworkModel {
     func clearImpl() {
         selectedEntry = nil
         session.clearNetworkLogs()
-    }
-
-    func setResourceFilterImpl(_ filter: NetworkResourceFilter, isEnabled: Bool) {
-        if filter == .all {
-            if isEnabled {
-                activeResourceFilters.removeAll()
-            }
-            return
-        }
-
-        if isEnabled {
-            activeResourceFilters.insert(filter)
-        } else {
-            activeResourceFilters.remove(filter)
-        }
     }
 
     func fetchBodyIfNeededImpl(

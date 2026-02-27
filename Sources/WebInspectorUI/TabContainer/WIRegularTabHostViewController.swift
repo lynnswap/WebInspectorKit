@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import ObservationsCompat
 import WebInspectorRuntime
 
 @MainActor
@@ -46,8 +47,9 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
     private var tabRootByTabID: [WITabDescriptor.ID: TabRoot] = [:]
     private var selectedTabID: WITabDescriptor.ID?
     private var isApplyingSegmentSelection = false
-    private let navigationUpdateCoalescer = UIUpdateCoalescer()
     private weak var activeNavigationItemProvider: (any WIHostNavigationItemProvider)?
+    private var activeNavigationState: WIHostNavigationState?
+    private var navigationStateObservationHandles: [ObservationHandle] = []
 
     private let placeholderViewController: UIViewController
 
@@ -78,7 +80,7 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
         wiApplyClearNavigationBarStyle(to: self)
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.scheduleNavigationUIUpdate()
+            self.updateNavigationUI()
         }
 
         updateNavigationUI()
@@ -131,7 +133,7 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
 
     func prepareForRemoval() {
         onSelectedTabIDChange = nil
-        activeNavigationItemProvider?.onHostNavigationItemsDidChange = nil
+        unbindNavigationProviderState()
         activeNavigationItemProvider = nil
         clearHostManagedNavigationControls(from: currentNavigationItem)
     }
@@ -162,7 +164,7 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
     }
 
     private func invalidateCachedViewControllers() {
-        activeNavigationItemProvider?.onHostNavigationItemsDidChange = nil
+        unbindNavigationProviderState()
         activeNavigationItemProvider = nil
         tabRootByTabID.removeAll()
         if viewControllers.first !== placeholderViewController {
@@ -269,11 +271,11 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
         }
 
         synchronizeNavigationProvider()
-        if let provider = selectedContentViewController as? (any WIHostNavigationItemProvider) {
-            provider.applyHostNavigationItems(to: navigationItem)
-        } else {
+        if activeNavigationState == nil {
             clearHostManagedNavigationControls(from: navigationItem, preserveTitleView: true)
+            return
         }
+        applyAllManagedNavigationItems(to: navigationItem)
     }
 
     private func synchronizeNavigationProvider() {
@@ -285,17 +287,143 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
             return
         }
 
-        activeNavigationItemProvider?.onHostNavigationItemsDidChange = nil
+        unbindNavigationProviderState()
         activeNavigationItemProvider = provider
-        activeNavigationItemProvider?.onHostNavigationItemsDidChange = { [weak self] in
-            self?.scheduleNavigationUIUpdate()
+        bindNavigationProviderState()
+    }
+
+    private func bindNavigationProviderState() {
+        guard let state = activeNavigationItemProvider?.hostNavigationState else {
+            activeNavigationState = nil
+            return
+        }
+        activeNavigationState = state
+        navigationStateObservationHandles.append(
+            state.observe(\.searchController) { [weak self] _ in
+                self?.applySearchControllerIfNeeded()
+            }
+        )
+        navigationStateObservationHandles.append(
+            state.observe(\.preferredSearchBarPlacement) { [weak self] _ in
+                self?.applySearchBarPlacementIfNeeded()
+            }
+        )
+        navigationStateObservationHandles.append(
+            state.observe(\.hidesSearchBarWhenScrolling) { [weak self] _ in
+                self?.applyHidesSearchBarWhenScrollingIfNeeded()
+            }
+        )
+        navigationStateObservationHandles.append(
+            state.observe(\.leftBarButtonItems) { [weak self] _ in
+                self?.applyLeftBarButtonItemsIfNeeded()
+            }
+        )
+        navigationStateObservationHandles.append(
+            state.observe(\.rightBarButtonItems) { [weak self] _ in
+                self?.applyRightBarButtonItemsIfNeeded()
+            }
+        )
+        navigationStateObservationHandles.append(
+            state.observe(\.additionalOverflowItems) { [weak self] _ in
+                self?.applyAdditionalOverflowItemsIfNeeded()
+            }
+        )
+    }
+
+    private func unbindNavigationProviderState() {
+        for handle in navigationStateObservationHandles {
+            handle.cancel()
+        }
+        navigationStateObservationHandles.removeAll()
+        activeNavigationState = nil
+    }
+
+    private func applyAllManagedNavigationItems(to navigationItem: UINavigationItem) {
+        applySearchControllerIfNeeded(navigationItem: navigationItem)
+        applySearchBarPlacementIfNeeded(navigationItem: navigationItem)
+        applyHidesSearchBarWhenScrollingIfNeeded(navigationItem: navigationItem)
+        applyLeftBarButtonItemsIfNeeded(navigationItem: navigationItem)
+        applyRightBarButtonItemsIfNeeded(navigationItem: navigationItem)
+        applyAdditionalOverflowItemsIfNeeded(navigationItem: navigationItem)
+    }
+
+    private func applySearchControllerIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
+        }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        if targetNavigationItem.searchController !== state.searchController {
+            targetNavigationItem.searchController = state.searchController
         }
     }
 
-    private func scheduleNavigationUIUpdate() {
-        navigationUpdateCoalescer.schedule { [weak self] in
-            self?.updateNavigationUI()
+    private func applySearchBarPlacementIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
         }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        let desiredPlacement = state.preferredSearchBarPlacement ?? .automatic
+        if targetNavigationItem.preferredSearchBarPlacement != desiredPlacement {
+            targetNavigationItem.preferredSearchBarPlacement = desiredPlacement
+        }
+    }
+
+    private func applyHidesSearchBarWhenScrollingIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
+        }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        if targetNavigationItem.hidesSearchBarWhenScrolling != state.hidesSearchBarWhenScrolling {
+            targetNavigationItem.hidesSearchBarWhenScrolling = state.hidesSearchBarWhenScrolling
+        }
+    }
+
+    private func applyLeftBarButtonItemsIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
+        }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        guard
+            WINavigationDiff.areBarButtonItemsEquivalent(
+                targetNavigationItem.leftBarButtonItems,
+                state.leftBarButtonItems
+            ) == false
+        else {
+            return
+        }
+        targetNavigationItem.setLeftBarButtonItems(state.leftBarButtonItems, animated: false)
+    }
+
+    private func applyRightBarButtonItemsIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
+        }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        guard
+            WINavigationDiff.areBarButtonItemsEquivalent(
+                targetNavigationItem.rightBarButtonItems,
+                state.rightBarButtonItems
+            ) == false
+        else {
+            return
+        }
+        targetNavigationItem.setRightBarButtonItems(state.rightBarButtonItems, animated: false)
+    }
+
+    private func applyAdditionalOverflowItemsIfNeeded(navigationItem: UINavigationItem? = nil) {
+        guard let state = activeNavigationState else {
+            return
+        }
+        let targetNavigationItem = navigationItem ?? currentNavigationItem
+        guard
+            WINavigationDiff.isSameOverflowItem(
+                targetNavigationItem.additionalOverflowItems,
+                state.additionalOverflowItems
+            ) == false
+        else {
+            return
+        }
+        targetNavigationItem.additionalOverflowItems = state.additionalOverflowItems
     }
 
     private func clearHostManagedNavigationControls(
@@ -309,7 +437,10 @@ final class WIRegularTabHostViewController: UINavigationController, WIUIKitInspe
         navigationItem.additionalOverflowItems = nil
         navigationItem.setLeftBarButtonItems(nil, animated: false)
         navigationItem.setRightBarButtonItems(nil, animated: false)
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
     }
+
 }
 
 #if DEBUG && canImport(SwiftUI)

@@ -38,19 +38,10 @@ public struct WIDOMState: Sendable, Equatable {
 
 public struct WINetworkState: Sendable, Equatable {
     public var selectedEntryID: UUID?
-    public var searchText: String
-    public var activeResourceFilters: Set<NetworkResourceFilter>
-    public var effectiveResourceFilters: Set<NetworkResourceFilter>
 
     public init(
-        selectedEntryID: UUID? = nil,
-        searchText: String = "",
-        activeResourceFilters: Set<NetworkResourceFilter> = [],
-        effectiveResourceFilters: Set<NetworkResourceFilter> = []
+        selectedEntryID: UUID? = nil
     ) {
         self.selectedEntryID = selectedEntryID
-        self.searchText = searchText
-        self.activeResourceFilters = activeResourceFilters
-        self.effectiveResourceFilters = effectiveResourceFilters
     }
 }
