@@ -49,7 +49,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationsCompat.git",
-            exact: "0.3.0"
+            exact: "0.3.1"
         )
     ],
     targets: [
