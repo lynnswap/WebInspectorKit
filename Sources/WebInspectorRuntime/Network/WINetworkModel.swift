@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ObservationsCompat
 import WebKit
 import WebInspectorModel
 import WebInspectorEngine
@@ -12,6 +13,7 @@ public final class WINetworkModel {
     public var selectedEntry: NetworkEntry?
     package var searchText: String = ""
     @ObservationIgnored var commandSink: ((WINetworkCommand) -> Void)?
+    @ObservationIgnored private var hasStartedObservingStore = false
 
     package var activeResourceFilters: Set<NetworkResourceFilter> = [] {
         didSet {
@@ -31,6 +33,7 @@ public final class WINetworkModel {
 
     package init(session: NetworkSession) {
         self.session = session
+        startObservingStoreIfNeeded()
     }
 
     public var store: NetworkStore {
@@ -66,17 +69,26 @@ public final class WINetworkModel {
     }
 
     public func selectEntry(id: UUID?) {
-        if dispatch(.selectEntry(id: id)) {
-            return
-        }
         selectEntryImpl(id: id)
     }
 
     public func clear() {
-        if dispatch(.clear) {
-            return
-        }
         clearImpl()
+    }
+
+    @discardableResult
+    package func revalidateSelectedEntryAgainstStore() -> NetworkEntry? {
+        guard let selectedEntry else {
+            return nil
+        }
+        guard let current = store.entry(forEntryID: selectedEntry.id) else {
+            self.selectedEntry = nil
+            return nil
+        }
+        if current !== selectedEntry {
+            self.selectedEntry = current
+        }
+        return current
     }
 
     public func fetchBodyIfNeeded(
@@ -92,10 +104,6 @@ public final class WINetworkModel {
 
     func execute(_ command: WINetworkCommand) async {
         switch command {
-        case let .selectEntry(id):
-            selectEntryImpl(id: id)
-        case .clear:
-            clearImpl()
         case let .fetchBody(entry, body, force):
             await fetchBodyIfNeededImpl(for: entry, body: body, force: force)
         }
@@ -107,6 +115,20 @@ public final class WINetworkModel {
 }
 
 private extension WINetworkModel {
+    func startObservingStoreIfNeeded() {
+        guard hasStartedObservingStore == false else {
+            return
+        }
+        hasStartedObservingStore = true
+        store.observeTask(
+            [
+                \.entries
+            ]
+        ) { [weak self] in
+            _ = self?.revalidateSelectedEntryAgainstStore()
+        }
+    }
+
     func dispatch(_ command: WINetworkCommand) -> Bool {
         guard let commandSink else {
             return false
@@ -120,7 +142,7 @@ private extension WINetworkModel {
             selectedEntry = nil
             return
         }
-        selectedEntry = store.entries.first(where: { $0.id == id })
+        selectedEntry = store.entry(forEntryID: id)
     }
 
     func clearImpl() {

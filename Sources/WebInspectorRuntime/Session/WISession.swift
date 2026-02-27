@@ -1,5 +1,4 @@
 import Observation
-import ObservationsCompat
 import WebKit
 import WebInspectorModel
 import WebInspectorEngine
@@ -13,7 +12,7 @@ public final class WISession {
 
     public var selectedTabID: String? {
         didSet {
-            if isApplyingStateProjection == false, state.selectedTabID != selectedTabID {
+            if state.selectedTabID != selectedTabID {
                 state.selectedTabID = selectedTabID
             }
             if suppressTabActivation {
@@ -33,8 +32,6 @@ public final class WISession {
     private var activationByTabID: [String: WISessionTabActivation] = [:]
     private var configuredRequirements: WISessionFeatureRequirements?
     private var suppressTabActivation = false
-    private var isApplyingStateProjection = false
-    private var hasStartedObservingModelEvents = false
     private var uiCommandRoutingEnabled = false
     private weak var connectedPageWebView: WKWebView?
     private let effectRunner = WISessionEffectRunner()
@@ -50,11 +47,10 @@ public final class WISession {
 
         self.dom = WIDOMModel(session: domSession)
         self.network = WINetworkModel(session: networkSession)
-        self.state = WISessionState.makeInitial(dom: self.dom, network: self.network)
+        self.state = WISessionState(selectedTabID: nil)
         self.dom.setRecoverableErrorHandler { [weak self] message in
             self?.lastRecoverableError = message
         }
-        startObservingModelEventsIfNeeded()
     }
 
     public func send(_ command: WISessionCommand) {
@@ -64,11 +60,8 @@ public final class WISession {
             return
         }
         state = nextState
-
-        if case .event = command {
-            // Observable updates already originated from models.
-        } else {
-            projectState()
+        if selectedTabID != nextState.selectedTabID {
+            selectedTabID = nextState.selectedTabID
         }
 
         effectRunner.run(effects, in: self)
@@ -201,35 +194,6 @@ public final class WISession {
 }
 
 private extension WISession {
-    func projectState() {
-        guard isApplyingStateProjection == false else {
-            return
-        }
-        isApplyingStateProjection = true
-        defer { isApplyingStateProjection = false }
-        WISessionStateProjector.project(state, onto: self)
-    }
-
-    func startObservingModelEventsIfNeeded() {
-        guard hasStartedObservingModelEvents == false else {
-            return
-        }
-        hasStartedObservingModelEvents = true
-
-        dom.observe(\.hasPageWebView, options: [.removeDuplicates]) { [weak self] value in
-            self?.send(.event(.dom(.pageWebViewAvailabilityChanged(value))))
-        }
-        dom.observe(\.isSelectingElement, options: [.removeDuplicates]) { [weak self] value in
-            self?.send(.event(.dom(.selectingElementChanged(value))))
-        }
-        dom.selection.observe(\.nodeId, options: [.removeDuplicates]) { [weak self] nodeID in
-            self?.send(.event(.dom(.selectionNodeChanged(nodeID))))
-        }
-        network.observeTask([\.selectedEntry]) { [weak self] in
-            self?.send(.event(.network(.selectedEntryChanged(self?.network.selectedEntry?.id))))
-        }
-    }
-
     func resolvedActivationForTabID(_ tabID: String?) -> WISessionTabActivation {
         guard let tabID else {
             return resolvedActivation(for: nil)

@@ -233,73 +233,63 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func selectionPolicySelectsFirstEntryWhenSelectionIsMissing() throws {
+    func selectedEntryRemainsWhenFilterExcludesDisplayedEntries() throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
-            requestID: 41,
-            url: "https://example.com/first",
-            initiator: "document",
+            requestID: 61,
+            url: "https://example.com/selected.js",
+            initiator: "script",
             monotonicMs: 1_000
         )
         try applyRequestStart(
             to: inspector,
-            requestID: 42,
-            url: "https://example.com/second",
-            initiator: "script",
+            requestID: 62,
+            url: "https://example.com/other.css",
+            initiator: "stylesheet",
             monotonicMs: 1_010
         )
-        inspector.sortDescriptors = [
-            SortDescriptor(\.requestID, order: .reverse)
-        ]
 
-        inspector.selectedEntry = makeEntry()
-        let resolved = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: inspector.displayEntries
+        let selectedEntry = try #require(
+            inspector.store.entries.first(where: { $0.requestID == 61 })
         )
+        inspector.selectedEntry = selectedEntry
+        inspector.activeResourceFilters = [.stylesheet]
 
-        #expect(resolved?.id == inspector.displayEntries.first?.id)
+        #expect(inspector.displayEntries.map(\.requestID) == [62])
+        #expect(inspector.selectedEntry?.id == selectedEntry.id)
     }
 
     @Test
-    func selectionPolicyCanKeepSelectionEmptyWhenMissingBehaviorIsNone() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+    func selectedEntryClearsWhenPrunedFromStoreByRetentionLimit() async throws {
+        let inspector = WINetworkModel(
+            session: NetworkSession(configuration: .init(maxEntries: 1))
+        )
         try applyRequestStart(
             to: inspector,
-            requestID: 51,
-            url: "https://example.com/first",
-            initiator: "document",
+            requestID: 71,
+            url: "https://example.com/old",
+            initiator: "fetch",
             monotonicMs: 1_000
         )
+
+        let initiallySelected = try #require(inspector.store.entries.first)
+        inspector.selectedEntry = initiallySelected
+
         try applyRequestStart(
             to: inspector,
-            requestID: 52,
-            url: "https://example.com/second",
-            initiator: "script",
+            requestID: 72,
+            url: "https://example.com/new",
+            initiator: "fetch",
             monotonicMs: 1_010
         )
-        inspector.selectedEntry = makeEntry()
 
-        let resolved = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: inspector.displayEntries,
-            whenMissing: .none
-        )
-
-        #expect(resolved == nil)
-    }
-
-    @Test
-    func selectionPolicyReturnsNilWhenEntriesAreEmpty() {
-        let inspector = WINetworkModel(session: NetworkSession())
-        inspector.selectedEntry = makeEntry()
-
-        let resolved = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: inspector.displayEntries
-        )
-        #expect(resolved == nil)
+        let cleared = await waitUntil {
+            inspector.selectedEntry == nil
+        }
+        #expect(cleared)
+        #expect(inspector.store.entries.count == 1)
+        #expect(inspector.store.entries.first?.requestID == 72)
     }
 
     @Test

@@ -1,4 +1,5 @@
 import Foundation
+import ObservationsCompat
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -92,6 +93,9 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var snapshotTaskGeneration: UInt64 = 0
+    private var observedEntryID: UUID?
+    private var selectedEntryObservationHandles: [ObservationHandle] = []
+    private var selectedEntryBodyObservationHandles: [ObservationHandle] = []
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -115,6 +119,12 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
+        for handle in selectedEntryObservationHandles {
+            handle.cancel()
+        }
+        for handle in selectedEntryBodyObservationHandles {
+            handle.cancel()
+        }
     }
 
     public override func viewDidLoad() {
@@ -139,6 +149,7 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
 
     func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
         self.entry = entry
+        synchronizeSelectedEntryObservation()
         if showsNavigationControls {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
@@ -162,6 +173,120 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         sections = makeSections(for: entry)
         collectionView.isHidden = false
         requestSnapshotUpdate()
+    }
+
+    private func synchronizeSelectedEntryObservation() {
+        let selectedEntryID = entry?.id
+        guard observedEntryID != selectedEntryID else {
+            return
+        }
+        observedEntryID = selectedEntryID
+        clearSelectedEntryObservationHandles()
+        clearSelectedEntryBodyObservationHandles()
+
+        guard let selectedEntry = entry else {
+            return
+        }
+
+        selectedEntryObservationHandles.append(
+            selectedEntry.observeTask(
+                [
+                    \.url,
+                    \.method,
+                    \.statusCode,
+                    \.statusText,
+                    \.mimeType,
+                    \.fileTypeLabel,
+                    \.requestHeaders,
+                    \.responseHeaders,
+                    \.duration,
+                    \.encodedBodyLength,
+                    \.decodedBodyLength,
+                    \.errorDescription,
+                    \.phase,
+                    \.requestBody,
+                    \.responseBody
+                ]
+            ) { [weak self, weak selectedEntry] in
+                guard let self, let selectedEntry else {
+                    return
+                }
+                self.synchronizeSelectedEntryBodyObservation(for: selectedEntry)
+                self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
+            }
+        )
+        synchronizeSelectedEntryBodyObservation(for: selectedEntry)
+    }
+
+    private func synchronizeSelectedEntryBodyObservation(for selectedEntry: NetworkEntry) {
+        clearSelectedEntryBodyObservationHandles()
+        if let requestBody = selectedEntry.requestBody {
+            selectedEntryBodyObservationHandles.append(
+                requestBody.observeTask(
+                    [
+                        \.kind,
+                        \.preview,
+                        \.full,
+                        \.size,
+                        \.isBase64Encoded,
+                        \.isTruncated,
+                        \.summary,
+                        \.reference,
+                        \.formEntries,
+                        \.fetchState
+                    ]
+                ) { [weak self, weak selectedEntry] in
+                    guard let self, let selectedEntry else {
+                        return
+                    }
+                    self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
+                }
+            )
+        }
+        if let responseBody = selectedEntry.responseBody {
+            selectedEntryBodyObservationHandles.append(
+                responseBody.observeTask(
+                    [
+                        \.kind,
+                        \.preview,
+                        \.full,
+                        \.size,
+                        \.isBase64Encoded,
+                        \.isTruncated,
+                        \.summary,
+                        \.reference,
+                        \.formEntries,
+                        \.fetchState
+                    ]
+                ) { [weak self, weak selectedEntry] in
+                    guard let self, let selectedEntry else {
+                        return
+                    }
+                    self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
+                }
+            )
+        }
+    }
+
+    private func clearSelectedEntryObservationHandles() {
+        for handle in selectedEntryObservationHandles {
+            handle.cancel()
+        }
+        selectedEntryObservationHandles.removeAll()
+    }
+
+    private func clearSelectedEntryBodyObservationHandles() {
+        for handle in selectedEntryBodyObservationHandles {
+            handle.cancel()
+        }
+        selectedEntryBodyObservationHandles.removeAll()
+    }
+
+    private func refreshDisplayedEntryIfNeeded(entryID: UUID) {
+        guard let selectedEntry = entry, selectedEntry.id == entryID else {
+            return
+        }
+        display(selectedEntry, hasEntries: !inspector.store.entries.isEmpty)
     }
 
     private func makeLayout() -> UICollectionViewLayout {

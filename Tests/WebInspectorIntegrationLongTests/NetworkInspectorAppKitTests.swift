@@ -13,7 +13,7 @@ import AppKit
 
 struct NetworkInspectorAppKitTests {
     @Test
-    func networkTabSelectsFirstEntryWhenEntriesExist() throws {
+    func networkTabDoesNotAutoSelectEntryWhenEntriesExist() throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
@@ -33,7 +33,36 @@ struct NetworkInspectorAppKitTests {
         let controller = WINetworkViewController(inspector: inspector)
         controller.loadViewIfNeeded()
 
-        #expect(inspector.selectedEntry?.id == inspector.displayEntries.first?.id)
+        #expect(inspector.selectedEntry == nil)
+    }
+
+    @Test
+    func networkTabUpdatesDetailWhenSelectionChanges() throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 111,
+            url: "https://example.com/first",
+            initiator: "document",
+            monotonicMs: 1_000
+        )
+        try applyRequestStart(
+            to: inspector,
+            requestID: 112,
+            url: "https://example.com/second",
+            initiator: "script",
+            monotonicMs: 1_010
+        )
+
+        let controller = WINetworkViewController(inspector: inspector)
+        controller.loadViewIfNeeded()
+        let selected = try #require(
+            inspector.displayEntries.first(where: { $0.requestID == 112 })
+        )
+
+        inspector.selectEntry(id: selected.id)
+
+        #expect(inspector.selectedEntry?.id == selected.id)
     }
 
     @Test

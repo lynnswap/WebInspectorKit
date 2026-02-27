@@ -42,7 +42,6 @@ public enum WISessionCommand {
     case selectTab(String?)
     case dom(WIDOMCommand)
     case network(WINetworkCommand)
-    case event(WIDomainEvent)
 }
 
 public enum WIDOMCommand {
@@ -58,23 +57,5 @@ public enum WIDOMCommand {
 }
 
 public enum WINetworkCommand {
-    case selectEntry(id: UUID?)
-    case clear
     case fetchBody(entry: NetworkEntry, body: NetworkBody, force: Bool)
-}
-
-public enum WIDomainEvent {
-    case dom(WIDOMEvent)
-    case network(WINetworkEvent)
-}
-
-public enum WIDOMEvent {
-    case pageWebViewAvailabilityChanged(Bool)
-    case selectingElementChanged(Bool)
-    case selectionNodeChanged(Int?)
-    case snapshotDepthChanged(Int)
-}
-
-public enum WINetworkEvent {
-    case selectedEntryChanged(UUID?)
 }

@@ -1,5 +1,4 @@
 import Foundation
-import ObservationsCompat
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -11,8 +10,6 @@ import SwiftUI
 public final class WINetworkViewController: NSSplitViewController {
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
-    private var hasStartedObservingInspector = false
-    private let selectionUpdateCoalescer = UIUpdateCoalescer()
     private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
@@ -52,24 +49,10 @@ public final class WINetworkViewController: NSSplitViewController {
         detailItem.minimumThickness = 280
 
         splitViewItems = [listItem, detailItem]
-
-        syncSelection()
-        startObservingInspectorIfNeeded()
     }
 
     public override func viewWillAppear() {
         super.viewWillAppear()
-        syncSelection()
-    }
-
-    private func syncSelection() {
-        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: queryModel.displayEntries
-        )
-        if inspector.selectedEntry?.id != resolvedSelection?.id {
-            inspector.selectEntry(id: resolvedSelection?.id)
-        }
     }
 
     func canFetchSelectedBodies() -> Bool {
@@ -80,42 +63,6 @@ public final class WINetworkViewController: NSSplitViewController {
         detailViewController?.fetchBodies(force: force)
     }
 
-    private func startObservingInspectorIfNeeded() {
-        guard hasStartedObservingInspector == false else {
-            return
-        }
-        hasStartedObservingInspector = true
-        inspector.observeTask(
-            [
-                \.selectedEntry,
-                \.sortDescriptors
-            ]
-        ) { [weak self] in
-            self?.scheduleSelectionSync()
-        }
-        queryModel.observeTask(
-            [
-                \.searchText,
-                \.activeFilters,
-                \.effectiveFilters
-            ]
-        ) { [weak self] in
-            self?.scheduleSelectionSync()
-        }
-        inspector.store.observeTask(
-            [
-                \.entries
-            ]
-        ) { [weak self] in
-            self?.scheduleSelectionSync()
-        }
-    }
-
-    private func scheduleSelectionSync() {
-        selectionUpdateCoalescer.schedule { [weak self] in
-            self?.syncSelection()
-        }
-    }
 }
 
 @MainActor
@@ -297,14 +244,7 @@ private struct NetworkMacListTab: View {
                 return [selected]
             },
             set: { newSelection in
-                let nextSelectedEntry = newSelection.first.flatMap { nextSelectedID in
-                    queryModel.displayEntries.first(where: { $0.id == nextSelectedID })
-                }
-                let resolved = NetworkListSelectionPolicy.resolvedSelection(
-                    current: nextSelectedEntry,
-                    entries: queryModel.displayEntries
-                )
-                inspector.selectEntry(id: resolved?.id)
+                inspector.selectEntry(id: newSelection.first)
             }
         )
     }

@@ -14,9 +14,6 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
     private var detailViewController: WINetworkDetailViewController?
     private var hasStartedObservingInspector = false
     private let selectionUpdateCoalescer = UIUpdateCoalescer()
-    private var observedSelectedEntryID: UUID?
-    private var selectedEntryObservationHandles: [ObservationHandle] = []
-    private var selectedEntryBodyObservationHandles: [ObservationHandle] = []
     private weak var previousNavigationControllerDelegate: UINavigationControllerDelegate?
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
@@ -47,15 +44,6 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
         ])
         listPaneViewController.didMove(toParent: self)
 
-        listPaneViewController.setMissingSelectionBehavior(.none)
-        listPaneViewController.onSelectEntry = { [weak self] entry in
-            guard let self else {
-                return
-            }
-            inspector.selectEntry(id: entry?.id)
-            syncDetailSelection(animated: true)
-        }
-
         startObservingInspectorIfNeeded()
     }
 
@@ -78,18 +66,7 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
         hasStartedObservingInspector = true
         inspector.observeTask(
             [
-                \.selectedEntry,
-                \.sortDescriptors
-            ]
-        ) { [weak self] in
-            self?.synchronizeSelectedEntryObservation()
-            self?.scheduleSelectionSync(animated: false)
-        }
-        queryModel.observeTask(
-            [
-                \.searchText,
-                \.activeFilters,
-                \.effectiveFilters
+                \.selectedEntry
             ]
         ) { [weak self] in
             self?.scheduleSelectionSync(animated: false)
@@ -99,117 +76,14 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
                 \.entries
             ]
         ) { [weak self] in
-            self?.synchronizeSelectedEntryObservation()
             self?.scheduleSelectionSync(animated: false)
         }
-        synchronizeSelectedEntryObservation()
     }
 
     private func scheduleSelectionSync(animated: Bool) {
         selectionUpdateCoalescer.schedule { [weak self] in
             self?.syncDetailSelection(animated: animated)
         }
-    }
-
-    private func synchronizeSelectedEntryObservation() {
-        let selectedEntryID = inspector.selectedEntry?.id
-        guard observedSelectedEntryID != selectedEntryID else {
-            return
-        }
-        observedSelectedEntryID = selectedEntryID
-        clearSelectedEntryObservationHandles()
-        clearSelectedEntryBodyObservationHandles()
-
-        guard let selectedEntry = inspector.selectedEntry else {
-            return
-        }
-
-        selectedEntryObservationHandles.append(
-            selectedEntry.observeTask(
-                [
-                    \.url,
-                    \.method,
-                    \.statusCode,
-                    \.statusText,
-                    \.mimeType,
-                    \.fileTypeLabel,
-                    \.requestHeaders,
-                    \.responseHeaders,
-                    \.duration,
-                    \.encodedBodyLength,
-                    \.decodedBodyLength,
-                    \.errorDescription,
-                    \.phase,
-                    \.requestBody,
-                    \.responseBody
-                ]
-            ) { [weak self, weak selectedEntry] in
-                self?.scheduleSelectionSync(animated: false)
-                guard let self, let selectedEntry else {
-                    return
-                }
-                self.synchronizeSelectedEntryBodyObservation(for: selectedEntry)
-            }
-        )
-        synchronizeSelectedEntryBodyObservation(for: selectedEntry)
-    }
-
-    private func synchronizeSelectedEntryBodyObservation(for selectedEntry: NetworkEntry) {
-        clearSelectedEntryBodyObservationHandles()
-        if let requestBody = selectedEntry.requestBody {
-            selectedEntryBodyObservationHandles.append(
-                requestBody.observeTask(
-                    [
-                        \.kind,
-                        \.preview,
-                        \.full,
-                        \.size,
-                        \.isBase64Encoded,
-                        \.isTruncated,
-                        \.summary,
-                        \.reference,
-                        \.formEntries,
-                        \.fetchState
-                    ]
-                ) { [weak self] in
-                    self?.scheduleSelectionSync(animated: false)
-                }
-            )
-        }
-        if let responseBody = selectedEntry.responseBody {
-            selectedEntryBodyObservationHandles.append(
-                responseBody.observeTask(
-                    [
-                        \.kind,
-                        \.preview,
-                        \.full,
-                        \.size,
-                        \.isBase64Encoded,
-                        \.isTruncated,
-                        \.summary,
-                        \.reference,
-                        \.formEntries,
-                        \.fetchState
-                    ]
-                ) { [weak self] in
-                    self?.scheduleSelectionSync(animated: false)
-                }
-            )
-        }
-    }
-
-    private func clearSelectedEntryObservationHandles() {
-        for handle in selectedEntryObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryObservationHandles.removeAll()
-    }
-
-    private func clearSelectedEntryBodyObservationHandles() {
-        for handle in selectedEntryBodyObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryBodyObservationHandles.removeAll()
     }
 
     private func attachNavigationControllerDelegateIfNeeded() {
@@ -232,18 +106,10 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
     }
 
     private func syncDetailSelection(animated: Bool) {
-        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: queryModel.displayEntries,
-            whenMissing: .none
-        )
-        if inspector.selectedEntry?.id != resolvedSelection?.id {
-            inspector.selectEntry(id: resolvedSelection?.id)
-        }
+        let selectedEntry = inspector.revalidateSelectedEntryAgainstStore()
+        listPaneViewController.selectEntry(with: selectedEntry?.id)
 
-        listPaneViewController.selectEntry(with: inspector.selectedEntry?.id)
-
-        guard let selectedEntry = inspector.selectedEntry else {
+        guard let selectedEntry else {
             popToListIfNeeded(animated: animated)
             detailViewController?.display(nil, hasEntries: !inspector.store.entries.isEmpty)
             return

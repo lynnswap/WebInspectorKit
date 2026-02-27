@@ -50,7 +50,6 @@ public final class WINetworkListViewController: UICollectionViewController {
     private var entryObservationHandlesByID: [UUID: [ObservationHandle]] = [:]
     private let listUpdateCoalescer = UIUpdateCoalescer()
 
-    private var displayedEntries: [NetworkEntry] = []
     private var entryByID: [UUID: NetworkEntry] = [:]
     private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
     private var revisionByStableID: [ItemStableID: Int] = [:]
@@ -58,13 +57,11 @@ public final class WINetworkListViewController: UICollectionViewController {
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var snapshotTaskGeneration: UInt64 = 0
-    private var missingSelectionBehavior: NetworkListSelectionPolicy.MissingSelectionBehavior = .firstEntry
     private lazy var dataSource = makeDataSource()
     private var searchController: UISearchController {
         queryModel.searchController
     }
 
-    var onSelectEntry: ((NetworkEntry?) -> Void)?
     var filterNavigationItem: UIBarButtonItem {
         queryModel.filterBarButtonItem
     }
@@ -141,14 +138,6 @@ public final class WINetworkListViewController: UICollectionViewController {
         if collectionView.indexPathsForSelectedItems?.contains(indexPath) != true {
             collectionView.selectItem(at: indexPath, animated: false, scrollPosition: .centeredVertically)
         }
-    }
-
-    func setMissingSelectionBehavior(_ behavior: NetworkListSelectionPolicy.MissingSelectionBehavior) {
-        guard missingSelectionBehavior != behavior else {
-            return
-        }
-        missingSelectionBehavior = behavior
-        reconcileSelectionIfNeeded()
     }
 
     func applyNavigationItems(to navigationItem: UINavigationItem) {
@@ -321,19 +310,18 @@ public final class WINetworkListViewController: UICollectionViewController {
 
     private func reloadDataFromInspector() {
         queryModel.syncSearchControllerText()
-        displayedEntries = queryModel.displayEntries
-        reconcileSelectionIfNeeded()
-        entryByID = Dictionary(uniqueKeysWithValues: displayedEntries.map { ($0.id, $0) })
-        synchronizeEntryObservers()
+        let visibleEntries = queryModel.displayEntries
+        entryByID = Dictionary(uniqueKeysWithValues: visibleEntries.map { ($0.id, $0) })
+        synchronizeEntryObservers(with: visibleEntries)
 
-        let renderSignature = snapshotRenderSignature(for: displayedEntries)
+        let renderSignature = snapshotRenderSignature(for: visibleEntries)
         if renderSignature != lastRenderSignature {
             lastRenderSignature = renderSignature
             requestSnapshotUpdate()
         } else if isCollectionViewVisible {
             selectEntry(with: inspector.selectedEntry?.id)
         }
-        let shouldShowEmptyState = displayedEntries.isEmpty
+        let shouldShowEmptyState = visibleEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
@@ -343,17 +331,6 @@ public final class WINetworkListViewController: UICollectionViewController {
             contentUnavailableConfiguration = configuration
         } else {
             contentUnavailableConfiguration = nil
-        }
-    }
-
-    private func reconcileSelectionIfNeeded() {
-        let resolvedSelection = NetworkListSelectionPolicy.resolvedSelection(
-            current: inspector.selectedEntry,
-            entries: displayedEntries,
-            whenMissing: missingSelectionBehavior
-        )
-        if inspector.selectedEntry?.id != resolvedSelection?.id {
-            inspector.selectEntry(id: resolvedSelection?.id)
         }
     }
 
@@ -404,8 +381,8 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
     }
 
-    private func synchronizeEntryObservers() {
-        let currentIDs = Set(displayedEntries.map(\.id))
+    private func synchronizeEntryObservers(with visibleEntries: [NetworkEntry]) {
+        let currentIDs = Set(visibleEntries.map(\.id))
         let removedIDs = Set(entryObservationHandlesByID.keys).subtracting(currentIDs)
         for removedID in removedIDs {
             guard let handles = entryObservationHandlesByID.removeValue(forKey: removedID) else {
@@ -415,7 +392,7 @@ public final class WINetworkListViewController: UICollectionViewController {
                 handle.cancel()
             }
         }
-        for entry in displayedEntries where entryObservationHandlesByID[entry.id] == nil {
+        for entry in visibleEntries where entryObservationHandlesByID[entry.id] == nil {
             entryObservationHandlesByID[entry.id] = observeEntry(entry)
         }
     }
@@ -545,10 +522,10 @@ public final class WINetworkListViewController: UICollectionViewController {
             let payload = payloadByStableID[item.stableID],
             let entry = entryByID[payload.entryID]
         else {
-            onSelectEntry?(nil)
+            inspector.selectEntry(id: nil)
             return
         }
-        onSelectEntry?(entry)
+        inspector.selectEntry(id: entry.id)
     }
 
     private func buildRenderState() -> (stableIDs: [ItemStableID], state: DiffableRenderState<ItemStableID, ItemPayload>) {
@@ -556,7 +533,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         var payloadByID: [ItemStableID: ItemPayload] = [:]
         var revisionByID: [ItemStableID: Int] = [:]
 
-        for entry in displayedEntries {
+        for entry in queryModel.displayEntries {
             let stableID = ItemStableID(key: .entry(id: entry.id), cellKind: .list)
             let payload = ItemPayload(
                 entryID: entry.id,
