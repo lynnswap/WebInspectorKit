@@ -89,6 +89,9 @@ let package = Package(
         ),
         .target(
             name: "WebInspectorScripts",
+            exclude: [
+                "TypeScript/Tests"
+            ],
             resources: [
                 .process("Resources/DOMTreeView")
             ],
@@ -133,17 +136,67 @@ let package = Package(
             ],
             swiftSettings: strictSwiftSettings
         ),
+        .target(
+            name: "WebInspectorTestSupport",
+            dependencies: [
+                "WebInspectorEngine"
+            ],
+            path: "Tests/WebInspectorTestSupport",
+            swiftSettings: strictSwiftSettings
+        ),
         .testTarget(
-            name: "WebInspectorKitTests",
+            name: "WebInspectorEngineTests",
+            dependencies: [
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorEngineTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorRuntimeTests",
+            dependencies: [
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorUI",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorRuntimeTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorUITests",
+            dependencies: [
+                "WebInspectorUI",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorUITests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorIntegrationTests",
             dependencies: [
                 "WebInspectorKit",
                 "WebInspectorUI",
-                "WebInspectorEngine",
-                "WebInspectorModel",
                 "WebInspectorRuntime",
-                "WebInspectorBridge",
-                "WebInspectorScripts"
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
             ],
+            path: "Tests/WebInspectorIntegrationTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorIntegrationLongTests",
+            dependencies: [
+                "WebInspectorKit",
+                "WebInspectorUI",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorIntegrationLongTests",
             swiftSettings: strictSwiftSettings
         ),
         .plugin(

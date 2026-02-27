@@ -92,10 +92,14 @@ function loadConfig(configPath) {
 
 function collectScriptFiles(directory) {
   const results = [];
+  const ignoredDirectories = new Set(["Tests", "node_modules"]);
   const entries = fs.readdirSync(directory, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
+      if (ignoredDirectories.has(entry.name)) {
+        continue;
+      }
       results.push(...collectScriptFiles(fullPath));
       continue;
     }

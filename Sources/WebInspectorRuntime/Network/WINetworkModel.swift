@@ -6,7 +6,7 @@ import WebInspectorEngine
 
 @MainActor
 @Observable
-public final class WINetworkModel: Sendable {
+public final class WINetworkModel {
     let session: NetworkSession
 
     public var selectedEntry: NetworkEntry?
@@ -66,6 +66,9 @@ public final class WINetworkModel: Sendable {
     }
 
     public func setSearchText(_ text: String) {
+        guard searchText != text else {
+            return
+        }
         if dispatch(.setSearchText(text)) {
             return
         }
@@ -107,6 +110,9 @@ public final class WINetworkModel: Sendable {
     func execute(_ command: WINetworkCommand) async {
         switch command {
         case let .setSearchText(text):
+            guard searchText != text else {
+                return
+            }
             searchText = text
         case let .selectEntry(id):
             selectEntryImpl(id: id)
