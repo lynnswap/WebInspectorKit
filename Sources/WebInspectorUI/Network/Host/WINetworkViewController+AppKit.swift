@@ -112,10 +112,10 @@ private struct NetworkMacListTab: View {
 
     var body: some View {
         Group {
-            if queryModel.displayEntries.isEmpty {
+            if inspector.displayEntries.isEmpty {
                 emptyState
             } else {
-                Table(queryModel.displayEntries, selection: tableSelection) {
+                Table(inspector.displayEntries, selection: tableSelection) {
                     TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
                         Text(entry.displayName)
                             .lineLimit(1)
@@ -191,7 +191,7 @@ private struct NetworkMacListTab: View {
             },
             set: { newSelection in
                 let selected = newSelection.first
-                let selectedEntry = queryModel.displayEntries.first(where: { $0.id == selected })
+                let selectedEntry = inspector.displayEntries.first(where: { $0.id == selected })
                 inspector.selectEntry(selectedEntry)
             }
         )

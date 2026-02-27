@@ -34,10 +34,6 @@ final class WINetworkQueryModel {
         inspector.effectiveResourceFilters
     }
 
-    var displayEntries: [NetworkEntry] {
-        inspector.displayEntries
-    }
-
     init(inspector: WINetworkModel) {
         self.inspector = inspector
     }

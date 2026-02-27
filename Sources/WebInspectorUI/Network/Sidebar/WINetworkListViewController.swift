@@ -135,7 +135,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         return dataSource
     }
     private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry> {
-        let identifiers = queryModel.displayEntries
+        let identifiers = inspector.displayEntries
         precondition(
             identifiers.count == Set(identifiers.map(\.id)).count,
             "Duplicate row IDs detected in WINetworkListViewController"
@@ -177,7 +177,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     private func reloadDataFromInspector() {
         queryModel.syncSearchControllerText()
         requestSnapshotUpdate()
-        let shouldShowEmptyState = queryModel.displayEntries.isEmpty
+        let shouldShowEmptyState = inspector.displayEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
