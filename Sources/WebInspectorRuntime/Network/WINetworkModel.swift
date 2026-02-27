@@ -27,9 +27,14 @@ public final class WINetworkModel {
     ]
 
     @ObservationIgnored var commandSink: ((WINetworkCommand) -> Void)?
+    @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
 
     package init(session: NetworkSession) {
         self.session = session
+    }
+
+    isolated deinit {
+        selectedEntryFetchTask?.cancel()
     }
 
     public var store: NetworkStore {
@@ -51,6 +56,13 @@ public final class WINetworkModel {
         return filteredEntries.sorted(using: sortDescriptors)
     }
 
+    public var canFetchSelectedBodies: Bool {
+        guard let selectedEntry else {
+            return false
+        }
+        return canFetchBodies(for: selectedEntry)
+    }
+
     func attach(to webView: WKWebView) {
         session.attach(pageWebView: webView)
     }
@@ -60,17 +72,50 @@ public final class WINetworkModel {
     }
 
     func detach() {
+        selectedEntryFetchTask?.cancel()
+        selectedEntryFetchTask = nil
         selectedEntry = nil
         session.detach()
     }
 
     public func selectEntry(_ entry: NetworkEntry?) {
         selectedEntry = entry
+        if entry == nil {
+            selectedEntryFetchTask?.cancel()
+            selectedEntryFetchTask = nil
+            return
+        }
+        requestFetchSelectedBodies(force: false)
     }
 
     public func clear() {
+        selectedEntryFetchTask?.cancel()
+        selectedEntryFetchTask = nil
         selectedEntry = nil
         session.clearNetworkLogs()
+    }
+
+    public func requestFetchSelectedBodies(force: Bool = false) {
+        selectedEntryFetchTask?.cancel()
+        selectedEntryFetchTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.fetchSelectedBodiesIfNeeded(force: force)
+        }
+    }
+
+    public func requestFetchBody(
+        entryID: UUID,
+        role: NetworkBody.Role,
+        force: Bool = false
+    ) {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.fetchBodyIfNeeded(entryID: entryID, role: role, force: force)
+        }
     }
 
     public func fetchBodyIfNeeded(
@@ -97,6 +142,56 @@ public final class WINetworkModel {
 }
 
 private extension WINetworkModel {
+    func fetchSelectedBodiesIfNeeded(force: Bool) async {
+        guard let selectedEntry else {
+            return
+        }
+        let selectedEntryID = selectedEntry.id
+
+        if let requestBody = selectedEntry.requestBody {
+            await fetchBodyIfNeeded(for: selectedEntry, body: requestBody, force: force)
+        }
+
+        guard self.selectedEntry?.id == selectedEntryID else {
+            return
+        }
+
+        if let responseBody = selectedEntry.responseBody {
+            await fetchBodyIfNeeded(for: selectedEntry, body: responseBody, force: force)
+        }
+    }
+
+    func fetchBodyIfNeeded(
+        entryID: UUID,
+        role: NetworkBody.Role,
+        force: Bool
+    ) async {
+        guard let entry = store.entries.first(where: { $0.id == entryID }) else {
+            return
+        }
+        let body: NetworkBody?
+        switch role {
+        case .request:
+            body = entry.requestBody
+        case .response:
+            body = entry.responseBody
+        }
+        guard let body else {
+            return
+        }
+        await fetchBodyIfNeeded(for: entry, body: body, force: force)
+    }
+
+    func canFetchBodies(for entry: NetworkEntry) -> Bool {
+        if let requestBody = entry.requestBody, requestBody.canFetchBody {
+            return true
+        }
+        if let responseBody = entry.responseBody, responseBody.canFetchBody {
+            return true
+        }
+        return false
+    }
+
     func dispatch(_ command: WINetworkCommand) -> Bool {
         guard let commandSink else {
             return false

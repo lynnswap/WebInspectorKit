@@ -101,10 +101,7 @@ final class WINetworkRegularSplitViewController: UISplitViewController, UISplitV
     }
 
     private func syncDetailSelection() {
-        let selectedEntry = inspector.selectedEntry
-        detailViewController.display(selectedEntry, hasEntries: !inspector.store.entries.isEmpty)
-
-        if selectedEntry == nil {
+        if inspector.selectedEntry == nil {
             showPrimaryColumnIfNeeded()
         }
     }

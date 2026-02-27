@@ -421,7 +421,7 @@ public final class WITabViewController: NSTabViewController {
         }
 
         if let fetchBodyItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFetchBody }) {
-            fetchBodyItem.isEnabled = Self.canFetchSelectedBodies(in: inspectorController.network)
+            fetchBodyItem.isEnabled = inspectorController.network.canFetchSelectedBodies
         }
 
         if let filterItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFilter }) as? NSMenuToolbarItem {
@@ -491,20 +491,6 @@ public final class WITabViewController: NSTabViewController {
             return selectedTabViewItemIndex
         }
         return 0
-    }
-
-    private static func canFetchSelectedBodies(in networkInspector: WINetworkModel) -> Bool {
-        guard let entry = networkInspector.selectedEntry else {
-            return false
-        }
-
-        if let requestBody = entry.requestBody, requestBody.canFetchBody {
-            return true
-        }
-        if let responseBody = entry.responseBody, responseBody.canFetchBody {
-            return true
-        }
-        return false
     }
 
     private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
@@ -616,20 +602,8 @@ public final class WITabViewController: NSTabViewController {
 
     @objc
     private func handleNetworkFetchBodyToolbarAction(_ sender: Any?) {
-        Task {
-            guard let entry = inspectorController.network.selectedEntry else { return }
-
-            if let requestBody = entry.requestBody {
-                await inspectorController.network.fetchBodyIfNeeded(for: entry, body: requestBody, force: true)
-            }
-            if let responseBody = entry.responseBody {
-                await inspectorController.network.fetchBodyIfNeeded(for: entry, body: responseBody, force: true)
-            }
-            guard !Task.isCancelled else {
-                return
-            }
-            updateToolbarState()
-        }
+        inspectorController.network.requestFetchSelectedBodies(force: true)
+        updateToolbarState()
     }
 
     @objc

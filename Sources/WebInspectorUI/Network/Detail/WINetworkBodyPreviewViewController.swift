@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Foundation
+import ObservationsCompat
 import UIKit
 import WebInspectorEngine
 import WebInspectorRuntime
@@ -44,6 +45,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private let renderGeneration = NetworkBodyPreviewRenderGeneration()
     private var renderTask: Task<Void, Never>?
     private var hasAppliedInitialTreeSnapshot = false
+    private var bodyObservationHandle: ObservationHandle?
 
     private var treePayloadByItem: [TreeItem: TreeItemPayload] = [:]
     private lazy var treeDataSource = makeTreeDataSource()
@@ -83,6 +85,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     isolated deinit {
         renderTask?.cancel()
+        bodyObservationHandle?.cancel()
     }
 
     public override func viewDidLoad() {
@@ -120,11 +123,8 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         applyTitle()
         updateSecondaryMenu()
         requestRenderModelUpdate()
-
-        Task {
-            await inspector.fetchBodyIfNeeded(for: entry, body: bodyState)
-            self.requestRenderModelUpdate()
-        }
+        startObservingBodyState()
+        inspector.requestFetchBody(entryID: entry.id, role: bodyState.role, force: false)
     }
 
     @objc
@@ -227,9 +227,30 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         guard bodyState.canFetchBody else {
             return
         }
-        Task {
-            self.requestRenderModelUpdate()
-            await inspector.fetchBodyIfNeeded(for: entry, body: bodyState, force: force)
+        requestRenderModelUpdate()
+        inspector.requestFetchBody(entryID: entry.id, role: bodyState.role, force: force)
+    }
+
+    private func startObservingBodyState() {
+        bodyObservationHandle?.cancel()
+        bodyObservationHandle = bodyState.observeTask(
+            [
+                \.kind,
+                \.preview,
+                \.full,
+                \.size,
+                \.isBase64Encoded,
+                \.isTruncated,
+                \.summary,
+                \.reference,
+                \.formEntries,
+                \.fetchState
+            ]
+        ) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.updateSecondaryMenu()
             self.requestRenderModelUpdate()
         }
     }

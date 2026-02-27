@@ -6,96 +6,34 @@ import WebInspectorRuntime
 #if canImport(UIKit)
 import UIKit
 
-private protocol DiffableStableID: Hashable, Sendable {}
-private protocol DiffableCellKind: Hashable, Sendable {}
-
-private struct DiffableRenderState<ID: DiffableStableID, Payload> {
-    let payloadByID: [ID: Payload]
-    let revisionByID: [ID: Int]
-}
-
 @MainActor
 public final class WINetworkDetailViewController: UIViewController, UICollectionViewDelegate {
-    private enum BodyKind: String, Hashable, Sendable {
-        case request
-        case response
-    }
-
     private struct SectionIdentifier: Hashable, Sendable {
         let index: Int
         let title: String
     }
 
-    private enum DetailSectionKind: Hashable, Sendable {
-        case overview
-        case requestHeaders
+    private enum DetailItemID: Hashable, Sendable {
+        case summary
+        case requestHeader(index: Int)
+        case requestHeadersEmpty
+        case responseHeader(index: Int)
+        case responseHeadersEmpty
         case requestBody
-        case responseHeaders
         case responseBody
         case error
     }
 
-    private enum ItemCellKind: String, DiffableCellKind {
-        case list
-    }
-
-    private enum ItemStableKey: DiffableStableID {
-        case summary(entryID: UUID)
-        case requestHeader(name: String, ordinal: Int)
-        case responseHeader(name: String, ordinal: Int)
-        case requestBody(entryID: UUID)
-        case responseBody(entryID: UUID)
-        case error(entryID: UUID)
-    }
-
-    private struct ItemStableID: DiffableStableID {
-        let key: ItemStableKey
-        let cellKind: ItemCellKind
-    }
-
-    private struct ItemIdentifier: Hashable, Sendable {
-        let stableID: ItemStableID
-    }
-
-    private enum DetailRow {
-        case summary(NetworkEntry)
-        case header(name: String, value: String)
-        case emptyHeader
-        case body(entry: NetworkEntry, body: NetworkBody)
-        case error(entryID: UUID, message: String)
-    }
-
-    private struct DetailSection {
-        let kind: DetailSectionKind
-        let title: String
-        let rows: [DetailRow]
-    }
-
-    private enum ItemPayload {
-        case summary(entryID: UUID)
-        case header(name: String, value: String)
-        case emptyHeader
-        case body(entryID: UUID, bodyKind: BodyKind)
-        case error(message: String)
-    }
-
     private struct RenderSection {
         let sectionIdentifier: SectionIdentifier
-        let stableIDs: [ItemStableID]
+        let itemIDs: [DetailItemID]
     }
 
     private let inspector: WINetworkModel
     private let showsNavigationControls: Bool
 
-    private var sections: [DetailSection] = []
-    private var payloadByStableID: [ItemStableID: ItemPayload] = [:]
-    private var revisionByStableID: [ItemStableID: Int] = [:]
     private var needsSnapshotReloadOnNextAppearance = false
-    private var pendingReloadDataTask: Task<Void, Never>?
-    private var snapshotTaskGeneration: UInt64 = 0
-    private var observedEntryID: UUID?
-    private var selectedEntryObservationHandles: [ObservationHandle] = []
-    private var selectedEntryBodyObservationHandles: [ObservationHandle] = []
+    private let contentUpdateCoalescer = UIUpdateCoalescer()
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -110,21 +48,15 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
+        
+        inspector.observeTask([\.selectedEntry]) { [weak self] in
+            self?.scheduleDisplayUpdate()
+        }
     }
 
     @available(*, unavailable)
     public required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        pendingReloadDataTask?.cancel()
-        for handle in selectedEntryObservationHandles {
-            handle.cancel()
-        }
-        for handle in selectedEntryBodyObservationHandles {
-            handle.cancel()
-        }
     }
 
     public override func viewDidLoad() {
@@ -139,7 +71,7 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        display(nil, hasEntries: false)
+        synchronizeDisplayWithInspector()
     }
 
     public override func viewDidAppear(_ animated: Bool) {
@@ -147,9 +79,8 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         flushPendingSnapshotUpdateIfNeeded()
     }
 
-    func display(_ entry: NetworkEntry?, hasEntries: Bool = false) {
+    func display(_ entry: NetworkEntry?) {
         self.entry = entry
-        synchronizeSelectedEntryObservation()
         if showsNavigationControls {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
@@ -159,9 +90,13 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         }
         guard let entry else {
             title = nil
-            sections = []
             requestSnapshotUpdate()
             collectionView.isHidden = true
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.text = wiLocalized("network.empty.selection.title")
+            configuration.secondaryText = wiLocalized("network.empty.selection.description")
+            configuration.image = UIImage(systemName: "line.3.horizontal")
+            contentUnavailableConfiguration = configuration
             return
         }
 
@@ -170,123 +105,19 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         } else {
             title = nil
         }
-        sections = makeSections(for: entry)
         collectionView.isHidden = false
+        contentUnavailableConfiguration = nil
         requestSnapshotUpdate()
     }
 
-    private func synchronizeSelectedEntryObservation() {
-        let selectedEntryID = entry?.id
-        guard observedEntryID != selectedEntryID else {
-            return
-        }
-        observedEntryID = selectedEntryID
-        clearSelectedEntryObservationHandles()
-        clearSelectedEntryBodyObservationHandles()
-
-        guard let selectedEntry = entry else {
-            return
-        }
-
-        selectedEntryObservationHandles.append(
-            selectedEntry.observeTask(
-                [
-                    \.url,
-                    \.method,
-                    \.statusCode,
-                    \.statusText,
-                    \.mimeType,
-                    \.fileTypeLabel,
-                    \.requestHeaders,
-                    \.responseHeaders,
-                    \.duration,
-                    \.encodedBodyLength,
-                    \.decodedBodyLength,
-                    \.errorDescription,
-                    \.phase,
-                    \.requestBody,
-                    \.responseBody
-                ]
-            ) { [weak self, weak selectedEntry] in
-                guard let self, let selectedEntry else {
-                    return
-                }
-                self.synchronizeSelectedEntryBodyObservation(for: selectedEntry)
-                self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
-            }
-        )
-        synchronizeSelectedEntryBodyObservation(for: selectedEntry)
-    }
-
-    private func synchronizeSelectedEntryBodyObservation(for selectedEntry: NetworkEntry) {
-        clearSelectedEntryBodyObservationHandles()
-        if let requestBody = selectedEntry.requestBody {
-            selectedEntryBodyObservationHandles.append(
-                requestBody.observeTask(
-                    [
-                        \.kind,
-                        \.preview,
-                        \.full,
-                        \.size,
-                        \.isBase64Encoded,
-                        \.isTruncated,
-                        \.summary,
-                        \.reference,
-                        \.formEntries,
-                        \.fetchState
-                    ]
-                ) { [weak self, weak selectedEntry] in
-                    guard let self, let selectedEntry else {
-                        return
-                    }
-                    self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
-                }
-            )
-        }
-        if let responseBody = selectedEntry.responseBody {
-            selectedEntryBodyObservationHandles.append(
-                responseBody.observeTask(
-                    [
-                        \.kind,
-                        \.preview,
-                        \.full,
-                        \.size,
-                        \.isBase64Encoded,
-                        \.isTruncated,
-                        \.summary,
-                        \.reference,
-                        \.formEntries,
-                        \.fetchState
-                    ]
-                ) { [weak self, weak selectedEntry] in
-                    guard let self, let selectedEntry else {
-                        return
-                    }
-                    self.refreshDisplayedEntryIfNeeded(entryID: selectedEntry.id)
-                }
-            )
+    private func scheduleDisplayUpdate() {
+        contentUpdateCoalescer.schedule { [weak self] in
+            self?.synchronizeDisplayWithInspector()
         }
     }
 
-    private func clearSelectedEntryObservationHandles() {
-        for handle in selectedEntryObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryObservationHandles.removeAll()
-    }
-
-    private func clearSelectedEntryBodyObservationHandles() {
-        for handle in selectedEntryBodyObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryBodyObservationHandles.removeAll()
-    }
-
-    private func refreshDisplayedEntryIfNeeded(entryID: UUID) {
-        guard let selectedEntry = entry, selectedEntry.id == entryID else {
-            return
-        }
-        display(selectedEntry, hasEntries: !inspector.store.entries.isEmpty)
+    private func synchronizeDisplayWithInspector() {
+        display(inspector.selectedEntry)
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -310,9 +141,9 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         }
     }
 
-    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier> {
-        let listCellRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemIdentifier> { [weak self] cell, _, item in
-            self?.configureListCell(cell, item: item)
+    private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, DetailItemID> {
+        let listCellRegistration = UICollectionView.CellRegistration<WINetworkDetailObservingListCell, DetailItemID> { [weak self] cell, _, itemID in
+            self?.configureListCell(cell, itemID: itemID)
         }
         let headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
             elementKind: UICollectionView.elementKindSectionHeader
@@ -328,13 +159,9 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
             header.contentConfiguration = configuration
         }
 
-        let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, ItemIdentifier>(
+        let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, DetailItemID>(
             collectionView: collectionView
         ) { collectionView, indexPath, item in
-            guard item.stableID.cellKind == .list else {
-                assertionFailure("Unexpected cell kind for network detail list registration")
-                return UICollectionViewCell()
-            }
             return collectionView.dequeueConfiguredReusableCell(
                 using: listCellRegistration,
                 for: indexPath,
@@ -351,86 +178,34 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
     }
 
     private func applySnapshot() {
-        pendingReloadDataTask?.cancel()
-        snapshotTaskGeneration &+= 1
-        let generation = snapshotTaskGeneration
-        let snapshot = makeSnapshot()
-        pendingReloadDataTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            defer {
-                if self.snapshotTaskGeneration == generation {
-                    self.pendingReloadDataTask = nil
-                }
-            }
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
+        Task {
+            let snapshot = self.makeSnapshot()
             await self.dataSource.apply(snapshot, animatingDifferences: false)
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
         }
     }
 
     private func applySnapshotUsingReloadData() {
-        pendingReloadDataTask?.cancel()
-        snapshotTaskGeneration &+= 1
-        let generation = snapshotTaskGeneration
-        let snapshot = makeSnapshot()
-        pendingReloadDataTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            defer {
-                if self.snapshotTaskGeneration == generation {
-                    self.pendingReloadDataTask = nil
-                }
-            }
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
+        Task {
+            let snapshot = self.makeSnapshot()
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            guard !Task.isCancelled, self.snapshotTaskGeneration == generation else {
-                return
-            }
         }
     }
 
-    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier> {
+    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, DetailItemID> {
         let renderSections = makeRenderSections()
-        let allStableIDs = renderSections.flatMap(\.stableIDs)
+        let allItemIDs = renderSections.flatMap(\.itemIDs)
         precondition(
-            allStableIDs.count == Set(allStableIDs).count,
+            allItemIDs.count == Set(allItemIDs).count,
             "Duplicate diffable IDs detected in WINetworkDetailViewController"
         )
-        let renderState = makeRenderState(for: renderSections)
-        let previousRevisionByStableID = revisionByStableID
-        payloadByStableID = renderState.payloadByID
-        revisionByStableID = renderState.revisionByID
 
-        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
+        var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, DetailItemID>()
         for renderSection in renderSections {
             snapshot.appendSections([renderSection.sectionIdentifier])
-            let identifiers = renderSection.stableIDs.map { stableID in
-                ItemIdentifier(stableID: stableID)
-            }
-            snapshot.appendItems(identifiers, toSection: renderSection.sectionIdentifier)
+            snapshot.appendItems(renderSection.itemIDs, toSection: renderSection.sectionIdentifier)
         }
-
-        let reconfigured = allStableIDs.compactMap { stableID -> ItemIdentifier? in
-            guard
-                let previousRevision = previousRevisionByStableID[stableID],
-                let nextRevision = renderState.revisionByID[stableID],
-                previousRevision != nextRevision
-            else {
-                return nil
-            }
-            return ItemIdentifier(stableID: stableID)
-        }
-        if !reconfigured.isEmpty {
-            snapshot.reconfigureItems(reconfigured)
+        if !allItemIDs.isEmpty {
+            snapshot.reconfigureItems(allItemIDs)
         }
         return snapshot
     }
@@ -457,287 +232,193 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
     }
 
     private func makeRenderSections() -> [RenderSection] {
-        let currentEntryID = entry?.id ?? UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-        return sections.enumerated().map { sectionIndex, section in
-            let sectionID = SectionIdentifier(index: sectionIndex, title: section.title)
-            var headerOrdinals: [String: Int] = [:]
-            let stableIDs = section.rows.map { row in
-                itemStableID(
-                    for: row,
-                    sectionKind: section.kind,
-                    currentEntryID: currentEntryID,
-                    headerOrdinals: &headerOrdinals
+        guard let entry else {
+            return []
+        }
+        var renderSections: [RenderSection] = []
+        var sectionIndex = 0
+
+        func appendSection(_ title: String, itemIDs: [DetailItemID]) {
+            guard !itemIDs.isEmpty else {
+                return
+            }
+            renderSections.append(
+                RenderSection(
+                    sectionIdentifier: SectionIdentifier(index: sectionIndex, title: title),
+                    itemIDs: itemIDs
                 )
-            }
-            return RenderSection(sectionIdentifier: sectionID, stableIDs: stableIDs)
-        }
-    }
-
-    private func makeRenderState(for renderSections: [RenderSection]) -> DiffableRenderState<ItemStableID, ItemPayload> {
-        var payloadByID: [ItemStableID: ItemPayload] = [:]
-        var revisionByID: [ItemStableID: Int] = [:]
-
-        for (sectionIndex, section) in sections.enumerated() {
-            guard sectionIndex < renderSections.count else {
-                continue
-            }
-            let stableIDs = renderSections[sectionIndex].stableIDs
-            for (rowIndex, row) in section.rows.enumerated() {
-                guard rowIndex < stableIDs.count else {
-                    continue
-                }
-                let stableID = stableIDs[rowIndex]
-                let rendered = payloadAndRevision(for: row)
-                payloadByID[stableID] = rendered.payload
-                revisionByID[stableID] = rendered.revision
-            }
+            )
+            sectionIndex += 1
         }
 
-        return DiffableRenderState(payloadByID: payloadByID, revisionByID: revisionByID)
-    }
+        appendSection(
+            wiLocalized("network.detail.section.overview", default: "Overview"),
+            itemIDs: [.summary]
+        )
 
-    private func itemStableID(
-        for row: DetailRow,
-        sectionKind: DetailSectionKind,
-        currentEntryID: UUID,
-        headerOrdinals: inout [String: Int]
-    ) -> ItemStableID {
-        let key: ItemStableKey
-        switch row {
-        case let .summary(entry):
-            key = .summary(entryID: entry.id)
-        case let .header(name, _):
-            let ordinal = headerOrdinals[name, default: 0]
-            headerOrdinals[name] = ordinal + 1
-            switch sectionKind {
-            case .requestHeaders:
-                key = .requestHeader(name: name, ordinal: ordinal)
-            case .responseHeaders:
-                key = .responseHeader(name: name, ordinal: ordinal)
-            default:
-                assertionFailure("Header row placed in non-header section")
-                key = .requestHeader(name: name, ordinal: ordinal)
-            }
-        case .emptyHeader:
-            switch sectionKind {
-            case .requestHeaders:
-                key = .requestHeader(name: "", ordinal: 0)
-            case .responseHeaders:
-                key = .responseHeader(name: "", ordinal: 0)
-            default:
-                assertionFailure("Empty header row placed in non-header section")
-                key = .requestHeader(name: "", ordinal: 0)
-            }
-        case let .body(entry, body):
-            let bodyKind: BodyKind = body.role == .request ? .request : .response
-            key = bodyKind == .request
-                ? .requestBody(entryID: entry.id)
-                : .responseBody(entryID: entry.id)
-        case .error:
-            key = .error(entryID: currentEntryID)
-        }
-        return ItemStableID(key: key, cellKind: .list)
-    }
-
-    private func payloadAndRevision(for row: DetailRow) -> (payload: ItemPayload, revision: Int) {
-        switch row {
-        case let .summary(entry):
-            return (
-                payload: .summary(entryID: entry.id),
-                revision: summaryRenderHash(for: entry)
-            )
-        case let .header(name, value):
-            var hasher = Hasher()
-            hasher.combine(name)
-            hasher.combine(value)
-            return (
-                payload: .header(name: name, value: value),
-                revision: hasher.finalize()
-            )
-        case .emptyHeader:
-            return (
-                payload: .emptyHeader,
-                revision: 0
-            )
-        case let .body(entry, body):
-            let bodyKind: BodyKind = body.role == .request ? .request : .response
-            return (
-                payload: .body(entryID: entry.id, bodyKind: bodyKind),
-                revision: bodyRenderHash(entry: entry, body: body)
-            )
-        case let .error(_, message):
-            var hasher = Hasher()
-            hasher.combine(message)
-            return (
-                payload: .error(message: message),
-                revision: hasher.finalize()
-            )
-        }
-    }
-
-    private func makeSections(for entry: NetworkEntry) -> [DetailSection] {
-        var sections: [DetailSection] = [
-            DetailSection(
-                kind: .overview,
-                title: wiLocalized("network.detail.section.overview", default: "Overview"),
-                rows: [.summary(entry)]
-            )
-        ]
-
-        let requestHeaderRows: [DetailRow]
-        if entry.requestHeaders.isEmpty {
-            requestHeaderRows = [.emptyHeader]
+        let requestHeaderItems: [DetailItemID]
+        if entry.requestHeaders.fields.isEmpty {
+            requestHeaderItems = [.requestHeadersEmpty]
         } else {
-            requestHeaderRows = entry.requestHeaders.fields.map { .header(name: $0.name, value: $0.value) }
+            requestHeaderItems = entry.requestHeaders.fields.indices.map { .requestHeader(index: $0) }
         }
-        sections.append(DetailSection(
-            kind: .requestHeaders,
-            title: wiLocalized("network.section.request", default: "Request"),
-            rows: requestHeaderRows
-        ))
+        appendSection(
+            wiLocalized("network.section.request", default: "Request"),
+            itemIDs: requestHeaderItems
+        )
 
-        if let requestBody = entry.requestBody {
-            sections.append(DetailSection(
-                kind: .requestBody,
-                title: wiLocalized("network.section.body.request", default: "Request Body"),
-                rows: [.body(entry: entry, body: requestBody)]
-            ))
+        if entry.requestBody != nil {
+            appendSection(
+                wiLocalized("network.section.body.request", default: "Request Body"),
+                itemIDs: [.requestBody]
+            )
         }
 
-        let responseHeaderRows: [DetailRow]
-        if entry.responseHeaders.isEmpty {
-            responseHeaderRows = [.emptyHeader]
+        let responseHeaderItems: [DetailItemID]
+        if entry.responseHeaders.fields.isEmpty {
+            responseHeaderItems = [.responseHeadersEmpty]
         } else {
-            responseHeaderRows = entry.responseHeaders.fields.map { .header(name: $0.name, value: $0.value) }
+            responseHeaderItems = entry.responseHeaders.fields.indices.map { .responseHeader(index: $0) }
         }
-        sections.append(DetailSection(
-            kind: .responseHeaders,
-            title: wiLocalized("network.section.response", default: "Response"),
-            rows: responseHeaderRows
-        ))
+        appendSection(
+            wiLocalized("network.section.response", default: "Response"),
+            itemIDs: responseHeaderItems
+        )
 
-        if let responseBody = entry.responseBody {
-            sections.append(DetailSection(
-                kind: .responseBody,
-                title: wiLocalized("network.section.body.response", default: "Response Body"),
-                rows: [.body(entry: entry, body: responseBody)]
-            ))
+        if entry.responseBody != nil {
+            appendSection(
+                wiLocalized("network.section.body.response", default: "Response Body"),
+                itemIDs: [.responseBody]
+            )
         }
 
         if let errorDescription = entry.errorDescription, !errorDescription.isEmpty {
-            sections.append(DetailSection(
-                kind: .error,
-                title: wiLocalized("network.section.error", default: "Error"),
-                rows: [.error(entryID: entry.id, message: errorDescription)]
-            ))
+            appendSection(
+                wiLocalized("network.section.error", default: "Error"),
+                itemIDs: [.error]
+            )
         }
 
-        return sections
+        return renderSections
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let canFetch: Bool
-        if let entry {
-            canFetch = canFetchBodies(for: entry)
-        } else {
-            canFetch = false
-        }
         let fetchAction = UIAction(
             title: wiLocalized("network.body.fetch", default: "Fetch Body"),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: canFetch ? [] : [.disabled]
+            attributes: inspector.canFetchSelectedBodies ? [] : [.disabled]
         ) { [weak self] _ in
-            self?.fetchBodies(force: true)
+            self?.inspector.requestFetchSelectedBodies(force: true)
         }
         return UIMenu(children: [fetchAction])
     }
 
-    private func canFetchBodies(for entry: NetworkEntry) -> Bool {
-        if let requestBody = entry.requestBody, requestBody.canFetchBody {
-            return true
-        }
-        if let responseBody = entry.responseBody, responseBody.canFetchBody {
-            return true
-        }
-        return false
-    }
-
-    private func fetchBodies(force: Bool) {
+    private func configureListCell(_ cell: WINetworkDetailObservingListCell, itemID: DetailItemID) {
         guard let entry else {
-            return
-        }
-        let entryID = entry.id
-
-        Task {
-            if let requestBody = entry.requestBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: requestBody, force: force)
-            }
-            if let responseBody = entry.responseBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: responseBody, force: force)
-            }
-            guard self.inspector.selectedEntry?.id == entryID else {
-                return
-            }
-            self.display(entry)
-        }
-    }
-
-    private func configureListCell(_ cell: UICollectionViewListCell, item: ItemIdentifier) {
-        guard item.stableID.cellKind == .list else {
-            assertionFailure("List registration mismatch in WINetworkDetailViewController")
             cell.contentConfiguration = nil
-            return
-        }
-        guard let payload = payloadByStableID[item.stableID] else {
-            cell.contentConfiguration = nil
+            cell.accessories = []
             return
         }
         cell.accessories = []
-        var content = UIListContentConfiguration.cell()
 
-        switch payload {
-        case let .summary(entryID):
-            guard let entry, entry.id == entryID else {
+        switch itemID {
+        case .summary:
+            configureSummaryCell(cell, entry: entry)
+        case let .requestHeader(index):
+            guard entry.requestHeaders.fields.indices.contains(index) else {
                 cell.contentConfiguration = nil
                 return
             }
-            content = makeOverviewSubtitleConfiguration(for: entry)
-        case let .header(name, value):
-            content = makeElementLikeSubtitleConfiguration(
-                title: name,
-                detail: value,
+            let field = entry.requestHeaders.fields[index]
+            cell.contentConfiguration = makeElementLikeSubtitleConfiguration(
+                title: field.name,
+                detail: field.value,
                 titleColor: .secondaryLabel,
                 detailColor: .label
             )
-        case .emptyHeader:
-            content = UIListContentConfiguration.cell()
-            content.text = wiLocalized("network.headers.empty", default: "No headers")
-            content.textProperties.color = .secondaryLabel
-        case let .body(entryID, bodyKind):
-            guard
-                let entry,
-                entry.id == entryID,
-                let body = body(for: bodyKind, in: entry)
-            else {
+        case let .responseHeader(index):
+            guard entry.responseHeaders.fields.indices.contains(index) else {
                 cell.contentConfiguration = nil
                 return
             }
-            content = makeElementLikeSubtitleConfiguration(
-                title: makeBodyPrimaryText(entry: entry, body: body),
-                detail: makeBodySecondaryText(body),
+            let field = entry.responseHeaders.fields[index]
+            cell.contentConfiguration = makeElementLikeSubtitleConfiguration(
+                title: field.name,
+                detail: field.value,
                 titleColor: .secondaryLabel,
-                detailColor: .label,
-                titleNumberOfLines: 1,
-                detailNumberOfLines: 6
+                detailColor: .label
             )
-            cell.accessories = [.disclosureIndicator()]
-        case let .error(error):
-            content = UIListContentConfiguration.cell()
-            content.text = error
+        case .requestHeadersEmpty, .responseHeadersEmpty:
+            var content = UIListContentConfiguration.cell()
+            content.text = wiLocalized("network.headers.empty", default: "No headers")
+            content.textProperties.color = .secondaryLabel
+            cell.contentConfiguration = content
+        case .requestBody:
+            guard let body = entry.requestBody else {
+                cell.contentConfiguration = nil
+                return
+            }
+            configureBodyCell(cell, entry: entry, body: body)
+        case .responseBody:
+            guard let body = entry.responseBody else {
+                cell.contentConfiguration = nil
+                return
+            }
+            configureBodyCell(cell, entry: entry, body: body)
+        case .error:
+            var content = UIListContentConfiguration.cell()
+            content.text = entry.errorDescription ?? ""
             content.textProperties.color = .systemOrange
             content.textProperties.numberOfLines = 0
+            cell.contentConfiguration = content
         }
+    }
+
+    private func configureSummaryCell(_ cell: WINetworkDetailObservingListCell, entry: NetworkEntry) {
+        applySummaryCellContent(cell, entry: entry)
+        cell.observeSummary(
+            entry: entry,
+            makeMetricsText: { [weak self] observedEntry in
+                self?.makeOverviewMetricsAttributedText(for: observedEntry) ?? NSAttributedString(string: "")
+            }
+        )
+    }
+
+    private func configureBodyCell(_ cell: WINetworkDetailObservingListCell, entry: NetworkEntry, body: NetworkBody) {
+        applyBodyCellContent(cell, entry: entry, body: body)
+        cell.observeBody(
+            entry: entry,
+            body: body,
+            makePrimaryText: { [weak self] observedEntry, observedBody in
+                self?.makeBodyPrimaryText(entry: observedEntry, body: observedBody) ?? ""
+            },
+            makeSecondaryText: { [weak self] observedBody in
+                self?.makeBodySecondaryText(observedBody) ?? ""
+            }
+        )
+    }
+
+    private func applySummaryCellContent(_ cell: UICollectionViewListCell, entry: NetworkEntry) {
+        var content = makeOverviewSubtitleConfiguration(for: entry)
+        content.secondaryText = entry.url
+        content.attributedText = makeOverviewMetricsAttributedText(for: entry)
         cell.contentConfiguration = content
+        cell.accessories = []
+    }
+
+    private func applyBodyCellContent(_ cell: UICollectionViewListCell, entry: NetworkEntry, body: NetworkBody) {
+        var content = makeElementLikeSubtitleConfiguration(
+            title: makeBodyPrimaryText(entry: entry, body: body),
+            detail: makeBodySecondaryText(body),
+            titleColor: .secondaryLabel,
+            detailColor: .label,
+            titleNumberOfLines: 1,
+            detailNumberOfLines: 6
+        )
+        content.text = makeBodyPrimaryText(entry: entry, body: body)
+        content.secondaryText = makeBodySecondaryText(body)
+        cell.contentConfiguration = content
+        cell.accessories = [.disclosureIndicator()]
     }
 
     private func makeElementLikeSubtitleConfiguration(
@@ -779,7 +460,11 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         configuration.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
         configuration.secondaryTextProperties.color = .label
         configuration.textToSecondaryTextVerticalPadding = 8
+        configuration.attributedText = makeOverviewMetricsAttributedText(for: entry)
+        return configuration
+    }
 
+    private func makeOverviewMetricsAttributedText(for entry: NetworkEntry) -> NSAttributedString {
         let metricsFont = UIFont.preferredFont(forTextStyle: .footnote)
         let attributed = NSMutableAttributedString()
         attributed.append(NSAttributedString(attachment: makeStatusBadgeAttachment(for: entry, baselineFont: metricsFont)))
@@ -802,9 +487,7 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
                 color: .secondaryLabel
             )
         }
-
-        configuration.attributedText = attributed
-        return configuration
+        return attributed
     }
 
     private func makeStatusBadgeAttachment(for entry: NetworkEntry, baselineFont: UIFont) -> NSTextAttachment {
@@ -898,13 +581,19 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
 
     public func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         guard
-            let item = dataSource.itemIdentifier(for: indexPath),
-            let payload = payloadByStableID[item.stableID],
-            case .body = payload
+            let itemID = dataSource.itemIdentifier(for: indexPath),
+            let entry
         else {
             return false
         }
-        return true
+        switch itemID {
+        case .requestBody:
+            return entry.requestBody != nil
+        case .responseBody:
+            return entry.responseBody != nil
+        default:
+            return false
+        }
     }
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -912,13 +601,21 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
             collectionView.deselectItem(at: indexPath, animated: true)
         }
         guard
-            let item = dataSource.itemIdentifier(for: indexPath),
-            let payload = payloadByStableID[item.stableID],
-            case let .body(entryID, bodyKind) = payload,
-            let entry,
-            entry.id == entryID,
-            let body = body(for: bodyKind, in: entry)
+            let itemID = dataSource.itemIdentifier(for: indexPath),
+            let entry
         else {
+            return
+        }
+        let body: NetworkBody?
+        switch itemID {
+        case .requestBody:
+            body = entry.requestBody
+        case .responseBody:
+            body = entry.responseBody
+        default:
+            body = nil
+        }
+        guard let body else {
             return
         }
 
@@ -930,54 +627,6 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         let previewNavigationController = UINavigationController(rootViewController: preview)
         wiApplyClearNavigationBarStyle(to: previewNavigationController)
         present(previewNavigationController, animated: true)
-    }
-
-    private func body(for bodyKind: BodyKind, in entry: NetworkEntry) -> NetworkBody? {
-        switch bodyKind {
-        case .request:
-            return entry.requestBody
-        case .response:
-            return entry.responseBody
-        }
-    }
-
-    private func summaryRenderHash(for entry: NetworkEntry) -> Int {
-        var hasher = Hasher()
-        hasher.combine(entry.url)
-        hasher.combine(entry.method)
-        hasher.combine(entry.statusLabel)
-        hasher.combine(entry.statusSeverity)
-        hasher.combine(entry.duration)
-        hasher.combine(entry.encodedBodyLength)
-        hasher.combine(entry.phase.rawValue)
-        return hasher.finalize()
-    }
-
-    private func bodyRenderHash(entry: NetworkEntry, body: NetworkBody) -> Int {
-        var hasher = Hasher()
-        hasher.combine(entry.id)
-        hasher.combine(body.role)
-        hasher.combine(body.kind.rawValue)
-        hasher.combine(body.size)
-        hasher.combine(body.summary)
-        hasher.combine(body.preview)
-        hasher.combine(body.full)
-        hasher.combine(body.reference)
-        hasher.combine(bodyFetchStateKey(body.fetchState))
-        return hasher.finalize()
-    }
-
-    private func bodyFetchStateKey(_ state: NetworkBody.FetchState) -> String {
-        switch state {
-        case .inline:
-            return "inline"
-        case .fetching:
-            return "fetching"
-        case .full:
-            return "full"
-        case let .failed(error):
-            return "failed.\(String(describing: error))"
-        }
     }
 
     private func makeBodyPrimaryText(entry: NetworkEntry, body: NetworkBody) -> String {
@@ -1017,6 +666,88 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
     }
 }
 
+@MainActor
+private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
+    func observeSummary(
+        entry: NetworkEntry,
+        makeMetricsText: @escaping @MainActor (NetworkEntry) -> NSAttributedString
+    ) {
+        entry.observe(\.url) { [weak self] newURL in
+            self?.updateSummaryURL(newURL)
+        }
+
+        entry.observe([\.method, \.statusCode, \.statusText, \.phase, \.duration, \.encodedBodyLength]) {
+            [weak self, weak entry] in
+            guard let self, let entry else { return }
+            self.updateSummaryMetrics(makeMetricsText(entry))
+        }
+    }
+
+    func observeBody(
+        entry: NetworkEntry,
+        body: NetworkBody,
+        makePrimaryText: @escaping @MainActor (NetworkEntry, NetworkBody) -> String,
+        makeSecondaryText: @escaping @MainActor (NetworkBody) -> String
+    ) {
+        entry.observe([\.mimeType, \.decodedBodyLength, \.encodedBodyLength, \.requestBodyBytesSent]) {
+            [weak self, weak entry, weak body] in
+            guard let self, let entry, let body else { return }
+            self.updateBodyPrimaryText(makePrimaryText(entry, body))
+        }
+
+        body.observe([\.kind]) {
+            [weak self, weak entry, weak body] in
+            guard let self, let entry, let body else { return }
+            self.updateBodyPrimaryText(makePrimaryText(entry, body))
+            self.updateBodySecondaryText(makeSecondaryText(body))
+        }
+        body.observe([\.size]) {
+            [weak self, weak entry, weak body] in
+            guard let self, let entry, let body else { return }
+            self.updateBodyPrimaryText(makePrimaryText(entry, body))
+        }
+
+        body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState, \.reference]) {
+            [weak self, weak body] in
+            guard let self, let body else { return }
+            self.updateBodySecondaryText(makeSecondaryText(body))
+        }
+    }
+
+    private func updateSummaryURL(_ url: String) {
+        guard var content = contentConfiguration as? UIListContentConfiguration else {
+            return
+        }
+        content.secondaryText = url
+        contentConfiguration = content
+    }
+
+    private func updateSummaryMetrics(_ metricsText: NSAttributedString) {
+        guard var content = contentConfiguration as? UIListContentConfiguration else {
+            return
+        }
+        content.attributedText = metricsText
+        contentConfiguration = content
+    }
+
+    private func updateBodyPrimaryText(_ text: String) {
+        guard var content = contentConfiguration as? UIListContentConfiguration else {
+            return
+        }
+        content.text = text
+        contentConfiguration = content
+    }
+
+    private func updateBodySecondaryText(_ text: String) {
+        guard var content = contentConfiguration as? UIListContentConfiguration else {
+            return
+        }
+        content.secondaryText = text
+        contentConfiguration = content
+        accessories = [.disclosureIndicator()]
+    }
+}
+
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Detail (UIKit)") {
@@ -1024,9 +755,9 @@ import SwiftUI
         guard let context = WINetworkPreviewFixtures.makeDetailContext() else {
             return UIViewController()
         }
-        let detail = WINetworkDetailViewController(inspector: context.inspector)
-        detail.display(context.entry)
-        return UINavigationController(rootViewController: detail)
+        return UINavigationController(
+            rootViewController: WINetworkDetailViewController(inspector: context.inspector)
+        )
     }
 }
 #endif

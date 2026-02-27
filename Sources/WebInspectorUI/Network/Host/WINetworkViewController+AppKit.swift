@@ -56,11 +56,11 @@ public final class WINetworkViewController: NSSplitViewController {
     }
 
     func canFetchSelectedBodies() -> Bool {
-        detailViewController?.canFetchBodies ?? false
+        inspector.canFetchSelectedBodies
     }
 
     func fetchSelectedBodies(force: Bool) {
-        detailViewController?.fetchBodies(force: force)
+        inspector.requestFetchSelectedBodies(force: force)
     }
 
 }
@@ -69,7 +69,6 @@ public final class WINetworkViewController: NSSplitViewController {
 private final class NetworkMacDetailViewController: NSViewController {
     private let inspector: WINetworkModel
     private var hostingController: NSHostingController<NetworkMacDetailTab>?
-    private var fetchTask: Task<Void, Never>?
 
     init(inspector: WINetworkModel) {
         self.inspector = inspector
@@ -79,10 +78,6 @@ private final class NetworkMacDetailViewController: NSViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        fetchTask?.cancel()
     }
 
     override func loadView() {
@@ -108,55 +103,6 @@ private final class NetworkMacDetailViewController: NSViewController {
         ])
     }
 
-    override func viewDidDisappear() {
-        super.viewDidDisappear()
-        fetchTask?.cancel()
-        fetchTask = nil
-    }
-
-    private var selectedEntry: NetworkEntry? {
-        inspector.selectedEntry
-    }
-
-    var canFetchBodies: Bool {
-        guard let entry = selectedEntry else {
-            return false
-        }
-        if let requestBody = entry.requestBody, requestBody.canFetchBody {
-            return true
-        }
-        if let responseBody = entry.responseBody, responseBody.canFetchBody {
-            return true
-        }
-        return false
-    }
-
-    func fetchBodies(force: Bool) {
-        guard let entry = selectedEntry else {
-            return
-        }
-        let entryID = entry.id
-
-        fetchTask?.cancel()
-        fetchTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            if let requestBody = entry.requestBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: requestBody, force: force)
-            }
-            if let responseBody = entry.responseBody {
-                await inspector.fetchBodyIfNeeded(for: entry, body: responseBody, force: force)
-            }
-            guard !Task.isCancelled else {
-                return
-            }
-            guard inspector.selectedEntry?.id == entryID else {
-                return
-            }
-            _ = inspector.selectedEntry
-        }
-    }
 }
 
 @MainActor

@@ -110,7 +110,6 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
 
         guard let selectedEntry else {
             popToListIfNeeded(animated: animated)
-            detailViewController?.display(nil, hasEntries: !inspector.store.entries.isEmpty)
             return
         }
 
@@ -119,7 +118,6 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
 
     private func showDetailIfNeeded(for entry: NetworkEntry, animated: Bool) {
         if let detailViewController {
-            detailViewController.display(entry, hasEntries: !inspector.store.entries.isEmpty)
             guard let navigationController else {
                 return
             }
@@ -137,7 +135,6 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
             inspector: inspector,
             showsNavigationControls: true
         )
-        detailViewController.display(entry, hasEntries: !inspector.store.entries.isEmpty)
 
         self.detailViewController = detailViewController
         navigationController?.pushViewController(detailViewController, animated: animated)
