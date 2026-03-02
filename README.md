@@ -8,7 +8,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: Container UI, tab descriptors, Observation state
+- `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
 - `WebInspectorEngine` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorEngine`.
@@ -17,8 +17,8 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable tabs via `WITabDescriptor`
-- Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
+- Explicit lifecycle via `WIModel` (`connect(to:)`, `suspend()`, `disconnect()`)
 
 ## Requirements
 
@@ -37,10 +37,10 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WISessionController()
+    private let inspector = WIModel()
 
     @objc private func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
@@ -55,7 +55,7 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-On iOS, `WIContainerViewController` defaults to `DOM + Network`.
+On iOS, `WITabViewController` defaults to `DOM + Network`.
 
 - `compact` (`horizontalSizeClass == .compact`): `DOM`, `Element` (auto inserted when missing), `Network`
 - `regular/unspecified` (`horizontalSizeClass != .compact`): `DOM` (split DOM + Element), `Network`
@@ -64,7 +64,7 @@ On iOS, `WIContainerViewController` defaults to `DOM + Network`.
 - `compact`: hosted by `UITabBarController`; each tab root is wrapped in `UINavigationController`.
 - `regular/unspecified`: hosted by `UINavigationController` with a centered segmented tab switcher.
 - Network search/filter use standard UIKit navigation APIs (`UISearchController`, `UIBarButtonItem` menu).
-- `WIContainerViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
+- `WITabViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
 
 ### AppKit
 
@@ -75,10 +75,10 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WISessionController()
+    let inspector = WIModel()
 
     @objc func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
@@ -95,12 +95,13 @@ final class BrowserWindowController: NSWindowController {
 ## Custom Tab
 
 ```swift
-let customTab = WITabDescriptor(
-    id: "my_custom_tab",
+let customTab = WITab(
     title: "Custom",
-    systemImage: "folder",
+    image: nil,
+    identifier: "my_custom_tab",
     role: .other
-) { context in
+) { tab in
+    _ = tab
     #if canImport(UIKit)
     return UIViewController()
     #else
@@ -108,7 +109,7 @@ let customTab = WITabDescriptor(
     #endif
 }
 
-let container = WIContainerViewController(
+let container = WITabViewController(
     inspector,
     webView: pageWebView,
     tabs: [.dom(), .network(), customTab]

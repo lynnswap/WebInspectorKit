@@ -7,7 +7,7 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISession
+    inspectorController: WIModel
 ) {
     guard let presenter = resolvePresenter(from: windowScene) else {
         return
@@ -156,7 +156,7 @@ private let inspectorWindowStore = InspectorWindowStore()
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISession
+    inspectorController: WIModel
 ) {
     if let existingWindow = inspectorWindowStore.window,
        let existingContainer = existingWindow.contentViewController as? WITabViewController {

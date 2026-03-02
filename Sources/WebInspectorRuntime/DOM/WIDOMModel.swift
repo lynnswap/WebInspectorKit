@@ -1,7 +1,6 @@
 import OSLog
 import Observation
 import WebKit
-import WebInspectorModel
 import WebInspectorEngine
 
 #if canImport(UIKit)
@@ -21,7 +20,6 @@ public final class WIDOMModel {
     public private(set) var errorMessage: String?
     public private(set) var isSelectingElement = false
 
-    @ObservationIgnored var commandSink: ((WIDOMCommand) -> Void)?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
     @ObservationIgnored private var pendingDeleteTask: Task<Void, Never>?
     @ObservationIgnored private var pendingDeleteGeneration: UInt64 = 0
@@ -98,38 +96,30 @@ public final class WIDOMModel {
         errorMessage = nil
     }
 
-    public func reloadInspector(preserveState: Bool = false) async {
-        if dispatch(.reloadInspector(preserveState: preserveState)) {
+    func setAutoSnapshotEnabled(_ enabled: Bool) {
+        guard session.hasPageWebView else {
             return
         }
+        session.setAutoSnapshot(enabled: enabled)
+    }
+
+    public func reloadInspector(preserveState: Bool = false) async {
         await reloadInspectorImpl(preserveState: preserveState)
     }
 
     public func updateSnapshotDepth(_ depth: Int) {
-        if dispatch(.setSnapshotDepth(depth)) {
-            return
-        }
         updateSnapshotDepthImpl(depth)
     }
 
     public func toggleSelectionMode() {
-        if dispatch(.toggleSelectionMode) {
-            return
-        }
         toggleSelectionModeImpl()
     }
 
     public func cancelSelectionMode() {
-        if dispatch(.cancelSelectionMode) {
-            return
-        }
         cancelSelectionModeImpl()
     }
 
     public func copySelection(_ kind: DOMSelectionCopyKind) {
-        if dispatch(.copySelection(kind)) {
-            return
-        }
         copySelectionImpl(kind)
     }
 
@@ -138,66 +128,23 @@ public final class WIDOMModel {
     }
 
     public func deleteSelectedNode(undoManager: UndoManager?) {
-        if dispatch(.deleteSelectedNode(undoManager: undoManager)) {
-            return
-        }
         deleteNodeImpl(nodeId: selection.nodeId, undoManager: undoManager)
     }
 
     public func deleteNode(nodeId: Int?, undoManager: UndoManager?) {
-        if dispatch(.deleteNode(nodeId: nodeId, undoManager: undoManager)) {
-            return
-        }
         deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
     }
 
     public func updateAttributeValue(name: String, value: String) {
-        if dispatch(.updateAttributeValue(name: name, value: value)) {
-            return
-        }
         updateAttributeValueImpl(name: name, value: value)
     }
 
     public func removeAttribute(name: String) {
-        if dispatch(.removeAttribute(name: name)) {
-            return
-        }
         removeAttributeImpl(name: name)
-    }
-
-    func execute(_ command: WIDOMCommand) async {
-        switch command {
-        case let .reloadInspector(preserveState):
-            await reloadInspectorImpl(preserveState: preserveState)
-        case let .setSnapshotDepth(depth):
-            updateSnapshotDepthImpl(depth)
-        case .toggleSelectionMode:
-            toggleSelectionModeImpl()
-        case .cancelSelectionMode:
-            cancelSelectionModeImpl()
-        case let .copySelection(kind):
-            copySelectionImpl(kind)
-        case let .deleteSelectedNode(undoManager):
-            deleteNodeImpl(nodeId: selection.nodeId, undoManager: undoManager)
-        case let .deleteNode(nodeId, undoManager):
-            deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
-        case let .updateAttributeValue(name, value):
-            updateAttributeValueImpl(name: name, value: value)
-        case let .removeAttribute(name):
-            removeAttributeImpl(name: name)
-        }
     }
 }
 
 private extension WIDOMModel {
-    func dispatch(_ command: WIDOMCommand) -> Bool {
-        guard let commandSink else {
-            return false
-        }
-        commandSink(command)
-        return true
-    }
-
     func reloadInspectorImpl(preserveState: Bool) async {
         guard session.hasPageWebView else {
             errorMessage = "Web view unavailable."

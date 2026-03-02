@@ -4,7 +4,7 @@ import ObservationsCompat
 import WebInspectorRuntime
 
 @MainActor
-public final class WIDOMViewController: UIViewController, WIHostNavigationItemProvider, WICompactNavigationHosting {
+public final class WIDOMViewController: UIViewController, WICompactNavigationHosting {
     private enum HostKind {
         case compact
         case regular
@@ -17,8 +17,6 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
 
     private weak var activeHostViewController: UIViewController?
     private var activeHostKind: HostKind?
-    public let hostNavigationState = WIHostNavigationState()
-    private var regularHostNavigationObservationHandles: [ObservationHandle] = []
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
 
     private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
@@ -56,7 +54,6 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
         self.regularHostViewController = WIDOMRegularSplitViewController(inspector: inspector)
 
         super.init(nibName: nil, bundle: nil)
-        bindRegularHostNavigationState()
     }
 
     @available(*, unavailable)
@@ -66,7 +63,6 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
         rebuildHost(force: true)
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -94,7 +90,6 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
             nextHost = regularHostViewController
         }
         installHost(nextHost)
-        syncHostNavigationStateFromActiveHost()
     }
 
     private func installHost(_ host: UIViewController) {
@@ -111,7 +106,6 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
-        host.view.backgroundColor = .clear
         view.addSubview(host.view)
         NSLayoutConstraint.activate([
             host.view.topAnchor.constraint(equalTo: view.topAnchor),
@@ -123,66 +117,18 @@ public final class WIDOMViewController: UIViewController, WIHostNavigationItemPr
         activeHostViewController = host
     }
 
-    private func bindRegularHostNavigationState() {
-        let regularState = regularHostViewController.hostNavigationState
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.searchController) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.preferredSearchBarPlacement) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.hidesSearchBarWhenScrolling) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.leftBarButtonItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.rightBarButtonItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.additionalOverflowItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-    }
-
-    private func syncHostNavigationStateFromActiveHost() {
-        guard activeHostKind == .regular else {
-            hostNavigationState.clearManagedItems()
-            return
-        }
-        let regularState = regularHostViewController.hostNavigationState
-        hostNavigationState.searchController = regularState.searchController
-        hostNavigationState.preferredSearchBarPlacement = regularState.preferredSearchBarPlacement
-        hostNavigationState.hidesSearchBarWhenScrolling = regularState.hidesSearchBarWhenScrolling
-        hostNavigationState.leftBarButtonItems = regularState.leftBarButtonItems
-        hostNavigationState.rightBarButtonItems = regularState.rightBarButtonItems
-        hostNavigationState.additionalOverflowItems = regularState.additionalOverflowItems
-    }
 }
 
 @MainActor
-private final class WIDOMRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate, WIHostNavigationItemProvider {
+private final class WIDOMRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let inspector: WIDOMModel
     private let domTreeViewController: WIDOMTreeViewController
     private let domTreeNavigationController: UINavigationController
     private let elementDetailsViewController: WIDOMDetailViewController
     private let elementDetailsNavigationController: UINavigationController
     private var hasAppliedInitialRegularColumnWidth = false
-    private var hasStartedObservingHostNavigationState = false
-    private let hostNavigationStateUpdateCoalescer = UIUpdateCoalescer()
-    let hostNavigationState = WIHostNavigationState()
+    private var hasStartedObservingNavigationState = false
+    private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
 
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -255,11 +201,11 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
                 self.hasAppliedInitialRegularColumnWidth = false
             }
             self.applyInitialRegularColumnWidthIfNeeded()
-            self.scheduleHostNavigationStateUpdate()
+            self.scheduleNavigationStateUpdate()
         }
 
-        startObservingHostNavigationStateIfNeeded()
-        updateHostNavigationState()
+        startObservingNavigationStateIfNeeded()
+        updateNavigationItemState()
     }
 
     override func viewDidLayoutSubviews() {
@@ -270,35 +216,31 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         applyInitialRegularColumnWidthIfNeeded()
-        showPrimaryColumnIfNeeded()
     }
 
-    private func updateHostNavigationState() {
+    private func updateNavigationItemState() {
         pickItem.isEnabled = inspector.hasPageWebView
         pickItem.image = UIImage(systemName: pickSymbolName)
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         menuItem.menu = makeDOMSecondaryMenu()
 
-        hostNavigationState.searchController = nil
-        hostNavigationState.preferredSearchBarPlacement = nil
-        hostNavigationState.hidesSearchBarWhenScrolling = false
-        hostNavigationState.leftBarButtonItems = nil
-        hostNavigationState.rightBarButtonItems = [pickItem, menuItem]
-        hostNavigationState.additionalOverflowItems = nil
+        applyNavigationItemState(to: navigationItem)
+        if let hostNavigationItem = parent?.navigationItem {
+            applyNavigationItemState(to: hostNavigationItem)
+        }
+    }
+
+    private func applyNavigationItemState(to navigationItem: UINavigationItem) {
+        navigationItem.searchController = nil
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.setLeftBarButtonItems(nil, animated: false)
+        navigationItem.setRightBarButtonItems([pickItem, menuItem], animated: false)
+        navigationItem.additionalOverflowItems = nil
     }
 
     private var pickSymbolName: String {
         traitCollection.horizontalSizeClass == .compact ? "viewfinder.circle" : "scope"
-    }
-
-    private func showPrimaryColumnIfNeeded() {
-        guard traitCollection.horizontalSizeClass != .compact else {
-            return
-        }
-        guard viewController(for: .primary) != nil else {
-            return
-        }
-        show(.primary)
     }
 
     private func applyInitialRegularColumnWidthIfNeeded() {
@@ -315,35 +257,35 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         hasAppliedInitialRegularColumnWidth = true
     }
 
-    private func startObservingHostNavigationStateIfNeeded() {
-        guard hasStartedObservingHostNavigationState == false else {
+    private func startObservingNavigationStateIfNeeded() {
+        guard hasStartedObservingNavigationState == false else {
             return
         }
-        hasStartedObservingHostNavigationState = true
+        hasStartedObservingNavigationState = true
 
         inspector.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleHostNavigationStateUpdate()
+            self?.scheduleNavigationStateUpdate()
         }
         inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleHostNavigationStateUpdate()
+            self?.scheduleNavigationStateUpdate()
         }
         inspector.selection.observe(
             \.nodeId,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleHostNavigationStateUpdate()
+            self?.scheduleNavigationStateUpdate()
         }
     }
 
-    private func scheduleHostNavigationStateUpdate() {
-        hostNavigationStateUpdateCoalescer.schedule { [weak self] in
-            self?.updateHostNavigationState()
+    private func scheduleNavigationStateUpdate() {
+        navigationStateUpdateCoalescer.schedule { [weak self] in
+            self?.updateNavigationItemState()
         }
     }
 

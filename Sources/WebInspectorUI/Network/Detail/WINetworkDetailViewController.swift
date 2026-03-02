@@ -7,7 +7,7 @@ import WebInspectorRuntime
 import UIKit
 
 @MainActor
-public final class WINetworkDetailViewController: UIViewController, UICollectionViewDelegate {
+@Observable public final class WINetworkDetailViewController: UIViewController, UICollectionViewDelegate {
     private struct SectionIdentifier: Hashable, Sendable {
         let index: Int
         let title: String
@@ -32,25 +32,31 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
     private let inspector: WINetworkModel
     private let showsNavigationControls: Bool
 
-    private var needsSnapshotReloadOnNextAppearance = false
-    private let contentUpdateCoalescer = UIUpdateCoalescer()
-    private lazy var collectionView: UICollectionView = {
+    @ObservationIgnored private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
         return collectionView
     }()
-    private lazy var dataSource = makeDataSource()
-    private var entry: NetworkEntry?
+    @ObservationIgnored private lazy var dataSource = makeDataSource()
+    
+    private var entry:NetworkEntry? {
+        inspector.selectedEntry
+    }
 
-    public init(inspector: WINetworkModel, showsNavigationControls: Bool = true) {
+    public init(
+        inspector: WINetworkModel,
+        showsNavigationControls: Bool = true
+    ) {
         self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
         
-        inspector.observeTask([\.selectedEntry]) { [weak self] in
-            self?.scheduleDisplayUpdate()
+        display(inspector.selectedEntry)
+        
+        inspector.observeTask(\.selectedEntry,options: [.removeDuplicates]) { [weak self] newValue in
+            self?.display(newValue)
         }
     }
 
@@ -71,16 +77,9 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        synchronizeDisplayWithInspector()
     }
 
-    public override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        flushPendingSnapshotUpdateIfNeeded()
-    }
-
-    func display(_ entry: NetworkEntry?) {
-        self.entry = entry
+    func display(_ entry:NetworkEntry?) {
         if showsNavigationControls {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
@@ -92,11 +91,7 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
             title = nil
             requestSnapshotUpdate()
             collectionView.isHidden = true
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = wiLocalized("network.empty.selection.title")
-            configuration.secondaryText = wiLocalized("network.empty.selection.description")
-            configuration.image = UIImage(systemName: "line.3.horizontal")
-            contentUnavailableConfiguration = configuration
+            contentUnavailableConfiguration = nil
             return
         }
 
@@ -108,16 +103,6 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         collectionView.isHidden = false
         contentUnavailableConfiguration = nil
         requestSnapshotUpdate()
-    }
-
-    private func scheduleDisplayUpdate() {
-        contentUpdateCoalescer.schedule { [weak self] in
-            self?.synchronizeDisplayWithInspector()
-        }
-    }
-
-    private func synchronizeDisplayWithInspector() {
-        display(inspector.selectedEntry)
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -210,24 +195,7 @@ public final class WINetworkDetailViewController: UIViewController, UICollection
         return snapshot
     }
 
-    private var isCollectionViewVisible: Bool {
-        isViewLoaded && view.window != nil
-    }
-
     private func requestSnapshotUpdate() {
-        guard isCollectionViewVisible else {
-            needsSnapshotReloadOnNextAppearance = true
-            return
-        }
-        needsSnapshotReloadOnNextAppearance = false
-        applySnapshot()
-    }
-
-    private func flushPendingSnapshotUpdateIfNeeded() {
-        guard needsSnapshotReloadOnNextAppearance, isCollectionViewVisible else {
-            return
-        }
-        needsSnapshotReloadOnNextAppearance = false
         applySnapshotUsingReloadData()
     }
 

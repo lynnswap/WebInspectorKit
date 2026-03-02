@@ -371,6 +371,59 @@ struct DOMSessionTests {
         #expect(await domNodeExists(withID: "target", in: webView) == false)
     }
 
+    @Test
+    func removeNodeFallsBackWhenHandleAPIIsUnavailable() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
+        let (webView, _) = makeTestWebView()
+        let html = """
+        <html>
+            <body>
+                <div id="target">Target</div>
+            </body>
+        </html>
+        """
+
+        session.attach(to: webView)
+        await loadHTML(html, in: webView)
+        let snapshot = try await session.captureSnapshot(maxDepth: 5)
+        guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target nodeId was not found in snapshot")
+            return
+        }
+
+        let modeBeforeFallback = session.bridgeMode
+        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+            """
+            return (function() {
+                if (!window.webInspectorDOM) {
+                    return false;
+                }
+                try {
+                    window.webInspectorDOM.createNodeHandle = undefined;
+                } catch (_) {}
+                try {
+                    window.webInspectorDOM.removeNodeHandle = undefined;
+                } catch (_) {}
+                return (
+                    typeof window.webInspectorDOM.createNodeHandle !== "function"
+                    || typeof window.webInspectorDOM.removeNodeHandle !== "function"
+                );
+            })();
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        await session.removeNode(nodeId: nodeId)
+
+        #expect(await domNodeExists(withID: "target", in: webView) == false)
+        if modeBeforeFallback != .legacyJSON,
+           ((didDisableHandleAPI as? Bool) ?? false) {
+            #expect(session.bridgeMode == .legacyJSON)
+        }
+    }
+
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
         let controller = RecordingUserContentController()
         let configuration = WKWebViewConfiguration()

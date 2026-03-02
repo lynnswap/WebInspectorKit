@@ -252,18 +252,8 @@ private struct NetworkMacDetailTab: View {
     @ViewBuilder
     private var emptyState: some View {
         if hasEntries {
-            ContentUnavailableView {
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.secondary)
-            } description: {
-                VStack(spacing: 4) {
-                    Text(LocalizedStringResource("network.empty.selection.title", bundle: .module))
-                    Text(LocalizedStringResource("network.empty.selection.description", bundle: .module))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView {
                 Image(systemName: "waveform.path.ecg.rectangle")
@@ -417,6 +407,7 @@ private func networkStatusColor(for severity: NetworkStatusSeverity) -> Color {
     }
 }
 
+@MainActor
 private func networkBodyTypeLabel(entry: NetworkEntry, body: NetworkBody) -> String? {
     let headerValue: String?
     switch body.role {
@@ -435,6 +426,7 @@ private func networkBodyTypeLabel(entry: NetworkEntry, body: NetworkBody) -> Str
     return body.kind.rawValue.uppercased()
 }
 
+@MainActor
 private func networkBodySize(entry: NetworkEntry, body: NetworkBody) -> Int? {
     if let size = body.size {
         return size

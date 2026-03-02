@@ -1,10 +1,13 @@
 import WebKit
-import ObservationsCompat
-import WebInspectorEngine
 import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
+
+@MainActor
+private protocol WIUIKitTabHost where Self: UIViewController {
+    func prepareForRemoval()
+}
 
 @MainActor
 public final class WITabViewController: UIViewController {
@@ -13,30 +16,24 @@ public final class WITabViewController: UIViewController {
         case regular
     }
 
-    public private(set) var inspectorController: WISession
+    public private(set) var inspectorController: WIModel
 
-    private var networkQueryModel: WINetworkQueryModel
-    private weak var pageWebView: WKWebView?
-    private var requestedTabDescriptors: [WITabDescriptor]
-    private var resolvedTabDescriptors: [WITabDescriptor]
-
-    private var activeHost: (UIViewController & WIUIKitInspectorHostProtocol)?
+    private var activeHost: (UIViewController & WIUIKitTabHost)?
     private var activeHostKind: HostKind?
 
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
 
     public init(
-        _ inspectorController: WISession,
+        _ inspectorController: WIModel,
         webView: WKWebView?,
-        tabs: [WITabDescriptor] = [.dom(), .network()]
+        tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
-        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
-        self.pageWebView = webView
-        self.requestedTabDescriptors = tabs
-        self.resolvedTabDescriptors = tabs
         super.init(nibName: nil, bundle: nil)
-        self.view.backgroundColor = .clear
+        if let webView {
+            inspectorController.setPageWebViewFromUI(webView)
+        }
+        inspectorController.setTabs(tabs)
     }
 
     @available(*, unavailable)
@@ -45,52 +42,45 @@ public final class WITabViewController: UIViewController {
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
-        pageWebView = webView
+        inspectorController.setPageWebViewFromUI(webView)
         if isViewLoaded {
-            inspectorController.connect(to: webView)
+            inspectorController.activateFromUIIfPossible()
         }
     }
 
-    public func setInspectorController(_ inspectorController: WISession) {
+    public func setInspectorController(_ inspectorController: WIModel) {
         guard self.inspectorController !== inspectorController else {
             return
         }
 
+        let currentTabs = self.inspectorController.tabs
+        let currentSelectedTab = self.inspectorController.selectedTab
+        let currentPageWebView = self.inspectorController.pageWebViewForUI
         let previousController = self.inspectorController
-        previousController.onSelectedTabIDChange = nil
+        resetCachedContentViewControllers(for: currentTabs)
         previousController.disconnect()
 
         self.inspectorController = inspectorController
-        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
-        self.inspectorController.enableUICommandRouting()
-        bindSelectionCallback()
+        inspectorController.setPageWebViewFromUI(currentPageWebView)
+        inspectorController.setTabs(currentTabs)
+        inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
         if isViewLoaded {
             rebuildLayout(forceHostReplacement: true)
-            inspectorController.connect(to: pageWebView)
+            inspectorController.activateFromUIIfPossible()
         }
     }
 
-    public func setTabs(_ tabs: [WITabDescriptor]) {
-        requestedTabDescriptors = tabs
+    public func setTabs(_ tabs: [WITab]) {
+        inspectorController.setTabs(tabs)
         if isViewLoaded {
             rebuildLayout()
-        } else {
-            applyResolvedTabDescriptors(
-                WIUIKitTabLayoutPolicy.resolveTabs(
-                    from: tabs,
-                    horizontalSizeClass: effectiveHorizontalSizeClass
-                )
-            )
         }
     }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
 
-        inspectorController.enableUICommandRouting()
-        bindSelectionCallback()
         rebuildLayout(forceHostReplacement: true)
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -100,8 +90,7 @@ public final class WITabViewController: UIViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        inspectorController.connect(to: pageWebView)
-        activeHost?.setSelectedTabID(inspectorController.selectedTabID)
+        inspectorController.activateFromUIIfPossible()
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
@@ -122,8 +111,8 @@ public final class WITabViewController: UIViewController {
         }
     }
 
-    var resolvedTabIDsForTesting: [WITabDescriptor.ID] {
-        resolvedTabDescriptors.map(\.id)
+    var resolvedTabIDsForTesting: [String] {
+        resolvedTabsForCurrentLayout(requestedTabs: inspectorController.tabs).map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -134,72 +123,35 @@ public final class WITabViewController: UIViewController {
         horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
     }
 
-    private func makeContext() -> WITabContext {
-        WITabContext(
-            controller: inspectorController,
-            networkQueryModel: networkQueryModel,
-            horizontalSizeClass: effectiveHorizontalSizeClass
-        )
-    }
-
     private func rebuildLayout(forceHostReplacement: Bool = false) {
-        let resolvedTabs = WIUIKitTabLayoutPolicy.resolveTabs(
-            from: requestedTabDescriptors,
-            horizontalSizeClass: effectiveHorizontalSizeClass
-        )
-        applyResolvedTabDescriptors(resolvedTabs)
-
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
+
+        if activeHostKind == .compact,
+           targetHostKind == .regular,
+           inspectorController.selectedTab?.identifier == WITab.elementTabID {
+            let domTab = inspectorController.tabs.first(where: { $0.identifier == WITab.domTabID })
+            inspectorController.setSelectedTabFromUI(domTab)
+        }
+
         if forceHostReplacement || activeHostKind != targetHostKind {
             installHost(of: targetHostKind)
         }
-
-        guard let activeHost else {
-            return
-        }
-
-        activeHost.setTabDescriptors(resolvedTabDescriptors, context: makeContext())
-        activeHost.setSelectedTabID(inspectorController.selectedTabID)
-    }
-
-    private func applyResolvedTabDescriptors(_ resolvedTabs: [WITabDescriptor]) {
-        let normalizedSelectedTabID = WIUIKitTabLayoutPolicy.normalizedSelectedTabID(
-            currentSelectedTabID: inspectorController.selectedTabID,
-            resolvedTabs: resolvedTabs
-        )
-
-        if normalizedSelectedTabID != inspectorController.selectedTabID {
-            inspectorController.send(.selectTab(normalizedSelectedTabID))
-        }
-
-        resolvedTabDescriptors = resolvedTabs
-        inspectorController.configureTabs(resolvedTabs.map(\.sessionTabDefinition))
     }
 
     private func installHost(of kind: HostKind) {
-        activeHost?.prepareForRemoval()
-        if let current = activeHost {
-            current.willMove(toParent: nil)
-            current.view.removeFromSuperview()
-            current.removeFromParent()
+        if let activeHost {
+            activeHost.prepareForRemoval()
+            activeHost.willMove(toParent: nil)
+            activeHost.view.removeFromSuperview()
+            activeHost.removeFromParent()
         }
 
-        let host: (UIViewController & WIUIKitInspectorHostProtocol)
+        let host: UIViewController & WIUIKitTabHost
         switch kind {
         case .compact:
-            host = WICompactTabHostViewController()
+            host = WICompactTabHostViewController(model: inspectorController)
         case .regular:
-            host = WIRegularTabHostViewController()
-        }
-
-        host.onSelectedTabIDChange = { [weak self] selectedTabID in
-            guard let self else {
-                return
-            }
-            guard inspectorController.selectedTabID != selectedTabID else {
-                return
-            }
-            inspectorController.synchronizeSelectedTabFromNativeUI(selectedTabID)
+            host = WIRegularTabHostViewController(model: inspectorController)
         }
 
         addChild(host)
@@ -221,18 +173,67 @@ public final class WITabViewController: UIViewController {
         rebuildLayout()
     }
 
-    private func bindSelectionCallback() {
-        inspectorController.onSelectedTabIDChange = { [weak self] tabID in
-            self?.activeHost?.setSelectedTabID(tabID)
+    private func resolvedTabsForCurrentLayout(requestedTabs: [WITab]) -> [WITab] {
+        guard effectiveHorizontalSizeClass == .compact else {
+            return requestedTabs.filter { $0.identifier != WITab.elementTabID }
+        }
+        return requestedTabs
+    }
+
+    private func resetCachedContentViewControllers(for tabs: [WITab]) {
+        for tab in tabs {
+            tab.resetCachedContentViewController()
+        }
+    }
+
+    func makeTabRootViewController(for tab: WITab) -> UIViewController? {
+        if let cached = tab.cachedContentViewController {
+            applyHorizontalSizeClassOverrideIfNeeded(to: cached)
+            return cached
+        }
+
+        let viewController: UIViewController?
+        if let customViewController = tab.viewControllerProvider?(tab) {
+            viewController = customViewController
+        } else {
+            switch tab.identifier {
+            case WITab.domTabID:
+                viewController = WIDOMViewController(inspector: inspectorController.dom)
+            case WITab.elementTabID:
+                viewController = WIDOMDetailViewController(inspector: inspectorController.dom)
+            case WITab.networkTabID:
+                viewController = WINetworkViewController(inspector: inspectorController.network)
+            default:
+                viewController = nil
+            }
+        }
+
+        guard let viewController else {
+            return nil
+        }
+        applyHorizontalSizeClassOverrideIfNeeded(to: viewController)
+        tab.cachedContentViewController = viewController
+        return viewController
+    }
+
+    private func applyHorizontalSizeClassOverrideIfNeeded(to viewController: UIViewController) {
+        if let domViewController = viewController as? WIDOMViewController {
+            domViewController.horizontalSizeClassOverrideForTesting = effectiveHorizontalSizeClass
+        }
+        if let networkViewController = viewController as? WINetworkViewController {
+            networkViewController.horizontalSizeClassOverrideForTesting = effectiveHorizontalSizeClass
         }
     }
 }
+
+extension WICompactTabHostViewController: WIUIKitTabHost {}
+extension WIRegularTabHostViewController: WIUIKitTabHost {}
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Tab Container (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WISession()
+        let session = WIModel()
         WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)

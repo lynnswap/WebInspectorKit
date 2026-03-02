@@ -7,21 +7,20 @@ import WebInspectorRuntime
 import UIKit
 
 @MainActor
-final class WINetworkCompactViewController: UIViewController, UINavigationControllerDelegate {
+final class WINetworkCompactViewController: UINavigationController, UINavigationControllerDelegate {
     private let inspector: WINetworkModel
-    private let queryModel: WINetworkQueryModel
     private let listPaneViewController: WINetworkListViewController
-    private var detailViewController: WINetworkDetailViewController?
-    private var hasStartedObservingInspector = false
-    private let selectionUpdateCoalescer = UIUpdateCoalescer()
-    private weak var previousNavigationControllerDelegate: UINavigationControllerDelegate?
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
-        self.queryModel = queryModel
         self.listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
-        super.init(nibName: nil, bundle: nil)
+        super.init(rootViewController: listPaneViewController)
         title = nil
+
+        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
+            guard let self ,newValue != nil else { return }
+            self.pushDetailVC()
+        }
     }
 
     @available(*, unavailable)
@@ -31,113 +30,24 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
-
-        addChild(listPaneViewController)
-        listPaneViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(listPaneViewController.view)
-        NSLayoutConstraint.activate([
-            listPaneViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            listPaneViewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            listPaneViewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            listPaneViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-        listPaneViewController.didMove(toParent: self)
-
-        startObservingInspectorIfNeeded()
+        wiApplyClearNavigationBarStyle(to: self)
+        delegate = self
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        attachNavigationControllerDelegateIfNeeded()
-        listPaneViewController.applyNavigationItems(to: navigationItem)
-        syncDetailSelection(animated: false)
+        applyListNavigationItems()
     }
 
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        detachNavigationControllerDelegateIfNeeded()
-    }
-
-    private func startObservingInspectorIfNeeded() {
-        guard hasStartedObservingInspector == false else {
+    private func pushDetailVC() {
+        guard (topViewController as? WINetworkDetailViewController) == nil else {
             return
         }
-        hasStartedObservingInspector = true
-        inspector.observeTask(
-            [
-                \.selectedEntry
-            ]
-        ) { [weak self] in
-            self?.scheduleSelectionSync(animated: false)
-        }
-        inspector.store.observeTask(
-            [
-                \.entries
-            ]
-        ) { [weak self] in
-            self?.scheduleSelectionSync(animated: false)
-        }
-    }
-
-    private func scheduleSelectionSync(animated: Bool) {
-        selectionUpdateCoalescer.schedule { [weak self] in
-            self?.syncDetailSelection(animated: animated)
-        }
-    }
-
-    private func attachNavigationControllerDelegateIfNeeded() {
-        guard let navigationController else {
-            return
-        }
-        guard navigationController.delegate !== self else {
-            return
-        }
-        previousNavigationControllerDelegate = navigationController.delegate
-        navigationController.delegate = self
-    }
-
-    private func detachNavigationControllerDelegateIfNeeded() {
-        guard let navigationController, navigationController.delegate === self else {
-            return
-        }
-        navigationController.delegate = previousNavigationControllerDelegate
-        previousNavigationControllerDelegate = nil
-    }
-
-    private func syncDetailSelection(animated: Bool) {
-        let selectedEntry = inspector.selectedEntry
-
-        guard let selectedEntry else {
-            popToListIfNeeded(animated: animated)
-            return
-        }
-
-        showDetailIfNeeded(for: selectedEntry, animated: animated)
-    }
-
-    private func showDetailIfNeeded(for entry: NetworkEntry, animated: Bool) {
-        if let detailViewController {
-            guard let navigationController else {
-                return
-            }
-            if navigationController.topViewController === detailViewController {
-                return
-            }
-            if navigationController.viewControllers.contains(where: { $0 === detailViewController }) {
-                return
-            }
-            navigationController.pushViewController(detailViewController, animated: animated)
-            return
-        }
-
-        let detailViewController = WINetworkDetailViewController(
+        let vc = WINetworkDetailViewController(
             inspector: inspector,
             showsNavigationControls: true
         )
-
-        self.detailViewController = detailViewController
-        navigationController?.pushViewController(detailViewController, animated: animated)
+        pushViewController(vc, animated: true)
     }
 
     func navigationController(
@@ -145,29 +55,17 @@ final class WINetworkCompactViewController: UIViewController, UINavigationContro
         didShow viewController: UIViewController,
         animated _: Bool
     ) {
-        guard viewController === self else {
+        guard viewController === listPaneViewController else {
             return
         }
-        guard let detailViewController else {
-            return
+        if inspector.selectedEntry != nil {
+            inspector.selectEntry(nil)
         }
-        guard navigationController.viewControllers.contains(where: { $0 === detailViewController }) == false else {
-            return
-        }
-
-        inspector.selectEntry(nil)
-        self.detailViewController = nil
-        listPaneViewController.applyNavigationItems(to: navigationItem)
+        applyListNavigationItems()
     }
 
-    private func popToListIfNeeded(animated: Bool) {
-        guard let navigationController else {
-            return
-        }
-        guard navigationController.topViewController !== self else {
-            return
-        }
-        navigationController.popToViewController(self, animated: animated)
+    private func applyListNavigationItems() {
+        listPaneViewController.applyNavigationItems(to: listPaneViewController.navigationItem)
     }
 }
 
@@ -176,11 +74,9 @@ import SwiftUI
 #Preview("Network Compact Host (UIKit)") {
     WIUIKitPreviewContainer {
         let inspector = WINetworkPreviewFixtures.makeInspector(mode: .detail)
-        return UINavigationController(
-            rootViewController: WINetworkCompactViewController(
-                inspector: inspector,
-                queryModel: WINetworkQueryModel(inspector: inspector)
-            )
+        return WINetworkCompactViewController(
+            inspector: inspector,
+            queryModel: WINetworkQueryModel(inspector: inspector)
         )
     }
 }

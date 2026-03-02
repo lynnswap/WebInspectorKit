@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import ObservationsCompat
 import WebKit
-import WebInspectorModel
 import WebInspectorEngine
 
 @MainActor
@@ -26,8 +25,8 @@ public final class WINetworkModel {
         SortDescriptor<NetworkEntry>(\.requestID, order: .reverse)
     ]
 
-    @ObservationIgnored var commandSink: ((WINetworkCommand) -> Void)?
     @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
+    @ObservationIgnored private var isAttachedToPage: Bool = false
 
     package init(session: NetworkSession) {
         self.session = session
@@ -65,10 +64,12 @@ public final class WINetworkModel {
 
     func attach(to webView: WKWebView) {
         session.attach(pageWebView: webView)
+        isAttachedToPage = true
     }
 
     func suspend() {
         session.suspend()
+        isAttachedToPage = false
     }
 
     func detach() {
@@ -76,6 +77,14 @@ public final class WINetworkModel {
         selectedEntryFetchTask = nil
         selectedEntry = nil
         session.detach()
+        isAttachedToPage = false
+    }
+
+    func setMode(_ mode: NetworkLoggingMode) {
+        guard isAttachedToPage else {
+            return
+        }
+        session.setMode(mode)
     }
 
     public func selectEntry(_ entry: NetworkEntry?) {
@@ -123,17 +132,7 @@ public final class WINetworkModel {
         body: NetworkBody,
         force: Bool = false
     ) async {
-        if dispatch(.fetchBody(entry: entry, body: body, force: force)) {
-            return
-        }
         await fetchBodyIfNeededImpl(for: entry, body: body, force: force)
-    }
-
-    func execute(_ command: WINetworkCommand) async {
-        switch command {
-        case let .fetchBody(entry, body, force):
-            await fetchBodyIfNeededImpl(for: entry, body: body, force: force)
-        }
     }
 
     func applyFetchedBody(_ fetched: NetworkBody, to target: NetworkBody, entry: NetworkEntry) {
@@ -190,14 +189,6 @@ private extension WINetworkModel {
             return true
         }
         return false
-    }
-
-    func dispatch(_ command: WINetworkCommand) -> Bool {
-        guard let commandSink else {
-            return false
-        }
-        commandSink(command)
-        return true
     }
 
     func fetchBodyIfNeededImpl(

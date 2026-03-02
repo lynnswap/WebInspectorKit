@@ -10,35 +10,33 @@ import WebInspectorBridge
 @MainActor
 public final class WITabViewController: NSTabViewController {
     private static let toolbarIdentifier = NSToolbar.Identifier("WITabToolbar")
-    private static let domTabID = "wi_dom"
-    private static let networkTabID = "wi_network"
 
-    public private(set) var inspectorController: WISession
+    public private(set) var inspectorController: WIModel
 
-    private weak var pageWebView: WKWebView?
-    private var tabDescriptors: [WITabDescriptor]
     private var networkQueryModel: WINetworkQueryModel
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
     private var toolbarObservationHandles: [ObservationHandle] = []
-    private var selectedEntryObservationHandles: [ObservationHandle] = []
-    private var selectedEntryBodyFetchStateHandles: [ObservationHandle] = []
-    private var selectedEntryBodyObservedEntryID: UUID?
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
+    private var isApplyingSelectionFromController = false
+    private var sessionTabsObservationHandle: ObservationHandle?
+    private var sessionSelectionObservationHandle: ObservationHandle?
 
     public init(
-        _ inspectorController: WISession,
+        _ inspectorController: WIModel,
         webView: WKWebView?,
-        tabs: [WITabDescriptor] = [.dom(), .network()]
+        tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
-        self.pageWebView = webView
-        self.tabDescriptors = Self.normalizeAppKitTabs(tabs)
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         super.init(nibName: nil, bundle: nil)
+        if let webView {
+            inspectorController.setPageWebViewFromUI(webView)
+        }
+        inspectorController.setTabs(tabs)
     }
 
     @available(*, unavailable)
@@ -47,43 +45,45 @@ public final class WITabViewController: NSTabViewController {
     }
 
     isolated deinit {
+        sessionTabsObservationHandle?.cancel()
+        sessionSelectionObservationHandle?.cancel()
         stopObservingToolbarState()
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
-        pageWebView = webView
+        inspectorController.setPageWebViewFromUI(webView)
         if isViewLoaded {
-            inspectorController.connect(to: webView)
+            inspectorController.activateFromUIIfPossible()
         }
     }
 
-    public func setInspectorController(_ inspectorController: WISession) {
+    public func setInspectorController(_ inspectorController: WIModel) {
         guard self.inspectorController !== inspectorController else {
             return
         }
+        let currentTabs = self.inspectorController.tabs
+        let currentSelectedTab = self.inspectorController.selectedTab
+        let currentPageWebView = self.inspectorController.pageWebViewForUI
         let previousController = self.inspectorController
-        previousController.onSelectedTabIDChange = nil
         previousController.disconnect()
         self.inspectorController = inspectorController
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
-        self.inspectorController.enableUICommandRouting()
-        bindSelectionCallback()
+        inspectorController.setPageWebViewFromUI(currentPageWebView)
+        resetCachedContentViewControllers(for: currentTabs)
+        inspectorController.setTabs(currentTabs)
+        inspectorController.setSelectedTabFromUI(currentSelectedTab)
         stopObservingToolbarState()
         if isViewLoaded {
+            bindSessionTabs()
             rebuildTabs()
-            inspectorController.connect(to: pageWebView)
+            inspectorController.activateFromUIIfPossible()
             startObservingToolbarStateIfNeeded()
             updateToolbarState()
         }
     }
 
-    public func setTabs(_ tabs: [WITabDescriptor]) {
-        tabDescriptors = Self.normalizeAppKitTabs(tabs)
-        inspectorController.configureTabs(tabDescriptors.map(\.sessionTabDefinition))
-        if isViewLoaded {
-            rebuildTabs()
-            updateToolbarState()
-        }
+    public func setTabs(_ tabs: [WITab]) {
+        inspectorController.setTabs(tabs)
     }
 
     public override func viewDidLoad() {
@@ -91,16 +91,15 @@ public final class WITabViewController: NSTabViewController {
         tabStyle = .unspecified
         tabView.tabViewType = .noTabsNoBorder
 
-        inspectorController.enableUICommandRouting()
-        bindSelectionCallback()
+        bindSessionTabs()
         rebuildTabs()
         startObservingToolbarStateIfNeeded()
     }
 
     public override func viewWillAppear() {
         super.viewWillAppear()
-        inspectorController.connect(to: pageWebView)
-        syncNativeSelection(with: inspectorController.selectedTabID)
+        inspectorController.activateFromUIIfPossible()
+        syncNativeSelection(with: inspectorController.selectedTab)
         installToolbarIfNeeded()
         startObservingToolbarStateIfNeeded()
         updateToolbarState()
@@ -115,69 +114,76 @@ public final class WITabViewController: NSTabViewController {
 
     public override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
         super.tabView(tabView, didSelect: tabViewItem)
+        guard isApplyingSelectionFromController == false else {
+            return
+        }
         guard
-            let identifier = tabViewItem?.identifier as? String
+            let identifier = tabViewItem?.identifier as? String,
+            let selectedTab = tabForIdentifier(identifier)
         else {
             return
         }
-        inspectorController.synchronizeSelectedTabFromNativeUI(identifier)
-        updateToolbarState()
+        applyUserTabSelection(selectedTab)
     }
 
     private func rebuildTabs() {
-        inspectorController.configureTabs(tabDescriptors.map(\.sessionTabDefinition))
-        let context = WITabContext(
-            controller: inspectorController,
-            networkQueryModel: networkQueryModel
-        )
-        tabViewItems = tabDescriptors.map { descriptor in
-            let viewController = descriptor.makeViewController(context: context)
+        let tabs = inspectorController.tabs
+        tabViewItems = tabs.map { tab in
+            let viewController = makeTabRootViewController(for: tab) ?? NSViewController()
             let item = NSTabViewItem(viewController: viewController)
-            item.identifier = descriptor.id
-            item.label = descriptor.title
-            item.image = NSImage(systemSymbolName: descriptor.systemImage, accessibilityDescription: descriptor.title)
+            item.identifier = tab.identifier
+            item.label = tab.title
+            item.image = tab.image
             return item
         }
-        syncNativeSelection(with: inspectorController.selectedTabID)
+        syncNativeSelection(with: inspectorController.selectedTab)
         refreshTabPickerState()
     }
 
-    private func bindSelectionCallback() {
-        inspectorController.onSelectedTabIDChange = { [weak self] tabID in
-            guard let self else { return }
-            self.syncNativeSelection(with: tabID)
-            self.synchronizeSelectedEntryObservation()
-            self.scheduleToolbarStateUpdate()
+    private func bindSessionTabs() {
+        sessionTabsObservationHandle?.cancel()
+        sessionSelectionObservationHandle?.cancel()
+
+        sessionTabsObservationHandle = inspectorController.observe(\.tabs) { [weak self] _ in
+            self?.handleObservedTabsChange()
+        }
+        sessionSelectionObservationHandle = inspectorController.observe(\.selectedTab) { [weak self] _ in
+            self?.handleObservedSelectionChange()
         }
     }
 
-    private func syncNativeSelection(with tabID: WITabDescriptor.ID?) {
-        guard tabDescriptors.isEmpty == false else {
+    private func handleObservedTabsChange() {
+        rebuildTabs()
+        applyObservedTabStateSideEffects()
+    }
+
+    private func handleObservedSelectionChange() {
+        syncNativeSelection(with: inspectorController.selectedTab)
+        applyObservedTabStateSideEffects()
+    }
+
+    private func applyObservedTabStateSideEffects() {
+        updateToolbarState()
+    }
+
+    private func syncNativeSelection(with tab: WITab?) {
+        let tabs = inspectorController.tabs
+        guard tabs.isEmpty == false else {
             refreshTabPickerState()
             return
         }
         // During rebuild, selection callbacks can arrive before NSTabViewItem creation.
         // Avoid touching selectedTabViewItemIndex while no tab items exist.
-        let availableTabCount = min(tabDescriptors.count, tabViewItems.count)
+        let availableTabCount = min(tabs.count, tabViewItems.count)
         guard availableTabCount > 0 else {
             return
         }
 
-        if let tabID,
-           let index = tabDescriptors.firstIndex(where: { $0.id == tabID }),
-           index < availableTabCount {
-            if selectedTabViewItemIndex != index {
-                selectedTabViewItemIndex = index
-            }
-            refreshTabPickerState()
+        let resolvedIndex = resolvedSelectionIndex(for: tab, in: tabs)
+        guard resolvedIndex < availableTabCount else {
             return
         }
-
-        let resolvedIndex = (0..<availableTabCount).contains(selectedTabViewItemIndex) ? selectedTabViewItemIndex : 0
-        if selectedTabViewItemIndex != resolvedIndex {
-            selectedTabViewItemIndex = resolvedIndex
-        }
-        inspectorController.synchronizeSelectedTabFromNativeUI(tabDescriptors[resolvedIndex].id)
+        applySelectionIndexFromControllerIfNeeded(resolvedIndex)
         refreshTabPickerState()
     }
 
@@ -206,14 +212,6 @@ public final class WITabViewController: NSTabViewController {
         hasStartedObservingToolbarState = true
 
         toolbarObservationHandles.append(
-            inspectorController.observe(
-                \.selectedTabID,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
             inspectorController.dom.observe(
                 \.hasPageWebView,
                 options: [.removeDuplicates]
@@ -233,7 +231,6 @@ public final class WITabViewController: NSTabViewController {
             inspectorController.network.observeTask(
                 [\.selectedEntry]
             ) { [weak self] in
-                self?.synchronizeSelectedEntryObservation()
                 self?.scheduleToolbarStateUpdate()
             }
         )
@@ -241,7 +238,6 @@ public final class WITabViewController: NSTabViewController {
             inspectorController.network.store.observeTask(
                 [\.entries]
             ) { [weak self] in
-                self?.synchronizeSelectedEntryObservation()
                 self?.scheduleToolbarStateUpdate()
             }
         )
@@ -269,103 +265,20 @@ public final class WITabViewController: NSTabViewController {
                 self?.scheduleToolbarStateUpdate()
             }
         )
-        synchronizeSelectedEntryObservation()
     }
 
     private func stopObservingToolbarState() {
         hasStartedObservingToolbarState = false
-        selectedEntryBodyObservedEntryID = nil
 
         for handle in toolbarObservationHandles {
             handle.cancel()
         }
         toolbarObservationHandles.removeAll()
-
-        for handle in selectedEntryObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryObservationHandles.removeAll()
-
-        for handle in selectedEntryBodyFetchStateHandles {
-            handle.cancel()
-        }
-        selectedEntryBodyFetchStateHandles.removeAll()
     }
 
     private func scheduleToolbarStateUpdate() {
         toolbarUpdateCoalescer.schedule { [weak self] in
             self?.updateToolbarState()
-        }
-    }
-
-    private func synchronizeSelectedEntryObservation() {
-        let selectedEntry = inspectorController.network.selectedEntry
-        let selectedEntryID = selectedEntry?.id
-        guard selectedEntryBodyObservedEntryID != selectedEntryID else {
-            return
-        }
-        selectedEntryBodyObservedEntryID = selectedEntryID
-
-        for handle in selectedEntryObservationHandles {
-            handle.cancel()
-        }
-        selectedEntryObservationHandles.removeAll()
-        for handle in selectedEntryBodyFetchStateHandles {
-            handle.cancel()
-        }
-        selectedEntryBodyFetchStateHandles.removeAll()
-
-        guard let selectedEntry else {
-            return
-        }
-
-        selectedEntryObservationHandles.append(
-            selectedEntry.observeTask(
-                [\.requestBody]
-            ) { [weak self, weak selectedEntry] in
-                guard let self else { return }
-                self.scheduleToolbarStateUpdate()
-                guard let selectedEntry else { return }
-                self.synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
-            }
-        )
-        selectedEntryObservationHandles.append(
-            selectedEntry.observeTask(
-                [\.responseBody]
-            ) { [weak self, weak selectedEntry] in
-                guard let self else { return }
-                self.scheduleToolbarStateUpdate()
-                guard let selectedEntry else { return }
-                self.synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
-            }
-        )
-        synchronizeSelectedEntryBodyFetchStateObservation(for: selectedEntry)
-    }
-
-    private func synchronizeSelectedEntryBodyFetchStateObservation(for selectedEntry: NetworkEntry) {
-        for handle in selectedEntryBodyFetchStateHandles {
-            handle.cancel()
-        }
-        selectedEntryBodyFetchStateHandles.removeAll()
-
-        if let requestBody = selectedEntry.requestBody {
-            selectedEntryBodyFetchStateHandles.append(
-                requestBody.observeTask(
-                    [\.fetchState]
-                ) { [weak self] in
-                    self?.scheduleToolbarStateUpdate()
-                }
-            )
-        }
-
-        if let responseBody = selectedEntry.responseBody {
-            selectedEntryBodyFetchStateHandles.append(
-                responseBody.observeTask(
-                    [\.fetchState]
-                ) { [weak self] in
-                    self?.scheduleToolbarStateUpdate()
-                }
-            )
         }
     }
 
@@ -375,10 +288,10 @@ public final class WITabViewController: NSTabViewController {
         }
 
         let desiredIdentifiers: [NSToolbarItem.Identifier]
-        switch inspectorController.selectedTabID {
-        case Self.domTabID:
+        switch inspectorController.selectedTab?.identifier {
+        case WITab.domTabID:
             desiredIdentifiers = [.wiTabPicker, .flexibleSpace, .wiDOMPick, .wiDOMReload]
-        case Self.networkTabID:
+        case WITab.networkTabID:
             desiredIdentifiers = [
                 .wiTabPicker,
                 .wiNetworkFilter,
@@ -458,7 +371,8 @@ public final class WITabViewController: NSTabViewController {
             return
         }
 
-        let titles = tabDescriptors.map(\.title)
+        let tabs = inspectorController.tabs
+        let titles = tabs.map(\.title)
         if tabPickerControl.segmentCount != titles.count {
             tabPickerControl.segmentCount = titles.count
         }
@@ -483,14 +397,7 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private func resolvedTabPickerSelectionIndex() -> Int {
-        if let selectedTabID = inspectorController.selectedTabID,
-           let index = tabDescriptors.firstIndex(where: { $0.id == selectedTabID }) {
-            return index
-        }
-        if (0..<tabDescriptors.count).contains(selectedTabViewItemIndex) {
-            return selectedTabViewItemIndex
-        }
-        return 0
+        resolvedSelectionIndex(for: inspectorController.selectedTab, in: inspectorController.tabs)
     }
 
     private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
@@ -645,17 +552,24 @@ public final class WITabViewController: NSTabViewController {
         guard selectedIndex >= 0 else {
             return
         }
-        guard selectedIndex < tabDescriptors.count, selectedIndex < tabViewItems.count else {
+        let tabs = inspectorController.tabs
+        guard selectedIndex < tabs.count, selectedIndex < tabViewItems.count else {
             refreshTabPickerState()
             return
         }
 
-        let selectedTabID = tabDescriptors[selectedIndex].id
-        if selectedTabViewItemIndex != selectedIndex {
-            selectedTabViewItemIndex = selectedIndex
+        let selectedTab = tabs[selectedIndex]
+        applySelectionIndexFromControllerIfNeeded(selectedIndex)
+        applyUserTabSelection(selectedTab)
+    }
+
+    private func applySelectionIndexFromControllerIfNeeded(_ index: Int) {
+        guard selectedTabViewItemIndex != index else {
+            return
         }
-        inspectorController.synchronizeSelectedTabFromNativeUI(selectedTabID)
-        updateToolbarState()
+        isApplyingSelectionFromController = true
+        defer { isApplyingSelectionFromController = false }
+        selectedTabViewItemIndex = index
     }
 
     public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -685,7 +599,7 @@ public final class WITabViewController: NSTabViewController {
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
             item.target = self
             item.isBordered = true
-            let labels = tabDescriptors.map(\.title)
+            let labels = inspectorController.tabs.map(\.title)
             let picker = NSSegmentedControl(
                 labels: labels,
                 trackingMode: .selectOne,
@@ -778,12 +692,62 @@ public final class WITabViewController: NSTabViewController {
         }
     }
 
-    private static func normalizeAppKitTabs(_ tabs: [WITabDescriptor]) -> [WITabDescriptor] {
-        let hasDOMTab = tabs.contains(where: { $0.id == "wi_dom" })
-        guard hasDOMTab else {
-            return tabs
+    private func applyUserTabSelection(_ tab: WITab) {
+        inspectorController.setSelectedTabFromUI(tab)
+        syncNativeSelection(with: inspectorController.selectedTab)
+        updateToolbarState()
+    }
+
+    private func tabForIdentifier(_ identifier: String) -> WITab? {
+        inspectorController.tabs.first(where: { $0.identifier == identifier })
+    }
+
+    private func resolvedSelectionIndex(for selectedTab: WITab?, in tabs: [WITab]) -> Int {
+        guard tabs.isEmpty == false else {
+            return 0
         }
-        return tabs.filter { $0.id != "wi_element" }
+        guard let selectedTab else {
+            return 0
+        }
+        if let exactMatch = tabs.firstIndex(where: { $0 === selectedTab }) {
+            return exactMatch
+        }
+        return tabs.firstIndex(where: { $0.identifier == selectedTab.identifier }) ?? 0
+    }
+
+    private func resetCachedContentViewControllers(for tabs: [WITab]) {
+        for tab in tabs {
+            tab.resetCachedContentViewController()
+        }
+    }
+
+    private func makeTabRootViewController(for tab: WITab) -> NSViewController? {
+        if let cached = tab.cachedContentViewController {
+            return cached
+        }
+
+        let viewController: NSViewController?
+        if let customViewController = tab.viewControllerProvider?(tab) {
+            viewController = customViewController
+        } else {
+            switch tab.identifier {
+            case WITab.domTabID:
+                viewController = WIDOMViewController(inspector: inspectorController.dom)
+            case WITab.networkTabID:
+                viewController = WINetworkViewController(
+                    inspector: inspectorController.network,
+                    queryModel: networkQueryModel
+                )
+            default:
+                viewController = nil
+            }
+        }
+
+        guard let viewController else {
+            return nil
+        }
+        tab.cachedContentViewController = viewController
+        return viewController
     }
 }
 
@@ -801,7 +765,7 @@ private extension NSToolbarItem.Identifier {
 import SwiftUI
 #Preview("Tab Container (AppKit)") {
     WIAppKitPreviewContainer {
-        let session = WISession()
+        let session = WIModel()
         WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)

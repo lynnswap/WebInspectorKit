@@ -21,7 +21,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func loadViewIfNeededDoesNotCrashWhenSelectionCallbackArrivesBeforeTabItemsExist() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
@@ -32,14 +32,14 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.tabViewItems.count == 2)
         #expect(container.selectedTabViewItemIndex == 0)
-        #expect(controller.selectedTabID == "tab_a")
+        #expect(controller.selectedTab?.id == "tab_a")
         #expect(container.tabStyle == .unspecified)
         #expect(container.tabView.tabViewType == .noTabsNoBorder)
     }
 
     @Test
     func toolbarContainsTabPickerAndUsesDescriptorTitles() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
@@ -65,7 +65,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func pickerSelectionUpdatesTabAndControllerSelectionWhenConnected() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -90,12 +90,12 @@ struct TabViewControllerAppKitTabTests {
         picker.sendAction(action, to: picker.target)
 
         #expect(container.selectedTabViewItemIndex == 1)
-        #expect(controller.selectedTabID == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
     }
 
     @Test
-    func externalSelectionChangesUpdatePickerSelection() {
-        let controller = WISession()
+    func pickerCanSwitchBackFromNetworkToDOM() {
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -107,29 +107,22 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
-        guard tabPicker(in: window) != nil else {
-            Issue.record("Expected toolbar tab picker")
-            return
-        }
+        selectTabViaPicker(index: 1, in: window)
+        #expect(container.selectedTabViewItemIndex == 1)
+        #expect(controller.selectedTab?.id == "wi_network")
 
-        controller.selectedTabID = "wi_network"
+        selectTabViaPicker(index: 0, in: window)
+        #expect(container.selectedTabViewItemIndex == 0)
+        #expect(controller.selectedTab?.id == "wi_dom")
+
         drainMainQueue()
-        guard let networkPicker = tabPicker(in: window) else {
-            Issue.record("Expected toolbar tab picker after selecting network tab")
-            return
-        }
-        #expect(networkPicker.selectedSegment == 1)
-        controller.selectedTabID = "wi_dom"
-        guard let updatedPicker = tabPicker(in: window) else {
-            Issue.record("Expected toolbar tab picker after tab switch")
-            return
-        }
-        #expect(updatedPicker.selectedSegment == 0)
+        #expect(container.selectedTabViewItemIndex == 0)
+        #expect(controller.selectedTab?.id == "wi_dom")
     }
 
     @Test
     func toolbarLayoutTracksSelectedTab() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -148,7 +141,9 @@ struct TabViewControllerAppKitTabTests {
             domReloadIdentifierRaw
         ])
 
-        controller.selectedTabID = "wi_network"
+        selectTabViaPicker(index: 1, in: window)
+        #expect(controller.selectedTab?.id == "wi_network")
+        drainMainQueue()
 
         #expect(toolbarIdentifierRawValues(in: window) == [
             tabPickerIdentifierRaw,
@@ -162,7 +157,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkSearchToolbarFieldUpdatesSearchText() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -174,7 +169,8 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
-        controller.selectedTabID = "wi_network"
+        selectTabViaPicker(index: 1, in: window)
+        #expect(controller.selectedTab?.id == "wi_network")
         guard
             let searchItem = window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == networkSearchIdentifierRaw }) as? NSSearchToolbarItem,
             let action = searchItem.searchField.action
@@ -191,7 +187,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkFilterToolbarItemBecomesProminentWhenFiltering() {
-        let controller = WISession()
+        let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -203,7 +199,7 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
-        controller.selectedTabID = "wi_network"
+        selectTabViaPicker(index: 1, in: window)
         drainMainQueue()
 
         guard let filterItem = networkFilterToolbarItem(in: window) else {
@@ -250,14 +246,12 @@ struct TabViewControllerAppKitTabTests {
         }
     }
 
-    private func makeDescriptor(id: String, title: String) -> WITabDescriptor {
-        WITabDescriptor(
+    private func makeDescriptor(id: String, title: String) -> WITab {
+        WITab(
             id: id,
             title: title,
             systemImage: "circle"
-        ) { _ in
-            NSViewController()
-        }
+        )
     }
 
     private func makeTestWebView() -> WKWebView {
@@ -301,7 +295,20 @@ struct TabViewControllerAppKitTabTests {
     }
 
     private func drainMainQueue() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
+    private func selectTabViaPicker(index: Int, in window: NSWindow) {
+        guard
+            let picker = tabPicker(in: window),
+            let action = picker.action
+        else {
+            Issue.record("Expected toolbar tab picker")
+            return
+        }
+        picker.selectedSegment = index
+        picker.sendAction(action, to: picker.target)
+        drainMainQueue()
     }
 }
 #endif

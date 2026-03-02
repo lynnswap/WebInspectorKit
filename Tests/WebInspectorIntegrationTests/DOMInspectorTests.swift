@@ -10,14 +10,14 @@ import WebInspectorEngine
 struct DOMInspectorTests {
     @Test
     func sharesSelectionInstanceWithSession() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         #expect(inspector.selection === inspector.session.selection)
     }
 
     @Test
     func hasPageWebViewReflectsAttachAndDetach() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         let webView = makeTestWebView()
 
@@ -34,7 +34,7 @@ struct DOMInspectorTests {
 
     @Test
     func attachSwitchingPageClearsPendingMutationBundles() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         let firstWebView = makeTestWebView()
         let secondWebView = makeTestWebView()
@@ -51,7 +51,7 @@ struct DOMInspectorTests {
 
     @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         #expect(inspector.errorMessage == nil)
 
@@ -62,7 +62,7 @@ struct DOMInspectorTests {
 
     @Test
     func updateSnapshotDepthClampsAndUpdatesConfiguration() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         inspector.updateSnapshotDepth(0)
         #expect(inspector.session.configuration.snapshotDepth == 1)
@@ -73,7 +73,7 @@ struct DOMInspectorTests {
 
     @Test
     func updateAndRemoveAttributeMutateSelectionState() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         inspector.selection.nodeId = 7
         inspector.selection.attributes = [
@@ -90,7 +90,7 @@ struct DOMInspectorTests {
 
     @Test
     func detachClearsErrorMessage() async {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         await inspector.reloadInspector()
         #expect(inspector.errorMessage != nil)
@@ -102,7 +102,7 @@ struct DOMInspectorTests {
 
     @Test
     func detachClearsMatchedStylesState() {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         inspector.selection.nodeId = 11
         inspector.selection.matchedStyles = [
@@ -128,7 +128,7 @@ struct DOMInspectorTests {
 
     @Test
     func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        let controller = WISession()
+        let controller = WIModel()
         let inspector = controller.dom
         let webView = makeTestWebView()
         let undoManager = UndoManager()

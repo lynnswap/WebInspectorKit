@@ -22,10 +22,6 @@ let package = Package(
             targets: ["WebInspectorEngine"]
         ),
         .library(
-            name: "WebInspectorModel",
-            targets: ["WebInspectorModel"]
-        ),
-        .library(
             name: "WebInspectorRuntime",
             targets: ["WebInspectorRuntime"]
         ),
@@ -62,16 +58,8 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorModel",
-            dependencies: [
-                "WebInspectorEngine"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
             name: "WebInspectorRuntime",
             dependencies: [
-                "WebInspectorModel",
                 "WebInspectorEngine",
                 "WebInspectorBridge",
                 "WebInspectorScripts",
@@ -113,7 +101,6 @@ let package = Package(
         .target(
             name: "WebInspectorUI",
             dependencies: [
-                "WebInspectorModel",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
                 "WebInspectorBridge",
@@ -129,7 +116,6 @@ let package = Package(
             dependencies: [
                 "WebInspectorUI",
                 "WebInspectorEngine",
-                "WebInspectorModel",
                 "WebInspectorRuntime",
                 "WebInspectorBridge",
                 "WebInspectorScripts"

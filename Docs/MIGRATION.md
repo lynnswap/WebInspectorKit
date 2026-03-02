@@ -1,26 +1,32 @@
 # MIGRATION (Next Release)
 
-This release includes a **breaking terminology rename** from `Pane` to `Tab`.
-There is no backward-compatible alias layer in this release.
+This release includes **breaking API changes** around tab modeling and ownership.
 
-## Breaking Rename Map
+## Breaking Changes
 
 | Old | New |
 | --- | --- |
-| `WIPaneDescriptor` | `WITabDescriptor` |
-| `WIPaneContext` | `WITabContext` |
-| `WIDOMPaneViewModel` | `WIDOMTabViewModel` |
-| `WINetworkPaneViewModel` | `WINetworkTabViewModel` |
-| `WIPaneActivation` | `WITabActivation` |
-| `WIPaneRuntimeDescriptor` | `WITabRuntimeDescriptor` |
-| `WISessionCommand.configurePanes` | `WISessionCommand.configureTabs` |
-| `WISessionCommand.selectPane` | `WISessionCommand.selectTab` |
-| `WISessionViewState.selectedPaneID` | `WISessionViewState.selectedTabID` |
-| `WISessionStore.selectedPaneID` | `WISessionStore.selectedTabID` |
+| `WITabDescriptor` | `WITab` |
+| `WITab` (value type-like usage) | `WITab: NSObject` |
+| `WIModel.setTabsFromUI(_:)` | `WIModel.setTabs(_:)` |
+| Host-side tab cache (`RenderEntry` / `TabEntry` / `stableKey`) | `WITab` internal content VC cache |
+| `WISessionLifecycle` in `WebInspectorEngine` | `WISessionLifecycle` in `WebInspectorRuntime` |
+
+## New Architecture
+
+- SSOT remains `WIModel` (`tabs` / `selectedTab`).
+- `WITab` owns:
+  - tab definition (`identifier`, `title`, `image`, `role`)
+  - optional `viewControllerProvider`
+  - optional `userInfo`
+  - internal cached content view controller
+- UIKit/AppKit hosts project `WIModel` directly using Observation.
+- Compact Element synthetic tab handling stays in UIKit host layer only.
 
 ## Migration Steps
 
-1. Replace all type and API references listed above in your app code.
-2. Update any custom tab construction from `WIPaneDescriptor(...)` to `WITabDescriptor(...)`.
-3. Rename local identifiers such as `customPane` to `customTab` for consistency.
-4. Rebuild and run tests to confirm there are no remaining `Pane` references in your integration code.
+1. Replace `WITabDescriptor` with `WITab`.
+2. Replace `setTabsFromUI(_:)` calls with `setTabs(_:)`.
+3. Remove app-side dependencies on host `stableKey` behavior.
+4. Keep custom tabs through `WITab(..., viewControllerProvider:)` and use `userInfo` for per-tab metadata when needed.
+5. Rebuild and run tests to confirm there are no references to removed types/APIs.
