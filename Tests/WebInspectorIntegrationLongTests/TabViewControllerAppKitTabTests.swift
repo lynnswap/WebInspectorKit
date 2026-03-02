@@ -121,6 +121,64 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func hiddenNativeTabSelectionCallbackDoesNotOverridePickerSelectionModel() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: "wi_dom", title: "DOM"),
+            makeDescriptor(id: "wi_network", title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        #expect(container.tabView.tabViewType == .noTabsNoBorder)
+        #expect(controller.selectedTab?.id == "wi_dom")
+
+        guard container.tabViewItems.count == 2 else {
+            Issue.record("Expected two tab items")
+            return
+        }
+
+        let networkItem = container.tabViewItems[1]
+        container.tabView(container.tabView, didSelect: networkItem)
+
+        #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(container.selectedTabViewItemIndex == 0)
+    }
+
+    @Test
+    func rebuildingTabsWithSameSelectedIndexKeepsConcreteSelectedTabViewItem() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: "wi_dom", title: "DOM"),
+            makeDescriptor(id: "wi_network", title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        #expect(container.selectedTabViewItemIndex == 0)
+        #expect((container.tabView.selectedTabViewItem?.identifier as? String) == "wi_dom")
+
+        // Rebuild with a new tab descriptor array while keeping DOM selected.
+        controller.setTabs([
+            makeDescriptor(id: "wi_dom", title: "DOM"),
+            makeDescriptor(id: "wi_network", title: "Network")
+        ])
+        drainMainQueue()
+
+        #expect(container.selectedTabViewItemIndex == 0)
+        #expect((container.tabView.selectedTabViewItem?.identifier as? String) == "wi_dom")
+        #expect(container.tabView.selectedTabViewItem?.viewController != nil)
+    }
+
+    @Test
     func toolbarLayoutTracksSelectedTab() {
         let controller = WIModel()
         let descriptors = [

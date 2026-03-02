@@ -18,8 +18,8 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
         title = nil
 
         inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
-            guard let self ,newValue != nil else { return }
-            self.pushDetailVC()
+            guard let self else { return }
+            self.syncNavigationStack(for: newValue)
         }
     }
 
@@ -48,6 +48,22 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
             showsNavigationControls: true
         )
         pushViewController(vc, animated: true)
+    }
+
+    private func popToListVCIfNeeded() {
+        guard topViewController !== listPaneViewController else {
+            applyListNavigationItems()
+            return
+        }
+        popToRootViewController(animated: true)
+    }
+
+    private func syncNavigationStack(for selectedEntry: NetworkEntry?) {
+        guard selectedEntry != nil else {
+            popToListVCIfNeeded()
+            return
+        }
+        pushDetailVC()
     }
 
     func navigationController(

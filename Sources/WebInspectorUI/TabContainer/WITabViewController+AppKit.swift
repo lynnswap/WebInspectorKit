@@ -22,6 +22,7 @@ public final class WITabViewController: NSTabViewController {
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
     private var isApplyingSelectionFromController = false
+    private var isRebuildingTabs = false
     private var sessionTabsObservationHandle: ObservationHandle?
     private var sessionSelectionObservationHandle: ObservationHandle?
 
@@ -114,7 +115,12 @@ public final class WITabViewController: NSTabViewController {
 
     public override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
         super.tabView(tabView, didSelect: tabViewItem)
-        guard isApplyingSelectionFromController == false else {
+        guard isApplyingSelectionFromController == false, isRebuildingTabs == false else {
+            return
+        }
+        // Tab headers are hidden and selection is driven by the toolbar picker.
+        // Ignore native tab callbacks that can arrive during internal sync.
+        guard tabView.tabViewType != .noTabsNoBorder else {
             return
         }
         guard
@@ -127,6 +133,10 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private func rebuildTabs() {
+        isRebuildingTabs = true
+        defer {
+            isRebuildingTabs = false
+        }
         let tabs = inspectorController.tabs
         tabViewItems = tabs.map { tab in
             let viewController = makeTabRootViewController(for: tab) ?? NSViewController()
@@ -229,7 +239,7 @@ public final class WITabViewController: NSTabViewController {
         )
         toolbarObservationHandles.append(
             inspectorController.network.observeTask(
-                [\.selectedEntry]
+                [\.canFetchSelectedBodies]
             ) { [weak self] in
                 self?.scheduleToolbarStateUpdate()
             }
@@ -564,12 +574,22 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private func applySelectionIndexFromControllerIfNeeded(_ index: Int) {
-        guard selectedTabViewItemIndex != index else {
+        guard index >= 0, index < tabViewItems.count else {
             return
         }
+
+        let expectedIdentifier = tabViewItems[index].identifier as? String
+        let currentIdentifier = tabView.selectedTabViewItem?.identifier as? String
+        let shouldApplySelection = selectedTabViewItemIndex != index || currentIdentifier != expectedIdentifier
+        guard shouldApplySelection else {
+            return
+        }
+
         isApplyingSelectionFromController = true
         defer { isApplyingSelectionFromController = false }
+        tabView.selectTabViewItem(at: index)
         selectedTabViewItemIndex = index
+        tabViewItems[index].viewController?.loadViewIfNeeded()
     }
 
     public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
