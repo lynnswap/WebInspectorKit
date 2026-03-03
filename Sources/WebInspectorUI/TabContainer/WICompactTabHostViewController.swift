@@ -56,7 +56,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         tabsObservationHandle?.cancel()
         selectedTabObservationHandle?.cancel()
 
-        tabsObservationHandle = model.observeTask(
+        tabsObservationHandle = model.observe(
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -68,19 +68,21 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             }
         }
 
-        selectedTabObservationHandle = model.observeTask(
+        selectedTabObservationHandle = model.observe(
             \.selectedTab,
             options: [.removeDuplicates]
-        ) { [weak self] _ in
+        ) { [weak self] newValue in
             guard let self else {
                 return
             }
-            self.syncNativeSelection(with: self.model.selectedTab)
+            self.syncNativeSelection(with: newValue)
         }
     }
 
     private func rebuildNativeTabsIfPossible() {
         renderCache.prune(activeTabs: model.tabs)
+        // Intentionally project `model.tabs` as-is in compact mode.
+        // We do not synthesize `.element` here; `WIModel.tabs` is the SSOT across layout changes.
         let desiredTabs = model.tabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
         syncNativeSelection(with: model.selectedTab)

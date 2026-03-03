@@ -122,9 +122,11 @@ private extension WIModel {
         let networkMode: NetworkLoggingMode
 
         if hasConfiguredTabsFromUI {
+            let hasDOMTab = tabs.contains { $0.identifier == WITab.domTabID }
             domEnabled = tabs.contains { $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID }
             networkEnabled = tabs.contains { $0.identifier == WITab.networkTabID }
             domAutoSnapshotEnabled = selectedTab?.identifier == WITab.domTabID
+                || (selectedTab?.identifier == WITab.elementTabID && hasDOMTab == false)
             networkMode = selectedTab?.identifier == WITab.networkTabID ? .active : .buffering
         } else {
             domEnabled = true

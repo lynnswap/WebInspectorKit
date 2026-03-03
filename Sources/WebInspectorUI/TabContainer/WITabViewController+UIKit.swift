@@ -74,7 +74,6 @@ public final class WITabViewController: UIViewController {
     public private(set) var inspectorController: WIModel
 
     private var requestedTabs: [WITab]
-    private let synthesizedCompactElementTab = WITab.element()
     private let renderCache = WIUIKitTabRenderCache()
 
     private var activeHost: (UIViewController & WIUIKitTabHost)?
@@ -93,7 +92,7 @@ public final class WITabViewController: UIViewController {
         if let webView {
             inspectorController.setPageWebViewFromUI(webView)
         }
-        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: tabs))
+        inspectorController.setTabs(tabs)
     }
 
     @available(*, unavailable)
@@ -122,7 +121,7 @@ public final class WITabViewController: UIViewController {
 
         self.inspectorController = inspectorController
         inspectorController.setPageWebViewFromUI(currentPageWebView)
-        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: currentRequestedTabs))
+        inspectorController.setTabs(currentRequestedTabs)
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
         if isViewLoaded {
@@ -133,7 +132,7 @@ public final class WITabViewController: UIViewController {
 
     public func setTabs(_ tabs: [WITab]) {
         requestedTabs = tabs
-        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: tabs))
+        inspectorController.setTabs(tabs)
         if isViewLoaded {
             rebuildLayout()
         }
@@ -173,7 +172,7 @@ public final class WITabViewController: UIViewController {
     }
 
     var resolvedTabIDsForTesting: [String] {
-        resolvedTabsForCurrentLayout(requestedTabs: requestedTabs).map(\.identifier)
+        inspectorController.tabs.map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -185,20 +184,9 @@ public final class WITabViewController: UIViewController {
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
-        let resolvedTabs = resolvedTabsForCurrentLayout(requestedTabs: requestedTabs)
-        renderCache.prune(activeTabs: resolvedTabs)
-        if tabsMatch(inspectorController.tabs, resolvedTabs) == false {
-            inspectorController.setTabs(resolvedTabs)
-        }
+        renderCache.prune(activeTabs: inspectorController.tabs)
 
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
-
-        if activeHostKind == .compact,
-           targetHostKind == .regular,
-           inspectorController.selectedTab?.identifier == WITab.elementTabID {
-            let domTab = inspectorController.tabs.first(where: { $0.identifier == WITab.domTabID })
-            inspectorController.setSelectedTabFromUI(domTab)
-        }
 
         if activeHostKind == .compact, targetHostKind == .regular {
             // Compact UITab closures retain wrapped controllers; drop only compact caches
@@ -244,38 +232,6 @@ public final class WITabViewController: UIViewController {
 
     private func handleHorizontalSizeClassChange() {
         rebuildLayout()
-    }
-
-    private func resolvedTabsForCurrentLayout(requestedTabs: [WITab]) -> [WITab] {
-        guard effectiveHorizontalSizeClass == .compact else {
-            return requestedTabs.filter { $0.identifier != WITab.elementTabID }
-        }
-
-        let containsDOM = requestedTabs.contains(where: { $0.identifier == WITab.domTabID })
-        let containsElement = requestedTabs.contains(where: { $0.identifier == WITab.elementTabID })
-        guard containsDOM, containsElement == false else {
-            return requestedTabs
-        }
-
-        var compactTabs = requestedTabs
-        if let domIndex = compactTabs.firstIndex(where: { $0.identifier == WITab.domTabID }) {
-            compactTabs.insert(synthesizedCompactElementTab, at: domIndex + 1)
-        } else {
-            compactTabs.append(synthesizedCompactElementTab)
-        }
-        return compactTabs
-    }
-
-    private func tabsMatch(_ lhs: [WITab], _ rhs: [WITab]) -> Bool {
-        guard lhs.count == rhs.count else {
-            return false
-        }
-        for (left, right) in zip(lhs, rhs) {
-            guard left === right else {
-                return false
-            }
-        }
-        return true
     }
 
     func makeTabRootViewController(for tab: WITab) -> UIViewController? {

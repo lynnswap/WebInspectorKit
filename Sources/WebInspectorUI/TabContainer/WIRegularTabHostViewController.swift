@@ -91,11 +91,17 @@ final class WIRegularTabHostViewController: UINavigationController {
         tabsObservationHandle?.cancel()
         selectedTabObservationHandle?.cancel()
 
-        tabsObservationHandle = model.observeTask([\.tabs]) { [weak self] in
+        tabsObservationHandle = model.observe(
+            \.tabs,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
             self?.rebuildLayout()
         }
 
-        selectedTabObservationHandle = model.observeTask([\.selectedTab]) { [weak self] in
+        selectedTabObservationHandle = model.observe(
+            \.selectedTab,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
             self?.applySelectedTabProjection()
         }
     }
@@ -231,6 +237,10 @@ final class WIRegularTabHostViewController: UINavigationController {
         }
         if let identifierMatch = visibleTabs.first(where: { $0.identifier == selectedTab.identifier }) {
             return identifierMatch
+        }
+        if selectedTab.identifier == WITab.elementTabID,
+           let domTab = visibleTabs.first(where: { $0.identifier == WITab.domTabID }) {
+            return domTab
         }
         return visibleTabs.first
     }

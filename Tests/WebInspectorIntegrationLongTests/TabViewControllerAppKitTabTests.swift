@@ -48,6 +48,42 @@ struct TabViewControllerAppKitTabTests {
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
         #expect(container.visibleContentTabIDForTesting == WITab.domTabID)
         #expect(container.visibleContentViewControllerForTesting is WIDOMViewController)
+        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID])
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+    }
+
+    @Test
+    func appKitKeepsSyntheticDOMFallbackWhenElementAndNetworkAreConfiguredWithoutDOM() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: WITab.elementTabID, title: "Element"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: nil, tabs: descriptors)
+
+        container.loadViewIfNeeded()
+
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
+    }
+
+    @Test
+    func standaloneElementProxyKeepsDOMAutoSnapshotEnabled() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: WITab.elementTabID, title: "Element")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.dom.session.isAutoSnapshotEnabled == true)
     }
 
     @Test
@@ -67,11 +103,30 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
 
         selectTabViaPicker(index: 1, in: window)
         #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
         #expect(container.visibleContentTabIDForTesting == WITab.networkTabID)
         #expect(container.visibleContentViewControllerForTesting is WINetworkViewController)
+    }
+
+    @Test
+    func appKitHiddenElementSelectionNormalizesToDOMWhenDOMExists() {
+        let controller = WIModel()
+        let dom = makeDescriptor(id: WITab.domTabID, title: "DOM")
+        let element = makeDescriptor(id: WITab.elementTabID, title: "Element")
+        let network = makeDescriptor(id: WITab.networkTabID, title: "Network")
+        let container = WITabViewController(controller, webView: nil, tabs: [dom, element, network])
+
+        controller.setSelectedTabFromUI(element)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+
+        container.loadViewIfNeeded()
+
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.selectedTab?.identifier == WITab.domTabID)
     }
 
     @Test
