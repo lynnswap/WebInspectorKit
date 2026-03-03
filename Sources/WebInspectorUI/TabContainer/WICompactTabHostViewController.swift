@@ -126,13 +126,13 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
 
         guard
-            let targetIdentifier = resolveDisplayedTabIdentifier(from: tab),
-            let targetTab = tabs.first(where: { $0.identifier == targetIdentifier })
+            let targetModelTab = resolveDisplayedModelTab(from: tab),
+            let targetTab = resolveNativeTab(for: targetModelTab)
         else {
             return
         }
 
-        guard selectedTab?.identifier != targetIdentifier else {
+        guard selectedTab !== targetTab else {
             return
         }
 
@@ -145,7 +145,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         if isApplyingSelectionFromModel {
             return true
         }
-        return model.tabs.contains(where: { $0.identifier == candidateTab.identifier })
+        return resolveModelTab(for: candidateTab) != nil
     }
 
     func tabBarController(
@@ -158,28 +158,42 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             return
         }
 
-        guard model.tabs.contains(where: { $0.identifier == selectedTab.identifier }) else {
+        guard let selectedModelTab = resolveModelTab(for: selectedTab) else {
             return
         }
-        applyUserSelection(selectedTabIdentifier: selectedTab.identifier)
+        applyUserSelection(selectedTab: selectedModelTab)
     }
 
-    private func applyUserSelection(selectedTabIdentifier: String) {
-        let selectedTab = model.tabs.first(where: { $0.identifier == selectedTabIdentifier })
+    private func applyUserSelection(selectedTab: WITab) {
         model.setSelectedTabFromUI(selectedTab)
     }
 
-    private func resolveDisplayedTabIdentifier(from requestedTab: WITab?) -> String? {
+    private func resolveDisplayedModelTab(from requestedTab: WITab?) -> WITab? {
         guard let requestedTab else {
-            return model.tabs.first?.identifier
+            return model.tabs.first
         }
-        if model.tabs.contains(where: { $0 === requestedTab }) {
-            return requestedTab.identifier
+        if let exactMatch = model.tabs.first(where: { $0 === requestedTab }) {
+            return exactMatch
         }
-        if model.tabs.contains(where: { $0.identifier == requestedTab.identifier }) {
-            return requestedTab.identifier
+        if let identifierMatch = model.tabs.first(where: { $0.identifier == requestedTab.identifier }) {
+            return identifierMatch
         }
-        return model.tabs.first?.identifier
+        return model.tabs.first
+    }
+
+    private func resolveModelTab(for nativeTab: UITab) -> WITab? {
+        if let exactMatch = model.tabs.first(where: { $0.cachedCompactUITab === nativeTab }) {
+            return exactMatch
+        }
+        return model.tabs.first(where: { $0.identifier == nativeTab.identifier })
+    }
+
+    private func resolveNativeTab(for modelTab: WITab) -> UITab? {
+        if let cachedTab = modelTab.cachedCompactUITab,
+           tabs.contains(where: { $0 === cachedTab }) {
+            return cachedTab
+        }
+        return tabs.first(where: { $0.identifier == modelTab.identifier })
     }
 
     private func makeTabRootViewController(for tab: WITab) -> UIViewController? {

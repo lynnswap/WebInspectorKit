@@ -30,6 +30,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         self.placeholderViewController = placeholder
         super.init(rootViewController: placeholder)
 
+        normalizeModelSelectionToDisplayedTabIfNeeded()
         if let initialTab = selectedTabForDisplay(),
            let initialRoot = makeTabRootViewController(for: initialTab) {
             setViewControllers([initialRoot], animated: false)
@@ -98,6 +99,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func rebuildLayout() {
+        normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         rebuildSegmentedControl(selectedTab: selectedTab)
         displaySelectionIfNeeded(selectedTab: selectedTab)
@@ -105,6 +107,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func applySelectedTabProjection() {
+        normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         selectSegment(for: selectedTab)
         displaySelectionIfNeeded(selectedTab: selectedTab)
@@ -199,6 +202,16 @@ final class WIRegularTabHostViewController: UINavigationController {
         if navigationItem.titleView !== desiredTitleView {
             navigationItem.titleView = desiredTitleView
         }
+    }
+
+    private func normalizeModelSelectionToDisplayedTabIfNeeded() {
+        guard let displayedTab = selectedTabForDisplay() else {
+            return
+        }
+        guard model.selectedTab !== displayedTab else {
+            return
+        }
+        model.setSelectedTabFromUI(displayedTab)
     }
 
     private func selectedTabForDisplay() -> WITab? {

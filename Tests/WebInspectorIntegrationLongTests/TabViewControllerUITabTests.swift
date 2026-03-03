@@ -192,6 +192,41 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func compactHostPreservesSelectionWhenTabIdentifiersDuplicate() {
+        let controller = WIModel()
+        let firstCustom = makeTab(id: "custom", title: "First")
+        let secondCustom = makeTab(id: "custom", title: "Second")
+        let requestedTabs: [WITab] = [firstCustom, secondCustom, .network()]
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+
+        let duplicateUITabs = compactHost.currentUITabsForTesting.filter { $0.identifier == "custom" }
+        guard duplicateUITabs.count == 2 else {
+            Issue.record("Expected two visible tabs for duplicate identifier")
+            return
+        }
+
+        let firstUITab = duplicateUITabs[0]
+        let secondUITab = duplicateUITabs[1]
+        #expect(compactHost.tabBarController(compactHost, shouldSelectTab: secondUITab))
+        compactHost.selectedTab = secondUITab
+        compactHost.tabBarController(compactHost, didSelectTab: secondUITab, previousTab: firstUITab)
+
+        #expect(controller.selectedTab === secondCustom)
+    }
+
+    @Test
     func compactHostUsesTabIdentifiersDirectly() {
         let controller = WIModel()
         let container = WITabViewController(
@@ -209,6 +244,27 @@ struct TabViewControllerUITabTests {
         }
 
         #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.networkTabID])
+    }
+
+    @Test
+    func initialRegularLayoutMapsElementSelectionToDOM() {
+        let controller = WIModel()
+        let tabs: [WITab] = [.dom(), .element(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: tabs
+        )
+        container.horizontalSizeClassOverrideForTesting = .regular
+
+        let elementTab = controller.tabs.first(where: { $0.identifier == WITab.elementTabID })
+        controller.setSelectedTabFromUI(elementTab)
+        #expect(controller.selectedTab?.id == WITab.elementTabID)
+
+        container.loadViewIfNeeded()
+
+        #expect(container.activeHostKindForTesting == "regular")
+        #expect(controller.selectedTab?.id == WITab.domTabID)
     }
 
     @Test
