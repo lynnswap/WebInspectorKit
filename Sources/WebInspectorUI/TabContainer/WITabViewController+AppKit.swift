@@ -12,6 +12,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private static let toolbarIdentifier = NSToolbar.Identifier("WITabToolbar")
 
     public private(set) var inspectorController: WIModel
+    private var requestedTabs: [WITab]
+    private let synthesizedAppKitDOMTab = WITab.dom()
 
     private var networkQueryModel: WINetworkQueryModel
     private weak var appKitToolbar: NSToolbar?
@@ -35,12 +37,13 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
+        self.requestedTabs = tabs
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         super.init(nibName: nil, bundle: nil)
         if let webView {
             inspectorController.setPageWebViewFromUI(webView)
         }
-        inspectorController.setTabs(tabs)
+        inspectorController.setTabs(normalizedTabsForAppKitLayout(requestedTabs: tabs))
     }
 
     @available(*, unavailable)
@@ -105,7 +108,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             return
         }
 
-        let currentTabs = self.inspectorController.tabs
+        let currentRequestedTabs = requestedTabs
         let currentSelectedTab = self.inspectorController.selectedTab
         let currentPageWebView = self.inspectorController.pageWebViewForUI
 
@@ -115,7 +118,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         self.inspectorController = inspectorController
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         inspectorController.setPageWebViewFromUI(currentPageWebView)
-        inspectorController.setTabs(currentTabs)
+        inspectorController.setTabs(normalizedTabsForAppKitLayout(requestedTabs: currentRequestedTabs))
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
         setVisibleContentViewController(nil)
@@ -132,7 +135,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     public func setTabs(_ tabs: [WITab]) {
-        inspectorController.setTabs(tabs)
+        requestedTabs = tabs
+        inspectorController.setTabs(normalizedTabsForAppKitLayout(requestedTabs: tabs))
         if isViewLoaded {
             render()
         }
@@ -171,6 +175,31 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         sessionSelectionObservationHandle = inspectorController.observe(\.selectedTab) { [weak self] _ in
             self?.render()
         }
+    }
+
+    private func normalizedTabsForAppKitLayout(requestedTabs: [WITab]) -> [WITab] {
+        let hasDOMTab = requestedTabs.contains(where: { $0.identifier == WITab.domTabID })
+        var didInsertSyntheticDOM = false
+        var normalizedTabs: [WITab] = []
+        normalizedTabs.reserveCapacity(requestedTabs.count)
+
+        for tab in requestedTabs {
+            guard tab.identifier == WITab.elementTabID else {
+                normalizedTabs.append(tab)
+                continue
+            }
+
+            if hasDOMTab {
+                continue
+            }
+
+            if didInsertSyntheticDOM == false {
+                normalizedTabs.append(synthesizedAppKitDOMTab)
+                didInsertSyntheticDOM = true
+            }
+        }
+
+        return normalizedTabs
     }
 
     private func render() {

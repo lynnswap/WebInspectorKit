@@ -6,6 +6,7 @@ import WebInspectorRuntime
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
     private let model: WIModel
+    private let renderCache: WIUIKitTabRenderCache
     private var tabsObservationHandle: ObservationHandle?
     private var selectedTabObservationHandle: ObservationHandle?
     private var isApplyingSegmentSelection = false
@@ -23,8 +24,9 @@ final class WIRegularTabHostViewController: UINavigationController {
         return control
     }()
 
-    init(model: WIModel) {
+    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
         self.model = model
+        self.renderCache = renderCache
         let placeholder = UIViewController()
         placeholder.navigationItem.title = ""
         self.placeholderViewController = placeholder
@@ -99,6 +101,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func rebuildLayout() {
+        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         rebuildSegmentedControl(selectedTab: selectedTab)
@@ -107,6 +110,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func applySelectedTabProjection() {
+        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         selectSegment(for: selectedTab)
@@ -157,7 +161,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
-        if let cached = tab.cachedContentViewController {
+        if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
         }
@@ -183,7 +187,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         }
 
         applyHorizontalSizeClassOverrideIfNeeded(to: viewController)
-        tab.cachedContentViewController = viewController
+        renderCache.setRootViewController(viewController, for: tab)
         return viewController
     }
 
@@ -238,7 +242,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         let session = WIModel()
         session.setTabs([.dom(), .network()])
-        let host = WIRegularTabHostViewController(model: session)
+        let host = WIRegularTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
         session.setSelectedTabFromUI(.dom())
         return host
     }

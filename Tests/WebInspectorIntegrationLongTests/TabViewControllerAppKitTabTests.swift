@@ -35,6 +35,46 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func appKitNormalizesStandaloneElementTabToDOM() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: WITab.elementTabID, title: "Element")
+        ]
+        let container = WITabViewController(controller, webView: nil, tabs: descriptors)
+
+        container.loadViewIfNeeded()
+
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(container.visibleContentTabIDForTesting == WITab.domTabID)
+        #expect(container.visibleContentViewControllerForTesting is WIDOMViewController)
+    }
+
+    @Test
+    func appKitRemovesElementWhenDOMTabExists() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: WITab.domTabID, title: "DOM"),
+            makeDescriptor(id: WITab.elementTabID, title: "Element"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+
+        selectTabViaPicker(index: 1, in: window)
+        #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
+        #expect(container.visibleContentTabIDForTesting == WITab.networkTabID)
+        #expect(container.visibleContentViewControllerForTesting is WINetworkViewController)
+    }
+
+    @Test
     func toolbarContainsTabPickerAndUsesDescriptorTitles() {
         let controller = WIModel()
         let descriptors = [

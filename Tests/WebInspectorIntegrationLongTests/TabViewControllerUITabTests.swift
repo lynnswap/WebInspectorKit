@@ -23,7 +23,7 @@ struct TabViewControllerUITabTests {
 
         #expect(container.activeHostKindForTesting == "compact")
         #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
-        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "wi_network"])
     }
 
     @Test
@@ -63,7 +63,7 @@ struct TabViewControllerUITabTests {
 
         #expect(container.activeHostKindForTesting == "compact")
         #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
-        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "wi_network"])
     }
 
     @Test
@@ -243,7 +243,66 @@ struct TabViewControllerUITabTests {
             return
         }
 
-        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+    }
+
+    @Test
+    func sharedTabsDoNotShareCompactCacheAcrossContainers() {
+        var createdControllers: [UIViewController] = []
+        let sharedTab = makeProviderTab(id: "custom", title: "Custom") {
+            let viewController = UIViewController()
+            createdControllers.append(viewController)
+            return viewController
+        }
+        let sharedTabs: [WITab] = [sharedTab]
+
+        let firstController = WIModel()
+        let secondController = WIModel()
+        let firstContainer = WITabViewController(
+            firstController,
+            webView: nil,
+            tabs: sharedTabs
+        )
+        let secondContainer = WITabViewController(
+            secondController,
+            webView: nil,
+            tabs: sharedTabs
+        )
+
+        firstContainer.loadViewIfNeeded()
+        configureSizeClass(.compact, for: firstContainer, requestedTabs: sharedTabs)
+        secondContainer.loadViewIfNeeded()
+        configureSizeClass(.compact, for: secondContainer, requestedTabs: sharedTabs)
+
+        #expect(createdControllers.count == 2)
+        #expect(createdControllers[0] !== createdControllers[1])
+    }
+
+    @Test
+    func setInspectorControllerResetsContainerRenderCacheAcrossRegularSwap() {
+        var createdCount = 0
+        let requestedTabs: [WITab] = [
+            makeProviderTab(id: "custom", title: "Custom") {
+                createdCount += 1
+                return UIViewController()
+            }
+        ]
+        let firstController = WIModel()
+        let secondController = WIModel()
+        let container = WITabViewController(
+            firstController,
+            webView: nil,
+            tabs: requestedTabs
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        #expect(createdCount == 1)
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        container.setInspectorController(secondController)
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+
+        #expect(createdCount == 2)
     }
 
     @Test
@@ -257,9 +316,9 @@ struct TabViewControllerUITabTests {
         )
         container.horizontalSizeClassOverrideForTesting = .regular
 
-        let elementTab = controller.tabs.first(where: { $0.identifier == WITab.elementTabID })
+        let elementTab = tabs.first(where: { $0.identifier == WITab.elementTabID })
         controller.setSelectedTabFromUI(elementTab)
-        #expect(controller.selectedTab?.id == WITab.elementTabID)
+        #expect(controller.selectedTab?.id == WITab.domTabID)
 
         container.loadViewIfNeeded()
 
@@ -354,6 +413,21 @@ struct TabViewControllerUITabTests {
             id: id,
             title: title,
             systemImage: "circle"
+        )
+    }
+
+    private func makeProviderTab(
+        id: String,
+        title: String,
+        viewControllerBuilder: @escaping @MainActor () -> UIViewController
+    ) -> WITab {
+        WITab(
+            id: id,
+            title: title,
+            systemImage: "circle",
+            viewControllerProvider: { _ in
+                viewControllerBuilder()
+            }
         )
     }
 

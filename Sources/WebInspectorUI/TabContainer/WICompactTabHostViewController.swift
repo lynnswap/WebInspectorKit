@@ -6,13 +6,15 @@ import WebInspectorRuntime
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
     private let model: WIModel
+    private let renderCache: WIUIKitTabRenderCache
     private var tabsObservationHandle: ObservationHandle?
     private var selectedTabObservationHandle: ObservationHandle?
     private var isApplyingSelectionFromModel = false
     private let tabsRebuildCoalescer = UIUpdateCoalescer()
 
-    init(model: WIModel) {
+    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
         self.model = model
+        self.renderCache = renderCache
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -78,6 +80,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func rebuildNativeTabsIfPossible() {
+        renderCache.prune(activeTabs: model.tabs)
         let desiredTabs = model.tabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
         syncNativeSelection(with: model.selectedTab)
@@ -103,7 +106,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func makeNativeTab(for tab: WITab) -> UITab {
-        if let cached = tab.cachedCompactUITab {
+        if let cached = renderCache.compactTab(for: tab) {
             return cached
         }
 
@@ -116,7 +119,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         ) { _ in
             wrappedViewController
         }
-        tab.cachedCompactUITab = nativeTab
+        renderCache.setCompactTab(nativeTab, for: tab)
         return nativeTab
     }
 
@@ -182,14 +185,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func resolveModelTab(for nativeTab: UITab) -> WITab? {
-        if let exactMatch = model.tabs.first(where: { $0.cachedCompactUITab === nativeTab }) {
+        if let exactMatch = renderCache.modelTab(for: nativeTab, among: model.tabs) {
             return exactMatch
         }
         return model.tabs.first(where: { $0.identifier == nativeTab.identifier })
     }
 
     private func resolveNativeTab(for modelTab: WITab) -> UITab? {
-        if let cachedTab = modelTab.cachedCompactUITab,
+        if let cachedTab = renderCache.compactTab(for: modelTab),
            tabs.contains(where: { $0 === cachedTab }) {
             return cachedTab
         }
@@ -197,7 +200,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
-        if let cached = tab.cachedContentViewController {
+        if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
         }
@@ -223,7 +226,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
 
         applyHorizontalSizeClassOverrideIfNeeded(to: viewController)
-        tab.cachedContentViewController = viewController
+        renderCache.setRootViewController(viewController, for: tab)
         return viewController
     }
 
@@ -257,7 +260,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         let session = WIModel()
         session.setTabs([.dom(), .element(), .network()])
-        let host = WICompactTabHostViewController(model: session)
+        let host = WICompactTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
         session.setSelectedTabFromUI(.dom())
         return host
     }

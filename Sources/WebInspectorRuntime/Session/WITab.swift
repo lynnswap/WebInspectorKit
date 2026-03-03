@@ -31,11 +31,6 @@ public final class WITab: NSObject {
     public let viewControllerProvider: ViewControllerProvider?
     public var userInfo: Any?
 
-    package var cachedContentViewController: WIPlatformViewController?
-#if canImport(UIKit)
-    package var cachedCompactUITab: UITab?
-#endif
-
     public var id: String { identifier }
 
     public init(
@@ -89,13 +84,6 @@ public final class WITab: NSObject {
             viewControllerProvider: viewControllerProvider,
             userInfo: userInfo
         )
-    }
-
-    package func resetCachedContentViewController() {
-        cachedContentViewController = nil
-#if canImport(UIKit)
-        cachedCompactUITab = nil
-#endif
     }
 
     private static func systemImage(named name: String, accessibilityDescription: String?) -> WIPlatformImage? {

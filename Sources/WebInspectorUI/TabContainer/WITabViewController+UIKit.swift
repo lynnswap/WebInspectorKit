@@ -10,6 +10,56 @@ private protocol WIUIKitTabHost where Self: UIViewController {
 }
 
 @MainActor
+final class WIUIKitTabRenderCache {
+    private var rootViewControllerByTabID: [ObjectIdentifier: UIViewController] = [:]
+    private var compactTabByTabID: [ObjectIdentifier: UITab] = [:]
+    private var modelTabIDByCompactTabID: [ObjectIdentifier: ObjectIdentifier] = [:]
+
+    func rootViewController(for tab: WITab) -> UIViewController? {
+        rootViewControllerByTabID[ObjectIdentifier(tab)]
+    }
+
+    func setRootViewController(_ viewController: UIViewController, for tab: WITab) {
+        rootViewControllerByTabID[ObjectIdentifier(tab)] = viewController
+    }
+
+    func compactTab(for tab: WITab) -> UITab? {
+        compactTabByTabID[ObjectIdentifier(tab)]
+    }
+
+    func setCompactTab(_ compactTab: UITab, for tab: WITab) {
+        let tabID = ObjectIdentifier(tab)
+        if let previousCompactTab = compactTabByTabID[tabID] {
+            modelTabIDByCompactTabID.removeValue(forKey: ObjectIdentifier(previousCompactTab))
+        }
+        compactTabByTabID[tabID] = compactTab
+        modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] = tabID
+    }
+
+    func modelTab(for compactTab: UITab, among tabs: [WITab]) -> WITab? {
+        guard let modelTabID = modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] else {
+            return nil
+        }
+        return tabs.first(where: { ObjectIdentifier($0) == modelTabID })
+    }
+
+    func prune(activeTabs: [WITab]) {
+        let activeTabIDs = Set(activeTabs.map { ObjectIdentifier($0) })
+        rootViewControllerByTabID = rootViewControllerByTabID.filter { activeTabIDs.contains($0.key) }
+        compactTabByTabID = compactTabByTabID.filter { activeTabIDs.contains($0.key) }
+
+        let activeCompactTabIDs = Set(compactTabByTabID.values.map { ObjectIdentifier($0) })
+        modelTabIDByCompactTabID = modelTabIDByCompactTabID.filter { activeCompactTabIDs.contains($0.key) }
+    }
+
+    func resetAll() {
+        rootViewControllerByTabID.removeAll()
+        compactTabByTabID.removeAll()
+        modelTabIDByCompactTabID.removeAll()
+    }
+}
+
+@MainActor
 public final class WITabViewController: UIViewController {
     private enum HostKind {
         case compact
@@ -17,6 +67,10 @@ public final class WITabViewController: UIViewController {
     }
 
     public private(set) var inspectorController: WIModel
+
+    private var requestedTabs: [WITab]
+    private let synthesizedCompactElementTab = WITab.element()
+    private let renderCache = WIUIKitTabRenderCache()
 
     private var activeHost: (UIViewController & WIUIKitTabHost)?
     private var activeHostKind: HostKind?
@@ -29,11 +83,12 @@ public final class WITabViewController: UIViewController {
         tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
+        self.requestedTabs = tabs
         super.init(nibName: nil, bundle: nil)
         if let webView {
             inspectorController.setPageWebViewFromUI(webView)
         }
-        inspectorController.setTabs(tabs)
+        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: tabs))
     }
 
     @available(*, unavailable)
@@ -53,16 +108,16 @@ public final class WITabViewController: UIViewController {
             return
         }
 
-        let currentTabs = self.inspectorController.tabs
+        let currentRequestedTabs = requestedTabs
         let currentSelectedTab = self.inspectorController.selectedTab
         let currentPageWebView = self.inspectorController.pageWebViewForUI
         let previousController = self.inspectorController
-        resetCachedContentViewControllers(for: currentTabs)
+        renderCache.resetAll()
         previousController.disconnect()
 
         self.inspectorController = inspectorController
         inspectorController.setPageWebViewFromUI(currentPageWebView)
-        inspectorController.setTabs(currentTabs)
+        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: currentRequestedTabs))
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
         if isViewLoaded {
@@ -72,7 +127,8 @@ public final class WITabViewController: UIViewController {
     }
 
     public func setTabs(_ tabs: [WITab]) {
-        inspectorController.setTabs(tabs)
+        requestedTabs = tabs
+        inspectorController.setTabs(resolvedTabsForCurrentLayout(requestedTabs: tabs))
         if isViewLoaded {
             rebuildLayout()
         }
@@ -112,7 +168,7 @@ public final class WITabViewController: UIViewController {
     }
 
     var resolvedTabIDsForTesting: [String] {
-        resolvedTabsForCurrentLayout(requestedTabs: inspectorController.tabs).map(\.identifier)
+        resolvedTabsForCurrentLayout(requestedTabs: requestedTabs).map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -124,6 +180,12 @@ public final class WITabViewController: UIViewController {
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
+        let resolvedTabs = resolvedTabsForCurrentLayout(requestedTabs: requestedTabs)
+        renderCache.prune(activeTabs: resolvedTabs)
+        if tabsMatch(inspectorController.tabs, resolvedTabs) == false {
+            inspectorController.setTabs(resolvedTabs)
+        }
+
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
 
         if activeHostKind == .compact,
@@ -149,9 +211,9 @@ public final class WITabViewController: UIViewController {
         let host: UIViewController & WIUIKitTabHost
         switch kind {
         case .compact:
-            host = WICompactTabHostViewController(model: inspectorController)
+            host = WICompactTabHostViewController(model: inspectorController, renderCache: renderCache)
         case .regular:
-            host = WIRegularTabHostViewController(model: inspectorController)
+            host = WIRegularTabHostViewController(model: inspectorController, renderCache: renderCache)
         }
 
         addChild(host)
@@ -177,17 +239,36 @@ public final class WITabViewController: UIViewController {
         guard effectiveHorizontalSizeClass == .compact else {
             return requestedTabs.filter { $0.identifier != WITab.elementTabID }
         }
-        return requestedTabs
+
+        let containsDOM = requestedTabs.contains(where: { $0.identifier == WITab.domTabID })
+        let containsElement = requestedTabs.contains(where: { $0.identifier == WITab.elementTabID })
+        guard containsDOM, containsElement == false else {
+            return requestedTabs
+        }
+
+        var compactTabs = requestedTabs
+        if let domIndex = compactTabs.firstIndex(where: { $0.identifier == WITab.domTabID }) {
+            compactTabs.insert(synthesizedCompactElementTab, at: domIndex + 1)
+        } else {
+            compactTabs.append(synthesizedCompactElementTab)
+        }
+        return compactTabs
     }
 
-    private func resetCachedContentViewControllers(for tabs: [WITab]) {
-        for tab in tabs {
-            tab.resetCachedContentViewController()
+    private func tabsMatch(_ lhs: [WITab], _ rhs: [WITab]) -> Bool {
+        guard lhs.count == rhs.count else {
+            return false
         }
+        for (left, right) in zip(lhs, rhs) {
+            guard left === right else {
+                return false
+            }
+        }
+        return true
     }
 
     func makeTabRootViewController(for tab: WITab) -> UIViewController? {
-        if let cached = tab.cachedContentViewController {
+        if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
         }
@@ -212,7 +293,7 @@ public final class WITabViewController: UIViewController {
             return nil
         }
         applyHorizontalSizeClassOverrideIfNeeded(to: viewController)
-        tab.cachedContentViewController = viewController
+        renderCache.setRootViewController(viewController, for: tab)
         return viewController
     }
 
