@@ -77,8 +77,8 @@ public final class WIModel {
         guard connectedPageWebView != nil else {
             return
         }
-        syncRuntimeStateFromTabs()
         lifecycle = .active
+        syncRuntimeStateFromTabs()
     }
 }
 
@@ -116,6 +116,12 @@ private extension WIModel {
     }
 
     func syncRuntimeStateFromTabs() {
+        if lifecycle == .suspended {
+            dom.suspend()
+            network.suspend()
+            return
+        }
+
         let domEnabled: Bool
         let networkEnabled: Bool
         let domAutoSnapshotEnabled: Bool

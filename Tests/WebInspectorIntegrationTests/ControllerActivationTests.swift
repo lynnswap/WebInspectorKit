@@ -128,6 +128,31 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func setTabsWhileSuspendedDoesNotReattachSessionsUntilActivated() {
+        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        #expect(controller.dom.session.hasPageWebView == true)
+        #expect(controller.network.session.hasAttachedPageWebView == true)
+
+        controller.suspend()
+        #expect(controller.lifecycle == .suspended)
+        #expect(controller.dom.session.hasPageWebView == false)
+        #expect(controller.network.session.hasAttachedPageWebView == false)
+
+        store.setTabs([.dom(), .network()])
+        #expect(controller.lifecycle == .suspended)
+        #expect(controller.dom.session.hasPageWebView == false)
+        #expect(controller.network.session.hasAttachedPageWebView == false)
+
+        controller.activateFromUIIfPossible()
+        #expect(controller.lifecycle == .active)
+        #expect(controller.dom.session.hasPageWebView == true)
+        #expect(controller.network.session.hasAttachedPageWebView == true)
+    }
+
+    @Test
     func setTabsWhileConnectedReconnectsNewlyRequiredSessions() {
         let (controller, store) = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
