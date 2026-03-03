@@ -28,8 +28,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     private let contentContainerView = NSView(frame: .zero)
     private var visibleContentViewController: NSViewController?
-    private var contentViewControllerByTabID: [String: NSViewController] = [:]
-    private var tabDescriptorByID: [String: WITab] = [:]
+    private var visibleContentTabObjectID: ObjectIdentifier?
+    private var visibleContentTabIdentifier: String?
+    private var contentViewControllerByTabObjectID: [ObjectIdentifier: NSViewController] = [:]
 
     public init(
         _ inspectorController: WIModel,
@@ -121,9 +122,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         inspectorController.setTabs(normalizedTabsForAppKitLayout(requestedTabs: currentRequestedTabs))
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
-        setVisibleContentViewController(nil)
-        contentViewControllerByTabID.removeAll()
-        tabDescriptorByID.removeAll()
+        setVisibleContentViewController(nil, for: nil)
+        contentViewControllerByTabObjectID.removeAll()
 
         stopObservingToolbarState()
         if isViewLoaded {
@@ -151,10 +151,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     var visibleContentTabIDForTesting: String? {
-        guard let visibleContentViewController else {
-            return nil
-        }
-        return contentViewControllerByTabID.first(where: { $0.value === visibleContentViewController })?.key
+        visibleContentTabIdentifier
     }
 
     var hasVisibleContentForTesting: Bool {
@@ -203,48 +200,32 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func render() {
-        reconcileTabDescriptorChanges(for: inspectorController.tabs)
         pruneContentControllerCache(for: inspectorController.tabs)
         renderSelectedContent()
         updateToolbarState()
     }
 
-    private func reconcileTabDescriptorChanges(for tabs: [WITab]) {
-        let activeIDs = Set(tabs.map(\.identifier))
-        for tab in tabs {
-            if let previousDescriptor = tabDescriptorByID[tab.identifier],
-               previousDescriptor !== tab {
-                if visibleContentTabIDForTesting == tab.identifier {
-                    setVisibleContentViewController(nil)
-                }
-                contentViewControllerByTabID[tab.identifier] = nil
-            }
-            tabDescriptorByID[tab.identifier] = tab
-        }
-        tabDescriptorByID = tabDescriptorByID.filter { activeIDs.contains($0.key) }
-    }
-
     private func renderSelectedContent() {
         let tabs = inspectorController.tabs
         guard tabs.isEmpty == false else {
-            setVisibleContentViewController(nil)
+            setVisibleContentViewController(nil, for: nil)
             return
         }
 
         guard let selectedTab = resolvedSelectedTab(in: tabs) else {
             assertionFailure("tabs is not empty but resolved selected tab is nil")
-            setVisibleContentViewController(nil)
+            setVisibleContentViewController(nil, for: nil)
             return
         }
 
         guard let rootViewController = makeTabRootViewController(for: selectedTab) else {
             assertionFailure("No content view controller for selected tab: \(selectedTab.identifier)")
-            setVisibleContentViewController(nil)
+            setVisibleContentViewController(nil, for: nil)
             return
         }
 
         rootViewController.loadViewIfNeeded()
-        setVisibleContentViewController(rootViewController)
+        setVisibleContentViewController(rootViewController, for: selectedTab)
     }
 
     private func resolvedSelectedTab(in tabs: [WITab]) -> WITab? {
@@ -262,8 +243,12 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         return fallback
     }
 
-    private func setVisibleContentViewController(_ nextViewController: NSViewController?) {
-        guard visibleContentViewController !== nextViewController else {
+    private func setVisibleContentViewController(_ nextViewController: NSViewController?, for tab: WITab?) {
+        let nextTabObjectID = tab.map(ObjectIdentifier.init)
+        let nextTabIdentifier = tab?.identifier
+        if visibleContentViewController === nextViewController {
+            visibleContentTabObjectID = nextTabObjectID
+            visibleContentTabIdentifier = nextTabIdentifier
             return
         }
 
@@ -273,6 +258,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         visibleContentViewController = nextViewController
+        visibleContentTabObjectID = nextTabObjectID
+        visibleContentTabIdentifier = nextTabIdentifier
 
         guard let nextViewController else {
             return
@@ -292,12 +279,12 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func pruneContentControllerCache(for tabs: [WITab]) {
-        let activeIDs = Set(tabs.map(\.identifier))
-        if let visibleID = visibleContentTabIDForTesting,
-           activeIDs.contains(visibleID) == false {
-            setVisibleContentViewController(nil)
+        let activeTabObjectIDs = Set(tabs.map(ObjectIdentifier.init))
+        if let visibleContentTabObjectID,
+           activeTabObjectIDs.contains(visibleContentTabObjectID) == false {
+            setVisibleContentViewController(nil, for: nil)
         }
-        contentViewControllerByTabID = contentViewControllerByTabID.filter { activeIDs.contains($0.key) }
+        contentViewControllerByTabObjectID = contentViewControllerByTabObjectID.filter { activeTabObjectIDs.contains($0.key) }
     }
 
     private func installToolbarIfNeeded() {
@@ -688,7 +675,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func makeTabRootViewController(for tab: WITab) -> NSViewController? {
-        if let cached = contentViewControllerByTabID[tab.identifier] {
+        let tabObjectID = ObjectIdentifier(tab)
+        if let cached = contentViewControllerByTabObjectID[tabObjectID] {
             return cached
         }
 
@@ -713,7 +701,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             return nil
         }
 
-        contentViewControllerByTabID[tab.identifier] = viewController
+        contentViewControllerByTabObjectID[tabObjectID] = viewController
         return viewController
     }
 

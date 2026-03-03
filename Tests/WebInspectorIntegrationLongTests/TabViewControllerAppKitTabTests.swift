@@ -358,6 +358,46 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func duplicateIdentifierTabsUseDistinctCachedContentControllers() {
+        let controller = WIModel()
+        let firstController = MarkerViewController(marker: "first")
+        let secondController = MarkerViewController(marker: "second")
+        let firstDescriptor = WITab(
+            id: "custom",
+            title: "First",
+            systemImage: "circle",
+            viewControllerProvider: { _ in firstController }
+        )
+        let secondDescriptor = WITab(
+            id: "custom",
+            title: "Second",
+            systemImage: "circle",
+            viewControllerProvider: { _ in secondController }
+        )
+
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: [firstDescriptor, secondDescriptor]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        let initialVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
+        #expect(initialVisible?.marker == "first")
+
+        selectTabViaPicker(index: 1, in: window)
+
+        let switchedVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
+        #expect(switchedVisible?.marker == "second")
+        #expect(initialVisible !== switchedVisible)
+        #expect(controller.selectedTab === secondDescriptor)
+    }
+
+    @Test
     func appKitSplitViewsUseStableAutosaveNamesAcrossTabSwitches() {
         let controller = WIModel()
         let descriptors = [
