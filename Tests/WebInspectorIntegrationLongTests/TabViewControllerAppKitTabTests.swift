@@ -388,6 +388,7 @@ struct TabViewControllerAppKitTabTests {
 
         let initialVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
         #expect(initialVisible?.marker == "first")
+        #expect(tabPicker(in: window)?.selectedSegment == 0)
 
         selectTabViaPicker(index: 1, in: window)
 
@@ -395,6 +396,7 @@ struct TabViewControllerAppKitTabTests {
         #expect(switchedVisible?.marker == "second")
         #expect(initialVisible !== switchedVisible)
         #expect(controller.selectedTab === secondDescriptor)
+        #expect(tabPicker(in: window)?.selectedSegment == 1)
     }
 
     @Test

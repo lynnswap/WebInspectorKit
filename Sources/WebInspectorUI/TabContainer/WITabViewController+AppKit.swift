@@ -504,10 +504,16 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         guard tabs.isEmpty == false else {
             return -1
         }
-        guard let selectedTabID = inspectorController.selectedTab?.identifier else {
+        guard let selectedTab = inspectorController.selectedTab else {
             return 0
         }
-        return tabs.firstIndex(where: { $0.identifier == selectedTabID }) ?? 0
+        if let identityIndex = tabs.firstIndex(where: { $0 === selectedTab }) {
+            return identityIndex
+        }
+        if let identifierIndex = tabs.firstIndex(where: { $0.identifier == selectedTab.identifier }) {
+            return identifierIndex
+        }
+        return 0
     }
 
     private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
