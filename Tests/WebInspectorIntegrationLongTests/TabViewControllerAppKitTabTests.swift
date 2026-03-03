@@ -8,8 +8,6 @@ import WebInspectorEngine
 import AppKit
 
 @MainActor
-
-
 struct TabViewControllerAppKitTabTests {
     private let tabPickerIdentifierRaw = "WIContainerToolbar.TabPicker"
     private let domPickIdentifierRaw = "WIContainerToolbar.DOMPick"
@@ -20,7 +18,7 @@ struct TabViewControllerAppKitTabTests {
     private let networkFetchIdentifierRaw = "WIContainerToolbar.NetworkFetchBody"
 
     @Test
-    func loadViewIfNeededDoesNotCrashWhenSelectionCallbackArrivesBeforeTabItemsExist() {
+    func loadViewIfNeededRendersInitialContentAndSelection() {
         let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
@@ -30,11 +28,10 @@ struct TabViewControllerAppKitTabTests {
 
         container.loadViewIfNeeded()
 
-        #expect(container.tabViewItems.count == 2)
-        #expect(container.selectedTabViewItemIndex == 0)
-        #expect(controller.selectedTab?.id == "tab_a")
-        #expect(container.tabStyle == .unspecified)
-        #expect(container.tabView.tabViewType == .noTabsNoBorder)
+        #expect(container.displayedTabIDsForTesting == ["tab_a", "tab_b"])
+        #expect(container.selectedTabIdentifierForTesting == "tab_a")
+        #expect(container.visibleContentTabIDForTesting == "tab_a")
+        #expect(container.hasVisibleContentForTesting == true)
     }
 
     @Test
@@ -59,12 +56,14 @@ struct TabViewControllerAppKitTabTests {
             Issue.record("Expected toolbar tab picker")
             return
         }
+
         let labels = (0..<picker.segmentCount).map { picker.label(forSegment: $0) }
         #expect(labels == ["A", "B"])
+        #expect(container.visibleContentTabIDForTesting == "tab_a")
     }
 
     @Test
-    func pickerSelectionUpdatesTabAndControllerSelectionWhenConnected() {
+    func pickerSelectionUpdatesVisibleContentAndModelSelectionWhenConnected() {
         let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
@@ -77,19 +76,10 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
-        guard let picker = tabPicker(in: window) else {
-            Issue.record("Expected toolbar tab picker")
-            return
-        }
+        selectTabViaPicker(index: 1, in: window)
 
-        picker.selectedSegment = 1
-        guard let action = picker.action else {
-            Issue.record("Expected picker action")
-            return
-        }
-        picker.sendAction(action, to: picker.target)
-
-        #expect(container.selectedTabViewItemIndex == 1)
+        #expect(container.selectedTabIdentifierForTesting == "wi_network")
+        #expect(container.visibleContentTabIDForTesting == "wi_network")
         #expect(controller.selectedTab?.id == "wi_network")
     }
 
@@ -108,20 +98,20 @@ struct TabViewControllerAppKitTabTests {
         }
 
         selectTabViaPicker(index: 1, in: window)
-        #expect(container.selectedTabViewItemIndex == 1)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(container.selectedTabIdentifierForTesting == "wi_network")
+        #expect(container.visibleContentTabIDForTesting == "wi_network")
 
         selectTabViaPicker(index: 0, in: window)
-        #expect(container.selectedTabViewItemIndex == 0)
-        #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(container.selectedTabIdentifierForTesting == "wi_dom")
+        #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
         drainMainQueue()
-        #expect(container.selectedTabViewItemIndex == 0)
         #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(container.hasVisibleContentForTesting == true)
     }
 
     @Test
-    func hiddenNativeTabSelectionCallbackDoesNotOverridePickerSelectionModel() {
+    func rebuildingTabsKeepsVisibleContentBoundToSelectedTab() {
         let controller = WIModel()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
@@ -134,48 +124,40 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
-        #expect(container.tabView.tabViewType == .noTabsNoBorder)
-        #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
-        guard container.tabViewItems.count == 2 else {
-            Issue.record("Expected two tab items")
-            return
-        }
-
-        let networkItem = container.tabViewItems[1]
-        container.tabView(container.tabView, didSelect: networkItem)
-
-        #expect(controller.selectedTab?.id == "wi_dom")
-        #expect(container.selectedTabViewItemIndex == 0)
-    }
-
-    @Test
-    func rebuildingTabsWithSameSelectedIndexKeepsConcreteSelectedTabViewItem() {
-        let controller = WIModel()
-        let descriptors = [
-            makeDescriptor(id: "wi_dom", title: "DOM"),
-            makeDescriptor(id: "wi_network", title: "Network")
-        ]
-        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
-        let window = mountInWindow(container)
-        defer {
-            container.viewDidDisappear()
-            _ = window
-        }
-
-        #expect(container.selectedTabViewItemIndex == 0)
-        #expect((container.tabView.selectedTabViewItem?.identifier as? String) == "wi_dom")
-
-        // Rebuild with a new tab descriptor array while keeping DOM selected.
         controller.setTabs([
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ])
         drainMainQueue()
 
-        #expect(container.selectedTabViewItemIndex == 0)
-        #expect((container.tabView.selectedTabViewItem?.identifier as? String) == "wi_dom")
-        #expect(container.tabView.selectedTabViewItem?.viewController != nil)
+        #expect(container.selectedTabIdentifierForTesting == "wi_dom")
+        #expect(container.visibleContentTabIDForTesting == "wi_dom")
+        #expect(container.hasVisibleContentForTesting == true)
+    }
+
+    @Test
+    func emptyTabsClearSelectionAndHideVisibleContent() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: "wi_dom", title: "DOM"),
+            makeDescriptor(id: "wi_network", title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        container.setTabs([])
+        drainMainQueue()
+
+        #expect(controller.selectedTab == nil)
+        #expect(container.selectedTabIdentifierForTesting == nil)
+        #expect(container.visibleContentTabIDForTesting == nil)
+        #expect(container.hasVisibleContentForTesting == false)
     }
 
     @Test
@@ -304,6 +286,37 @@ struct TabViewControllerAppKitTabTests {
         }
     }
 
+    @Test
+    func replacingDescriptorWithSameIdentifierRebuildsCachedContentController() {
+        let controller = WIModel()
+        let firstController = MarkerViewController(marker: "first")
+        let secondController = MarkerViewController(marker: "second")
+
+        let firstDescriptor = WITab(
+            id: "custom",
+            title: "Custom",
+            systemImage: "circle",
+            viewControllerProvider: { _ in firstController }
+        )
+        let container = WITabViewController(controller, webView: nil, tabs: [firstDescriptor])
+        container.loadViewIfNeeded()
+
+        let initialVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
+        #expect(initialVisible?.marker == "first")
+
+        let replacedDescriptor = WITab(
+            id: "custom",
+            title: "Custom",
+            systemImage: "circle",
+            viewControllerProvider: { _ in secondController }
+        )
+        container.setTabs([replacedDescriptor])
+        drainMainQueue()
+
+        let replacedVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
+        #expect(replacedVisible?.marker == "second")
+    }
+
     private func makeDescriptor(id: String, title: String) -> WITab {
         WITab(
             id: id,
@@ -367,6 +380,25 @@ struct TabViewControllerAppKitTabTests {
         picker.selectedSegment = index
         picker.sendAction(action, to: picker.target)
         drainMainQueue()
+    }
+}
+
+@MainActor
+private final class MarkerViewController: NSViewController {
+    let marker: String
+
+    init(marker: String) {
+        self.marker = marker
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func loadView() {
+        view = NSView(frame: .zero)
     }
 }
 #endif

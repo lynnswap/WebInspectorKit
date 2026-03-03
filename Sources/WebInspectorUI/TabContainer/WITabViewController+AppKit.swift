@@ -8,7 +8,7 @@ import AppKit
 import WebInspectorBridge
 
 @MainActor
-public final class WITabViewController: NSTabViewController {
+public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private static let toolbarIdentifier = NSToolbar.Identifier("WITabToolbar")
 
     public private(set) var inspectorController: WIModel
@@ -21,10 +21,13 @@ public final class WITabViewController: NSTabViewController {
     private var toolbarObservationHandles: [ObservationHandle] = []
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
-    private var isApplyingSelectionFromController = false
-    private var isRebuildingTabs = false
     private var sessionTabsObservationHandle: ObservationHandle?
     private var sessionSelectionObservationHandle: ObservationHandle?
+
+    private let contentContainerView = NSView(frame: .zero)
+    private var visibleContentViewController: NSViewController?
+    private var contentViewControllerByTabID: [String: NSViewController] = [:]
+    private var tabDescriptorByID: [String: WITab] = [:]
 
     public init(
         _ inspectorController: WIModel,
@@ -51,6 +54,45 @@ public final class WITabViewController: NSTabViewController {
         stopObservingToolbarState()
     }
 
+    public override func loadView() {
+        let rootView = NSView(frame: .zero)
+        rootView.translatesAutoresizingMaskIntoConstraints = false
+
+        contentContainerView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.addSubview(contentContainerView)
+
+        NSLayoutConstraint.activate([
+            contentContainerView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            contentContainerView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            contentContainerView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            contentContainerView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
+        ])
+
+        view = rootView
+    }
+
+    public override func viewDidLoad() {
+        super.viewDidLoad()
+        bindSessionTabs()
+        startObservingToolbarStateIfNeeded()
+        render()
+    }
+
+    public override func viewWillAppear() {
+        super.viewWillAppear()
+        inspectorController.activateFromUIIfPossible()
+        installToolbarIfNeeded()
+        startObservingToolbarStateIfNeeded()
+        render()
+    }
+
+    public override func viewDidDisappear() {
+        super.viewDidDisappear()
+        if Self.window(for: view) == nil {
+            inspectorController.suspend()
+        }
+    }
+
     public func setPageWebView(_ webView: WKWebView?) {
         inspectorController.setPageWebViewFromUI(webView)
         if isViewLoaded {
@@ -62,92 +104,61 @@ public final class WITabViewController: NSTabViewController {
         guard self.inspectorController !== inspectorController else {
             return
         }
+
         let currentTabs = self.inspectorController.tabs
         let currentSelectedTab = self.inspectorController.selectedTab
         let currentPageWebView = self.inspectorController.pageWebViewForUI
+
         let previousController = self.inspectorController
         previousController.disconnect()
+
         self.inspectorController = inspectorController
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         inspectorController.setPageWebViewFromUI(currentPageWebView)
-        resetCachedContentViewControllers(for: currentTabs)
         inspectorController.setTabs(currentTabs)
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
+
+        setVisibleContentViewController(nil)
+        contentViewControllerByTabID.removeAll()
+        tabDescriptorByID.removeAll()
+
         stopObservingToolbarState()
         if isViewLoaded {
             bindSessionTabs()
-            rebuildTabs()
-            inspectorController.activateFromUIIfPossible()
             startObservingToolbarStateIfNeeded()
-            updateToolbarState()
+            render()
+            inspectorController.activateFromUIIfPossible()
         }
     }
 
     public func setTabs(_ tabs: [WITab]) {
         inspectorController.setTabs(tabs)
-    }
-
-    public override func viewDidLoad() {
-        super.viewDidLoad()
-        tabStyle = .unspecified
-        tabView.tabViewType = .noTabsNoBorder
-
-        bindSessionTabs()
-        rebuildTabs()
-        startObservingToolbarStateIfNeeded()
-    }
-
-    public override func viewWillAppear() {
-        super.viewWillAppear()
-        inspectorController.activateFromUIIfPossible()
-        syncNativeSelection(with: inspectorController.selectedTab)
-        installToolbarIfNeeded()
-        startObservingToolbarStateIfNeeded()
-        updateToolbarState()
-    }
-
-    public override func viewDidDisappear() {
-        super.viewDidDisappear()
-        if Self.window(for: view) == nil {
-            inspectorController.suspend()
+        if isViewLoaded {
+            render()
         }
     }
 
-    public override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
-        super.tabView(tabView, didSelect: tabViewItem)
-        guard isApplyingSelectionFromController == false, isRebuildingTabs == false else {
-            return
-        }
-        // Tab headers are hidden and selection is driven by the toolbar picker.
-        // Ignore native tab callbacks that can arrive during internal sync.
-        guard tabView.tabViewType != .noTabsNoBorder else {
-            return
-        }
-        guard
-            let identifier = tabViewItem?.identifier as? String,
-            let selectedTab = tabForIdentifier(identifier)
-        else {
-            return
-        }
-        applyUserTabSelection(selectedTab)
+    var displayedTabIDsForTesting: [String] {
+        inspectorController.tabs.map(\.identifier)
     }
 
-    private func rebuildTabs() {
-        isRebuildingTabs = true
-        defer {
-            isRebuildingTabs = false
+    var selectedTabIdentifierForTesting: String? {
+        inspectorController.selectedTab?.identifier
+    }
+
+    var visibleContentTabIDForTesting: String? {
+        guard let visibleContentViewController else {
+            return nil
         }
-        let tabs = inspectorController.tabs
-        tabViewItems = tabs.map { tab in
-            let viewController = makeTabRootViewController(for: tab) ?? NSViewController()
-            let item = NSTabViewItem(viewController: viewController)
-            item.identifier = tab.identifier
-            item.label = tab.title
-            item.image = tab.image
-            return item
-        }
-        syncNativeSelection(with: inspectorController.selectedTab)
-        refreshTabPickerState()
+        return contentViewControllerByTabID.first(where: { $0.value === visibleContentViewController })?.key
+    }
+
+    var hasVisibleContentForTesting: Bool {
+        visibleContentViewController != nil
+    }
+
+    var visibleContentViewControllerForTesting: NSViewController? {
+        visibleContentViewController
     }
 
     private func bindSessionTabs() {
@@ -155,46 +166,109 @@ public final class WITabViewController: NSTabViewController {
         sessionSelectionObservationHandle?.cancel()
 
         sessionTabsObservationHandle = inspectorController.observe(\.tabs) { [weak self] _ in
-            self?.handleObservedTabsChange()
+            self?.render()
         }
         sessionSelectionObservationHandle = inspectorController.observe(\.selectedTab) { [weak self] _ in
-            self?.handleObservedSelectionChange()
+            self?.render()
         }
     }
 
-    private func handleObservedTabsChange() {
-        rebuildTabs()
-        applyObservedTabStateSideEffects()
-    }
-
-    private func handleObservedSelectionChange() {
-        syncNativeSelection(with: inspectorController.selectedTab)
-        applyObservedTabStateSideEffects()
-    }
-
-    private func applyObservedTabStateSideEffects() {
+    private func render() {
+        reconcileTabDescriptorChanges(for: inspectorController.tabs)
+        pruneContentControllerCache(for: inspectorController.tabs)
+        renderSelectedContent()
         updateToolbarState()
     }
 
-    private func syncNativeSelection(with tab: WITab?) {
+    private func reconcileTabDescriptorChanges(for tabs: [WITab]) {
+        let activeIDs = Set(tabs.map(\.identifier))
+        for tab in tabs {
+            if let previousDescriptor = tabDescriptorByID[tab.identifier],
+               previousDescriptor !== tab {
+                if visibleContentTabIDForTesting == tab.identifier {
+                    setVisibleContentViewController(nil)
+                }
+                contentViewControllerByTabID[tab.identifier] = nil
+            }
+            tabDescriptorByID[tab.identifier] = tab
+        }
+        tabDescriptorByID = tabDescriptorByID.filter { activeIDs.contains($0.key) }
+    }
+
+    private func renderSelectedContent() {
         let tabs = inspectorController.tabs
         guard tabs.isEmpty == false else {
-            refreshTabPickerState()
-            return
-        }
-        // During rebuild, selection callbacks can arrive before NSTabViewItem creation.
-        // Avoid touching selectedTabViewItemIndex while no tab items exist.
-        let availableTabCount = min(tabs.count, tabViewItems.count)
-        guard availableTabCount > 0 else {
+            setVisibleContentViewController(nil)
             return
         }
 
-        let resolvedIndex = resolvedSelectionIndex(for: tab, in: tabs)
-        guard resolvedIndex < availableTabCount else {
+        guard let selectedTab = resolvedSelectedTab(in: tabs) else {
+            assertionFailure("tabs is not empty but resolved selected tab is nil")
+            setVisibleContentViewController(nil)
             return
         }
-        applySelectionIndexFromControllerIfNeeded(resolvedIndex)
-        refreshTabPickerState()
+
+        guard let rootViewController = makeTabRootViewController(for: selectedTab) else {
+            assertionFailure("No content view controller for selected tab: \(selectedTab.identifier)")
+            setVisibleContentViewController(nil)
+            return
+        }
+
+        rootViewController.loadViewIfNeeded()
+        setVisibleContentViewController(rootViewController)
+    }
+
+    private func resolvedSelectedTab(in tabs: [WITab]) -> WITab? {
+        guard tabs.isEmpty == false else {
+            return nil
+        }
+        if let selectedTab = inspectorController.selectedTab,
+           let resolvedTab = tabs.first(where: { $0 === selectedTab }) ?? tabs.first(where: { $0.identifier == selectedTab.identifier }) {
+            return resolvedTab
+        }
+        guard let fallback = tabs.first else {
+            return nil
+        }
+        inspectorController.setSelectedTabFromUI(fallback)
+        return fallback
+    }
+
+    private func setVisibleContentViewController(_ nextViewController: NSViewController?) {
+        guard visibleContentViewController !== nextViewController else {
+            return
+        }
+
+        if let current = visibleContentViewController {
+            current.view.removeFromSuperview()
+            current.removeFromParent()
+        }
+
+        visibleContentViewController = nextViewController
+
+        guard let nextViewController else {
+            return
+        }
+
+        addChild(nextViewController)
+        let hostedView = nextViewController.view
+        hostedView.translatesAutoresizingMaskIntoConstraints = false
+        contentContainerView.addSubview(hostedView)
+
+        NSLayoutConstraint.activate([
+            hostedView.topAnchor.constraint(equalTo: contentContainerView.topAnchor),
+            hostedView.leadingAnchor.constraint(equalTo: contentContainerView.leadingAnchor),
+            hostedView.trailingAnchor.constraint(equalTo: contentContainerView.trailingAnchor),
+            hostedView.bottomAnchor.constraint(equalTo: contentContainerView.bottomAnchor)
+        ])
+    }
+
+    private func pruneContentControllerCache(for tabs: [WITab]) {
+        let activeIDs = Set(tabs.map(\.identifier))
+        if let visibleID = visibleContentTabIDForTesting,
+           activeIDs.contains(visibleID) == false {
+            setVisibleContentViewController(nil)
+        }
+        contentViewControllerByTabID = contentViewControllerByTabID.filter { activeIDs.contains($0.key) }
     }
 
     private func installToolbarIfNeeded() {
@@ -392,12 +466,15 @@ public final class WITabViewController: NSTabViewController {
         }
 
         guard titles.isEmpty == false else {
+            isApplyingPickerSelection = true
             tabPickerControl.selectedSegment = -1
+            isApplyingPickerSelection = false
             tabPickerControl.isEnabled = false
             return
         }
 
         tabPickerControl.isEnabled = true
+
         let selectedIndex = resolvedTabPickerSelectionIndex()
         if tabPickerControl.selectedSegment != selectedIndex {
             isApplyingPickerSelection = true
@@ -407,7 +484,14 @@ public final class WITabViewController: NSTabViewController {
     }
 
     private func resolvedTabPickerSelectionIndex() -> Int {
-        resolvedSelectionIndex(for: inspectorController.selectedTab, in: inspectorController.tabs)
+        let tabs = inspectorController.tabs
+        guard tabs.isEmpty == false else {
+            return -1
+        }
+        guard let selectedTabID = inspectorController.selectedTab?.identifier else {
+            return 0
+        }
+        return tabs.firstIndex(where: { $0.identifier == selectedTabID }) ?? 0
     }
 
     private static func pickToolbarImage(isSelecting: Bool) -> NSImage? {
@@ -562,37 +646,49 @@ public final class WITabViewController: NSTabViewController {
         guard selectedIndex >= 0 else {
             return
         }
+
         let tabs = inspectorController.tabs
-        guard selectedIndex < tabs.count, selectedIndex < tabViewItems.count else {
+        guard selectedIndex < tabs.count else {
             refreshTabPickerState()
             return
         }
 
         let selectedTab = tabs[selectedIndex]
-        applySelectionIndexFromControllerIfNeeded(selectedIndex)
-        applyUserTabSelection(selectedTab)
+        inspectorController.setSelectedTabFromUI(selectedTab)
+        render()
     }
 
-    private func applySelectionIndexFromControllerIfNeeded(_ index: Int) {
-        guard index >= 0, index < tabViewItems.count else {
-            return
+    private func makeTabRootViewController(for tab: WITab) -> NSViewController? {
+        if let cached = contentViewControllerByTabID[tab.identifier] {
+            return cached
         }
 
-        let expectedIdentifier = tabViewItems[index].identifier as? String
-        let currentIdentifier = tabView.selectedTabViewItem?.identifier as? String
-        let shouldApplySelection = selectedTabViewItemIndex != index || currentIdentifier != expectedIdentifier
-        guard shouldApplySelection else {
-            return
+        let viewController: NSViewController?
+        if let customViewController = tab.viewControllerProvider?(tab) {
+            viewController = customViewController
+        } else {
+            switch tab.identifier {
+            case WITab.domTabID:
+                viewController = WIDOMViewController(inspector: inspectorController.dom)
+            case WITab.networkTabID:
+                viewController = WINetworkViewController(
+                    inspector: inspectorController.network,
+                    queryModel: networkQueryModel
+                )
+            default:
+                viewController = WIPlaceholderTabContentViewController()
+            }
         }
 
-        isApplyingSelectionFromController = true
-        defer { isApplyingSelectionFromController = false }
-        tabView.selectTabViewItem(at: index)
-        selectedTabViewItemIndex = index
-        tabViewItems[index].viewController?.loadViewIfNeeded()
+        guard let viewController else {
+            return nil
+        }
+
+        contentViewControllerByTabID[tab.identifier] = viewController
+        return viewController
     }
 
-    public override func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    public func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
             .wiTabPicker,
             .wiDOMPick,
@@ -605,11 +701,11 @@ public final class WITabViewController: NSTabViewController {
         ]
     }
 
-    public override func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+    public func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.wiTabPicker, .flexibleSpace, .wiDOMPick, .wiDOMReload]
     }
 
-    public override func toolbar(
+    public func toolbar(
         _ toolbar: NSToolbar,
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
@@ -711,63 +807,12 @@ public final class WITabViewController: NSTabViewController {
             return nil
         }
     }
+}
 
-    private func applyUserTabSelection(_ tab: WITab) {
-        inspectorController.setSelectedTabFromUI(tab)
-        syncNativeSelection(with: inspectorController.selectedTab)
-        updateToolbarState()
-    }
-
-    private func tabForIdentifier(_ identifier: String) -> WITab? {
-        inspectorController.tabs.first(where: { $0.identifier == identifier })
-    }
-
-    private func resolvedSelectionIndex(for selectedTab: WITab?, in tabs: [WITab]) -> Int {
-        guard tabs.isEmpty == false else {
-            return 0
-        }
-        guard let selectedTab else {
-            return 0
-        }
-        if let exactMatch = tabs.firstIndex(where: { $0 === selectedTab }) {
-            return exactMatch
-        }
-        return tabs.firstIndex(where: { $0.identifier == selectedTab.identifier }) ?? 0
-    }
-
-    private func resetCachedContentViewControllers(for tabs: [WITab]) {
-        for tab in tabs {
-            tab.resetCachedContentViewController()
-        }
-    }
-
-    private func makeTabRootViewController(for tab: WITab) -> NSViewController? {
-        if let cached = tab.cachedContentViewController {
-            return cached
-        }
-
-        let viewController: NSViewController?
-        if let customViewController = tab.viewControllerProvider?(tab) {
-            viewController = customViewController
-        } else {
-            switch tab.identifier {
-            case WITab.domTabID:
-                viewController = WIDOMViewController(inspector: inspectorController.dom)
-            case WITab.networkTabID:
-                viewController = WINetworkViewController(
-                    inspector: inspectorController.network,
-                    queryModel: networkQueryModel
-                )
-            default:
-                viewController = nil
-            }
-        }
-
-        guard let viewController else {
-            return nil
-        }
-        tab.cachedContentViewController = viewController
-        return viewController
+@MainActor
+private final class WIPlaceholderTabContentViewController: NSViewController {
+    override func loadView() {
+        view = NSView(frame: .zero)
     }
 }
 

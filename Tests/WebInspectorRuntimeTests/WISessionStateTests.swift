@@ -76,6 +76,26 @@ struct WISessionStateTests {
     }
 
     @Test
+    func setTabsRebuildKeepsSelectedTabNormalized() {
+        let originalA = WITab(id: "a", title: "A", systemImage: "a.circle")
+        let originalB = WITab(id: "b", title: "B", systemImage: "b.circle")
+        let replacementA = WITab(id: "a", title: "A", systemImage: "a.circle")
+        let replacementC = WITab(id: "c", title: "C", systemImage: "c.circle")
+
+        let controller = WIModel()
+        controller.setTabs([originalA, originalB])
+        controller.setSelectedTabFromUI(originalB)
+        #expect(controller.selectedTab?.id == "b")
+
+        controller.setTabs([replacementA, replacementC])
+
+        #expect(controller.selectedTab?.id == "a")
+
+        controller.setTabs([])
+        #expect(controller.selectedTab == nil)
+    }
+
+    @Test
     func selectedTabObservationEmitsOnSelectionChange() async {
         actor Recorder {
             var values: [String?] = []

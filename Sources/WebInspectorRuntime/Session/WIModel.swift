@@ -48,21 +48,7 @@ public final class WIModel {
     public func setTabs(_ tabs: [WITab]) {
         hasConfiguredTabsFromUI = true
         self.tabs = tabs
-
-        if tabs.isEmpty {
-            selectedTab = nil
-        } else if let selectedTab {
-            if let exactMatch = tabs.first(where: { $0 === selectedTab }) {
-                self.selectedTab = exactMatch
-            } else if let identifierMatch = tabs.first(where: { $0.identifier == selectedTab.identifier }) {
-                self.selectedTab = identifierMatch
-            } else {
-                self.selectedTab = tabs.first
-            }
-        } else {
-            selectedTab = tabs.first
-        }
-
+        applyNormalizedSelection(preferredTab: selectedTab)
         syncRuntimeStateFromTabs()
     }
 
@@ -71,18 +57,7 @@ public final class WIModel {
         if tab != nil, resolvedTab == nil {
             return
         }
-        let normalizedSelection: WITab?
-        if let resolvedTab {
-            normalizedSelection = resolvedTab
-        } else if tabs.isEmpty {
-            normalizedSelection = nil
-        } else {
-            normalizedSelection = tabs.first
-        }
-
-        if normalizedSelection !== selectedTab {
-            selectedTab = normalizedSelection
-        }
+        applyNormalizedSelection(preferredTab: resolvedTab)
         syncRuntimeStateFromTabs()
     }
 
@@ -108,6 +83,25 @@ public final class WIModel {
 }
 
 private extension WIModel {
+    func applyNormalizedSelection(preferredTab: WITab?) {
+        let normalizedTab: WITab?
+        if tabs.isEmpty {
+            normalizedTab = nil
+        } else if let preferredTab,
+                  let resolvedTab = resolveSelectionCandidate(preferredTab) {
+            normalizedTab = resolvedTab
+        } else if let currentSelection = selectedTab,
+                  let resolvedCurrent = resolveSelectionCandidate(currentSelection) {
+            normalizedTab = resolvedCurrent
+        } else {
+            normalizedTab = tabs.first
+        }
+
+        if normalizedTab !== selectedTab {
+            selectedTab = normalizedTab
+        }
+    }
+
     func resolveSelectionCandidate(_ requestedTab: WITab?) -> WITab? {
         guard let requestedTab else {
             return nil
