@@ -57,6 +57,11 @@ final class WIUIKitTabRenderCache {
         compactTabByTabID.removeAll()
         modelTabIDByCompactTabID.removeAll()
     }
+
+    func resetCompactTabs() {
+        compactTabByTabID.removeAll()
+        modelTabIDByCompactTabID.removeAll()
+    }
 }
 
 @MainActor
@@ -193,6 +198,12 @@ public final class WITabViewController: UIViewController {
            inspectorController.selectedTab?.identifier == WITab.elementTabID {
             let domTab = inspectorController.tabs.first(where: { $0.identifier == WITab.domTabID })
             inspectorController.setSelectedTabFromUI(domTab)
+        }
+
+        if activeHostKind == .compact, targetHostKind == .regular {
+            // Compact UITab closures retain wrapped controllers; drop only compact caches
+            // so regular host can reuse the shared root cache without cross-stack leakage.
+            renderCache.resetCompactTabs()
         }
 
         if forceHostReplacement || activeHostKind != targetHostKind {

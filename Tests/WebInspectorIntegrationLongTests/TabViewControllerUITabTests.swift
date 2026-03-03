@@ -306,6 +306,48 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
+        var createdCount = 0
+        let requestedTabs: [WITab] = [
+            makeProviderTab(id: "custom", title: "Custom") {
+                createdCount += 1
+                return UIViewController()
+            }
+        ]
+
+        let controller = WIModel()
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        container.loadViewIfNeeded()
+
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        guard
+            let firstCompactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController,
+            let firstUITab = firstCompactHost.currentUITabsForTesting.first
+        else {
+            Issue.record("Expected first compact host and tab")
+            return
+        }
+
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+
+        guard
+            let secondCompactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController,
+            let secondUITab = secondCompactHost.currentUITabsForTesting.first
+        else {
+            Issue.record("Expected second compact host and tab")
+            return
+        }
+
+        #expect(createdCount == 1)
+        #expect(firstUITab !== secondUITab)
+    }
+
+    @Test
     func initialRegularLayoutMapsElementSelectionToDOM() {
         let controller = WIModel()
         let tabs: [WITab] = [.dom(), .element(), .network()]
