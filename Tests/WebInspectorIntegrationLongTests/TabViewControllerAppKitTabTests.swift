@@ -317,6 +317,28 @@ struct TabViewControllerAppKitTabTests {
         #expect(replacedVisible?.marker == "second")
     }
 
+    @Test
+    func appKitSplitViewsUseStableAutosaveNamesAcrossTabSwitches() {
+        let controller = WIModel()
+        let descriptors = [
+            makeDescriptor(id: "wi_dom", title: "DOM"),
+            makeDescriptor(id: "wi_network", title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        let domController = try? #require(container.visibleContentViewControllerForTesting as? WIDOMViewController)
+        #expect(domController?.splitView.autosaveName == "WebInspectorKit.DOMSplitView")
+
+        selectTabViaPicker(index: 1, in: window)
+        let networkController = try? #require(container.visibleContentViewControllerForTesting as? WINetworkViewController)
+        #expect(networkController?.splitView.autosaveName == "WebInspectorKit.NetworkSplitView")
+    }
+
     private func makeDescriptor(id: String, title: String) -> WITab {
         WITab(
             id: id,

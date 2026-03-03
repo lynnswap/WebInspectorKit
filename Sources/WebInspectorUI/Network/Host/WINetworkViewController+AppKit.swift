@@ -8,6 +8,8 @@ import SwiftUI
 
 @MainActor
 public final class WINetworkViewController: NSSplitViewController {
+    private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.NetworkSplitView")
+
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
     private var listHostingController: NSHostingController<NetworkMacListTab>?
@@ -33,6 +35,7 @@ public final class WINetworkViewController: NSSplitViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        splitView.autosaveName = Self.splitViewAutosaveName
         inspector.selectEntry(nil)
 
         let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector, queryModel: queryModel))

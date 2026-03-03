@@ -3,6 +3,8 @@ import AppKit
 
 @MainActor
 public final class WIDOMViewController: NSSplitViewController {
+    private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.DOMSplitView")
+
     private let inspector: WIDOMModel
     private let domTreeViewController: WIDOMTreeViewController
     private let elementDetailsViewController: WIDOMDetailViewController
@@ -21,6 +23,7 @@ public final class WIDOMViewController: NSSplitViewController {
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        splitView.autosaveName = Self.splitViewAutosaveName
 
         let domTreeItem = NSSplitViewItem(viewController: domTreeViewController)
         domTreeItem.minimumThickness = 320
