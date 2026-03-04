@@ -1,5 +1,4 @@
 import Foundation
-import ObservationsCompat
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -7,7 +6,7 @@ import WebInspectorRuntime
 import UIKit
 
 @MainActor
-public final class WINetworkViewController: UIViewController, WIHostNavigationItemProvider, WICompactNavigationHosting {
+public final class WINetworkViewController: UIViewController, WICompactNavigationHosting {
     private enum HostKind {
         case compact
         case regular
@@ -15,14 +14,11 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
 
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
-    private let compactRootViewController: WINetworkCompactViewController
-    private let compactNavigationController: UINavigationController
+    private let compactHostViewController: WINetworkCompactViewController
     private let regularHostViewController: WINetworkRegularSplitViewController
 
     private weak var activeHostViewController: UIViewController?
     private var activeHostKind: HostKind?
-    public let hostNavigationState = WIHostNavigationState()
-    private var regularHostNavigationObservationHandles: [ObservationHandle] = []
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
 
     private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
@@ -58,20 +54,16 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
         self.queryModel = queryModel
-        self.compactRootViewController = WINetworkCompactViewController(
+        self.compactHostViewController = WINetworkCompactViewController(
             inspector: inspector,
             queryModel: queryModel
         )
-        let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
-        wiApplyClearNavigationBarStyle(to: compactNavigationController)
-        self.compactNavigationController = compactNavigationController
         self.regularHostViewController = WINetworkRegularSplitViewController(
             inspector: inspector,
             queryModel: queryModel
         )
 
         super.init(nibName: nil, bundle: nil)
-        bindRegularHostNavigationState()
     }
 
     @available(*, unavailable)
@@ -81,7 +73,6 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
         rebuildHost(force: true)
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -104,12 +95,11 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         let nextHost: UIViewController
         switch targetHostKind {
         case .compact:
-            nextHost = compactNavigationController
+            nextHost = compactHostViewController
         case .regular:
             nextHost = regularHostViewController
         }
         installHost(nextHost)
-        syncHostNavigationStateFromActiveHost()
     }
 
     private func installHost(_ host: UIViewController) {
@@ -126,7 +116,6 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
 
         addChild(host)
         host.view.translatesAutoresizingMaskIntoConstraints = false
-        host.view.backgroundColor = .clear
         view.addSubview(host.view)
         NSLayoutConstraint.activate([
             host.view.topAnchor.constraint(equalTo: view.topAnchor),
@@ -138,53 +127,6 @@ public final class WINetworkViewController: UIViewController, WIHostNavigationIt
         activeHostViewController = host
     }
 
-    private func bindRegularHostNavigationState() {
-        let regularState = regularHostViewController.hostNavigationState
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.searchController) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.preferredSearchBarPlacement) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.hidesSearchBarWhenScrolling) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.leftBarButtonItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.rightBarButtonItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-        regularHostNavigationObservationHandles.append(
-            regularState.observe(\.additionalOverflowItems) { [weak self] _ in
-                self?.syncHostNavigationStateFromActiveHost()
-            }
-        )
-    }
-
-    private func syncHostNavigationStateFromActiveHost() {
-        guard activeHostKind == .regular else {
-            hostNavigationState.clearManagedItems()
-            return
-        }
-        let regularState = regularHostViewController.hostNavigationState
-        hostNavigationState.searchController = regularState.searchController
-        hostNavigationState.preferredSearchBarPlacement = regularState.preferredSearchBarPlacement
-        hostNavigationState.hidesSearchBarWhenScrolling = regularState.hidesSearchBarWhenScrolling
-        hostNavigationState.leftBarButtonItems = regularState.leftBarButtonItems
-        hostNavigationState.rightBarButtonItems = regularState.rightBarButtonItems
-        hostNavigationState.additionalOverflowItems = regularState.additionalOverflowItems
-    }
 }
 @MainActor
 func networkStatusColor(for severity: NetworkStatusSeverity) -> UIColor {

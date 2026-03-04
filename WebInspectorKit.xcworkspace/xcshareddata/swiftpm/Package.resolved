@@ -1,13 +1,13 @@
 {
-  "originHash" : "5890fdd1a0303b9b3ccb85cc6447eca903aa5b9eac6cf4e5ebefece0269ca0d2",
+  "originHash" : "fb1fd1dee5be0429ba195539b7c77dc3b05f73457b5b61dad93d226c3285f4ad",
   "pins" : [
     {
       "identity" : "observationscompat",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationsCompat.git",
       "state" : {
-        "revision" : "3a79901867b6111e100411099377c32dc7e7ca8d",
-        "version" : "0.3.1"
+        "revision" : "f4b5bf24eeb4eb0b9a4b88d98ca225e2ab80ddb8",
+        "version" : "0.3.2"
       }
     },
     {

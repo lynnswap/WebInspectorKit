@@ -8,7 +8,7 @@
 
 ## 製品
 
-- `WebInspectorKit`: コンテナ UI、タブ記述子、Observation ベースの状態管理
+- `WebInspectorKit`: コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
 - `WebInspectorEngine`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
 `WebInspectorKit` は `WebInspectorEngine` に依存します。
@@ -17,8 +17,8 @@
 
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
-- `WITabDescriptor` によるタブ構成のカスタマイズ
-- `WISessionController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
+- `WITab` によるタブ構成のカスタマイズ（custom tab は `viewControllerProvider` を利用）
+- `WIModel` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
 
 ## 要件
 
@@ -37,10 +37,10 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WISessionController()
+    private let inspector = WIModel()
 
     @objc private func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
@@ -56,7 +56,7 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-`WIContainerViewController` は iOS ではデフォルト `DOM + Network` です。
+`WITabViewController` は iOS ではデフォルト `DOM + Network` です。
 
 - `compact`（`horizontalSizeClass == .compact`）: `DOM` / `Element`（未指定時は自動追加）/ `Network`
 - `regular/unspecified`（`horizontalSizeClass != .compact`）: `DOM`（DOM + Element の split）/ `Network`
@@ -65,7 +65,7 @@ final class BrowserViewController: UIViewController {
 - `compact` は `UITabBarController` ベースで、各タブ root は `UINavigationController` にラップされます。
 - `regular/unspecified` は `UINavigationController` ベースで、中央の segmented control でタブ切り替えします。
 - Network の検索/フィルタは UIKit 標準 API（`UISearchController` / `UIBarButtonItem` メニュー）を使用します。
-- `WIContainerViewController` は `UIViewController` 継承に変更されています（`UITabBarController` 継承ではありません）。
+- `WITabViewController` は `UIViewController` 継承です（`UITabBarController` 継承ではありません）。
 
 ### AppKit
 
@@ -76,10 +76,10 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WISessionController()
+    let inspector = WIModel()
 
     @objc func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
@@ -96,12 +96,13 @@ final class BrowserWindowController: NSWindowController {
 ## カスタムタブ
 
 ```swift
-let customTab = WITabDescriptor(
-    id: "my_custom_tab",
+let customTab = WITab(
     title: "Custom",
-    systemImage: "folder",
+    image: nil,
+    identifier: "my_custom_tab",
     role: .other
-) { context in
+) { tab in
+    _ = tab
     #if canImport(UIKit)
     return UIViewController()
     #else
@@ -109,7 +110,7 @@ let customTab = WITabDescriptor(
     #endif
 }
 
-let container = WIContainerViewController(
+let container = WITabViewController(
     inspector,
     webView: pageWebView,
     tabs: [.dom(), .network(), customTab]

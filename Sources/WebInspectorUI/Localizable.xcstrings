@@ -5303,6 +5303,7 @@
     },
     "network.empty.selection.description" : {
       "comment" : "Empty state description shown when requests exist but no row is selected.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -5320,6 +5321,7 @@
     },
     "network.empty.selection.title" : {
       "comment" : "Empty state title shown when requests exist but no row is selected.",
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

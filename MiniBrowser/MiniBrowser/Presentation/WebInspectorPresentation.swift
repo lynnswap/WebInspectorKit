@@ -7,7 +7,7 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISession
+    inspectorController: WIModel
 ) {
     guard let presenter = resolvePresenter(from: windowScene) else {
         return
@@ -156,7 +156,7 @@ private let inspectorWindowStore = InspectorWindowStore()
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WISession
+    inspectorController: WIModel
 ) {
     if let existingWindow = inspectorWindowStore.window,
        let existingContainer = existingWindow.contentViewController as? WITabViewController {
@@ -174,7 +174,7 @@ func presentWebInspector(
         tabs: [.dom(), .network()]
     )
     let window = NSWindow(contentViewController: container)
-    window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .docModalWindow]
+    window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
     window.title = "Web Inspector"
     window.setContentSize(NSSize(width: 960, height: 720))
     window.minSize = NSSize(width: 640, height: 480)

@@ -287,6 +287,59 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func fetchBodyFallsBackToReferenceWhenHandleAPIIsUnavailable() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, _) = makeTestWebView()
+        defer { agent.detachPageWebView(preparing: .stopped) }
+
+        await attachAndWait(agent, to: webView)
+        await loadHTML("<html><body><p>fallback</p></body></html>", in: webView)
+
+        let modeBeforeFallback = agent.currentBridgeMode
+        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+            """
+            return (function() {
+                if (!window.webInspectorNetworkAgent) {
+                    return false;
+                }
+                try {
+                    window.webInspectorNetworkAgent.getBodyForHandle = undefined;
+                } catch (_) {}
+                window.webInspectorNetworkAgent.getBody = function(ref, options) {
+                    const content = `ref:${ref}`;
+                    return {
+                        kind: "text",
+                        truncated: false,
+                        content,
+                        size: content.length
+                    };
+                };
+                return typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function";
+            })();
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+
+        let body = await agent.fetchBody(
+            bodyRef: "fallback-ref",
+            bodyHandle: "token" as NSString,
+            role: .response
+        )
+        let handleDisabled = ((didDisableHandleAPI as? Bool) ?? false)
+        if handleDisabled {
+            #expect(body?.full == "ref:fallback-ref")
+        } else {
+            #expect(body?.full == "token")
+        }
+
+        if modeBeforeFallback != .legacyJSON, handleDisabled {
+            #expect(agent.currentBridgeMode == .legacyJSON)
+        }
+    }
+
+    @Test
     func reattachKeepsControlTokenValidForBodyFetch() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()

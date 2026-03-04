@@ -1,6 +1,6 @@
 import WebInspectorEngine
 
-public struct WISessionConfiguration: Sendable {
+public struct WIModelConfiguration: Sendable {
     public var dom: DOMConfiguration
     public var network: NetworkConfiguration
 

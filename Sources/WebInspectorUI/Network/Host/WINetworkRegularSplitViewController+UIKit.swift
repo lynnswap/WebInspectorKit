@@ -1,21 +1,17 @@
 import Foundation
-import ObservationsCompat
 import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
-final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate, WIHostNavigationItemProvider {
+final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let inspector: WINetworkModel
-    private var hasStartedObservingInspector = false
-    private let selectionUpdateCoalescer = UIUpdateCoalescer()
 
     private let listPaneViewController: WINetworkListViewController
     private let listNavigationController: UINavigationController
     private let detailViewController: WINetworkDetailViewController
     private let detailNavigationController: UINavigationController
-    let hostNavigationState = WIHostNavigationState()
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
@@ -56,73 +52,29 @@ final class WINetworkRegularSplitViewController: UISplitViewController, UISplitV
     override func viewDidLoad() {
         super.viewDidLoad()
         listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
-        startObservingInspectorIfNeeded()
-        updateHostNavigationState()
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        showPrimaryColumnIfNeeded()
+        updateNavigationItemState()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
-        updateHostNavigationState()
-        syncDetailSelection()
+        updateNavigationItemState()
     }
 
-    private func startObservingInspectorIfNeeded() {
-        guard hasStartedObservingInspector == false else {
-            return
-        }
-        hasStartedObservingInspector = true
-
-        inspector.observeTask(
-            [
-                \.selectedEntry
-            ]
-        ) { [weak self] in
-            self?.scheduleDetailSelectionSync()
-        }
-        inspector.store.observeTask(
-            [
-                \.entries
-            ]
-        ) { [weak self] in
-            self?.scheduleDetailSelectionSync()
+    private func updateNavigationItemState() {
+        applyNavigationItemState(to: navigationItem)
+        if let hostNavigationItem = parent?.navigationItem {
+            applyNavigationItemState(to: hostNavigationItem)
         }
     }
 
-    private func scheduleDetailSelectionSync() {
-        selectionUpdateCoalescer.schedule { [weak self] in
-            self?.syncDetailSelection()
-        }
-    }
-
-    private func syncDetailSelection() {
-        if inspector.selectedEntry == nil {
-            showPrimaryColumnIfNeeded()
-        }
-    }
-
-    private func showPrimaryColumnIfNeeded() {
-        guard traitCollection.horizontalSizeClass != .compact else {
-            return
-        }
-        guard viewController(for: .primary) != nil else {
-            return
-        }
-        show(.primary)
-    }
-
-    private func updateHostNavigationState() {
-        hostNavigationState.searchController = nil
-        hostNavigationState.preferredSearchBarPlacement = nil
-        hostNavigationState.hidesSearchBarWhenScrolling = false
-        hostNavigationState.leftBarButtonItems = nil
-        hostNavigationState.rightBarButtonItems = [listPaneViewController.filterNavigationItem]
-        hostNavigationState.additionalOverflowItems = listPaneViewController.hostOverflowItemsForRegularNavigation
+    private func applyNavigationItemState(to navigationItem: UINavigationItem) {
+        navigationItem.searchController = nil
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.setLeftBarButtonItems(nil, animated: false)
+        navigationItem.setRightBarButtonItems([listPaneViewController.filterNavigationItem], animated: false)
+        navigationItem.additionalOverflowItems = listPaneViewController.hostOverflowItemsForRegularNavigation
     }
 
     func splitViewController(

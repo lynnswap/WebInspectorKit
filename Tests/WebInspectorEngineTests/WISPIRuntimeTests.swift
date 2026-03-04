@@ -56,4 +56,71 @@ struct WISPIRuntimeTests {
 
         #expect(runtime.mode(for: capabilities) == .privateFull)
     }
+
+    @Test
+    func modeResolutionPreservesModeOrderingAcrossCapabilityCombinations() {
+        let runtime = WISPIRuntime.shared
+        let cases: [(WISPICapabilities, WIBridgeMode)] = [
+            (
+                WISPICapabilities(
+                    hasContentWorldConfiguration: true,
+                    hasJSHandleClass: true,
+                    hasSerializedNodeClass: true,
+                    hasJSBufferClass: true,
+                    hasWorldWithConfigurationSelector: true,
+                    hasPublicAddBufferSelector: true,
+                    hasPublicRemoveBufferSelector: true,
+                    hasPrivateAddBufferSelector: false,
+                    hasPrivateRemoveBufferSelector: false
+                ),
+                .privateFull
+            ),
+            (
+                WISPICapabilities(
+                    hasContentWorldConfiguration: true,
+                    hasJSHandleClass: true,
+                    hasSerializedNodeClass: true,
+                    hasJSBufferClass: true,
+                    hasWorldWithConfigurationSelector: true,
+                    hasPublicAddBufferSelector: false,
+                    hasPublicRemoveBufferSelector: false,
+                    hasPrivateAddBufferSelector: true,
+                    hasPrivateRemoveBufferSelector: true
+                ),
+                .privateFull
+            ),
+            (
+                WISPICapabilities(
+                    hasContentWorldConfiguration: true,
+                    hasJSHandleClass: true,
+                    hasSerializedNodeClass: true,
+                    hasJSBufferClass: false,
+                    hasWorldWithConfigurationSelector: true,
+                    hasPublicAddBufferSelector: true,
+                    hasPublicRemoveBufferSelector: true,
+                    hasPrivateAddBufferSelector: false,
+                    hasPrivateRemoveBufferSelector: false
+                ),
+                .privateCore
+            ),
+            (
+                WISPICapabilities(
+                    hasContentWorldConfiguration: false,
+                    hasJSHandleClass: true,
+                    hasSerializedNodeClass: true,
+                    hasJSBufferClass: true,
+                    hasWorldWithConfigurationSelector: true,
+                    hasPublicAddBufferSelector: true,
+                    hasPublicRemoveBufferSelector: true,
+                    hasPrivateAddBufferSelector: true,
+                    hasPrivateRemoveBufferSelector: true
+                ),
+                .legacyJSON
+            ),
+        ]
+
+        for (capabilities, expected) in cases {
+            #expect(runtime.mode(for: capabilities) == expected)
+        }
+    }
 }
