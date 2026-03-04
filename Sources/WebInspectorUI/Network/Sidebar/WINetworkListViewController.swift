@@ -1,5 +1,5 @@
 import Foundation
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -14,6 +14,7 @@ public final class WINetworkListViewController: UICollectionViewController {
 
     private let inspector: WINetworkModel
     private let queryModel: WINetworkQueryModel
+    private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
     private lazy var dataSource = makeDataSource()
@@ -33,20 +34,14 @@ public final class WINetworkListViewController: UICollectionViewController {
         self.inspector = inspector
         self.queryModel = WINetworkQueryModel(inspector: inspector)
         super.init(collectionViewLayout: Self.makeListLayout())
-
-        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
-            self?.reloadDataFromInspector()
-        }
+        startObservingInspector()
     }
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
         self.inspector = inspector
         self.queryModel = queryModel
         super.init(collectionViewLayout: Self.makeListLayout())
-
-        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
-            self?.reloadDataFromInspector()
-        }
+        startObservingInspector()
     }
 
     @available(*, unavailable)
@@ -119,8 +114,15 @@ public final class WINetworkListViewController: UICollectionViewController {
         return UICollectionViewCompositionalLayout.list(using: configuration)
     }
 
+    private func startObservingInspector() {
+        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
+            self?.reloadDataFromInspector()
+        }
+        .store(in: &observationHandles)
+    }
+
     private func makeDataSource() -> UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry> {
-        let listCellRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, NetworkEntry> { [weak self] cell, _, item in
+        let listCellRegistration = UICollectionView.CellRegistration<WINetworkObservingListCell, NetworkEntry> { [weak self] cell, _, item in
             self?.configureListCell(cell, item: item)
         }
         let dataSource = UICollectionViewDiffableDataSource<SectionIdentifier, NetworkEntry>(
@@ -190,7 +192,9 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
     }
 
-    private func configureListCell(_ cell: UICollectionViewListCell, item: NetworkEntry) {
+    private func configureListCell(_ cell: WINetworkObservingListCell, item: NetworkEntry) {
+        cell.resetObservationHandles()
+
         var content = UIListContentConfiguration.cell()
         content.text = item.displayName
         content.secondaryText = nil
@@ -217,13 +221,16 @@ public final class WINetworkListViewController: UICollectionViewController {
             ),
             .disclosureIndicator()
         ]
-        
-        item.observe(\.displayName){ [weak cell] newValue in
+
+        item.observe(\.displayName) { [weak cell] newValue in
             guard var content = cell?.contentConfiguration as? UIListContentConfiguration else { return }
             content.text = newValue
+            cell?.contentConfiguration = content
         }
-        item.observe([\.fileTypeLabel,\.statusSeverity]){ [weak cell,weak item] in
-            guard let cell,let item else { return }
+        .store(in: &cell.observationHandles)
+
+        item.observe([\.fileTypeLabel, \.statusSeverity]) { [weak cell, weak item] in
+            guard let cell, let item else { return }
             cell.accessories = [
                 .customView(configuration: statusIndicatorConfiguration(for: item)),
                 .label(
@@ -238,6 +245,7 @@ public final class WINetworkListViewController: UICollectionViewController {
                 .disclosureIndicator()
             ]
         }
+        .store(in: &cell.observationHandles)
     }
 
     private func makeSecondaryMenu() -> UIMenu {
@@ -270,6 +278,21 @@ public final class WINetworkListViewController: UICollectionViewController {
         inspector.selectEntry(entry)
     }
 }
+
+@MainActor
+private final class WINetworkObservingListCell: UICollectionViewListCell {
+    fileprivate var observationHandles: Set<ObservationHandle> = []
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        observationHandles.removeAll()
+    }
+
+    func resetObservationHandles() {
+        observationHandles.removeAll()
+    }
+}
+
 @MainActor
 private func statusIndicatorConfiguration(for item: NetworkEntry) -> UICellAccessory.CustomViewConfiguration {
     let dotView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))

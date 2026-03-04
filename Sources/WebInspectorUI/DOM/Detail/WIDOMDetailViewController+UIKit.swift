@@ -1,6 +1,6 @@
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationsCompat
+import ObservationBridge
 
 #if canImport(UIKit)
 import UIKit
@@ -125,6 +125,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
+    private var stateObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because navigation controls react to several independent state updates.
     private let navigationUpdateCoalescer = UIUpdateCoalescer()
     // Keep coalescing because content snapshots are expensive and can burst under DOM updates.
@@ -164,6 +165,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
+        stateObservationHandles.removeAll()
     }
 
     public override func viewDidLoad() {
@@ -217,12 +219,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.observe(
             \.isSelectingElement,
             options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.nodeId,
             options: WIObservationOptions.dedupe
@@ -230,48 +234,56 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             self?.scheduleNavigationControlsUpdate()
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.preview,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.selectorPath,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.attributes,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.matchedStyles,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.isLoadingMatchedStyles,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.matchedStylesTruncated,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
         inspector.selection.observe(
             \.blockedStylesheetCount,
             options: WIObservationOptions.dedupeDebounced
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }
+        .store(in: &stateObservationHandles)
     }
 
     private func makeSecondaryMenu() -> UIMenu {

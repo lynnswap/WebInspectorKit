@@ -1,4 +1,4 @@
-import ObservationsCompat
+import ObservationBridge
 
 enum WIObservationOptions {
     private static let defaultDebounce = ObservationDebounce(

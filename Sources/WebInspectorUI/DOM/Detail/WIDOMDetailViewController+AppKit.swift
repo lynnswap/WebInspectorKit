@@ -1,6 +1,5 @@
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationsCompat
 
 #if canImport(AppKit)
 import AppKit

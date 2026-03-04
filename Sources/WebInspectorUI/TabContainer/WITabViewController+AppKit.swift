@@ -1,5 +1,5 @@
 import WebKit
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -20,12 +20,11 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
-    private var toolbarObservationHandles: [ObservationHandle] = []
+    private var toolbarObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
-    private var sessionTabsObservationHandle: ObservationHandle?
-    private var sessionSelectionObservationHandle: ObservationHandle?
+    private var sessionObservationHandles: Set<ObservationHandle> = []
 
     private let contentContainerView = NSView(frame: .zero)
     private var visibleContentViewController: NSViewController?
@@ -54,8 +53,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     isolated deinit {
-        sessionTabsObservationHandle?.cancel()
-        sessionSelectionObservationHandle?.cancel()
+        sessionObservationHandles.removeAll()
         stopObservingToolbarState()
     }
 
@@ -164,15 +162,17 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func bindSessionTabs() {
-        sessionTabsObservationHandle?.cancel()
-        sessionSelectionObservationHandle?.cancel()
+        sessionObservationHandles.removeAll()
 
-        sessionTabsObservationHandle = inspectorController.observe(\.tabs) { [weak self] _ in
+        inspectorController.observe(\.tabs) { [weak self] _ in
             self?.render()
         }
-        sessionSelectionObservationHandle = inspectorController.observe(\.selectedTab) { [weak self] _ in
+        .store(in: &sessionObservationHandles)
+
+        inspectorController.observe(\.selectedTab) { [weak self] _ in
             self?.render()
         }
+        .store(in: &sessionObservationHandles)
     }
 
     private func render() {
@@ -352,68 +352,57 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
         hasStartedObservingToolbarState = true
 
-        toolbarObservationHandles.append(
-            inspectorController.dom.observe(
-                \.hasPageWebView,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            inspectorController.dom.observe(
-                \.isSelectingElement,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            inspectorController.network.observeTask(
-                [\.canFetchSelectedBodies]
-            ) { [weak self] in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            inspectorController.network.store.observeTask(
-                [\.entries]
-            ) { [weak self] in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            networkQueryModel.observe(
-                \.searchText,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            networkQueryModel.observe(
-                \.activeFilters,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
-        toolbarObservationHandles.append(
-            networkQueryModel.observe(
-                \.effectiveFilters,
-                options: [.removeDuplicates]
-            ) { [weak self] _ in
-                self?.scheduleToolbarStateUpdate()
-            }
-        )
+        inspectorController.dom.observe(
+            \.hasPageWebView,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        inspectorController.dom.observe(
+            \.isSelectingElement,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        inspectorController.network.observeTask(
+            [\.canFetchSelectedBodies]
+        ) { [weak self] in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        inspectorController.network.store.observeTask(
+            [\.entries]
+        ) { [weak self] in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        networkQueryModel.observe(
+            \.searchText,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        networkQueryModel.observe(
+            \.activeFilters,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
+        networkQueryModel.observe(
+            \.effectiveFilters,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.scheduleToolbarStateUpdate()
+        }
+        .store(in: &toolbarObservationHandles)
     }
 
     private func stopObservingToolbarState() {
         hasStartedObservingToolbarState = false
-
-        for handle in toolbarObservationHandles {
-            handle.cancel()
-        }
         toolbarObservationHandles.removeAll()
     }
 

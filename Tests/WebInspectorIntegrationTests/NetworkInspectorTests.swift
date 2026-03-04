@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import ObservationBridge
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 @testable import WebInspectorUI
@@ -330,16 +331,15 @@ struct NetworkInspectorTests {
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
         let inspector = WINetworkModel(session: NetworkSession())
         var emittedValues: [String] = []
+        var observationHandles = Set<ObservationHandle>()
 
-        let handle = inspector.observeTask(
+        inspector.observeTask(
             \.searchText,
             options: [.removeDuplicates]
         ) { value in
             emittedValues.append(value)
         }
-        defer {
-            handle.cancel()
-        }
+        .store(in: &observationHandles)
 
         let receivedInitial = await waitUntil { emittedValues.count >= 1 }
         #expect(receivedInitial)

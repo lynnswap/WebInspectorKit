@@ -1,7 +1,7 @@
 import WebKit
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationsCompat
+import ObservationBridge
 
 #if canImport(AppKit)
 import AppKit
@@ -10,6 +10,7 @@ import AppKit
 public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMModel
     private var contextMenuNodeID: Int?
+    private var observationHandles: Set<ObservationHandle> = []
 
     private let errorLabel = NSTextField(labelWithString: "")
 
@@ -70,6 +71,7 @@ public final class WIDOMTreeViewController: NSViewController {
             guard let self else { return }
             self.updateErrorLabel(errorMessage: self.inspector.errorMessage)
         }
+        .store(in: &observationHandles)
     }
 
     private func makeCopyMenu() -> NSMenu {

@@ -1,14 +1,13 @@
 #if canImport(UIKit)
 import UIKit
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorRuntime
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
     private let model: WIModel
     private let renderCache: WIUIKitTabRenderCache
-    private var tabsObservationHandle: ObservationHandle?
-    private var selectedTabObservationHandle: ObservationHandle?
+    private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
     init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
@@ -23,8 +22,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     isolated deinit {
-        tabsObservationHandle?.cancel()
-        selectedTabObservationHandle?.cancel()
+        tabObservationHandles.removeAll()
     }
 
     override func viewDidLoad() {
@@ -37,10 +35,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     func prepareForRemoval() {
         delegate = nil
-        tabsObservationHandle?.cancel()
-        tabsObservationHandle = nil
-        selectedTabObservationHandle?.cancel()
-        selectedTabObservationHandle = nil
+        tabObservationHandles.removeAll()
     }
 
     var displayedTabIdentifiersForTesting: [String] {
@@ -52,17 +47,17 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func bindModel() {
-        tabsObservationHandle?.cancel()
-        selectedTabObservationHandle?.cancel()
+        tabObservationHandles.removeAll()
 
-        tabsObservationHandle = model.observe(
+        model.observe(
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.rebuildNativeTabsIfPossible()
         }
+        .store(in: &tabObservationHandles)
 
-        selectedTabObservationHandle = model.observe(
+        model.observe(
             \.selectedTab,
             options: [.removeDuplicates]
         ) { [weak self] newValue in
@@ -71,6 +66,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             }
             self.syncNativeSelection(with: newValue)
         }
+        .store(in: &tabObservationHandles)
     }
 
     private func rebuildNativeTabsIfPossible() {

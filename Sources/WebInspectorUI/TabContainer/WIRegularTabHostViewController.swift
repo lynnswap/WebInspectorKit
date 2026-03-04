@@ -1,14 +1,13 @@
 #if canImport(UIKit)
 import UIKit
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorRuntime
 
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
     private let model: WIModel
     private let renderCache: WIUIKitTabRenderCache
-    private var tabsObservationHandle: ObservationHandle?
-    private var selectedTabObservationHandle: ObservationHandle?
+    private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
 
     private let placeholderViewController: UIViewController
@@ -45,8 +44,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     isolated deinit {
-        tabsObservationHandle?.cancel()
-        selectedTabObservationHandle?.cancel()
+        tabObservationHandles.removeAll()
     }
 
     override func viewDidLoad() {
@@ -59,10 +57,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     func prepareForRemoval() {
-        tabsObservationHandle?.cancel()
-        tabsObservationHandle = nil
-        selectedTabObservationHandle?.cancel()
-        selectedTabObservationHandle = nil
+        tabObservationHandles.removeAll()
     }
 
     var displayedTabIDsForTesting: [String] {
@@ -88,22 +83,23 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func bindModel() {
-        tabsObservationHandle?.cancel()
-        selectedTabObservationHandle?.cancel()
+        tabObservationHandles.removeAll()
 
-        tabsObservationHandle = model.observe(
+        model.observe(
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.rebuildLayout()
         }
+        .store(in: &tabObservationHandles)
 
-        selectedTabObservationHandle = model.observe(
+        model.observe(
             \.selectedTab,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.applySelectedTabProjection()
         }
+        .store(in: &tabObservationHandles)
     }
 
     private func rebuildLayout() {

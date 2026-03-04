@@ -44,8 +44,8 @@ let package = Package(
     ],
     dependencies: [
         .package(
-            url: "https://github.com/lynnswap/ObservationsCompat.git",
-            exact: "0.3.2"
+            url: "https://github.com/lynnswap/ObservationBridge.git",
+            exact: "0.4.0"
         )
     ],
     targets: [
@@ -63,7 +63,7 @@ let package = Package(
                 "WebInspectorEngine",
                 "WebInspectorBridge",
                 "WebInspectorScripts",
-                .product(name: "ObservationsCompat", package: "ObservationsCompat")
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -104,7 +104,7 @@ let package = Package(
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
                 "WebInspectorBridge",
-                .product(name: "ObservationsCompat", package: "ObservationsCompat")
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             resources: [
                 .process("Localizable.xcstrings")

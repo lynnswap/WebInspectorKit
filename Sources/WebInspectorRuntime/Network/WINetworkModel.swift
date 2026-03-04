@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import ObservationsCompat
 import WebKit
 import WebInspectorEngine
 

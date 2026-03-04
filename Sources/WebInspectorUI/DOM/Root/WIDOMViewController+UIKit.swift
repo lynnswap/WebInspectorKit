@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import UIKit
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorRuntime
 
 @MainActor
@@ -128,6 +128,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     private let elementDetailsNavigationController: UINavigationController
     private var hasAppliedInitialRegularColumnWidth = false
     private var hasStartedObservingNavigationState = false
+    private var navigationObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because this navigation state is recomputed from multiple observation streams.
     private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
 
@@ -270,18 +271,21 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
         }
+        .store(in: &navigationObservationHandles)
         inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
         }
+        .store(in: &navigationObservationHandles)
         inspector.selection.observe(
             \.nodeId,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
         }
+        .store(in: &navigationObservationHandles)
     }
 
     private func scheduleNavigationStateUpdate() {
