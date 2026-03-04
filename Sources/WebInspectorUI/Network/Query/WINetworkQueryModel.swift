@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationsCompat
 #if canImport(UIKit)
 import UIKit
 #endif

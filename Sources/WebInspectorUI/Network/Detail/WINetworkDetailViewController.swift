@@ -1,5 +1,5 @@
 import Foundation
-import ObservationsCompat
+import ObservationBridge
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -31,7 +31,7 @@ import UIKit
 
     private let inspector: WINetworkModel
     private let showsNavigationControls: Bool
-
+    @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -58,6 +58,7 @@ import UIKit
         inspector.observeTask(\.selectedEntry,options: [.removeDuplicates]) { [weak self] newValue in
             self?.display(newValue)
         }
+        .store(in: &observationHandles)
     }
 
     @available(*, unavailable)
@@ -282,6 +283,7 @@ import UIKit
     }
 
     private func configureListCell(_ cell: WINetworkDetailObservingListCell, itemID: DetailItemID) {
+        cell.resetObservationHandles()
         guard let entry else {
             cell.contentConfiguration = nil
             cell.accessories = []
@@ -636,6 +638,17 @@ import UIKit
 
 @MainActor
 private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
+    private var observationHandles: Set<ObservationHandle> = []
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        observationHandles.removeAll()
+    }
+
+    func resetObservationHandles() {
+        observationHandles.removeAll()
+    }
+
     func observeSummary(
         entry: NetworkEntry,
         makeMetricsText: @escaping @MainActor (NetworkEntry) -> NSAttributedString
@@ -643,12 +656,14 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
         entry.observe(\.url) { [weak self] newURL in
             self?.updateSummaryURL(newURL)
         }
+        .store(in: &observationHandles)
 
         entry.observe([\.method, \.statusCode, \.statusText, \.phase, \.duration, \.encodedBodyLength]) {
             [weak self, weak entry] in
             guard let self, let entry else { return }
             self.updateSummaryMetrics(makeMetricsText(entry))
         }
+        .store(in: &observationHandles)
     }
 
     func observeBody(
@@ -662,6 +677,7 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
             guard let self, let entry, let body else { return }
             self.updateBodyPrimaryText(makePrimaryText(entry, body))
         }
+        .store(in: &observationHandles)
 
         body.observe([\.kind]) {
             [weak self, weak entry, weak body] in
@@ -669,17 +685,20 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
             self.updateBodyPrimaryText(makePrimaryText(entry, body))
             self.updateBodySecondaryText(makeSecondaryText(body))
         }
+        .store(in: &observationHandles)
         body.observe([\.size]) {
             [weak self, weak entry, weak body] in
             guard let self, let entry, let body else { return }
             self.updateBodyPrimaryText(makePrimaryText(entry, body))
         }
+        .store(in: &observationHandles)
 
         body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState, \.reference]) {
             [weak self, weak body] in
             guard let self, let body else { return }
             self.updateBodySecondaryText(makeSecondaryText(body))
         }
+        .store(in: &observationHandles)
     }
 
     private func updateSummaryURL(_ url: String) {

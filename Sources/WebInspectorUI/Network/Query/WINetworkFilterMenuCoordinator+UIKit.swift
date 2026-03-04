@@ -1,11 +1,12 @@
 #if canImport(UIKit)
 import UIKit
 import WebInspectorEngine
-import ObservationsCompat
+import ObservationBridge
 
 @MainActor
 final class WINetworkFilterMenuCoordinator {
     private unowned let queryModel: WINetworkQueryModel
+    private var observationHandles: Set<ObservationHandle> = []
 
     private lazy var barButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -22,6 +23,7 @@ final class WINetworkFilterMenuCoordinator {
         queryModel.observeTask(\.effectiveFilters) { [weak self] _ in
             self?.applyMenuStateAfterMutation()
         }
+        .store(in: &observationHandles)
     }
 
     var item: UIBarButtonItem {

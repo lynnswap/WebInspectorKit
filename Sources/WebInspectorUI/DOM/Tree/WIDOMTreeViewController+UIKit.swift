@@ -1,7 +1,7 @@
 import WebKit
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationsCompat
+import ObservationBridge
 
 #if canImport(UIKit)
 import UIKit
@@ -10,7 +10,8 @@ import UIKit
 public final class WIDOMTreeViewController: UIViewController {
     private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
-    private let errorUpdateCoalescer = UIUpdateCoalescer()
+    private var observationHandles: Set<ObservationHandle> = []
+    // Keep coalescing here because navigation controls are driven by multiple observed states.
     private let navigationUpdateCoalescer = UIUpdateCoalescer()
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -108,33 +109,31 @@ public final class WIDOMTreeViewController: UIViewController {
             \.errorMessage,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleErrorPresentationUpdate()
+            guard let self else { return }
+            self.updateErrorPresentation(errorMessage: self.inspector.errorMessage)
         }
+        .store(in: &observationHandles)
         inspector.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
+        .store(in: &observationHandles)
         inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
+        .store(in: &observationHandles)
         inspector.selection.observe(
             \.nodeId,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
-    }
-
-    private func scheduleErrorPresentationUpdate() {
-        errorUpdateCoalescer.schedule { [weak self] in
-            guard let self else { return }
-            self.updateErrorPresentation(errorMessage: self.inspector.errorMessage)
-        }
+        .store(in: &observationHandles)
     }
 
     private func scheduleNavigationControlsUpdate() {

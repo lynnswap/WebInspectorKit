@@ -2,7 +2,7 @@ import Testing
 import WebKit
 @testable import WebInspectorUI
 @testable import WebInspectorRuntime
-import WebInspectorEngine
+@testable import WebInspectorEngine
 
 #if canImport(AppKit)
 import AppKit

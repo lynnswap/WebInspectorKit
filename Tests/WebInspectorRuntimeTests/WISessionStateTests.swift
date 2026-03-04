@@ -1,6 +1,6 @@
 import Testing
 import WebKit
-import ObservationsCompat
+import ObservationBridge
 @testable import WebInspectorUI
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
@@ -111,10 +111,11 @@ struct WISessionStateTests {
         controller.setTabs([.dom(), .network()])
 
         let recorder = Recorder()
-        let handle = controller.observeTask([\.selectedTab]) {
+        var observationHandles = Set<ObservationHandle>()
+        controller.observeTask([\.selectedTab]) {
             await recorder.append(controller.selectedTab?.identifier)
         }
-        defer { handle.cancel() }
+        .store(in: &observationHandles)
 
         let networkTab = controller.tabs.first { $0.identifier == WITab.networkTabID }
         controller.setSelectedTabFromUI(networkTab)

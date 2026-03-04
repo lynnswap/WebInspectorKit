@@ -2,12 +2,12 @@
   "originHash" : "0a6ef3fdb68dcfc9115cb6fbce1f10dca1be9f9de1e12e9dd27cf4f324d625d5",
   "pins" : [
     {
-      "identity" : "observationscompat",
+      "identity" : "observationbridge",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/lynnswap/ObservationsCompat.git",
+      "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "ef41b8f28333a71cd9b5790c3a6a9d3c639ca6d4",
-        "version" : "0.3.0"
+        "revision" : "a8da12f149d3953e3a5e60887b2a707c1ffe1b37",
+        "version" : "0.4.0"
       }
     },
     {

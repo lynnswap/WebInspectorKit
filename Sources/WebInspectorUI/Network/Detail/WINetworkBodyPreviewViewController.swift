@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import Foundation
-import ObservationsCompat
+import ObservationBridge
 import UIKit
 import WebInspectorEngine
 import WebInspectorRuntime
@@ -45,7 +45,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private let renderGeneration = NetworkBodyPreviewRenderGeneration()
     private var renderTask: Task<Void, Never>?
     private var hasAppliedInitialTreeSnapshot = false
-    private var bodyObservationHandle: ObservationHandle?
+    private var bodyObservationHandles: Set<ObservationHandle> = []
 
     private var treePayloadByItem: [TreeItem: TreeItemPayload] = [:]
     private lazy var treeDataSource = makeTreeDataSource()
@@ -85,7 +85,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     isolated deinit {
         renderTask?.cancel()
-        bodyObservationHandle?.cancel()
+        bodyObservationHandles.removeAll()
     }
 
     public override func viewDidLoad() {
@@ -232,8 +232,8 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private func startObservingBodyState() {
-        bodyObservationHandle?.cancel()
-        bodyObservationHandle = bodyState.observeTask(
+        bodyObservationHandles.removeAll()
+        bodyState.observeTask(
             [
                 \.kind,
                 \.preview,
@@ -253,6 +253,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
             self.updateSecondaryMenu()
             self.requestRenderModelUpdate()
         }
+        .store(in: &bodyObservationHandles)
     }
 
     private func makeTreeLayout() -> UICollectionViewLayout {
