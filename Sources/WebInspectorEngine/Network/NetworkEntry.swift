@@ -3,7 +3,7 @@ import Observation
 
 @MainActor
 @Observable
-public final class NetworkEntry: Identifiable, Equatable, Hashable ,Sendable{
+public final class NetworkEntry: Identifiable, Equatable, Hashable {
     public static nonisolated func == (lhs: NetworkEntry, rhs: NetworkEntry) -> Bool { lhs.id == rhs.id }
     public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
