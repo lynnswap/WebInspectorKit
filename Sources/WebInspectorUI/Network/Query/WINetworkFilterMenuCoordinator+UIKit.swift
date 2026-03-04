@@ -20,8 +20,8 @@ final class WINetworkFilterMenuCoordinator {
     init(queryModel: WINetworkQueryModel) {
         self.queryModel = queryModel
 
-        queryModel.observeTask(\.effectiveFilters) { [weak self] _ in
-            self?.applyMenuStateAfterMutation()
+        queryModel.observeTask(\.effectiveFilters) { [weak self] effectiveFilters in
+            self?.applyMenuStateAfterMutation(effectiveFilters: effectiveFilters)
         }
         .store(in: &observationHandles)
     }
@@ -71,8 +71,8 @@ final class WINetworkFilterMenuCoordinator {
         return actions
     }
 
-    private func applyMenuStateAfterMutation() {
-        barButtonItem.isSelected = !queryModel.effectiveFilters.isEmpty
+    private func applyMenuStateAfterMutation(effectiveFilters: Set<NetworkResourceFilter>) {
+        barButtonItem.isSelected = !effectiveFilters.isEmpty
         barButtonItem.menu = makeMenu()
     }
 }

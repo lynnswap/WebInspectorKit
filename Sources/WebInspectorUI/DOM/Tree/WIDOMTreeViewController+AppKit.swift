@@ -67,9 +67,8 @@ public final class WIDOMTreeViewController: NSViewController {
         inspector.observe(
             \.errorMessage,
             options: [.removeDuplicates]
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.updateErrorLabel(errorMessage: self.inspector.errorMessage)
+        ) { [weak self] newErrorMessage in
+            self?.updateErrorLabel(errorMessage: newErrorMessage)
         }
         .store(in: &observationHandles)
     }

@@ -115,8 +115,8 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func startObservingInspector() {
-        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] _ in
-            self?.reloadDataFromInspector()
+        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] displayEntries in
+            self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
         .store(in: &observationHandles)
     }
@@ -136,8 +136,10 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
         return dataSource
     }
-    private func makeSnapshot() -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry> {
-        let identifiers = inspector.displayEntries
+    private func makeSnapshot(
+        displayEntries: [NetworkEntry]
+    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkEntry> {
+        let identifiers = displayEntries
         precondition(
             identifiers.count == Set(identifiers.map(\.id)).count,
             "Duplicate row IDs detected in WINetworkListViewController"
@@ -153,14 +155,14 @@ public final class WINetworkListViewController: UICollectionViewController {
         isViewLoaded && view.window != nil
     }
 
-    private func requestSnapshotUpdate() {
+    private func requestSnapshotUpdate(displayEntries: [NetworkEntry]) {
         guard isCollectionViewVisible else {
             needsSnapshotReloadOnNextAppearance = true
             return
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot()
+            let snapshot = self.makeSnapshot(displayEntries: displayEntries)
             await self.dataSource.apply(snapshot, animatingDifferences: false)
         }
     }
@@ -171,15 +173,16 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot()
+            let snapshot = self.makeSnapshot(displayEntries: self.inspector.displayEntries)
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
         }
     }
 
-    private func reloadDataFromInspector() {
+    private func reloadDataFromInspector(displayEntries: [NetworkEntry]? = nil) {
+        let resolvedDisplayEntries = displayEntries ?? inspector.displayEntries
         queryModel.syncSearchControllerText()
-        requestSnapshotUpdate()
-        let shouldShowEmptyState = inspector.displayEntries.isEmpty
+        requestSnapshotUpdate(displayEntries: resolvedDisplayEntries)
+        let shouldShowEmptyState = resolvedDisplayEntries.isEmpty
         collectionView.isHidden = shouldShowEmptyState
         if shouldShowEmptyState {
             var configuration = UIContentUnavailableConfiguration.empty()
