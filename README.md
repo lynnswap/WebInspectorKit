@@ -121,7 +121,6 @@ let container = WITabViewController(
 - `swift test`
 - `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run test`
 - `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run typecheck`
-- `xcodebuild -workspace WebInspectorKit.xcworkspace -scheme MiniBrowser -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' test` (run when changes affect MiniBrowser/UI-runtime integration)
 
 ## Migration
 
