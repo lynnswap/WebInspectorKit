@@ -21,6 +21,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
     private var toolbarObservationHandles: [ObservationHandle] = []
+    // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
     private var sessionTabsObservationHandle: ObservationHandle?

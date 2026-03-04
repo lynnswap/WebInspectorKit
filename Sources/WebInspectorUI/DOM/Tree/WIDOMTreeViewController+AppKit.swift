@@ -10,7 +10,6 @@ import AppKit
 public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMModel
     private var contextMenuNodeID: Int?
-    private let errorUpdateCoalescer = UIUpdateCoalescer()
 
     private let errorLabel = NSTextField(labelWithString: "")
 
@@ -68,10 +67,8 @@ public final class WIDOMTreeViewController: NSViewController {
             \.errorMessage,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.errorUpdateCoalescer.schedule { [weak self] in
-                guard let self else { return }
-                self.updateErrorLabel(errorMessage: self.inspector.errorMessage)
-            }
+            guard let self else { return }
+            self.updateErrorLabel(errorMessage: self.inspector.errorMessage)
         }
     }
 

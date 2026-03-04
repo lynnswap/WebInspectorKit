@@ -125,7 +125,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
+    // Keep coalescing because navigation controls react to several independent state updates.
     private let navigationUpdateCoalescer = UIUpdateCoalescer()
+    // Keep coalescing because content snapshots are expensive and can burst under DOM updates.
     private let contentUpdateCoalescer = UIUpdateCoalescer()
     private var sections: [DetailSection] = []
     private var editingAttributeKey: ElementAttributeEditingKey?

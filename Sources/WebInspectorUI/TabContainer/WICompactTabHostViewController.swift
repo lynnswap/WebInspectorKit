@@ -10,7 +10,6 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     private var tabsObservationHandle: ObservationHandle?
     private var selectedTabObservationHandle: ObservationHandle?
     private var isApplyingSelectionFromModel = false
-    private let tabsRebuildCoalescer = UIUpdateCoalescer()
 
     init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
         self.model = model
@@ -60,12 +59,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            guard let self else {
-                return
-            }
-            self.tabsRebuildCoalescer.schedule { [weak self] in
-                self?.rebuildNativeTabsIfPossible()
-            }
+            self?.rebuildNativeTabsIfPossible()
         }
 
         selectedTabObservationHandle = model.observe(

@@ -128,6 +128,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     private let elementDetailsNavigationController: UINavigationController
     private var hasAppliedInitialRegularColumnWidth = false
     private var hasStartedObservingNavigationState = false
+    // Keep coalescing because this navigation state is recomputed from multiple observation streams.
     private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
 
     private lazy var pickItem: UIBarButtonItem = {
