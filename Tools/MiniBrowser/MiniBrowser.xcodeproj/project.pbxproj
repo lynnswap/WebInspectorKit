@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
-		ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Resources */ = {isa = PBXBuildFile; fileRef = ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */; };
+		ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Copy Resources */ = {isa = PBXBuildFile; fileRef = ABA354122F00000000489A00 /* MiniBrowserInjectedBundle.bundle */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,6 +34,20 @@
 			remoteInfo = MiniBrowserInjectedBundle;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		ABA3541D2F00000000489A00 /* Copy Resources */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+				ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Copy Resources */,
+			);
+			name = "Copy Resources";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		ABA353C82EDFF1EC00489A00 /* MiniBrowser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MiniBrowser.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -129,6 +143,7 @@
 			buildPhases = (
 				ABA353C42EDFF1EC00489A00 /* Sources */,
 				ABA353C52EDFF1EC00489A00 /* Frameworks */,
+				ABA3541D2F00000000489A00 /* Copy Resources */,
 				ABA353C62EDFF1EC00489A00 /* Resources */,
 			);
 			buildRules = (
@@ -271,7 +286,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				ABA3541A2F00000000489A00 /* MiniBrowserInjectedBundle.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

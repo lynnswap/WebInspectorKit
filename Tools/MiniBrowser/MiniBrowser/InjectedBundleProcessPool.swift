@@ -39,9 +39,7 @@ enum InjectedBundleProcessPool {
         } else {
             NSLog("InjectedBundleProcessPool: failed to load bundle at \(bundlePath)")
         }
-        let appBundleURL = Bundle.main.bundleURL.resolvingSymlinksInPath()
-        debugLog("appBundleURL=\(appBundleURL.path)")
-        guard let processPool = makeProcessPool(bundleURL: resolvedBundleURL, appBundleURL: appBundleURL) else {
+        guard let processPool = makeProcessPool(bundleURL: bundleURL) else {
             logger.error("Failed to create process pool with injected bundle.")
             NSLog("InjectedBundleProcessPool: failed to create process pool with injected bundle.")
             return
@@ -51,7 +49,7 @@ enum InjectedBundleProcessPool {
         debugLog("configure done")
     }
 
-    private static func makeProcessPool(bundleURL: URL, appBundleURL: URL) -> WKProcessPool? {
+    private static func makeProcessPool(bundleURL: URL) -> WKProcessPool? {
         guard let configurationClass = NSClassFromString("_WKProcessPoolConfiguration") as? NSObject.Type else {
             logger.error("Missing _WKProcessPoolConfiguration.")
             NSLog("InjectedBundleProcessPool: missing _WKProcessPoolConfiguration.")
@@ -59,16 +57,18 @@ enum InjectedBundleProcessPool {
         }
         let poolConfiguration = configurationClass.init()
         poolConfiguration.setValue(bundleURL, forKey: "injectedBundleURL")
-        var readAccessURLs = [bundleURL]
-        if appBundleURL != bundleURL {
-            readAccessURLs.append(appBundleURL)
-        }
+#if targetEnvironment(simulator)
         setConfigurationIfSupported(
             poolConfiguration,
             selectorName: "setAdditionalReadAccessAllowedURLs:",
             key: "additionalReadAccessAllowedURLs",
-            value: readAccessURLs
+            value: [bundleURL]
         )
+#else
+        // On physical devices, requesting broad app-bundle read extensions can fail and
+        // prevent injected-bundle diagnostics from surfacing reliably.
+        debugLog("skip additionalReadAccessAllowedURLs on device")
+#endif
         setConfigurationIfSupported(
             poolConfiguration,
             selectorName: "setUsesWebProcessCache:",

@@ -17,8 +17,7 @@ static bool did_log_install_failure;
 static bool did_install_be_swizzle;
 static bool did_log_missing_be_class;
 static bool did_log_missing_be_method;
-// Temporarily disable WebContent.Development override to verify behavior.
-// (Keep the flag around in case we re-enable the override.)
+static bool did_log_development_request;
 static bool did_log_development_fallback;
 
 static void log_line(const char *message)
@@ -98,6 +97,14 @@ static bool replacement_shouldAllowNonValidInjectedCode(void *self)
     return true;
 }
 
+static bool should_try_webcontent_development(void)
+{
+    const char *value = getenv("MINIBROWSER_USE_WEBCONTENT_DEVELOPMENT");
+    if (!value || !value[0])
+        return false;
+    return value[0] == '1';
+}
+
 typedef void (^BEWebContentProcessInterruptionHandler)(void);
 typedef void (^BEWebContentProcessCompletion)(id _Nullable process, NSError * _Nullable error);
 typedef void (*BEWebContentProcessWithBundleIDFunc)(id, SEL, NSString *, BEWebContentProcessInterruptionHandler, BEWebContentProcessCompletion);
@@ -109,8 +116,11 @@ static void replacement_webContentProcessWithBundleID(id self, SEL _cmd, NSStrin
         original_webContentProcessWithBundleID(self, _cmd, bundleID, interruptionHandler, completion);
         return;
     }
+    if (!should_try_webcontent_development()) {
+        original_webContentProcessWithBundleID(self, _cmd, bundleID, interruptionHandler, completion);
+        return;
+    }
 
-#if 0
     __block bool didFallback = false;
     BEWebContentProcessCompletion wrappedCompletion = ^(id process, NSError *error) {
         if (!error || didFallback) {
@@ -122,14 +132,17 @@ static void replacement_webContentProcessWithBundleID(id self, SEL _cmd, NSStrin
             did_log_development_fallback = true;
             log_line("WebContent.Development unavailable; retrying with WebContent");
         }
+        fprintf(stderr, "WebProcessProxyHook: Development launch error domain=%s code=%ld\n",
+            error.domain.UTF8String ?: "<nil>", (long)error.code);
         didFallback = true;
         original_webContentProcessWithBundleID(self, _cmd, @"com.apple.WebKit.WebContent", interruptionHandler, completion);
     };
 
+    if (!did_log_development_request) {
+        did_log_development_request = true;
+        log_line("requesting WebContent.Development");
+    }
     original_webContentProcessWithBundleID(self, _cmd, @"com.apple.WebKit.WebContent.Development", interruptionHandler, wrappedCompletion);
-#else
-    original_webContentProcessWithBundleID(self, _cmd, bundleID, interruptionHandler, completion);
-#endif
 }
 
 static void install_be_webcontent_swizzle(void)

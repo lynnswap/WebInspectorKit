@@ -23,6 +23,7 @@ typedef const void *WKStringRef;
 typedef const void *WKTypeRef;
 
 typedef WKStringRef (*WKStringCreateWithUTF8CStringFunc)(const char *);
+typedef bool (*WKStringIsEqualToUTF8CStringFunc)(WKStringRef, const char *);
 typedef void (*WKBundleSetClientFunc)(WKBundleRef, void *);
 typedef void (*WKBundlePagePostMessageFunc)(WKBundlePageRef, WKStringRef, WKTypeRef);
 typedef void *(*WKRetainFunc)(const void *);
@@ -30,6 +31,7 @@ typedef void (*WKReleaseFunc)(const void *);
 
 typedef void (*WKBundleDidCreatePageCallback)(WKBundleRef, WKBundlePageRef, const void *);
 typedef void (*WKBundleWillDestroyPageCallback)(WKBundleRef, WKBundlePageRef, const void *);
+typedef void (*WKBundleDidReceiveMessageCallback)(WKBundleRef, WKStringRef, WKTypeRef, const void *);
 
 typedef struct WKBundleClientBase {
     int version;
@@ -41,17 +43,24 @@ typedef struct WKBundleClientV0 {
     WKBundleDidCreatePageCallback didCreatePage;
     WKBundleWillDestroyPageCallback willDestroyPage;
     void *didInitializePageGroup;
-    void *didReceiveMessage;
+    WKBundleDidReceiveMessageCallback didReceiveMessage;
 } WKBundleClientV0;
 
 static WKBundleRef injected_bundle;
 static WKBundlePageRef injected_bundle_page;
 static WKStringCreateWithUTF8CStringFunc wkStringCreateWithUTF8CString;
+static WKStringIsEqualToUTF8CStringFunc wkStringIsEqualToUTF8CString;
 static WKBundleSetClientFunc wkBundleSetClient;
 static WKBundlePagePostMessageFunc wkBundlePagePostMessage;
 static WKRetainFunc wkRetain;
 static WKReleaseFunc wkRelease;
 static bool did_resolve_bundle_symbols;
+
+#define PENDING_REMOTE_LOG_CAPACITY 64
+#define PENDING_REMOTE_LOG_LENGTH 512
+
+static char pending_remote_logs[PENDING_REMOTE_LOG_CAPACITY][PENDING_REMOTE_LOG_LENGTH];
+static size_t pending_remote_log_count;
 
 void MiniBrowserInjectedBundleInstallHooks(void);
 void MiniBrowserInjectedBundleLog(const char *message);
@@ -150,10 +159,78 @@ static void resolve_bundle_symbols(void)
         return;
     did_resolve_bundle_symbols = true;
     wkStringCreateWithUTF8CString = (WKStringCreateWithUTF8CStringFunc)dlsym(RTLD_DEFAULT, "WKStringCreateWithUTF8CString");
+    wkStringIsEqualToUTF8CString = (WKStringIsEqualToUTF8CStringFunc)dlsym(RTLD_DEFAULT, "WKStringIsEqualToUTF8CString");
     wkBundleSetClient = (WKBundleSetClientFunc)dlsym(RTLD_DEFAULT, "WKBundleSetClient");
     wkBundlePagePostMessage = (WKBundlePagePostMessageFunc)dlsym(RTLD_DEFAULT, "WKBundlePagePostMessage");
     wkRetain = (WKRetainFunc)dlsym(RTLD_DEFAULT, "WKRetain");
     wkRelease = (WKReleaseFunc)dlsym(RTLD_DEFAULT, "WKRelease");
+}
+
+static void enqueue_remote_log(const char *message)
+{
+    if (!message || !message[0])
+        return;
+    if (pending_remote_log_count >= PENDING_REMOTE_LOG_CAPACITY)
+        return;
+
+    size_t index = pending_remote_log_count++;
+    snprintf(pending_remote_logs[index], PENDING_REMOTE_LOG_LENGTH, "%s", message);
+}
+
+static bool post_remote_log_message(const char *message)
+{
+    if (!message || !message[0])
+        return true;
+    if (!injected_bundle_page)
+        return false;
+
+    resolve_bundle_symbols();
+    if (!wkStringCreateWithUTF8CString || !wkBundlePagePostMessage)
+        return false;
+
+    WKStringRef name = wkStringCreateWithUTF8CString("MiniBrowserInjectedBundleLog");
+    WKStringRef body = wkStringCreateWithUTF8CString(message);
+    if (!name || !body) {
+        if (wkRelease) {
+            if (name)
+                wkRelease(name);
+            if (body)
+                wkRelease(body);
+        }
+        return false;
+    }
+
+    wkBundlePagePostMessage(injected_bundle_page, name, body);
+    if (wkRelease) {
+        wkRelease(name);
+        wkRelease(body);
+    }
+    return true;
+}
+
+static bool flush_pending_remote_logs(void)
+{
+    if (!pending_remote_log_count)
+        return true;
+
+    size_t sent_count = 0;
+    while (sent_count < pending_remote_log_count) {
+        if (!post_remote_log_message(pending_remote_logs[sent_count]))
+            break;
+        sent_count += 1;
+    }
+
+    if (!sent_count)
+        return false;
+    if (sent_count < pending_remote_log_count) {
+        size_t remaining = pending_remote_log_count - sent_count;
+        memmove(pending_remote_logs, pending_remote_logs + sent_count, remaining * PENDING_REMOTE_LOG_LENGTH);
+        pending_remote_log_count = remaining;
+        return false;
+    }
+
+    pending_remote_log_count = 0;
+    return true;
 }
 
 static void did_create_page(WKBundleRef bundle, WKBundlePageRef page, const void *clientInfo)
@@ -167,6 +244,7 @@ static void did_create_page(WKBundleRef bundle, WKBundlePageRef page, const void
     } else {
         injected_bundle_page = page;
     }
+    flush_pending_remote_logs();
 }
 
 static void will_destroy_page(WKBundleRef bundle, WKBundlePageRef page, const void *clientInfo)
@@ -178,6 +256,21 @@ static void will_destroy_page(WKBundleRef bundle, WKBundlePageRef page, const vo
     if (wkRelease && injected_bundle_page)
         wkRelease(injected_bundle_page);
     injected_bundle_page = NULL;
+}
+
+static void did_receive_message(WKBundleRef bundle, WKStringRef messageName, WKTypeRef messageBody, const void *clientInfo)
+{
+    (void)bundle;
+    (void)messageBody;
+    (void)clientInfo;
+
+    resolve_bundle_symbols();
+    if (!wkStringIsEqualToUTF8CString)
+        return;
+    if (!wkStringIsEqualToUTF8CString(messageName, "MiniBrowserInjectedBundleFlushLogs"))
+        return;
+
+    flush_pending_remote_logs();
 }
 
 __attribute__((used, visibility("default")))
@@ -195,7 +288,7 @@ void WKBundleInitialize(WKBundleRef bundle, WKTypeRef userData)
         client.didCreatePage = did_create_page;
         client.willDestroyPage = will_destroy_page;
         client.didInitializePageGroup = NULL;
-        client.didReceiveMessage = NULL;
+        client.didReceiveMessage = did_receive_message;
         wkBundleSetClient(bundle, &client);
     }
     MiniBrowserInjectedBundleLog("WKBundleInitialize");
@@ -206,22 +299,16 @@ void MiniBrowserInjectedBundleSendRemoteLog(const char *message)
 {
     if (!message || !message[0])
         return;
-    if (!injected_bundle_page)
+    if (!injected_bundle_page) {
+        enqueue_remote_log(message);
         return;
-    resolve_bundle_symbols();
-    if (!wkStringCreateWithUTF8CString || !wkBundlePagePostMessage)
-        return;
-
-    WKStringRef name = wkStringCreateWithUTF8CString("MiniBrowserInjectedBundleLog");
-    WKStringRef body = wkStringCreateWithUTF8CString(message);
-    if (name && body)
-        wkBundlePagePostMessage(injected_bundle_page, name, body);
-    if (wkRelease) {
-        if (name)
-            wkRelease(name);
-        if (body)
-            wkRelease(body);
     }
+    if (!flush_pending_remote_logs()) {
+        enqueue_remote_log(message);
+        return;
+    }
+    if (!post_remote_log_message(message))
+        enqueue_remote_log(message);
 }
 
 typedef Class (*ObjCGetClassFunc)(const char *);

@@ -9,6 +9,9 @@ typedef const void *WKTypeRef;
 
 typedef void (*WKPageDidReceiveMessageFromInjectedBundleCallback)(WKPageRef, WKStringRef, WKTypeRef, const void *);
 typedef void (*WKPageDidReceiveSynchronousMessageFromInjectedBundleCallback)(WKPageRef, WKStringRef, WKTypeRef, WKTypeRef *, const void *);
+typedef void (*WKPagePostMessageToInjectedBundleFunc)(WKPageRef, WKStringRef, WKTypeRef);
+typedef WKStringRef (*WKStringCreateWithUTF8CStringFunc)(const char *);
+typedef void (*WKReleaseFunc)(const void *);
 
 typedef struct WKPageInjectedBundleClientBase {
     int version;
@@ -28,6 +31,9 @@ typedef size_t (*WKStringGetUTF8CStringFunc)(WKStringRef, char *, size_t);
 static WKPageSetPageInjectedBundleClientFunc wkPageSetClient;
 static WKStringIsEqualToUTF8CStringFunc wkStringIsEqual;
 static WKStringGetUTF8CStringFunc wkStringGetUTF8;
+static WKPagePostMessageToInjectedBundleFunc wkPagePostMessageToInjectedBundle;
+static WKStringCreateWithUTF8CStringFunc wkStringCreateWithUTF8CString;
+static WKReleaseFunc wkRelease;
 static bool didResolveSymbols;
 static bool didInstallClient;
 
@@ -39,6 +45,9 @@ static void resolveSymbols(void)
     wkPageSetClient = (WKPageSetPageInjectedBundleClientFunc)dlsym(RTLD_DEFAULT, "WKPageSetPageInjectedBundleClient");
     wkStringIsEqual = (WKStringIsEqualToUTF8CStringFunc)dlsym(RTLD_DEFAULT, "WKStringIsEqualToUTF8CString");
     wkStringGetUTF8 = (WKStringGetUTF8CStringFunc)dlsym(RTLD_DEFAULT, "WKStringGetUTF8CString");
+    wkPagePostMessageToInjectedBundle = (WKPagePostMessageToInjectedBundleFunc)dlsym(RTLD_DEFAULT, "WKPagePostMessageToInjectedBundle");
+    wkStringCreateWithUTF8CString = (WKStringCreateWithUTF8CStringFunc)dlsym(RTLD_DEFAULT, "WKStringCreateWithUTF8CString");
+    wkRelease = (WKReleaseFunc)dlsym(RTLD_DEFAULT, "WKRelease");
 }
 
 static WKPageRef pageRefForWebView(WKWebView *webView)
@@ -69,6 +78,21 @@ static void didReceiveMessageFromInjectedBundle(WKPageRef page, WKStringRef mess
     NSLog(@"InjectedBundle: %s", buffer);
 }
 
+static void requestInjectedBundleLogFlush(WKPageRef page)
+{
+    if (!page)
+        return;
+    if (!wkPagePostMessageToInjectedBundle || !wkStringCreateWithUTF8CString)
+        return;
+
+    WKStringRef name = wkStringCreateWithUTF8CString("MiniBrowserInjectedBundleFlushLogs");
+    if (!name)
+        return;
+    wkPagePostMessageToInjectedBundle(page, name, NULL);
+    if (wkRelease)
+        wkRelease(name);
+}
+
 @interface WKWebView (MiniBrowserInjectedBundleBridge)
 - (void)minibrowser_installInjectedBundleMessageBridge;
 @end
@@ -95,6 +119,7 @@ static void didReceiveMessageFromInjectedBundle(WKPageRef page, WKStringRef mess
     client.didReceiveMessageFromInjectedBundle = didReceiveMessageFromInjectedBundle;
     client.didReceiveSynchronousMessageFromInjectedBundle = NULL;
     wkPageSetClient(page, &client.base);
+    requestInjectedBundleLogFlush(page);
     didInstallClient = true;
     NSLog(@"InjectedBundleMessageBridge: registered page client");
 }
