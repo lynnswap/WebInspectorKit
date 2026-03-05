@@ -47,12 +47,13 @@ public final class WIDOMDetailViewController: NSViewController {
 @MainActor
 private struct ElementDetailsMacRootView: View {
     private struct AttributeEditorState: Identifiable {
-        let nodeID: Int?
+        let nodeID: DOMEntryID?
         let name: String
         let initialValue: String
 
         var id: String {
-            "\(nodeID ?? -1):\(name)"
+            let localID = nodeID?.localID ?? 0
+            return "\(localID):\(name)"
         }
     }
 
@@ -60,8 +61,12 @@ private struct ElementDetailsMacRootView: View {
     @State private var attributeEditorState: AttributeEditorState?
     @State private var attributeEditorDraft = ""
 
+    private var selectedEntry: DOMEntry? {
+        inspector.selectedEntry
+    }
+
     private var hasSelection: Bool {
-        inspector.selection.nodeId != nil
+        selectedEntry != nil
     }
 
     var body: some View {
@@ -140,14 +145,14 @@ private struct ElementDetailsMacRootView: View {
     }
 
     private var previewRow: some View {
-        Text(inspector.selection.preview)
+        Text(selectedEntry?.preview ?? "")
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
             .lineLimit(4)
     }
 
     private var selectorRow: some View {
-        Text(inspector.selection.selectorPath)
+        Text(selectedEntry?.selectorPath ?? "")
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
             .lineLimit(4)
@@ -155,12 +160,12 @@ private struct ElementDetailsMacRootView: View {
 
     @ViewBuilder
     private var stylesSection: some View {
-        if inspector.selection.isLoadingMatchedStyles {
+        if selectedEntry?.isLoadingMatchedStyles == true {
             infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if inspector.selection.matchedStyles.isEmpty {
+        } else if (selectedEntry?.matchedStyles ?? []).isEmpty {
             infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
         } else {
-            ForEach(Array(inspector.selection.matchedStyles.enumerated()), id: \.offset) { _, rule in
+            ForEach(Array((selectedEntry?.matchedStyles ?? []).enumerated()), id: \.offset) { _, rule in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(rule.selectorText)
                         .font(.subheadline.weight(.semibold))
@@ -172,12 +177,12 @@ private struct ElementDetailsMacRootView: View {
                 }
             }
 
-            if inspector.selection.matchedStylesTruncated {
+            if selectedEntry?.matchedStylesTruncated == true {
                 infoRow(message: wiLocalized("dom.element.styles.truncated"), color: .secondary)
             }
-            if inspector.selection.blockedStylesheetCount > 0 {
+            if let blockedStylesheetCount = selectedEntry?.blockedStylesheetCount, blockedStylesheetCount > 0 {
                 infoRow(
-                    message: "\(inspector.selection.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
+                    message: "\(blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
                     color: .secondary
                 )
             }
@@ -186,10 +191,11 @@ private struct ElementDetailsMacRootView: View {
 
     @ViewBuilder
     private var attributesSection: some View {
-        if inspector.selection.attributes.isEmpty {
+        if (selectedEntry?.attributes ?? []).isEmpty {
             infoRow(message: wiLocalized("dom.element.attributes.empty"), color: .secondary)
         } else {
-            ForEach(Array(inspector.selection.attributes.enumerated()), id: \.offset) { _, attribute in
+            let attributes = selectedEntry?.attributes ?? []
+            ForEach(Array(attributes.enumerated()), id: \.offset) { _, attribute in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(attribute.name)
                         .font(.caption.weight(.semibold))
@@ -202,7 +208,7 @@ private struct ElementDetailsMacRootView: View {
                 .contextMenu {
                     Button(wiLocalized("dom.element.attributes.edit", default: "Edit Attribute")) {
                         attributeEditorState = AttributeEditorState(
-                            nodeID: attribute.nodeId,
+                            nodeID: selectedEntry?.id,
                             name: attribute.name,
                             initialValue: attribute.value
                         )

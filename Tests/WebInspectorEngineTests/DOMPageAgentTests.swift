@@ -7,34 +7,38 @@ struct DOMSessionTests {
     @Test
     func detachClearsSelection() {
         let session = DOMSession(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
-        session.selection.nodeId = 42
-        session.selection.preview = "<div>"
-        session.selection.attributes = [DOMAttribute(nodeId: 42, name: "class", value: "title")]
-        session.selection.path = ["html", "body", "div"]
-        session.selection.selectorPath = "#title"
-        session.selection.matchedStyles = [
-            DOMMatchedStyleRule(
-                origin: .author,
-                selectorText: ".title",
-                declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                sourceLabel: "inline"
+        session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div>",
+                attributes: [DOMAttribute(nodeId: 42, name: "class", value: "title")],
+                path: ["html", "body", "div"],
+                selectorPath: "#title",
+                styleRevision: 1
             )
-        ]
-        session.selection.isLoadingMatchedStyles = true
-        session.selection.matchedStylesTruncated = true
-        session.selection.blockedStylesheetCount = 2
+        )
+        session.graphStore.applyMatchedStyles(
+            .init(
+                nodeId: 42,
+                rules: [
+                    DOMMatchedStyleRule(
+                        origin: .author,
+                        selectorText: ".title",
+                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                        sourceLabel: "inline"
+                    ),
+                ],
+                truncated: true,
+                blockedStylesheetCount: 2
+            ),
+            for: 42
+        )
 
         session.detach()
 
-        #expect(session.selection.nodeId == nil)
-        #expect(session.selection.preview.isEmpty)
-        #expect(session.selection.attributes.isEmpty)
-        #expect(session.selection.path.isEmpty)
-        #expect(session.selection.selectorPath.isEmpty)
-        #expect(session.selection.matchedStyles.isEmpty)
-        #expect(session.selection.isLoadingMatchedStyles == false)
-        #expect(session.selection.matchedStylesTruncated == false)
-        #expect(session.selection.blockedStylesheetCount == 0)
+        #expect(session.graphStore.selectedEntry == nil)
+        #expect(session.graphStore.entriesByID.isEmpty)
+        #expect(session.graphStore.rootID == nil)
     }
 
     @Test
@@ -126,15 +130,16 @@ struct DOMSessionTests {
         #expect(firstAttach.shouldReload == true)
         #expect(firstAttach.preserveState == false)
 
-        session.selection.nodeId = 42
-        session.selection.preview = "<div id=\"selected\">"
+        session.graphStore.applySelectionSnapshot(
+            .init(localID: 42, preview: "<div id=\"selected\">", attributes: [], path: [], selectorPath: "", styleRevision: 0)
+        )
 
         let secondAttach = session.attach(to: webView)
 
         #expect(secondAttach.shouldReload == false)
         #expect(secondAttach.preserveState == false)
-        #expect(session.selection.nodeId == 42)
-        #expect(session.selection.preview == "<div id=\"selected\">")
+        #expect(session.graphStore.selectedID?.localID == 42)
+        #expect(session.graphStore.selectedEntry?.preview == "<div id=\"selected\">")
     }
 
     @Test

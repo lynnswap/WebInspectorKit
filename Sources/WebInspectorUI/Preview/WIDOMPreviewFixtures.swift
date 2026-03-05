@@ -20,27 +20,30 @@ enum WIDOMPreviewFixtures {
     }
 
     static func applySampleSelection(to inspector: WIDOMModel, mode: Mode) {
-        inspector.selection.nodeId = nil
-        inspector.selection.preview = ""
-        inspector.selection.selectorPath = ""
-        inspector.selection.attributes = []
-        inspector.selection.matchedStyles = []
-        inspector.selection.matchedStylesTruncated = false
-        inspector.selection.blockedStylesheetCount = 0
+        let graphStore = inspector.session.graphStore
+        graphStore.applySelectionSnapshot(nil)
 
         switch mode {
         case .empty:
             break
         case .selected:
-            inspector.selection.nodeId = 42
-            inspector.selection.preview = "<span aria-label=\"スノーボード\">...</span>"
-            inspector.selection.selectorPath = "#hplogo > span"
-            inspector.selection.attributes = [
+            let localID: UInt64 = 42
+            let attributes = [
                 DOMAttribute(nodeId: 42, name: "alt", value: "スノーボード 2026"),
                 DOMAttribute(nodeId: 42, name: "id", value: "hplogo"),
                 DOMAttribute(nodeId: 42, name: "src", value: "/logos/doodles/2026/snowboarding.gif")
             ]
-            inspector.selection.matchedStyles = [
+            graphStore.applySelectionSnapshot(
+                .init(
+                    localID: localID,
+                    preview: "<span aria-label=\"スノーボード\">...</span>",
+                    attributes: attributes,
+                    path: [],
+                    selectorPath: "#hplogo > span",
+                    styleRevision: 0
+                )
+            )
+            let rules = [
                 DOMMatchedStyleRule(
                     origin: .author,
                     selectorText: ".logo span[aria-label]",
@@ -51,11 +54,13 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:120"
                 )
             ]
+            graphStore.applyMatchedStyles(
+                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
+                for: localID
+            )
         case .selectedEditableAttributes:
-            inspector.selection.nodeId = 101
-            inspector.selection.preview = "<img alt=\"スノーボード 2026\" src=\"/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif\">"
-            inspector.selection.selectorPath = "#hplogo > img"
-            inspector.selection.attributes = [
+            let localID: UInt64 = 101
+            let attributes = [
                 DOMAttribute(
                     nodeId: 101,
                     name: "style",
@@ -74,7 +79,17 @@ enum WIDOMPreviewFixtures {
                     value: "/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif"
                 )
             ]
-            inspector.selection.matchedStyles = [
+            graphStore.applySelectionSnapshot(
+                .init(
+                    localID: localID,
+                    preview: "<img alt=\"スノーボード 2026\" src=\"/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif\">",
+                    attributes: attributes,
+                    path: [],
+                    selectorPath: "#hplogo > img",
+                    styleRevision: 0
+                )
+            )
+            let rules = [
                 DOMMatchedStyleRule(
                     origin: .author,
                     selectorText: ".logo img[alt]",
@@ -86,6 +101,10 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:188"
                 )
             ]
+            graphStore.applyMatchedStyles(
+                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
+                for: localID
+            )
         }
     }
 

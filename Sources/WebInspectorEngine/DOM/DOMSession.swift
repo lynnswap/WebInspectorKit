@@ -5,7 +5,7 @@ public final class DOMSession {
     public typealias AttachmentResult = (shouldReload: Bool, preserveState: Bool)
 
     public private(set) var configuration: DOMConfiguration
-    public let selection: DOMSelection
+    public let graphStore: DOMGraphStore
 
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: DOMPageAgent
@@ -27,7 +27,7 @@ public final class DOMSession {
 
     public init(configuration: DOMConfiguration = .init()) {
         self.configuration = configuration
-        selection = DOMSelection()
+        graphStore = DOMGraphStore()
         pageAgent = DOMPageAgent(configuration: configuration)
     }
 
@@ -56,7 +56,7 @@ public final class DOMSession {
             return (false, false)
         }
 
-        selection.clear()
+        graphStore.resetForDocumentUpdate()
 
         let previousWebView = lastPageWebView
         let shouldPreserveState = pageAgent.webView == nil && previousWebView === webView
@@ -79,7 +79,7 @@ public final class DOMSession {
 
     public func detach() {
         suspend()
-        selection.clear()
+        graphStore.resetForDocumentUpdate()
         lastPageWebView = nil
     }
 

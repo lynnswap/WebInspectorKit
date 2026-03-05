@@ -279,8 +279,8 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
             self?.scheduleNavigationStateUpdate()
         }
         .store(in: &navigationObservationHandles)
-        inspector.selection.observe(
-            \.nodeId,
+        inspector.session.graphStore.observe(
+            \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
@@ -296,7 +296,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
 
     private func makeDOMSecondaryMenu() -> UIMenu {
         DOMSecondaryMenuBuilder.makeMenu(
-            hasSelection: inspector.selection.nodeId != nil,
+            hasSelection: inspector.selectedEntry != nil,
             hasPageWebView: inspector.hasPageWebView,
             onCopyHTML: { [weak self] in
                 self?.inspector.copySelection(.html)

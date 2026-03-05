@@ -74,7 +74,7 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.selection.nodeId != nil
+        let hasSelection = inspector.selectedEntry != nil
         let hasPageWebView = inspector.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
@@ -126,8 +126,8 @@ public final class WIDOMTreeViewController: UIViewController {
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        inspector.selection.observe(
-            \.nodeId,
+        inspector.session.graphStore.observe(
+            \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()

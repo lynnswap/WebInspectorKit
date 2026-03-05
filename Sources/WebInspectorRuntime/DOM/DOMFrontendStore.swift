@@ -27,6 +27,7 @@ final class DOMFrontendStore: NSObject {
     private var matchedStylesTask: Task<Void, Never>?
     private var matchedStylesRequestToken = 0
     private let protocolRouter: DOMProtocolRouter
+    private let payloadNormalizer = DOMPayloadNormalizer()
     private let bridgeRuntime = WISPIRuntime.shared
     var onRecoverableError: (@MainActor (String) -> Void)?
 
@@ -191,6 +192,10 @@ final class DOMFrontendStore: NSObject {
 
     private func requestDocumentNow(depth: Int, preserveState: Bool) async {
         guard let webView else { return }
+        if !preserveState {
+            payloadNormalizer.resetForDocumentUpdate()
+            session.graphStore.resetForDocumentUpdate()
+        }
         do {
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOMFrontend?.requestDocument?.(options)",
@@ -207,8 +212,14 @@ extension DOMFrontendStore: DOMBundleSink {
     func domDidEmit(bundle: DOMBundle) {
         switch bundle.payload {
         case let .jsonString(rawJSON):
+            if let delta = payloadNormalizer.normalizeBundlePayload(rawJSON) {
+                applyGraphDelta(delta)
+            }
             enqueueMutationBundle(rawJSON, preserveState: true)
         case let .objectEnvelope(object):
+            if let delta = payloadNormalizer.normalizeBundlePayload(object) {
+                applyGraphDelta(delta)
+            }
             enqueueMutationBundle(object, preserveState: true)
         }
     }
@@ -253,43 +264,48 @@ private extension DOMFrontendStore {
     }
 
     private func handleDOMSelectionMessage(_ payload: Any) {
-        if let dictionary = payload as? NSDictionary, dictionary.count > 0 {
-            let previousNodeId = session.selection.nodeId
-            let previousPreview = session.selection.preview
-            let previousPath = session.selection.path
-            let previousAttributes = session.selection.attributes
-            let previousStyleRevision = session.selection.styleRevision
-            session.selection.applySnapshot(from: dictionary)
-            if let nodeId = session.selection.nodeId {
-                let didSelectNewNode = previousNodeId != nodeId
-                let didStyleRelevantSnapshotChange = !didSelectNewNode && (
-                    previousPreview != session.selection.preview
-                        || previousPath != session.selection.path
-                        || previousAttributes != session.selection.attributes
-                        || previousStyleRevision != session.selection.styleRevision
-                )
-                let shouldRefetchForCurrentNode = !session.selection.isLoadingMatchedStyles
-                    && session.selection.matchedStyles.isEmpty
-                if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchForCurrentNode {
-                    startMatchedStylesRequest(nodeId: nodeId)
-                }
-            } else {
-                cancelMatchedStylesRequest()
-                session.selection.clearMatchedStyles()
-            }
-        } else {
+        let previousSelectedSnapshot: (
+            id: DOMEntryID,
+            preview: String,
+            path: [String],
+            attributes: [DOMAttribute],
+            styleRevision: Int
+        )? = session.graphStore.selectedEntry.map {
+            (
+                id: $0.id,
+                preview: $0.preview,
+                path: $0.path,
+                attributes: $0.attributes,
+                styleRevision: $0.styleRevision
+            )
+        }
+        applyGraphDelta(payloadNormalizer.normalizeSelectionPayload(payload))
+        guard let selected = session.graphStore.selectedEntry else {
             cancelMatchedStylesRequest()
-            session.selection.clear()
+            return
+        }
+
+        guard let nodeID = selected.backendNodeID else {
+            return
+        }
+
+        let didSelectNewNode = previousSelectedSnapshot?.id != selected.id
+        let didStyleRelevantSnapshotChange = !didSelectNewNode && (
+            previousSelectedSnapshot?.preview != selected.preview
+                || previousSelectedSnapshot?.path != selected.path
+                || previousSelectedSnapshot?.attributes != selected.attributes
+                || previousSelectedSnapshot?.styleRevision != selected.styleRevision
+        )
+        let shouldRefetchForCurrentNode = !selected.isLoadingMatchedStyles
+            && selected.matchedStyles.isEmpty
+        if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchForCurrentNode {
+            startMatchedStylesRequest(nodeID: nodeID, selectionID: selected.id)
         }
     }
 
     private func handleDOMSelectorMessage(_ payload: Any) {
-        if let dictionary = payload as? NSDictionary {
-            let nodeId = dictionary["id"] as? Int
-            let selectorPath = dictionary["selectorPath"] as? String ?? ""
-            if let nodeId, session.selection.nodeId == nodeId {
-                session.selection.selectorPath = selectorPath
-            }
+        if let delta = payloadNormalizer.normalizeSelectorPayload(payload) {
+            applyGraphDelta(delta)
         }
     }
 
@@ -305,24 +321,24 @@ private extension DOMFrontendStore {
         await mutationPipeline.flushPendingBundlesNow()
     }
 
-    private func startMatchedStylesRequest(nodeId: Int) {
+    private func startMatchedStylesRequest(nodeID: Int, selectionID: DOMEntryID) {
         cancelMatchedStylesRequest()
         let requestToken = matchedStylesRequestToken
-        session.selection.beginMatchedStylesLoading(for: nodeId)
+        session.graphStore.beginMatchedStylesLoading(for: selectionID.localID)
 
         matchedStylesTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let payload = try await self.session.matchedStyles(nodeId: nodeId)
+                let payload = try await self.session.matchedStyles(nodeId: nodeID)
                 guard !Task.isCancelled else { return }
                 guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.selection.nodeId == nodeId else { return }
-                self.session.selection.applyMatchedStyles(payload, for: nodeId)
+                guard self.session.graphStore.selectedID == selectionID else { return }
+                self.session.graphStore.applyMatchedStyles(payload, for: selectionID.localID)
             } catch {
                 guard !Task.isCancelled else { return }
                 guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.selection.nodeId == nodeId else { return }
-                self.session.selection.clearMatchedStyles()
+                guard self.session.graphStore.selectedID == selectionID else { return }
+                self.session.graphStore.clearMatchedStyles(for: selectionID.localID)
                 inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -335,6 +351,8 @@ private extension DOMFrontendStore {
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
+        let method = protocolRequestMethod(from: payload)
+        let resetDocumentHint = protocolRequestWantsDocumentReset(method: method, from: payload)
         Task { [weak self] in
             guard let self else { return }
             let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
@@ -342,6 +360,14 @@ private extension DOMFrontendStore {
                 onRecoverableError?(recoverableError)
             }
             if let responseObject = outcome.responseObject {
+                if let method,
+                   let delta = payloadNormalizer.normalizeProtocolResponse(
+                    method: method,
+                    responseObject: responseObject,
+                    resetDocument: resetDocumentHint
+                   ) {
+                    applyGraphDelta(delta)
+                }
                 let delivered = await dispatchToFrontend(message: responseObject)
                 if delivered {
                     return
@@ -357,6 +383,103 @@ private extension DOMFrontendStore {
             guard let responseJSON = outcome.responseJSON else { return }
             _ = await dispatchToFrontend(message: responseJSON)
         }
+    }
+
+    private func applyGraphDelta(_ delta: DOMGraphDelta) {
+        switch delta {
+        case let .snapshot(snapshot, resetDocument):
+            if resetDocument {
+                session.graphStore.resetForDocumentUpdate()
+            }
+            session.graphStore.applySnapshot(snapshot)
+
+        case let .mutations(bundle):
+            session.graphStore.applyMutationBundle(bundle)
+
+        case let .replaceSubtree(root):
+            session.graphStore.applyMutationBundle(
+                .init(events: [.replaceSubtree(root: root)])
+            )
+
+        case let .selection(selectionPayload):
+            session.graphStore.applySelectionSnapshot(selectionPayload)
+
+        case let .selectorPath(selectorPayload):
+            session.graphStore.applySelectorPath(selectorPayload)
+        }
+    }
+
+    private func protocolRequestMethod(from payload: Any?) -> String? {
+        guard let payload else {
+            return nil
+        }
+
+        if let dictionary = payload as? [String: Any] {
+            return dictionary["method"] as? String
+        }
+        if let dictionary = payload as? NSDictionary {
+            return dictionary["method"] as? String
+        }
+        if let string = payload as? String,
+           let data = string.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data),
+           let dictionary = object as? [String: Any] {
+            return dictionary["method"] as? String
+        }
+        return nil
+    }
+
+    private func protocolRequestWantsDocumentReset(method: String?, from payload: Any?) -> Bool {
+        guard method == "DOM.getDocument",
+              let payload
+        else {
+            return false
+        }
+
+        let dictionary: [String: Any]?
+        if let direct = payload as? [String: Any] {
+            dictionary = direct
+        } else if let nsDirect = payload as? NSDictionary {
+            dictionary = nsDirect as? [String: Any]
+        } else if let string = payload as? String,
+                  let data = string.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data),
+                  let decoded = object as? [String: Any] {
+            dictionary = decoded
+        } else {
+            dictionary = nil
+        }
+
+        guard let dictionary else {
+            return true
+        }
+
+        guard let rawParams = dictionary["params"] else {
+            return true
+        }
+
+        let params: [String: Any]
+        if let direct = rawParams as? [String: Any] {
+            params = direct
+        } else if let nsDirect = rawParams as? NSDictionary,
+                  let bridged = nsDirect as? [String: Any] {
+            params = bridged
+        } else {
+            return true
+        }
+
+        let preserveState: Bool?
+        if let boolValue = params["preserveState"] as? Bool {
+            preserveState = boolValue
+        } else if let number = params["preserveState"] as? NSNumber {
+            preserveState = number.boolValue
+        } else {
+            preserveState = nil
+        }
+        guard let preserveState else {
+            return true
+        }
+        return preserveState == false
     }
 
     @discardableResult
@@ -419,6 +542,10 @@ extension DOMFrontendStore {
 
     func testHandleDOMSelectionMessage(_ payload: Any) {
         handleDOMSelectionMessage(payload)
+    }
+
+    func testProtocolRequestWantsDocumentReset(method: String?, payload: Any?) -> Bool {
+        protocolRequestWantsDocumentReset(method: method, from: payload)
     }
 }
 #endif

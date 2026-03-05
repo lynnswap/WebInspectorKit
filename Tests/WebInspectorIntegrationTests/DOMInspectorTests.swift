@@ -9,10 +9,11 @@ import WebInspectorEngine
 
 struct DOMInspectorTests {
     @Test
-    func sharesSelectionInstanceWithSession() {
+    func exposesSelectedItemFromSessionGraphStore() {
         let controller = WIModel()
         let inspector = controller.dom
-        #expect(inspector.selection === inspector.session.selection)
+        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.session.graphStore.selectedEntry == nil)
     }
 
     @Test
@@ -29,7 +30,7 @@ struct DOMInspectorTests {
         inspector.detach()
         #expect(inspector.hasPageWebView == false)
         #expect(inspector.session.lastPageWebView == nil)
-        #expect(inspector.selection.nodeId == nil)
+        #expect(inspector.selectedEntry == nil)
     }
 
     @Test
@@ -75,17 +76,25 @@ struct DOMInspectorTests {
     func updateAndRemoveAttributeMutateSelectionState() {
         let controller = WIModel()
         let inspector = controller.dom
-        inspector.selection.nodeId = 7
-        inspector.selection.attributes = [
-            DOMAttribute(nodeId: 7, name: "class", value: "old"),
-            DOMAttribute(nodeId: 7, name: "id", value: "foo")
-        ]
+        inspector.session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: 7,
+                preview: "<div id=\"foo\">",
+                attributes: [
+                    DOMAttribute(nodeId: 7, name: "class", value: "old"),
+                    DOMAttribute(nodeId: 7, name: "id", value: "foo"),
+                ],
+                path: [],
+                selectorPath: "#foo",
+                styleRevision: 0
+            )
+        )
 
         inspector.updateAttributeValue(name: "class", value: "new")
-        #expect(inspector.selection.attributes.first(where: { $0.name == "class" })?.value == "new")
+        #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
 
         inspector.removeAttribute(name: "id")
-        #expect(inspector.selection.attributes.contains(where: { $0.name == "id" }) == false)
+        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
     }
 
     @Test
@@ -104,26 +113,38 @@ struct DOMInspectorTests {
     func detachClearsMatchedStylesState() {
         let controller = WIModel()
         let inspector = controller.dom
-        inspector.selection.nodeId = 11
-        inspector.selection.matchedStyles = [
-            DOMMatchedStyleRule(
-                origin: .author,
-                selectorText: ".target",
-                declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                sourceLabel: "inline"
+        inspector.session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: 11,
+                preview: "<div class=\"target\">",
+                attributes: [],
+                path: [],
+                selectorPath: ".target",
+                styleRevision: 0
             )
-        ]
-        inspector.selection.isLoadingMatchedStyles = true
-        inspector.selection.matchedStylesTruncated = true
-        inspector.selection.blockedStylesheetCount = 3
+        )
+        inspector.session.graphStore.applyMatchedStyles(
+            .init(
+                nodeId: 11,
+                rules: [
+                    DOMMatchedStyleRule(
+                        origin: .author,
+                        selectorText: ".target",
+                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                        sourceLabel: "inline"
+                    ),
+                ],
+                truncated: true,
+                blockedStylesheetCount: 3
+            ),
+            for: 11
+        )
+        inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
 
         inspector.detach()
 
-        #expect(inspector.selection.nodeId == nil)
-        #expect(inspector.selection.matchedStyles.isEmpty)
-        #expect(inspector.selection.isLoadingMatchedStyles == false)
-        #expect(inspector.selection.matchedStylesTruncated == false)
-        #expect(inspector.selection.blockedStylesheetCount == 0)
+        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.session.graphStore.entriesByID.isEmpty)
     }
 
     @Test

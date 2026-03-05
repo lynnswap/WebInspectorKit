@@ -170,13 +170,21 @@ struct ControllerActivationTests {
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
-        controller.dom.selection.nodeId = 42
-        controller.dom.selection.preview = "<div id='selected'>"
+        controller.dom.session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id='selected'>",
+                attributes: [],
+                path: [],
+                selectorPath: "#selected",
+                styleRevision: 0
+            )
+        )
 
         store.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
 
-        #expect(controller.dom.selection.nodeId == 42)
-        #expect(controller.dom.selection.preview == "<div id='selected'>")
+        #expect(controller.dom.selectedEntry?.id.localID == 42)
+        #expect(controller.dom.selectedEntry?.preview == "<div id='selected'>")
     }
 
     @Test

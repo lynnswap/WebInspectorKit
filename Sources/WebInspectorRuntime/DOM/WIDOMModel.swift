@@ -14,7 +14,6 @@ private let domDeleteUndoHistoryLimit = 128
 @Observable
 public final class WIDOMModel {
     public let session: DOMSession
-    public let selection: DOMSelection
     private let frontendStore: DOMFrontendStore
 
     public private(set) var errorMessage: String?
@@ -33,7 +32,6 @@ public final class WIDOMModel {
         onRecoverableError: (@MainActor (String) -> Void)? = nil
     ) {
         self.session = session
-        self.selection = session.selection
         self.frontendStore = DOMFrontendStore(session: session)
         self.frontendStore.onRecoverableError = onRecoverableError
     }
@@ -49,6 +47,10 @@ public final class WIDOMModel {
 
     public var hasPageWebView: Bool {
         session.hasPageWebView
+    }
+
+    public var selectedEntry: DOMEntry? {
+        session.graphStore.selectedEntry
     }
 
     package func setRecoverableErrorHandler(_ handler: (@MainActor (String) -> Void)?) {
@@ -128,7 +130,7 @@ public final class WIDOMModel {
     }
 
     public func deleteSelectedNode(undoManager: UndoManager?) {
-        deleteNodeImpl(nodeId: selection.nodeId, undoManager: undoManager)
+        deleteNodeImpl(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
     }
 
     public func deleteNode(nodeId: Int?, undoManager: UndoManager?) {
@@ -191,7 +193,7 @@ private extension WIDOMModel {
     }
 
     func copySelectionImpl(_ kind: DOMSelectionCopyKind) {
-        guard let nodeId = selection.nodeId else { return }
+        guard let nodeId = selectedEntry?.backendNodeID else { return }
         Task {
             do {
                 let text = try await session.selectionCopyText(nodeId: nodeId, kind: kind)
@@ -209,16 +211,16 @@ private extension WIDOMModel {
     }
 
     func updateAttributeValueImpl(name: String, value: String) {
-        guard let nodeId = selection.nodeId else { return }
-        selection.updateAttributeValue(nodeId: nodeId, name: name, value: value)
+        guard let nodeId = selectedEntry?.backendNodeID else { return }
+        session.graphStore.updateSelectedAttribute(name: name, value: value)
         Task {
             await session.setAttribute(nodeId: nodeId, name: name, value: value)
         }
     }
 
     func removeAttributeImpl(name: String) {
-        guard let nodeId = selection.nodeId else { return }
-        selection.removeAttribute(nodeId: nodeId, name: name)
+        guard let nodeId = selectedEntry?.backendNodeID else { return }
+        session.graphStore.removeSelectedAttribute(name: name)
         Task {
             await session.removeAttribute(nodeId: nodeId, name: name)
         }
@@ -329,8 +331,18 @@ private extension WIDOMModel {
                 clearDeleteUndoHistory(using: undoManager)
                 return
             }
-            selection.clear()
-            selection.nodeId = nodeId
+            if let localID = UInt64(exactly: nodeId) {
+                session.graphStore.applySelectionSnapshot(
+                    .init(
+                        localID: localID,
+                        preview: "",
+                        attributes: [],
+                        path: [],
+                        selectorPath: "",
+                        styleRevision: 0
+                    )
+                )
+            }
             await reloadInspector(preserveState: true)
         }
     }
@@ -360,8 +372,8 @@ private extension WIDOMModel {
                 clearDeleteUndoHistory(using: undoManager)
                 return
             }
-            if selection.nodeId == nodeId {
-                selection.clear()
+            if selectedEntry?.backendNodeID == nodeId {
+                session.graphStore.select((nil as DOMEntryID?))
             }
         }
     }
