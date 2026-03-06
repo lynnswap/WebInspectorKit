@@ -1,3 +1,4 @@
+import Foundation
 import WebKit
 
 @MainActor
@@ -13,6 +14,11 @@ package enum NetworkBodyFetchResult {
 
 @MainActor
 public final class NetworkSession: PageSession {
+    private struct BodyFetchKey: Hashable {
+        let entryID: UUID
+        let role: NetworkBody.Role
+    }
+
     public typealias AttachmentResult = Void
 
     public var configuration: NetworkConfiguration {
@@ -27,6 +33,7 @@ public final class NetworkSession: PageSession {
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: NetworkPageAgent
     private let bodyFetcher: any NetworkBodyFetching
+    private var bodyFetchTasks: [BodyFetchKey: (token: UUID, task: Task<Void, Never>)] = [:]
 
     var hasAttachedPageWebView: Bool {
         pageAgent.webView != nil
@@ -64,11 +71,13 @@ public final class NetworkSession: PageSession {
     }
 
     public func suspend() {
+        cancelAllBodyFetches()
         mode = .stopped
         pageAgent.detachPageWebView(preparing: .stopped)
     }
 
     public func detach() {
+        cancelAllBodyFetches()
         mode = .stopped
         pageAgent.detachPageWebView(preparing: .stopped)
         lastPageWebView = nil
@@ -80,7 +89,13 @@ public final class NetworkSession: PageSession {
     }
 
     public func clearNetworkLogs() {
+        cancelAllBodyFetches()
         pageAgent.clearNetworkLogs()
+    }
+
+    package func cancelBodyFetches(for entry: NetworkEntry) {
+        cancelBodyFetch(for: BodyFetchKey(entryID: entry.id, role: .request), entry: entry)
+        cancelBodyFetch(for: BodyFetchKey(entryID: entry.id, role: .response), entry: entry)
     }
 
     public func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
@@ -112,21 +127,29 @@ public final class NetworkSession: PageSession {
             return
         }
 
+        let key = BodyFetchKey(entryID: entry.id, role: role)
         body.markFetching()
-        Task { @MainActor [weak self, weak entry, weak body] in
+        let token = UUID()
+        let task = Task { @MainActor [weak self, weak entry, weak body] in
+            defer {
+                self?.clearBodyFetchTask(for: key, token: token)
+            }
             guard let self, let entry, let body else {
                 return
             }
 
             let fetchResult = await self.bodyFetcher.fetchBodyResult(ref: bodyRef, handle: bodyHandle, role: role)
 
+            guard !Task.isCancelled else {
+                self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
+                return
+            }
+
             guard self.body(for: entry, role: role) === body else {
                 return
             }
             guard self.hasAttachedPageWebView else {
-                if case .fetching = body.fetchState {
-                    body.fetchState = .inline
-                }
+                self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
                 return
             }
             switch fetchResult {
@@ -136,11 +159,56 @@ public final class NetworkSession: PageSession {
                 body.markFailed(.unavailable)
             }
         }
+        bodyFetchTasks[key] = (token, task)
     }
 }
 
 private extension NetworkSession {
-    func shouldFetch(_ body: NetworkBody) -> Bool {
+    private func cancelAllBodyFetches() {
+        let activeKeys = Array(bodyFetchTasks.keys)
+        for key in activeKeys {
+            cancelBodyFetch(for: key, entry: entry(forID: key.entryID))
+        }
+    }
+
+    private func cancelBodyFetch(for key: BodyFetchKey, entry: NetworkEntry?) {
+        if let activeTask = bodyFetchTasks.removeValue(forKey: key) {
+            activeTask.task.cancel()
+        }
+        guard let entry else {
+            return
+        }
+        resetBodyToInlineIfFetching(for: entry, role: key.role)
+    }
+
+    private func clearBodyFetchTask(for key: BodyFetchKey, token: UUID) {
+        guard bodyFetchTasks[key]?.token == token else {
+            return
+        }
+        bodyFetchTasks.removeValue(forKey: key)
+    }
+
+    private func resetBodyToInlineIfFetching(
+        for entry: NetworkEntry,
+        role: NetworkBody.Role,
+        expectedBody: NetworkBody? = nil
+    ) {
+        guard let currentBody = body(for: entry, role: role) else {
+            return
+        }
+        if let expectedBody, currentBody !== expectedBody {
+            return
+        }
+        if case .fetching = currentBody.fetchState {
+            currentBody.fetchState = .inline
+        }
+    }
+
+    private func entry(forID id: UUID) -> NetworkEntry? {
+        store.entries.first { $0.id == id }
+    }
+
+    private func shouldFetch(_ body: NetworkBody) -> Bool {
         switch body.fetchState {
         case .inline:
             return true
@@ -149,7 +217,7 @@ private extension NetworkSession {
         }
     }
 
-    func body(for entry: NetworkEntry, role: NetworkBody.Role) -> NetworkBody? {
+    private func body(for entry: NetworkEntry, role: NetworkBody.Role) -> NetworkBody? {
         switch role {
         case .request:
             return entry.requestBody

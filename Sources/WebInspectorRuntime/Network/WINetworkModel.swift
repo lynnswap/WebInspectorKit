@@ -64,12 +64,18 @@ public final class WINetworkModel {
 
     func suspend() {
         selectedEntryFetchTask?.cancel()
+        if let selectedEntry {
+            session.cancelBodyFetches(for: selectedEntry)
+        }
         session.suspend()
         isAttachedToPage = false
     }
 
     func detach() {
         selectedEntryFetchTask?.cancel()
+        if let selectedEntry {
+            session.cancelBodyFetches(for: selectedEntry)
+        }
         selectedEntryObservationHandles.removeAll()
         selectedEntry = nil
         session.detach()
@@ -84,6 +90,10 @@ public final class WINetworkModel {
     }
 
     public func selectEntry(_ entry: NetworkEntry?) {
+        if let previousSelection = selectedEntry,
+           previousSelection.id != entry?.id {
+            session.cancelBodyFetches(for: previousSelection)
+        }
         selectedEntry = entry
         startObservingSelectedEntry(entry)
         scheduleSelectedEntryBodyFetch()
@@ -91,6 +101,9 @@ public final class WINetworkModel {
 
     public func clear() {
         selectedEntryFetchTask?.cancel()
+        if let selectedEntry {
+            session.cancelBodyFetches(for: selectedEntry)
+        }
         selectedEntryObservationHandles.removeAll()
         selectedEntry = nil
         session.clearNetworkLogs()

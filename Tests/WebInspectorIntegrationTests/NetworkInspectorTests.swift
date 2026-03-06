@@ -194,6 +194,46 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func selectingNewEntryCancelsPreviousSelectionFetch() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            if ref == "slow-ref" {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                return self.makeFetchedBody(full: "slow body", reference: ref, role: role)
+            }
+            return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
+        }
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        inspector.attach(to: WKWebView(frame: .zero))
+
+        let firstEntry = makeEntry()
+        let firstBody = makeBody(reference: "slow-ref", role: .response)
+        firstEntry.responseBody = firstBody
+
+        let secondEntry = makeEntry(requestID: 2)
+        let secondBody = makeBody(reference: "fast-ref", role: .response)
+        secondEntry.responseBody = secondBody
+
+        inspector.selectEntry(firstEntry)
+        let firstStarted = await waitUntil {
+            firstBody.fetchState == .fetching
+        }
+        #expect(firstStarted)
+
+        inspector.selectEntry(secondEntry)
+
+        let secondFetched = await waitUntil {
+            secondBody.full == "fast body" && secondBody.fetchState == .full
+        }
+        #expect(secondFetched)
+
+        try? await Task.sleep(nanoseconds: 180_000_000)
+
+        #expect(firstBody.fetchState == .inline)
+        #expect(firstBody.full == nil)
+        #expect(secondBody.fetchState == .full)
+    }
+
+    @Test
     func detachClearsSelectedEntrySoReattachDoesNotFetchStaleBody() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in
             Issue.record("reattach should not fetch cleared selection")
@@ -494,10 +534,10 @@ struct NetworkInspectorTests {
         #expect(callbackCount == countAfterCancel)
     }
 
-    private func makeEntry() -> NetworkEntry {
+    private func makeEntry(requestID: Int = 1) -> NetworkEntry {
         NetworkEntry(
             sessionID: "session",
-            requestID: 1,
+            requestID: requestID,
             url: "https://example.com",
             method: "GET",
             requestHeaders: NetworkHeaders(),

@@ -113,6 +113,45 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func cancelBodyFetchesResetsFetchingStateAndPreventsApply() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            return NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "late-\(ref ?? "nil")",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                reference: ref,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let session = NetworkSession(bodyFetcher: fetcher)
+        session.attach(pageWebView: WKWebView(frame: .zero))
+
+        let entry = makeEntry()
+        let body = makeBody(reference: "resp_ref", role: .response)
+        entry.responseBody = body
+
+        session.requestBodyIfNeeded(for: entry, role: .response)
+
+        let started = await waitUntil {
+            body.fetchState == .fetching
+        }
+        #expect(started)
+
+        session.cancelBodyFetches(for: entry)
+        try? await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(body.fetchState == .inline)
+        #expect(body.full == nil)
+    }
+
+    @Test
     func requestBodyIfNeededSkipsNonInlineBodies() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in
             Issue.record("fetchBody should not run for non-inline bodies")
