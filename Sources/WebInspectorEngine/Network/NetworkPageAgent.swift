@@ -14,7 +14,9 @@ private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "Netw
 private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetworkAgent */ })();
 """
-private let networkPrivateUnavailableSentinel = "__wi_private_unavailable__"
+private let networkBodyFetchSentinelKey = "__wiBodyFetchState"
+private let networkAgentUnavailableSentinelValue = "agentUnavailable"
+private let networkBodyUnavailableSentinelValue = "bodyUnavailable"
 private let networkControlTokenWindowKey = "__wiNetworkControlToken"
 private let networkPageHookModeWindowKey = "__wiNetworkPageHookMode"
 
@@ -161,35 +163,36 @@ extension NetworkPageAgent {
             return .bodyUnavailable
         }
 
+        await waitForPendingConfigurationIfNeeded(in: webView)
+
         let availability = await ensureBodyFetchAvailability(
             in: webView,
             requiresReferenceAPI: hasReference,
             requiresHandleAPI: hasHandle
         )
-
-        if let bodyHandle {
-            if availability.hasGetBodyForHandle {
-                if let body = await fetchBodyFromHandle(bodyHandle, role: role, in: webView) {
-                    return .fetched(body)
-                }
-            } else {
-                lockToLegacyMode("selector_missing=getBodyForHandle")
-                if hasReference == false {
-                    return .agentUnavailable
-                }
-            }
+        let initialResult = await performBodyFetch(
+            bodyRef: bodyRef,
+            bodyHandle: bodyHandle,
+            role: role,
+            in: webView,
+            availability: availability
+        )
+        guard case .agentUnavailable = initialResult else {
+            return initialResult
         }
 
-        if let bodyRef, !bodyRef.isEmpty {
-            guard availability.hasGetBody else {
-                return .agentUnavailable
-            }
-            if let body = await fetchBodyFromReference(bodyRef, role: role, in: webView) {
-                return .fetched(body)
-            }
-        }
-
-        return .bodyUnavailable
+        let recoveredAvailability = await ensureBodyFetchAvailability(
+            in: webView,
+            requiresReferenceAPI: hasReference,
+            requiresHandleAPI: hasHandle
+        )
+        return await performBodyFetch(
+            bodyRef: bodyRef,
+            bodyHandle: bodyHandle,
+            role: role,
+            in: webView,
+            availability: recoveredAvailability
+        )
     }
 }
 
@@ -254,6 +257,47 @@ extension NetworkPageAgent: WKScriptMessageHandler {
 }
 
 private extension NetworkPageAgent {
+    private func performBodyFetch(
+        bodyRef: String?,
+        bodyHandle: AnyObject?,
+        role: NetworkBody.Role,
+        in webView: WKWebView,
+        availability: BodyFetchAvailability
+    ) async -> NetworkBodyFetchResult {
+        let hasReference = bodyRef?.isEmpty == false
+
+        if let bodyHandle {
+            if availability.hasGetBodyForHandle {
+                switch await fetchBodyFromHandle(bodyHandle, role: role, in: webView) {
+                case .fetched(let body):
+                    return .fetched(body)
+                case .agentUnavailable:
+                    if hasReference == false {
+                        return .agentUnavailable
+                    }
+                case .bodyUnavailable:
+                    if hasReference == false {
+                        return .bodyUnavailable
+                    }
+                }
+            } else {
+                lockToLegacyMode("selector_missing=getBodyForHandle")
+                if hasReference == false {
+                    return .agentUnavailable
+                }
+            }
+        }
+
+        if let bodyRef, !bodyRef.isEmpty {
+            guard availability.hasGetBody else {
+                return .agentUnavailable
+            }
+            return await fetchBodyFromReference(bodyRef, role: role, in: webView)
+        }
+
+        return .bodyUnavailable
+    }
+
     func resolveBridgeModeIfNeeded(with webView: WKWebView) {
         guard !bridgeModeLocked else {
             return
@@ -435,6 +479,7 @@ private extension NetworkPageAgent {
         requiresReferenceAPI: Bool,
         requiresHandleAPI: Bool
     ) async -> BodyFetchAvailability {
+        await waitForPendingConfigurationIfNeeded(in: webView)
         let initialAvailability = await probeBodyFetchAvailability(in: webView)
         guard initialAvailability.satisfies(
             requiresReferenceAPI: requiresReferenceAPI,
@@ -443,10 +488,36 @@ private extension NetworkPageAgent {
             return initialAvailability
         }
 
+        return await repairBodyFetchAvailability(
+            in: webView,
+            requiresReferenceAPI: requiresReferenceAPI,
+            requiresHandleAPI: requiresHandleAPI
+        )
+    }
+
+    private func repairBodyFetchAvailability(
+        in webView: WKWebView,
+        requiresReferenceAPI: Bool,
+        requiresHandleAPI: Bool
+    ) async -> BodyFetchAvailability {
         networkLogger.notice("network body api unavailable, reinstalling page agent")
         await installNetworkAgentScriptIfNeeded(on: webView, forceCurrentPageAgentInjection: true)
         await configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
         return await probeBodyFetchAvailability(in: webView)
+    }
+
+    private func waitForPendingConfigurationIfNeeded(in webView: WKWebView) async {
+        guard self.webView === webView else {
+            return
+        }
+        await configureTask?.value
+    }
+
+    private func fetchSentinelState(from result: Any?) -> String? {
+        guard let payload = result as? NSDictionary else {
+            return nil
+        }
+        return payload[networkBodyFetchSentinelKey] as? String
     }
 
     private func probeBodyFetchAvailability(in webView: WKWebView) async -> BodyFetchAvailability {
@@ -575,53 +646,84 @@ private extension NetworkPageAgent {
         return .mismatched
     }
 
-    func fetchBodyFromHandle(_ handle: AnyObject, role: NetworkBody.Role, in webView: WKWebView) async -> NetworkBody? {
+    func fetchBodyFromHandle(
+        _ handle: AnyObject,
+        role: NetworkBody.Role,
+        in webView: WKWebView
+    ) async -> NetworkBodyFetchResult {
         do {
             let result = try await webView.callAsyncJavaScript(
                 """
-                return (function(handle, unavailable) {
+                return (function(handle, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function") {
-                        return unavailable;
+                        return agentUnavailable;
                     }
-                    return window.webInspectorNetworkAgent.getBodyForHandle(handle, options);
-                })(handle, unavailable);
+                    const body = window.webInspectorNetworkAgent.getBodyForHandle(handle, options);
+                    return body == null ? bodyUnavailable : body;
+                })(handle, agentUnavailable, bodyUnavailable);
                 """,
                 arguments: [
                     "handle": handle,
                     "options": [
                         "controlAuthToken": networkMessageAuthToken
                     ],
-                    "unavailable": networkPrivateUnavailableSentinel,
+                    "agentUnavailable": [
+                        networkBodyFetchSentinelKey: networkAgentUnavailableSentinelValue
+                    ],
+                    "bodyUnavailable": [
+                        networkBodyFetchSentinelKey: networkBodyUnavailableSentinelValue
+                    ],
                 ],
                 in: nil,
                 contentWorld: .page
             )
 
-            if let sentinel = result as? String, sentinel == networkPrivateUnavailableSentinel {
-                lockToLegacyMode("selector_missing=getBodyForHandle")
-                return nil
+            if let sentinelState = fetchSentinelState(from: result) {
+                switch sentinelState {
+                case networkAgentUnavailableSentinelValue:
+                    lockToLegacyMode("selector_missing=getBodyForHandle")
+                    return .agentUnavailable
+                case networkBodyUnavailableSentinelValue:
+                    return .bodyUnavailable
+                default:
+                    break
+                }
             }
 
-            return decodeNetworkBody(from: result, role: role)
+            guard let body = decodeNetworkBody(from: result, role: role) else {
+                return .bodyUnavailable
+            }
+            return .fetched(body)
         } catch {
             lockToLegacyMode("runtime_probe_failed=getBodyForHandle")
             networkLogger.error("getBodyForHandle failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .agentUnavailable
         }
     }
 
-    func fetchBodyFromReference(_ bodyRef: String, role: NetworkBody.Role, in webView: WKWebView) async -> NetworkBody? {
+    func fetchBodyFromReference(
+        _ bodyRef: String,
+        role: NetworkBody.Role,
+        in webView: WKWebView
+    ) async -> NetworkBodyFetchResult {
         do {
             let result = try await webView.callAsyncJavaScript(
                 """
-                return (function(ref) {
+                return (function(ref, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {
-                        return null;
+                        return agentUnavailable;
                     }
-                    return window.webInspectorNetworkAgent.getBody(ref, options);
-                })(ref);
+                    const body = window.webInspectorNetworkAgent.getBody(ref, options);
+                    return body == null ? bodyUnavailable : body;
+                })(ref, agentUnavailable, bodyUnavailable);
                 """,
                 arguments: [
+                    "agentUnavailable": [
+                        networkBodyFetchSentinelKey: networkAgentUnavailableSentinelValue
+                    ],
+                    "bodyUnavailable": [
+                        networkBodyFetchSentinelKey: networkBodyUnavailableSentinelValue
+                    ],
                     "options": [
                         "controlAuthToken": networkMessageAuthToken
                     ],
@@ -630,10 +732,23 @@ private extension NetworkPageAgent {
                 in: nil,
                 contentWorld: .page
             )
-            return decodeNetworkBody(from: result, role: role)
+            if let sentinelState = fetchSentinelState(from: result) {
+                switch sentinelState {
+                case networkAgentUnavailableSentinelValue:
+                    return .agentUnavailable
+                case networkBodyUnavailableSentinelValue:
+                    return .bodyUnavailable
+                default:
+                    break
+                }
+            }
+            guard let body = decodeNetworkBody(from: result, role: role) else {
+                return .bodyUnavailable
+            }
+            return .fetched(body)
         } catch {
             networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .agentUnavailable
         }
     }
 

@@ -316,6 +316,49 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func fetchBodyRetriesHandleAfterTransientAgentFailure() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, _) = makeTestWebView()
+        defer { agent.detachPageWebView(preparing: .stopped) }
+
+        await attachAndWait(agent, to: webView)
+        await loadHTML("<html><body><p>handle retry</p></body></html>", in: webView)
+        await agent.waitForPendingConfigurationForTesting()
+
+        let patched = try await webView.callAsyncJavaScript(
+            """
+            return (function() {
+                if (!window.webInspectorNetworkAgent) {
+                    return false;
+                }
+                let attempts = 0;
+                window.webInspectorNetworkAgent.getBodyForHandle = function(handle, options) {
+                    attempts += 1;
+                    if (attempts === 1) {
+                        throw new Error("transient getBodyForHandle failure");
+                    }
+                    const content = String(handle);
+                    return {
+                        kind: "text",
+                        truncated: false,
+                        content,
+                        size: content.length
+                    };
+                };
+                return true;
+            })();
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        #expect((patched as? Bool) == true)
+
+        let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
+        #expect(body?.full == "token")
+    }
+
+    @Test
     func fetchBodyFallsBackToReferenceWhenHandleAPIIsUnavailable() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
