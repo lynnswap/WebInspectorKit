@@ -359,6 +359,100 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func fetchBodySkipsRepairAfterLegacyFallbackLocksBridgeMode() async throws {
+        let agent = NetworkPageAgent()
+        let (webView, _) = makeTestWebView()
+        defer { agent.detachPageWebView(preparing: .stopped) }
+
+        await attachAndWait(agent, to: webView)
+        await loadHTML("<html><body><p>fallback without repair</p></body></html>", in: webView)
+        await agent.waitForPendingConfigurationForTesting()
+
+        let prepared = try await webView.callAsyncJavaScript(
+            """
+            return (function() {
+                if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
+                    return { prepared: false, handleDisabled: false };
+                }
+                let repairCount = 0;
+                const originalConfigure = window.webInspectorNetworkAgent.configure;
+                window.webInspectorNetworkAgent.configure = function(options) {
+                    repairCount += 1;
+                    return originalConfigure.call(this, options);
+                };
+                window.__wiRepairCount = function() {
+                    return repairCount;
+                };
+                window.webInspectorNetworkAgent.getBodyForHandle = undefined;
+                window.webInspectorNetworkAgent.getBody = function(ref, options) {
+                    const content = `ref:${ref}`;
+                    return {
+                        kind: "text",
+                        truncated: false,
+                        content,
+                        size: content.length
+                    };
+                };
+                return {
+                    prepared: true,
+                    handleDisabled: typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function"
+                };
+            })();
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        let preparation = prepared as? NSDictionary
+        let didPrepare = (preparation?["prepared"] as? Bool)
+            ?? ((preparation?["prepared"] as? NSNumber)?.boolValue ?? false)
+        let handleDisabled = (preparation?["handleDisabled"] as? Bool)
+            ?? ((preparation?["handleDisabled"] as? NSNumber)?.boolValue ?? false)
+        #expect(didPrepare == true)
+
+        let firstBody = await agent.fetchBody(
+            bodyRef: "first-ref",
+            bodyHandle: "token" as NSString,
+            role: .response
+        )
+        if handleDisabled {
+            #expect(firstBody?.full == "ref:first-ref")
+            #expect(agent.currentBridgeMode == .legacyJSON)
+        } else {
+            #expect(firstBody?.full == "token")
+        }
+
+        let rawRepairCountAfterFirstFetch = try await webView.evaluateJavaScript(
+            "window.__wiRepairCount ? window.__wiRepairCount() : -1;",
+            in: nil,
+            contentWorld: .page
+        )
+        let repairCountAfterFirstFetch = (rawRepairCountAfterFirstFetch as? Int)
+            ?? ((rawRepairCountAfterFirstFetch as? NSNumber)?.intValue ?? -1)
+
+        let secondBody = await agent.fetchBody(
+            bodyRef: "second-ref",
+            bodyHandle: "token" as NSString,
+            role: .response
+        )
+        if handleDisabled {
+            #expect(secondBody?.full == "ref:second-ref")
+        } else {
+            #expect(secondBody?.full == "token")
+        }
+
+        let rawRepairCount = try await webView.evaluateJavaScript(
+            "window.__wiRepairCount ? window.__wiRepairCount() : -1;",
+            in: nil,
+            contentWorld: .page
+        )
+        let repairCount = (rawRepairCount as? Int) ?? ((rawRepairCount as? NSNumber)?.intValue ?? -1)
+        if handleDisabled {
+            #expect(repairCount == repairCountAfterFirstFetch)
+        }
+    }
+
+    @Test
     func fetchBodyFallsBackToReferenceWhenHandleAPIIsUnavailable() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()

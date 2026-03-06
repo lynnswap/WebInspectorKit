@@ -13,6 +13,7 @@ import {
 } from "../Runtime/NetworkAgent/network-agent-utils";
 import {
     configureNetwork,
+    getBody,
     getBodyForHandle,
     installNetworkObserver
 } from "../Runtime/NetworkAgent/network-agent-core";
@@ -207,6 +208,26 @@ describe("network-agent-utils", () => {
             encoding: "utf-8",
             content: "body-from-value-of",
             size: "body-from-value-of".length
+        });
+    });
+
+    it("returns an agent-unavailable sentinel when body access is unauthorized", () => {
+        const restored = getBody("body-ref", {
+            controlAuthToken: "wrong-token"
+        }) as Record<string, unknown> | null;
+
+        expect(restored).toEqual({
+            __wiBodyFetchState: "agentUnavailable"
+        });
+    });
+
+    it("returns an agent-unavailable sentinel for unauthorized handle access", () => {
+        const restored = getBodyForHandle("body-handle", {
+            controlAuthToken: "wrong-token"
+        }) as Record<string, unknown> | null;
+
+        expect(restored).toEqual({
+            __wiBodyFetchState: "agentUnavailable"
         });
     });
 

@@ -33,6 +33,12 @@ type ResourceObserverMode = "enabled" | "disabled";
 
 let pageHookModeState: PageHookMode = "enabled";
 let resourceObserverModeState: ResourceObserverMode = "enabled";
+const BODY_FETCH_STATE_KEY = "__wiBodyFetchState";
+const BODY_FETCH_AGENT_UNAVAILABLE = "agentUnavailable";
+
+const makeBodyFetchStatePayload = (state: string) => ({
+    [BODY_FETCH_STATE_KEY]: state
+});
 
 const buildNetworkError = (
     error: unknown,
@@ -402,7 +408,7 @@ const installNetworkObserver = (
 
 const getBody = (ref: string | null | undefined, options?: { controlAuthToken?: unknown } | null) => {
     if (!isAuthorizedControlCall(options)) {
-        return null;
+        return makeBodyFetchStatePayload(BODY_FETCH_AGENT_UNAVAILABLE);
     }
     if (!ref || typeof ref !== "string") {
         return null;
@@ -494,7 +500,7 @@ const coerceHandleToString = (handle: unknown) => {
 
 const getBodyForHandle = (handle: unknown, options?: { controlAuthToken?: unknown } | null) => {
     if (!isAuthorizedControlCall(options)) {
-        return null;
+        return makeBodyFetchStatePayload(BODY_FETCH_AGENT_UNAVAILABLE);
     }
     if (handle == null) {
         return null;

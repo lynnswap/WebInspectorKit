@@ -159,6 +159,7 @@ extension NetworkPageAgent {
 
         let hasReference = bodyRef?.isEmpty == false
         let hasHandle = bodyHandle != nil
+        let requiresHandleAPI = hasHandle && (hasReference == false || bridgeMode != .legacyJSON)
         guard hasReference || hasHandle else {
             return .bodyUnavailable
         }
@@ -168,7 +169,7 @@ extension NetworkPageAgent {
         let availability = await ensureBodyFetchAvailability(
             in: webView,
             requiresReferenceAPI: hasReference,
-            requiresHandleAPI: hasHandle
+            requiresHandleAPI: requiresHandleAPI
         )
         let initialResult = await performBodyFetch(
             bodyRef: bodyRef,
@@ -184,7 +185,7 @@ extension NetworkPageAgent {
         let recoveredAvailability = await ensureBodyFetchAvailability(
             in: webView,
             requiresReferenceAPI: hasReference,
-            requiresHandleAPI: hasHandle
+            requiresHandleAPI: requiresHandleAPI
         )
         return await performBodyFetch(
             bodyRef: bodyRef,
