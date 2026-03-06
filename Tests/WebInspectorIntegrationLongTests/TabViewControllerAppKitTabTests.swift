@@ -15,7 +15,6 @@ struct TabViewControllerAppKitTabTests {
     private let networkFilterIdentifierRaw = "WIContainerToolbar.NetworkFilter"
     private let networkClearIdentifierRaw = "WIContainerToolbar.NetworkClear"
     private let networkSearchIdentifierRaw = "WIContainerToolbar.NetworkSearch"
-    private let networkFetchIdentifierRaw = "WIContainerToolbar.NetworkFetchBody"
 
     @Test
     func loadViewIfNeededRendersInitialContentAndSelection() {
@@ -285,8 +284,7 @@ struct TabViewControllerAppKitTabTests {
             networkFilterIdentifierRaw,
             networkClearIdentifierRaw,
             networkSearchIdentifierRaw,
-            NSToolbarItem.Identifier.flexibleSpace.rawValue,
-            networkFetchIdentifierRaw
+            NSToolbarItem.Identifier.flexibleSpace.rawValue
         ])
     }
 
