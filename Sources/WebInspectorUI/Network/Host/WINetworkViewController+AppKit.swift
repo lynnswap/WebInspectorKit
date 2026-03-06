@@ -341,15 +341,6 @@ private struct NetworkMacDetailTab: View {
                 .lineLimit(10)
                 .textSelection(.enabled)
         }
-        .onAppear {
-            inspector.requestBodyIfNeeded(for: entry, role: body.role)
-        }
-        .onChange(of: inspector.isAttachedToPage) { _, isAttached in
-            guard isAttached else {
-                return
-            }
-            inspector.requestBodyIfNeeded(for: entry, role: body.role)
-        }
     }
 
     private func errorRow(_ message: String) -> some View {

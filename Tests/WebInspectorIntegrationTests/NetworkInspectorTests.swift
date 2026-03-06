@@ -106,10 +106,40 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func selectingEntryWithExistingResponseBodyDoesNotAutoFetch() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
-            Issue.record("selectEntry should not fetch automatically")
-            return nil
+    func selectingEntryFetchesSelectedBodiesWhenAttached() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            switch ref {
+            case "req_ref":
+                return self.makeFetchedBody(full: "resolved request", reference: ref, role: role)
+            case "resp_ref":
+                return self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
+            default:
+                Issue.record("unexpected body ref: \(ref ?? "nil")")
+                return nil
+            }
+        }
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        inspector.attach(to: WKWebView(frame: .zero))
+        let entry = makeEntry()
+        entry.requestBody = makeBody(reference: "req_ref", role: .request)
+        entry.responseBody = makeBody(reference: "resp_ref", role: .response)
+
+        inspector.selectEntry(entry)
+
+        let fetched = await waitUntil {
+            fetcher.fetchRefs.count == 2
+                && Set(fetcher.fetchRefs.compactMap { $0 }) == Set(["req_ref", "resp_ref"])
+                && entry.requestBody?.full == "resolved request"
+                && entry.responseBody?.full == "resolved response"
+        }
+        #expect(fetched)
+        #expect(fetcher.fetchRefs.count == 2)
+    }
+
+    @Test
+    func selectingEntryWhileDetachedWaitsForAttachBeforeFetching() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
@@ -124,20 +154,8 @@ struct NetworkInspectorTests {
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
-    }
 
-    @Test
-    func requestBodyIfNeededFetchesInlineBodyOnce() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
-        }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         inspector.attach(to: WKWebView(frame: .zero))
-        let entry = makeEntry()
-        let body = makeBody(reference: "resp_ref", role: .response)
-        entry.responseBody = body
-
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
 
         let fetched = await waitUntil {
             fetcher.fetchRefs == ["resp_ref"]
@@ -145,75 +163,50 @@ struct NetworkInspectorTests {
                 && body.full == "resolved response"
         }
         #expect(fetched)
-        #expect(fetcher.fetchRefs.count == 1)
-
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
-        for _ in 0..<64 {
-            await Task.yield()
-        }
-
-        #expect(fetcher.fetchRefs.count == 1)
     }
 
     @Test
-    func requestBodyIfNeededDoesNotRetryFailedBody() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
+    func selectedEntryBodyAppearanceTriggersFetch() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            self.makeFetchedBody(full: "late body", reference: ref, role: role)
+        }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         inspector.attach(to: WKWebView(frame: .zero))
         let entry = makeEntry()
-        let body = makeBody(reference: "failed-ref", role: .response)
-        entry.responseBody = body
 
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
-
-        let failed = await waitUntil {
-            body.fetchState == .failed(.unavailable)
-        }
-        #expect(failed)
-        #expect(fetcher.fetchRefs.count == 1)
-
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
-        await Task.yield()
-
-        #expect(fetcher.fetchRefs.count == 1)
-    }
-
-    @Test
-    func requestBodyIfNeededDoesNothingWhileDetached() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
-            Issue.record("detached inspector should not fetch")
-            return nil
-        }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        let entry = makeEntry()
-        let body = makeBody(reference: "detached-ref", role: .response)
-        entry.responseBody = body
-
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
+        inspector.selectEntry(entry)
 
         for _ in 0..<64 {
             await Task.yield()
         }
 
         #expect(fetcher.fetchRefs.isEmpty)
-        #expect(body.fetchState == .inline)
+
+        let body = makeBody(reference: "late-ref", role: .response)
+        entry.responseBody = body
+
+        let fetched = await waitUntil {
+            fetcher.fetchRefs == ["late-ref"]
+                && body.fetchState == .full
+                && body.full == "late body"
+        }
+        #expect(fetched)
     }
 
     @Test
-    func requestBodyIfNeededRemainsNoOpAfterDetach() async {
+    func detachClearsSelectedEntrySoReattachDoesNotFetchStaleBody() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in
-            Issue.record("detached inspector should not fetch")
+            Issue.record("reattach should not fetch cleared selection")
             return nil
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
-        inspector.detach()
-
         let entry = makeEntry()
-        let body = makeBody(reference: "detach-ref", role: .response)
+        let body = makeBody(reference: "stale-ref", role: .response)
         entry.responseBody = body
+        inspector.selectEntry(entry)
 
-        inspector.requestBodyIfNeeded(for: entry, role: .response)
+        inspector.detach()
+        inspector.attach(to: WKWebView(frame: .zero))
 
         for _ in 0..<64 {
             await Task.yield()
@@ -596,16 +589,21 @@ struct NetworkInspectorTests {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
     private(set) var fetchRefs: [String?] = []
 
     init(
         onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = onFetch
+        self.onFetch = { ref, handle, role in
+            guard let body = await onFetch(ref, handle, role) else {
+                return .bodyUnavailable
+            }
+            return .fetched(body)
+        }
     }
 
-    func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchRefs.append(ref)
         return await onFetch(ref, handle, role)
     }

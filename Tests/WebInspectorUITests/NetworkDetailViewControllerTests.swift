@@ -10,7 +10,7 @@ import WebKit
 @MainActor
 struct NetworkDetailViewControllerTests {
     @Test
-    func detailViewRequestsFetchForExistingResponseBodyOnDisplay() async throws {
+    func detailViewReflectsModelDrivenFetchForSelectedResponseBody() async throws {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
@@ -43,7 +43,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailViewRequestsFetchWhenInspectorReattaches() async throws {
+    func detailViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async throws {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
@@ -141,7 +141,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func previewViewRequestsFetchWhenInspectorReattaches() async {
+    func previewViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
@@ -161,6 +161,7 @@ struct NetworkDetailViewControllerTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
+        inspector.selectEntry(entry)
 
         let viewController = WINetworkBodyPreviewViewController(
             entry: entry,
@@ -185,7 +186,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func previewViewRequestsFetchOnLoadAndDoesNotExposeFetchActions() async {
+    func previewViewDoesNotFetchOnLoadWithoutModelSelection() async {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
@@ -218,8 +219,8 @@ struct NetworkDetailViewControllerTests {
             await Task.yield()
         }
 
-        #expect(fetcher.fetchCount == 1)
-        #expect(body.full == "preview body")
+        #expect(fetcher.fetchCount == 0)
+        #expect(body.full == nil)
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
@@ -283,16 +284,21 @@ struct NetworkDetailViewControllerTests {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
     private(set) var fetchCount = 0
 
     init(
         onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = onFetch
+        self.onFetch = { ref, handle, role in
+            guard let body = await onFetch(ref, handle, role) else {
+                return .bodyUnavailable
+            }
+            return .fetched(body)
+        }
     }
 
-    func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchCount += 1
         return await onFetch(ref, handle, role)
     }

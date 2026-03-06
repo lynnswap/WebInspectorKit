@@ -2,7 +2,13 @@ import WebKit
 
 @MainActor
 package protocol NetworkBodyFetching: AnyObject {
-    func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody?
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult
+}
+
+package enum NetworkBodyFetchResult {
+    case fetched(NetworkBody)
+    case agentUnavailable
+    case bodyUnavailable
 }
 
 @MainActor
@@ -78,7 +84,12 @@ public final class NetworkSession: PageSession {
     }
 
     public func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
-        await bodyFetcher.fetchBody(ref: ref, handle: handle, role: role)
+        switch await bodyFetcher.fetchBodyResult(ref: ref, handle: handle, role: role) {
+        case .fetched(let body):
+            return body
+        case .agentUnavailable, .bodyUnavailable:
+            return nil
+        }
     }
 
     package func requestBodyIfNeeded(for entry: NetworkEntry, role: NetworkBody.Role) {
@@ -107,7 +118,7 @@ public final class NetworkSession: PageSession {
                 return
             }
 
-            let fetched = await self.bodyFetcher.fetchBody(ref: bodyRef, handle: bodyHandle, role: role)
+            let fetchResult = await self.bodyFetcher.fetchBodyResult(ref: bodyRef, handle: bodyHandle, role: role)
 
             guard self.body(for: entry, role: role) === body else {
                 return
@@ -118,12 +129,12 @@ public final class NetworkSession: PageSession {
                 }
                 return
             }
-            guard let fetched else {
+            switch fetchResult {
+            case .fetched(let fetched):
+                entry.applyFetchedBody(fetched, to: body)
+            case .agentUnavailable, .bodyUnavailable:
                 body.markFailed(.unavailable)
-                return
             }
-
-            entry.applyFetchedBody(fetched, to: body)
         }
     }
 }

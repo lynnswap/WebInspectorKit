@@ -60,14 +60,6 @@ import UIKit
             self?.display(newValue)
         }
         .store(in: &observationHandles)
-
-        inspector.observeTask(\.isAttachedToPage, options: [.removeDuplicates]) { [weak self] isAttached in
-            guard let self, isAttached, let entry = self.entry else {
-                return
-            }
-            self.requestVisibleBodyFetchIfNeeded(entry)
-        }
-        .store(in: &observationHandles)
     }
 
     @available(*, unavailable)
@@ -105,7 +97,6 @@ import UIKit
         } else {
             title = nil
         }
-        requestVisibleBodyFetchIfNeeded(entry)
         collectionView.isHidden = false
         contentUnavailableConfiguration = nil
         requestSnapshotUpdate()
@@ -286,19 +277,9 @@ import UIKit
             guard self.entry?.id == entry.id else {
                 return
             }
-            self.requestVisibleBodyFetchIfNeeded(entry)
             self.requestSnapshotUpdate()
         }
         .store(in: &selectedEntryStructureObservationHandles)
-    }
-
-    private func requestVisibleBodyFetchIfNeeded(_ entry: NetworkEntry) {
-        if entry.requestBody != nil {
-            inspector.requestBodyIfNeeded(for: entry, role: .request)
-        }
-        if entry.responseBody != nil {
-            inspector.requestBodyIfNeeded(for: entry, role: .response)
-        }
     }
 
     private func configureListCell(_ cell: WINetworkDetailObservingListCell, itemID: DetailItemID) {

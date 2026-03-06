@@ -2,6 +2,7 @@ import Testing
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorEngine
+@testable import WebInspectorBridge
 
 @MainActor
 struct NetworkPageAgentTests {
@@ -284,6 +285,34 @@ struct NetworkPageAgentTests {
 
         let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
         #expect(body?.full == "token")
+    }
+
+    @Test
+    func fetchBodyReinstallsAgentWhenRegistryClaimsItIsAlreadyInstalled() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        registry.clearState(for: controller)
+        registry.setNetworkBridgeScriptInstalled(true, on: controller)
+
+        let agent = NetworkPageAgent(controllerStateRegistry: registry)
+        defer {
+            agent.detachPageWebView(preparing: .stopped)
+            registry.clearState(for: controller)
+        }
+
+        await attachAndWait(agent, to: webView)
+        await loadHTML("<html><body><p>self-heal</p></body></html>", in: webView)
+
+        let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
+        #expect(body?.full == "token")
+
+        let raw = try await webView.evaluateJavaScript(
+            "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
+            in: nil,
+            contentWorld: .page
+        )
+        let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
+        #expect(installed == true)
     }
 
     @Test

@@ -46,7 +46,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private var renderTask: Task<Void, Never>?
     private var hasAppliedInitialTreeSnapshot = false
     private var bodyObservationHandles: Set<ObservationHandle> = []
-    private var inspectorObservationHandles: Set<ObservationHandle> = []
 
     private var treePayloadByItem: [TreeItem: TreeItemPayload] = [:]
     private lazy var treeDataSource = makeTreeDataSource()
@@ -87,7 +86,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     isolated deinit {
         renderTask?.cancel()
         bodyObservationHandles.removeAll()
-        inspectorObservationHandles.removeAll()
     }
 
     public override func viewDidLoad() {
@@ -123,10 +121,8 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         modeControl.isHidden = true
         navigationItem.titleView = modeControl
         applyTitle()
-        inspector.requestBodyIfNeeded(for: entry, role: bodyState.role)
         requestRenderModelUpdate()
         startObservingBodyState()
-        startObservingInspectorState()
     }
 
     @objc
@@ -230,18 +226,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         }
         .store(in: &bodyObservationHandles)
     }
-
-    private func startObservingInspectorState() {
-        inspectorObservationHandles.removeAll()
-        inspector.observeTask(\.isAttachedToPage, options: [.removeDuplicates]) { [weak self] isAttached in
-            guard let self, isAttached else {
-                return
-            }
-            self.inspector.requestBodyIfNeeded(for: self.entry, role: self.bodyState.role)
-        }
-        .store(in: &inspectorObservationHandles)
-    }
-
     private func makeTreeLayout() -> UICollectionViewLayout {
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.showsSeparators = true

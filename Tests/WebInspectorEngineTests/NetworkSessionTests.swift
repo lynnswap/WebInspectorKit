@@ -92,6 +92,27 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func requestBodyIfNeededMarksUnavailableWhenBodyFetcherCannotRestoreAgent() async {
+        let fetcher = StubNetworkBodyFetcher(resultOnFetch: { _, _, _ in
+            .agentUnavailable
+        })
+        let session = NetworkSession(bodyFetcher: fetcher)
+        session.attach(pageWebView: WKWebView(frame: .zero))
+
+        let entry = makeEntry()
+        let body = makeBody(reference: "resp_ref", role: .response)
+        entry.responseBody = body
+
+        session.requestBodyIfNeeded(for: entry, role: .response)
+
+        let failed = await waitUntil {
+            body.fetchState == .failed(.unavailable)
+        }
+        #expect(failed)
+        #expect(fetcher.fetchRefs == ["resp_ref"])
+    }
+
+    @Test
     func requestBodyIfNeededSkipsNonInlineBodies() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in
             Issue.record("fetchBody should not run for non-inline bodies")
@@ -206,16 +227,27 @@ struct NetworkSessionTests {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
     private(set) var fetchRefs: [String?] = []
 
     init(
         onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = onFetch
+        self.onFetch = { ref, handle, role in
+            guard let body = await onFetch(ref, handle, role) else {
+                return .bodyUnavailable
+            }
+            return .fetched(body)
+        }
     }
 
-    func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
+    init(
+        resultOnFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
+    ) {
+        self.onFetch = resultOnFetch
+    }
+
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchRefs.append(ref)
         return await onFetch(ref, handle, role)
     }

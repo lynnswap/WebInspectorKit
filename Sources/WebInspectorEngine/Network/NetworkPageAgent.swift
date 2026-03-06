@@ -31,6 +31,15 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         case mismatched
     }
 
+    private struct BodyFetchAvailability {
+        let hasGetBody: Bool
+        let hasGetBodyForHandle: Bool
+
+        func satisfies(requiresReferenceAPI: Bool, requiresHandleAPI: Bool) -> Bool {
+            (!requiresReferenceAPI || hasGetBody) && (!requiresHandleAPI || hasGetBodyForHandle)
+        }
+    }
+
     weak var webView: WKWebView?
     let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
@@ -129,24 +138,64 @@ extension NetworkPageAgent {
     }
 
     func fetchBody(bodyRef: String?, bodyHandle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
-        guard let webView else { return nil }
+        switch await fetchBodyResult(bodyRef: bodyRef, bodyHandle: bodyHandle, role: role) {
+        case .fetched(let body):
+            return body
+        case .agentUnavailable, .bodyUnavailable:
+            return nil
+        }
+    }
+
+    func fetchBodyResult(
+        bodyRef: String?,
+        bodyHandle: AnyObject?,
+        role: NetworkBody.Role
+    ) async -> NetworkBodyFetchResult {
+        guard let webView else {
+            return .agentUnavailable
+        }
+
+        let hasReference = bodyRef?.isEmpty == false
+        let hasHandle = bodyHandle != nil
+        guard hasReference || hasHandle else {
+            return .bodyUnavailable
+        }
+
+        let availability = await ensureBodyFetchAvailability(
+            in: webView,
+            requiresReferenceAPI: hasReference,
+            requiresHandleAPI: hasHandle
+        )
 
         if let bodyHandle {
-            if let body = await fetchBodyFromHandle(bodyHandle, role: role, in: webView) {
-                return body
+            if availability.hasGetBodyForHandle {
+                if let body = await fetchBodyFromHandle(bodyHandle, role: role, in: webView) {
+                    return .fetched(body)
+                }
+            } else {
+                lockToLegacyMode("selector_missing=getBodyForHandle")
+                if hasReference == false {
+                    return .agentUnavailable
+                }
             }
         }
 
-        guard let bodyRef, !bodyRef.isEmpty else {
-            return nil
+        if let bodyRef, !bodyRef.isEmpty {
+            guard availability.hasGetBody else {
+                return .agentUnavailable
+            }
+            if let body = await fetchBodyFromReference(bodyRef, role: role, in: webView) {
+                return .fetched(body)
+            }
         }
-        return await fetchBodyFromReference(bodyRef, role: role, in: webView)
+
+        return .bodyUnavailable
     }
 }
 
 extension NetworkPageAgent: NetworkBodyFetching {
-    package func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
-        await fetchBody(bodyRef: ref, bodyHandle: handle, role: role)
+    package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        await fetchBodyResult(bodyRef: ref, bodyHandle: handle, role: role)
     }
 }
 
@@ -261,7 +310,10 @@ private extension NetworkPageAgent {
         networkLogger.debug("detached network message handlers")
     }
 
-    func installNetworkAgentScriptIfNeeded(on webView: WKWebView) async {
+    func installNetworkAgentScriptIfNeeded(
+        on webView: WKWebView,
+        forceCurrentPageAgentInjection: Bool = false
+    ) async {
         let controller = webView.configuration.userContentController
         let escapedToken = networkMessageAuthToken
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -299,26 +351,46 @@ private extension NetworkPageAgent {
             forMainFrameOnly: true,
             in: .page
         )
+        let scriptWasInstalled = controllerStateRegistry.networkBridgeScriptInstalled(on: controller)
+        let shouldEvaluateAgentScript = forceCurrentPageAgentInjection || !scriptWasInstalled
+        let scriptSource = shouldEvaluateAgentScript ? loadNetworkAgentScriptSource() : nil
 
-        if controllerStateRegistry.networkBridgeScriptInstalled(on: controller) {
+        if scriptWasInstalled {
             // Avoid repeatedly appending the same bootstrap script on reconfigure/reattach.
             if controllerStateRegistry.networkTokenBootstrapSignature(on: controller) != tokenBootstrapSignature {
                 controller.addUserScript(tokenScript)
                 controllerStateRegistry.setNetworkTokenBootstrapSignature(tokenBootstrapSignature, on: controller)
             }
+            if forceCurrentPageAgentInjection,
+               let scriptSource,
+               controller.userScripts.contains(where: { $0.source == scriptSource }) == false {
+                let userScript = WKUserScript(
+                    source: scriptSource,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true,
+                    in: .page
+                )
+                let checkScript = WKUserScript(
+                    source: networkPresenceProbeScript,
+                    injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true,
+                    in: .page
+                )
+                controller.addUserScript(userScript)
+                controller.addUserScript(checkScript)
+            }
             do {
                 _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
+                if let scriptSource {
+                    _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+                }
             } catch {
-                networkLogger.error("failed to refresh network control token: \(error.localizedDescription, privacy: .public)")
+                networkLogger.error("failed to refresh network agent bootstrap: \(error.localizedDescription, privacy: .public)")
             }
             return
         }
 
-        let scriptSource: String
-        do {
-            scriptSource = try WebInspectorScripts.networkAgent()
-        } catch {
-            networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
+        guard let scriptSource else {
             return
         }
 
@@ -347,6 +419,66 @@ private extension NetworkPageAgent {
             networkLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
         }
         networkLogger.debug("installed network agent user script")
+    }
+
+    func loadNetworkAgentScriptSource() -> String? {
+        do {
+            return try WebInspectorScripts.networkAgent()
+        } catch {
+            networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    private func ensureBodyFetchAvailability(
+        in webView: WKWebView,
+        requiresReferenceAPI: Bool,
+        requiresHandleAPI: Bool
+    ) async -> BodyFetchAvailability {
+        let initialAvailability = await probeBodyFetchAvailability(in: webView)
+        guard initialAvailability.satisfies(
+            requiresReferenceAPI: requiresReferenceAPI,
+            requiresHandleAPI: requiresHandleAPI
+        ) == false else {
+            return initialAvailability
+        }
+
+        networkLogger.notice("network body api unavailable, reinstalling page agent")
+        await installNetworkAgentScriptIfNeeded(on: webView, forceCurrentPageAgentInjection: true)
+        await configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
+        return await probeBodyFetchAvailability(in: webView)
+    }
+
+    private func probeBodyFetchAvailability(in webView: WKWebView) async -> BodyFetchAvailability {
+        do {
+            let raw = try await webView.evaluateJavaScript(
+                """
+                (() => ({
+                    hasGetBody: Boolean(
+                        window.webInspectorNetworkAgent &&
+                        typeof window.webInspectorNetworkAgent.getBody === "function"
+                    ),
+                    hasGetBodyForHandle: Boolean(
+                        window.webInspectorNetworkAgent &&
+                        typeof window.webInspectorNetworkAgent.getBodyForHandle === "function"
+                    )
+                }))();
+                """,
+                in: nil,
+                contentWorld: .page
+            )
+            let payload = raw as? NSDictionary
+            let hasGetBody = (payload?["hasGetBody"] as? Bool) ?? ((payload?["hasGetBody"] as? NSNumber)?.boolValue ?? false)
+            let hasGetBodyForHandle = (payload?["hasGetBodyForHandle"] as? Bool)
+                ?? ((payload?["hasGetBodyForHandle"] as? NSNumber)?.boolValue ?? false)
+            return BodyFetchAvailability(
+                hasGetBody: hasGetBody,
+                hasGetBodyForHandle: hasGetBodyForHandle
+            )
+        } catch {
+            networkLogger.error("failed to probe network body api: \(error.localizedDescription, privacy: .public)")
+            return BodyFetchAvailability(hasGetBody: false, hasGetBodyForHandle: false)
+        }
     }
 
     func configureNetworkLogging(
