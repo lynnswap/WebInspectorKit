@@ -60,6 +60,14 @@ import UIKit
             self?.display(newValue)
         }
         .store(in: &observationHandles)
+
+        inspector.observeTask(\.isAttachedToPage, options: [.removeDuplicates]) { [weak self] isAttached in
+            guard let self, isAttached, let entry = self.entry else {
+                return
+            }
+            self.requestVisibleBodyFetchIfNeeded(entry)
+        }
+        .store(in: &observationHandles)
     }
 
     @available(*, unavailable)

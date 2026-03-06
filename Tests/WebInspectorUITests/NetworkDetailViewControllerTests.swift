@@ -43,6 +43,45 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func detailViewRequestsFetchWhenInspectorReattaches() async throws {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "reattached response body",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                reference: ref,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let entry = makeEntry()
+        entry.responseBody = makeBody(reference: "resp_ref")
+        inspector.selectEntry(entry)
+
+        let viewController = WINetworkDetailViewController(inspector: inspector)
+        viewController.loadViewIfNeeded()
+
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(fetcher.fetchCount == 0)
+
+        inspector.attach(to: WKWebView(frame: .zero))
+
+        let fetched = await waitUntil {
+            fetcher.fetchCount == 1 && entry.responseBody?.full == "reattached response body"
+        }
+        #expect(fetched)
+    }
+
+    @Test
     func detailViewUpdatesWhenResponseHeadersAndBodyAppear() async throws {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
@@ -99,6 +138,50 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(bodySectionAdded)
         #expect(entry.responseBody?.full == "response body")
+    }
+
+    @Test
+    func previewViewRequestsFetchWhenInspectorReattaches() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "reattached preview body",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                reference: ref,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let entry = makeEntry()
+        let body = makeBody(reference: "resp_ref")
+        entry.responseBody = body
+
+        let viewController = WINetworkBodyPreviewViewController(
+            entry: entry,
+            inspector: inspector,
+            bodyState: body
+        )
+        viewController.loadViewIfNeeded()
+
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(fetcher.fetchCount == 0)
+
+        inspector.attach(to: WKWebView(frame: .zero))
+
+        let fetched = await waitUntil {
+            fetcher.fetchCount == 1 && body.full == "reattached preview body"
+        }
+        #expect(fetched)
+        #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
     @Test

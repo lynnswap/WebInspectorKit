@@ -24,7 +24,7 @@ public final class WINetworkModel {
         SortDescriptor<NetworkEntry>(\.requestID, order: .reverse)
     ]
 
-    @ObservationIgnored private var isAttachedToPage: Bool = false
+    package private(set) var isAttachedToPage: Bool = false
 
     package init(session: NetworkSession) {
         self.session = session
