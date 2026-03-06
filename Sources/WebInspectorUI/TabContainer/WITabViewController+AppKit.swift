@@ -366,12 +366,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             self?.scheduleToolbarStateUpdate()
         }
         .store(in: &toolbarObservationHandles)
-        inspectorController.network.observeTask(
-            [\.canFetchSelectedBodies]
-        ) { [weak self] in
-            self?.scheduleToolbarStateUpdate()
-        }
-        .store(in: &toolbarObservationHandles)
         inspectorController.network.store.observeTask(
             [\.entries]
         ) { [weak self] in
@@ -428,8 +422,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
                 .wiNetworkFilter,
                 .wiNetworkClear,
                 .wiNetworkSearch,
-                .flexibleSpace,
-                .wiNetworkFetchBody
+                .flexibleSpace
             ]
         default:
             desiredIdentifiers = [.wiTabPicker]
@@ -462,10 +455,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
         if let reloadItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMReload }) {
             reloadItem.isEnabled = inspectorController.dom.hasPageWebView
-        }
-
-        if let fetchBodyItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFetchBody }) {
-            fetchBodyItem.isEnabled = inspectorController.network.canFetchSelectedBodies
         }
 
         if let filterItem = toolbar.items.first(where: { $0.itemIdentifier == .wiNetworkFilter }) as? NSMenuToolbarItem {
@@ -653,12 +642,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     @objc
-    private func handleNetworkFetchBodyToolbarAction(_ sender: Any?) {
-        inspectorController.network.requestFetchSelectedBodies(force: true)
-        updateToolbarState()
-    }
-
-    @objc
     private func handleNetworkFilterMenuAction(_ sender: NSMenuItem) {
         guard
             let rawValue = sender.representedObject as? String,
@@ -750,7 +733,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             .wiNetworkFilter,
             .wiNetworkClear,
             .wiNetworkSearch,
-            .wiNetworkFetchBody,
             .flexibleSpace
         ]
     }
@@ -847,16 +829,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: item.label)
             item.action = #selector(handleDOMReloadToolbarAction(_:))
             return item
-        case .wiNetworkFetchBody:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.target = self
-            item.isBordered = true
-            item.label = wiLocalized("network.body.fetch", default: "Fetch Body")
-            item.paletteLabel = item.label
-            item.toolTip = item.label
-            item.image = NSImage(systemSymbolName: "arrow.down.document", accessibilityDescription: item.label)
-            item.action = #selector(handleNetworkFetchBodyToolbarAction(_:))
-            return item
         default:
             return nil
         }
@@ -877,7 +849,6 @@ private extension NSToolbarItem.Identifier {
     static let wiNetworkFilter = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFilter")
     static let wiNetworkClear = NSToolbarItem.Identifier("WIContainerToolbar.NetworkClear")
     static let wiNetworkSearch = NSToolbarItem.Identifier("WIContainerToolbar.NetworkSearch")
-    static let wiNetworkFetchBody = NSToolbarItem.Identifier("WIContainerToolbar.NetworkFetchBody")
 }
 
 #if DEBUG && canImport(SwiftUI)

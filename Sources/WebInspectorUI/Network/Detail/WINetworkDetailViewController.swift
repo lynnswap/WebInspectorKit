@@ -32,6 +32,7 @@ import UIKit
     private let inspector: WINetworkModel
     private let showsNavigationControls: Bool
     @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
+    @ObservationIgnored private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -81,13 +82,8 @@ import UIKit
     }
 
     func display(_ entry:NetworkEntry?) {
-        if showsNavigationControls {
-            navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-                completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
-            }
-        } else {
-            navigationItem.additionalOverflowItems = nil
-        }
+        navigationItem.additionalOverflowItems = nil
+        selectedEntryStructureObservationHandles.removeAll()
         guard let entry else {
             title = nil
             requestSnapshotUpdate()
@@ -101,9 +97,11 @@ import UIKit
         } else {
             title = nil
         }
+        requestVisibleBodyFetchIfNeeded(entry)
         collectionView.isHidden = false
         contentUnavailableConfiguration = nil
         requestSnapshotUpdate()
+        startObservingEntryStructure(entry)
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -271,15 +269,28 @@ import UIKit
         return renderSections
     }
 
-    private func makeSecondaryMenu() -> UIMenu {
-        let fetchAction = UIAction(
-            title: wiLocalized("network.body.fetch", default: "Fetch Body"),
-            image: UIImage(systemName: "arrow.clockwise"),
-            attributes: inspector.canFetchSelectedBodies ? [] : [.disabled]
-        ) { [weak self] _ in
-            self?.inspector.requestFetchSelectedBodies(force: true)
+    private func startObservingEntryStructure(_ entry: NetworkEntry) {
+        entry.observe([\.requestHeaders, \.responseHeaders, \.requestBody, \.responseBody, \.errorDescription]) {
+            [weak self, weak entry] in
+            guard let self, let entry else {
+                return
+            }
+            guard self.entry?.id == entry.id else {
+                return
+            }
+            self.requestVisibleBodyFetchIfNeeded(entry)
+            self.requestSnapshotUpdate()
         }
-        return UIMenu(children: [fetchAction])
+        .store(in: &selectedEntryStructureObservationHandles)
+    }
+
+    private func requestVisibleBodyFetchIfNeeded(_ entry: NetworkEntry) {
+        if entry.requestBody != nil {
+            inspector.requestBodyIfNeeded(for: entry, role: .request)
+        }
+        if entry.responseBody != nil {
+            inspector.requestBodyIfNeeded(for: entry, role: .response)
+        }
     }
 
     private func configureListCell(_ cell: WINetworkDetailObservingListCell, itemID: DetailItemID) {

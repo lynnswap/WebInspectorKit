@@ -57,15 +57,6 @@ public final class WINetworkViewController: NSSplitViewController {
     public override func viewWillAppear() {
         super.viewWillAppear()
     }
-
-    func canFetchSelectedBodies() -> Bool {
-        inspector.canFetchSelectedBodies
-    }
-
-    func fetchSelectedBodies(force: Bool) {
-        inspector.requestFetchSelectedBodies(force: force)
-    }
-
 }
 
 @MainActor
@@ -349,6 +340,9 @@ private struct NetworkMacDetailTab: View {
                 .foregroundStyle(bodyPreviewColor(for: body))
                 .lineLimit(10)
                 .textSelection(.enabled)
+        }
+        .onAppear {
+            inspector.requestBodyIfNeeded(for: entry, role: body.role)
         }
     }
 

@@ -144,6 +144,12 @@ extension NetworkPageAgent {
     }
 }
 
+extension NetworkPageAgent: NetworkBodyFetching {
+    package func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
+        await fetchBody(bodyRef: ref, bodyHandle: handle, role: role)
+    }
+}
+
 extension NetworkPageAgent: WKScriptMessageHandler {
     public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame else {

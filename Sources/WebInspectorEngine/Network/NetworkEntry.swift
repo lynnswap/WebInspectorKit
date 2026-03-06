@@ -173,6 +173,28 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         }
     }
 
+    package func applyFetchedBody(_ fetched: NetworkBody, to target: NetworkBody) {
+        if let fullText = fetched.full ?? fetched.preview, !fullText.isEmpty {
+            target.applyFullBody(
+                fullText,
+                isBase64Encoded: fetched.isBase64Encoded,
+                isTruncated: fetched.isTruncated,
+                size: fetched.size ?? fullText.count
+            )
+        }
+
+        target.summary = fetched.summary ?? target.summary
+        target.formEntries = fetched.formEntries
+        target.kind = fetched.kind
+        target.isTruncated = fetched.isTruncated
+        target.isBase64Encoded = fetched.isBase64Encoded
+        target.fetchState = .full
+        if let size = target.size ?? target.full?.count ?? target.preview?.count {
+            target.size = size
+        }
+        applyFetchedBodySizeMetadata(from: target)
+    }
+
     func refreshFileTypeLabel() {
         fileTypeLabel = Self.makeFileTypeLabel(
             mimeType: mimeType,

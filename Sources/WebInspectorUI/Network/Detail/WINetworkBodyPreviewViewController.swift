@@ -121,10 +121,9 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         modeControl.isHidden = true
         navigationItem.titleView = modeControl
         applyTitle()
-        updateSecondaryMenu()
+        inspector.requestBodyIfNeeded(for: entry, role: bodyState.role)
         requestRenderModelUpdate()
         startObservingBodyState()
-        inspector.requestFetchBody(entryID: entry.id, role: bodyState.role, force: false)
     }
 
     @objc
@@ -162,7 +161,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private func applyRenderModel(_ model: NetworkBodyPreviewRenderModel) {
         renderModel = model
         applyTitle()
-        updateSecondaryMenu()
 
         let hasObjectTree = model.availableModes.contains(.objectTree)
         modeControl.isHidden = !hasObjectTree
@@ -206,31 +204,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
             : wiLocalized("network.section.body.response", default: "Response Body")
     }
 
-    private func updateSecondaryMenu() {
-        navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-            completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
-        }
-    }
-
-    private func makeSecondaryMenu() -> UIMenu {
-        let fetchAction = UIAction(
-            title: wiLocalized("network.body.fetch", default: "Fetch Body"),
-            image: UIImage(systemName: "arrow.clockwise"),
-            attributes: bodyState.canFetchBody ? [] : [.disabled]
-        ) { [weak self] _ in
-            self?.fetch(force: true)
-        }
-        return UIMenu(children: [fetchAction])
-    }
-
-    private func fetch(force: Bool) {
-        guard bodyState.canFetchBody else {
-            return
-        }
-        requestRenderModelUpdate()
-        inspector.requestFetchBody(entryID: entry.id, role: bodyState.role, force: force)
-    }
-
     private func startObservingBodyState() {
         bodyObservationHandles.removeAll()
         bodyState.observeTask(
@@ -250,7 +223,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
             guard let self else {
                 return
             }
-            self.updateSecondaryMenu()
             self.requestRenderModelUpdate()
         }
         .store(in: &bodyObservationHandles)
