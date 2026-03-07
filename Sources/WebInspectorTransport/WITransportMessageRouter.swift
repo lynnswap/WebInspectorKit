@@ -32,6 +32,13 @@ actor WITransportMessageRouter {
         let errorMessage: String?
     }
 
+    private struct KnownTarget {
+        let identifier: String
+        let type: String
+        let isProvisional: Bool
+        let creationOrder: Int
+    }
+
     private let configuration: WITransportConfiguration
     private var rootDispatcher: RootDispatcher?
     private var pageDispatcher: PageDispatcher?
@@ -44,6 +51,9 @@ actor WITransportMessageRouter {
     private var subscriptions: [UUID: EventSubscription] = [:]
     private var backlogs: [WITransportTargetScope: [WITransportEventEnvelope]] = [:]
     private var currentPageTargetIdentifier: String?
+    private var committedPageTargetIdentifier: String?
+    private var knownTargets: [String: KnownTarget] = [:]
+    private var nextTargetCreationOrder = 0
     private var pageTargetWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(configuration: WITransportConfiguration) {
@@ -57,6 +67,9 @@ actor WITransportMessageRouter {
         self.rootDispatcher = rootDispatcher
         self.pageDispatcher = pageDispatcher
         currentPageTargetIdentifier = nil
+        committedPageTargetIdentifier = nil
+        knownTargets.removeAll()
+        nextTargetCreationOrder = 0
         log("router connected")
     }
 
@@ -64,6 +77,8 @@ actor WITransportMessageRouter {
         rootDispatcher = nil
         pageDispatcher = nil
         currentPageTargetIdentifier = nil
+        committedPageTargetIdentifier = nil
+        knownTargets.removeAll()
 
         for pending in pendingRootRequests.values {
             pending.timeoutTask.cancel()
@@ -244,6 +259,8 @@ private extension WITransportMessageRouter {
             throw WITransportError.pageTargetUnavailable
         }
 
+        log("sending page command method=\(method) target=\(targetIdentifier)")
+
         let innerIdentifier = nextIdentifier()
         let outerIdentifier = nextIdentifier()
         let innerMessage = try commandJSONString(identifier: innerIdentifier, method: method, parametersData: parametersData)
@@ -373,17 +390,23 @@ private extension WITransportMessageRouter {
         }
 
         if method == "Target.targetCreated" {
-            guard
-                let targetInfo = params["targetInfo"] as? [String: Any],
-                stringValue(targetInfo["type"]) == "page",
-                let targetIdentifier = stringValue(targetInfo["targetId"]),
-                boolValue(targetInfo["isProvisional"]) != true
-            else {
+            let targetInfo = params["targetInfo"] as? [String: Any]
+            let targetType = stringValue(targetInfo?["type"])
+            let targetIdentifier = stringValue(targetInfo?["targetId"])
+            let isProvisional = boolValue(targetInfo?["isProvisional"])
+            log("target created id=\(targetIdentifier ?? "n/a") type=\(targetType ?? "n/a") provisional=\(String(describing: isProvisional))")
+
+            guard targetInfo != nil, let targetType, let targetIdentifier else {
                 return
             }
 
-            currentPageTargetIdentifier = targetIdentifier
-            resumePageTargetWaiters()
+            knownTargets[targetIdentifier] = KnownTarget(
+                identifier: targetIdentifier,
+                type: targetType,
+                isProvisional: isProvisional == true,
+                creationOrder: nextTargetOrder()
+            )
+            refreshPreferredPageTarget(reason: "targetCreated")
             return
         }
 
@@ -394,23 +417,82 @@ private extension WITransportMessageRouter {
                 return
             }
 
+            log("target committed old=\(stringValue(params["oldTargetId"]) ?? "n/a") new=\(newTargetIdentifier)")
+
             if let oldTargetIdentifier = stringValue(params["oldTargetId"]) {
-                if currentPageTargetIdentifier == nil || currentPageTargetIdentifier == oldTargetIdentifier {
-                    currentPageTargetIdentifier = newTargetIdentifier
-                    resumePageTargetWaiters()
+                if var target = knownTargets.removeValue(forKey: oldTargetIdentifier) {
+                    target = KnownTarget(
+                        identifier: newTargetIdentifier,
+                        type: target.type,
+                        isProvisional: false,
+                        creationOrder: target.creationOrder
+                    )
+                    knownTargets[newTargetIdentifier] = target
                 }
-            } else {
-                currentPageTargetIdentifier = newTargetIdentifier
-                resumePageTargetWaiters()
+            } else if knownTargets[newTargetIdentifier] == nil {
+                knownTargets[newTargetIdentifier] = KnownTarget(
+                    identifier: newTargetIdentifier,
+                    type: "page",
+                    isProvisional: false,
+                    creationOrder: nextTargetOrder()
+                )
             }
+
+            if let existing = knownTargets[newTargetIdentifier] {
+                knownTargets[newTargetIdentifier] = KnownTarget(
+                    identifier: existing.identifier,
+                    type: existing.type,
+                    isProvisional: false,
+                    creationOrder: existing.creationOrder
+                )
+            }
+
+            committedPageTargetIdentifier = newTargetIdentifier
+            refreshPreferredPageTarget(reason: "didCommitProvisionalTarget")
             return
         }
 
         if method == "Target.targetDestroyed",
-           let targetIdentifier = stringValue(params["targetId"]),
-           currentPageTargetIdentifier == targetIdentifier {
-            currentPageTargetIdentifier = nil
+           let targetIdentifier = stringValue(params["targetId"]) {
+            if committedPageTargetIdentifier == targetIdentifier {
+                committedPageTargetIdentifier = nil
+            }
+            knownTargets.removeValue(forKey: targetIdentifier)
+            refreshPreferredPageTarget(reason: "targetDestroyed")
         }
+    }
+
+    func refreshPreferredPageTarget(reason: String) {
+        let selectedTarget = preferredTarget(ofType: "page")
+        let previousTargetIdentifier = currentPageTargetIdentifier
+        currentPageTargetIdentifier = selectedTarget?.identifier
+
+        guard previousTargetIdentifier != currentPageTargetIdentifier else {
+            return
+        }
+
+        if let selectedTarget {
+            log("selected page target id=\(selectedTarget.identifier) type=\(selectedTarget.type) reason=\(reason)")
+            resumePageTargetWaiters()
+        } else {
+            log("cleared page target reason=\(reason)")
+        }
+    }
+
+    private func preferredTarget(ofType type: String) -> KnownTarget? {
+        let nonProvisionalTargets = knownTargets.values.filter { $0.type == type && !$0.isProvisional }
+
+        if type == "page",
+           let committedPageTargetIdentifier,
+           let committedTarget = nonProvisionalTargets.first(where: { $0.identifier == committedPageTargetIdentifier }) {
+            return committedTarget
+        }
+
+        return nonProvisionalTargets
+            .sorted { lhs, rhs in
+                lhs.creationOrder > rhs.creationOrder
+            }
+            .first
     }
 
     func resumePageTargetWaiters() {
@@ -570,6 +652,11 @@ private extension WITransportMessageRouter {
     func nextIdentifier() -> Int {
         defer { nextIdentifierValue += 1 }
         return nextIdentifierValue
+    }
+
+    func nextTargetOrder() -> Int {
+        defer { nextTargetCreationOrder += 1 }
+        return nextTargetCreationOrder
     }
 
     func log(_ message: String) {

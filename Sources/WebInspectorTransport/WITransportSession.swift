@@ -1,6 +1,5 @@
 import Foundation
 import WebKit
-@unsafe @preconcurrency import WebInspectorTransportObjCShim
 
 @MainActor
 public final class WITransportSession {
@@ -14,17 +13,22 @@ public final class WITransportSession {
     public private(set) var supportSnapshot: WITransportSupportSnapshot
 
     private let configuration: WITransportConfiguration
+    private let backendFactory: @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend
     private weak var webView: WKWebView?
-    private var bridge: WITransportBridge?
+    private var backend: (any WITransportPlatformBackend)?
     private var router: WITransportMessageRouter?
 
-    public init(configuration: WITransportConfiguration = .init()) {
-        self.configuration = configuration
-        self.supportSnapshot = WITransportWebKitLocalSymbolResolver.currentAttachResolution().supportSnapshot
+    public convenience init(configuration: WITransportConfiguration = .init()) {
+        self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
     }
 
-    deinit {
-        bridge?.detach()
+    init(
+        configuration: WITransportConfiguration = .init(),
+        backendFactory: @escaping @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend
+    ) {
+        self.configuration = configuration
+        self.backendFactory = backendFactory
+        self.supportSnapshot = backendFactory(configuration).supportSnapshot
     }
 
     public var root: WITransportCommandChannel {
@@ -40,60 +44,56 @@ public final class WITransportSession {
             throw WITransportError.alreadyAttached
         }
 
-        let resolution = WITransportWebKitLocalSymbolResolver.currentAttachResolution()
-        supportSnapshot = resolution.supportSnapshot
-        guard resolution.supportSnapshot.isSupported else {
-            throw WITransportError.unsupported(resolution.failureReason ?? "connect/disconnect symbol missing")
+        let backend = backendFactory(configuration)
+        supportSnapshot = backend.supportSnapshot
+        guard backend.supportSnapshot.isSupported else {
+            throw WITransportError.unsupported(backend.supportSnapshot.failureReason ?? "inspector backend unavailable")
         }
 
         state = .attaching
         self.webView = webView
 
-        let bridge = WITransportBridge(webView: webView)
-        let bridgeReference = BridgeReference(bridge)
         let router = WITransportMessageRouter(configuration: configuration)
 
-        self.bridge = bridge
+        self.backend = backend
         self.router = router
 
-        bridge.rootMessageHandler = { [router] message in
-            Task {
-                await router.handleIncomingRootMessage(message)
-            }
-        }
-        bridge.pageMessageHandler = { [router] message, targetIdentifier in
-            Task {
-                await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
-            }
-        }
-        bridge.fatalFailureHandler = { [logHandler = configuration.logHandler] message in
-            logHandler?("[WebInspectorTransport] transport fatal failure: \(message)")
-        }
-
         do {
-            try bridge.attach(
-                withConnectFrontendAddress: resolution.connectFrontendAddress,
-                disconnectFrontendAddress: resolution.disconnectFrontendAddress
+            try backend.attach(
+                to: webView,
+                messageHandlers: WITransportBackendMessageHandlers(
+                    handleRootMessage: { [router] message in
+                        Task {
+                            await router.handleIncomingRootMessage(message)
+                        }
+                    },
+                    handlePageMessage: { [router] message, targetIdentifier in
+                        Task {
+                            await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
+                        }
+                    },
+                    handleFatalFailure: { [logHandler = configuration.logHandler] message in
+                        logHandler?("[WebInspectorTransport] transport fatal failure: \(message)")
+                    }
+                )
             )
             await router.connect(
-                rootDispatcher: { [bridgeReference] message in
+                rootDispatcher: { [sessionReference = SessionReference(self)] message in
                     try await MainActor.run {
-                        guard let bridge = bridgeReference.bridge else {
+                        guard let session = sessionReference.session,
+                              let backend = session.backend else {
                             throw WITransportError.transportClosed
                         }
-                        try bridge.sendRootJSONString(message)
+                        try backend.sendRootMessage(message)
                     }
                 },
-                pageDispatcher: { [bridgeReference] message, targetIdentifier, outerIdentifier in
+                pageDispatcher: { [sessionReference = SessionReference(self)] message, targetIdentifier, outerIdentifier in
                     try await MainActor.run {
-                        guard let bridge = bridgeReference.bridge else {
+                        guard let session = sessionReference.session,
+                              let backend = session.backend else {
                             throw WITransportError.transportClosed
                         }
-                        try bridge.sendPageJSONString(
-                            message,
-                            targetIdentifier: targetIdentifier,
-                            outerIdentifier: NSNumber(value: outerIdentifier)
-                        )
+                        try backend.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
                     }
                 }
             )
@@ -103,8 +103,8 @@ public final class WITransportSession {
             log("attached")
         } catch {
             await router.disconnect()
-            bridge.detach()
-            self.bridge = nil
+            backend.detach()
+            self.backend = nil
             self.router = nil
             self.webView = nil
             state = .detached
@@ -125,13 +125,13 @@ public final class WITransportSession {
             return
         }
 
-        bridge?.detach()
+        backend?.detach()
         if let router {
             Task {
                 await router.disconnect()
             }
         }
-        bridge = nil
+        backend = nil
         router = nil
         webView = nil
         state = .detached
@@ -165,6 +165,11 @@ private extension WITransportSession {
         guard let router else {
             throw WITransportError.notAttached
         }
+
+        if let compatibilityResponse = compatibilityResponse(scope: scope, method: method) {
+            return compatibilityResponse
+        }
+
         return try await router.send(scope: scope, method: method, parametersData: parametersData)
     }
 
@@ -184,13 +189,14 @@ private extension WITransportSession {
     func log(_ message: String) {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
     }
-}
 
-private final class BridgeReference: @unchecked Sendable {
-    weak var bridge: WITransportBridge?
-
-    init(_ bridge: WITransportBridge) {
-        self.bridge = bridge
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+        switch (supportSnapshot.backendKind, scope, method) {
+        case (.macOSNativeInspector, .page, WITransportCommands.DOM.Enable.method):
+            return Data("{}".utf8)
+        default:
+            return nil
+        }
     }
 }
 

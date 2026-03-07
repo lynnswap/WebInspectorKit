@@ -31,7 +31,7 @@ public final class NetworkSession: PageSession {
 
     public let store: NetworkStore
     public private(set) weak var lastPageWebView: WKWebView?
-    private let pageAgent: NetworkPageAgent
+    private let pageAgent: any NetworkPageDriving
     private let bodyFetcher: any NetworkBodyFetching
     private var bodyFetchTasks: [BodyFetchKey: (token: UUID, task: Task<Void, Never>)] = [:]
 
@@ -52,9 +52,9 @@ public final class NetworkSession: PageSession {
         self.init(configuration: configuration, pageAgent: pageAgent, bodyFetcher: bodyFetcher)
     }
 
-    private init(
+    init(
         configuration: NetworkConfiguration,
-        pageAgent: NetworkPageAgent,
+        pageAgent: any NetworkPageDriving,
         bodyFetcher: any NetworkBodyFetching
     ) {
         self.configuration = configuration

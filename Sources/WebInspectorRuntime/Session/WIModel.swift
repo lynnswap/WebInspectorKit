@@ -16,10 +16,17 @@ public final class WIModel {
     private weak var connectedPageWebView: WKWebView?
     private var hasConfiguredTabsFromUI = false
 
-    public init(configuration: WIModelConfiguration = .init()) {
-        let domSession = DOMSession(configuration: configuration.dom)
-        let networkSession = NetworkSession(configuration: configuration.network)
+    public convenience init(configuration: WIModelConfiguration = .init()) {
+        self.init(
+            domSession: DOMSession(configuration: configuration.dom),
+            networkSession: NetworkSession(configuration: configuration.network)
+        )
+    }
 
+    init(
+        domSession: DOMSession,
+        networkSession: NetworkSession
+    ) {
         self.dom = WIDOMModel(session: domSession)
         self.network = WINetworkModel(session: networkSession)
         self.dom.setRecoverableErrorHandler { [weak self] message in

@@ -5,6 +5,21 @@ import WebKit
 @MainActor
 struct DOMSessionTests {
     @Test
+    func sessionCanUseInjectedPageDriver() async throws {
+        let pageAgent = StubDOMPageDriver()
+        let session = DOMSession(configuration: .init(snapshotDepth: 3), pageAgent: pageAgent)
+        let webView = WKWebView(frame: .zero)
+
+        let attachResult = session.attach(to: webView)
+        let snapshot = try await session.captureSnapshot(maxDepth: 3)
+
+        #expect(attachResult.shouldReload == true)
+        #expect(pageAgent.attachedWebViews.count == 1)
+        #expect(pageAgent.attachedWebViews.first === webView)
+        #expect(snapshot == "{\"root\":{}}")
+    }
+
+    @Test
     func detachClearsSelection() {
         let session = DOMSession(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
         session.graphStore.applySelectionSnapshot(
@@ -556,6 +571,89 @@ private final class RecordingUserContentController: WKUserContentController {
     override func removeScriptMessageHandler(forName name: String, contentWorld: WKContentWorld) {
         removedHandlers.append((name, contentWorld))
         super.removeScriptMessageHandler(forName: name, contentWorld: contentWorld)
+    }
+}
+
+@MainActor
+private final class StubDOMPageDriver: DOMPageDriving {
+    weak var sink: (any DOMBundleSink)?
+    let currentBridgeMode: WIBridgeMode = .privateFull
+    private(set) weak var webView: WKWebView?
+    private(set) var attachedWebViews: [WKWebView] = []
+
+    func updateConfiguration(_ configuration: DOMConfiguration) {
+    }
+
+    func attachPageWebView(_ newWebView: WKWebView?) {
+        webView = newWebView
+        if let newWebView {
+            attachedWebViews.append(newWebView)
+        }
+    }
+
+    func detachPageWebView() {
+        webView = nil
+    }
+
+    func setAutoSnapshot(enabled: Bool) async {
+    }
+
+    func captureSnapshot(maxDepth: Int) async throws -> String {
+        "{\"root\":{}}"
+    }
+
+    func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
+        "{}"
+    }
+
+    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
+        .init(nodeId: nodeId, rules: [], truncated: false, blockedStylesheetCount: 0)
+    }
+
+    func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
+        ["root": [:]]
+    }
+
+    func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any {
+        [:]
+    }
+
+    func beginSelectionMode() async throws -> DOMPageAgent.SelectionModeResult {
+        .init(cancelled: false, requiredDepth: 0)
+    }
+
+    func cancelSelectionMode() async {
+    }
+
+    func highlight(nodeId: Int) async {
+    }
+
+    func hideHighlight() async {
+    }
+
+    func removeNode(nodeId: Int) async {
+    }
+
+    func removeNodeWithUndo(nodeId: Int) async -> Int? {
+        nil
+    }
+
+    func undoRemoveNode(undoToken: Int) async -> Bool {
+        false
+    }
+
+    func redoRemoveNode(undoToken: Int, nodeId: Int?) async -> Bool {
+        false
+    }
+
+    func setAttribute(nodeId: Int, name: String, value: String) async {
+    }
+
+    func removeAttribute(nodeId: Int, name: String) async {
+    }
+
+    func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
+        ""
     }
 }
 

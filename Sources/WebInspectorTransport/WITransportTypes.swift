@@ -5,6 +5,20 @@ public enum WITransportTargetScope: String, Sendable {
     case page
 }
 
+public enum WITransportBackendKind: String, Sendable {
+    case iOSNativeInspector
+    case macOSNativeInspector
+    case unsupported
+}
+
+public enum WITransportCapability: String, Hashable, Sendable {
+    case rootMessaging
+    case pageMessaging
+    case pageTargetRouting
+    case domDomain
+    case networkDomain
+}
+
 public struct WIEmptyTransportParameters: Codable, Hashable, Sendable {
     public init() {}
 }
@@ -20,10 +34,19 @@ public struct WITransportSupportSnapshot: Sendable {
     }
 
     public let availability: Availability
+    public let backendKind: WITransportBackendKind
+    public let capabilities: Set<WITransportCapability>
     public let failureReason: String?
 
-    public init(availability: Availability, failureReason: String?) {
+    public init(
+        availability: Availability,
+        backendKind: WITransportBackendKind,
+        capabilities: Set<WITransportCapability> = [],
+        failureReason: String?
+    ) {
         self.availability = availability
+        self.backendKind = backendKind
+        self.capabilities = capabilities
         self.failureReason = failureReason
     }
 

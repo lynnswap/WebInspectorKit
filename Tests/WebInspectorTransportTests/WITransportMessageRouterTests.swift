@@ -89,6 +89,103 @@ struct WITransportMessageRouterTests {
     }
 
     @Test
+    func pageCommandsFollowCommittedTargetWithoutOldIdentifier() async throws {
+        let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
+        let recorder = PageDispatchRecorder()
+
+        await router.connect(
+            rootDispatcher: { _ in },
+            pageDispatcher: { [router, recorder] message, targetIdentifier, _ in
+                await recorder.record(targetIdentifier: targetIdentifier)
+                let identifier = try Self.identifier(from: message)
+                Task {
+                    await router.handleIncomingPageMessage(
+                        Self.jsonString([
+                            "id": identifier,
+                            "result": ["targetIdentifier": targetIdentifier],
+                        ]),
+                        targetIdentifier: targetIdentifier
+                    )
+                }
+            }
+        )
+
+        await router.handleIncomingRootMessage(
+            Self.jsonString([
+                "method": "Target.didCommitProvisionalTarget",
+                "params": [
+                    "newTargetId": "page-C",
+                ],
+            ])
+        )
+
+        let response = try JSONDecoder().decode(
+            TargetEcho.self,
+            from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil)
+        )
+
+        #expect(response.targetIdentifier == "page-C")
+        #expect(await recorder.snapshot() == ["page-C"])
+    }
+
+    @Test
+    func pageCommandsPreferNewestPageTargetWhenNoCommittedTargetExists() async throws {
+        let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
+        let recorder = PageDispatchRecorder()
+
+        await router.connect(
+            rootDispatcher: { _ in },
+            pageDispatcher: { [router, recorder] message, targetIdentifier, _ in
+                await recorder.record(targetIdentifier: targetIdentifier)
+                let identifier = try Self.identifier(from: message)
+                Task {
+                    await router.handleIncomingPageMessage(
+                        Self.jsonString([
+                            "id": identifier,
+                            "result": ["targetIdentifier": targetIdentifier],
+                        ]),
+                        targetIdentifier: targetIdentifier
+                    )
+                }
+            }
+        )
+
+        await router.handleIncomingRootMessage(
+            Self.jsonString([
+                "method": "Target.targetCreated",
+                "params": [
+                    "targetInfo": [
+                        "targetId": "page-old",
+                        "type": "page",
+                        "isProvisional": false,
+                    ],
+                ],
+            ])
+        )
+
+        await router.handleIncomingRootMessage(
+            Self.jsonString([
+                "method": "Target.targetCreated",
+                "params": [
+                    "targetInfo": [
+                        "targetId": "page-new",
+                        "type": "page",
+                        "isProvisional": false,
+                    ],
+                ],
+            ])
+        )
+
+        let response = try JSONDecoder().decode(
+            TargetEcho.self,
+            from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil)
+        )
+
+        #expect(response.targetIdentifier == "page-new")
+        #expect(await recorder.snapshot() == ["page-new"])
+    }
+
+    @Test
     func eventSubscriptionsSkipNonMatchingMethods() async throws {
         let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
         let stream = await router.events(

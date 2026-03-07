@@ -5,6 +5,27 @@ import WebKit
 @MainActor
 struct NetworkSessionTests {
     @Test
+    func sessionCanUseInjectedPageDriver() {
+        let pageAgent = StubNetworkPageDriver()
+        let session = NetworkSession(
+            configuration: .init(),
+            pageAgent: pageAgent,
+            bodyFetcher: pageAgent
+        )
+        let webView = WKWebView(frame: .zero)
+
+        session.attach(pageWebView: webView)
+        session.setMode(.buffering)
+        session.clearNetworkLogs()
+
+        #expect(session.store === pageAgent.store)
+        #expect(pageAgent.attachedWebViews.count == 1)
+        #expect(pageAgent.attachedWebViews.first === webView)
+        #expect(pageAgent.observedModes == [.active, .buffering])
+        #expect(pageAgent.clearCount == 1)
+    }
+
+    @Test
     func startsInActiveMode() {
         let session = NetworkSession()
 
@@ -289,5 +310,37 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
     func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchRefs.append(ref)
         return await onFetch(ref, handle, role)
+    }
+}
+
+@MainActor
+private final class StubNetworkPageDriver: NetworkPageDriving {
+    private(set) weak var webView: WKWebView?
+    let store = NetworkStore()
+    private(set) var observedModes: [NetworkLoggingMode] = []
+    private(set) var attachedWebViews: [WKWebView] = []
+    private(set) var clearCount = 0
+
+    func setMode(_ mode: NetworkLoggingMode) {
+        observedModes.append(mode)
+    }
+
+    func attachPageWebView(_ newWebView: WKWebView?) {
+        webView = newWebView
+        if let newWebView {
+            attachedWebViews.append(newWebView)
+        }
+    }
+
+    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
+        webView = nil
+    }
+
+    func clearNetworkLogs() {
+        clearCount += 1
+    }
+
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        .bodyUnavailable
     }
 }

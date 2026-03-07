@@ -73,6 +73,7 @@ let package = Package(
                 .linkedFramework("Foundation"),
                 .linkedFramework("JavaScriptCore"),
                 .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
             ]
         ),
         .target(

@@ -8,7 +8,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || TARGET_OS_OSX
 namespace WITransportBridgePrivate {
 
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
@@ -530,7 +530,7 @@ private:
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorTransport.Transport"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS." }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS and macOS." }];
     }
     return NO;
 }
@@ -540,7 +540,7 @@ private:
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorTransport.Transport"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS." }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS and macOS." }];
     }
     return NO;
 }
@@ -553,7 +553,7 @@ private:
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorTransport.Transport"
                                      code:1
-                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS." }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: @"WebInspectorTransport is only available on iOS and macOS." }];
     }
     return NO;
 }

@@ -8,7 +8,7 @@ public final class DOMSession {
     public let graphStore: DOMGraphStore
 
     public private(set) weak var lastPageWebView: WKWebView?
-    private let pageAgent: DOMPageAgent
+    private let pageAgent: any DOMPageDriving
     private var autoSnapshotEnabled = false
 
     var isAutoSnapshotEnabled: Bool {
@@ -25,10 +25,18 @@ public final class DOMSession {
         }
     }
 
-    public init(configuration: DOMConfiguration = .init()) {
+    public convenience init(configuration: DOMConfiguration = .init()) {
+        self.init(configuration: configuration, pageAgent: DOMPageAgent(configuration: configuration))
+    }
+
+    init(
+        configuration: DOMConfiguration = .init(),
+        pageAgent: any DOMPageDriving
+    ) {
         self.configuration = configuration
         graphStore = DOMGraphStore()
-        pageAgent = DOMPageAgent(configuration: configuration)
+        self.pageAgent = pageAgent
+        self.pageAgent.sink = bundleSink
     }
 
     public func updateConfiguration(_ configuration: DOMConfiguration) {
