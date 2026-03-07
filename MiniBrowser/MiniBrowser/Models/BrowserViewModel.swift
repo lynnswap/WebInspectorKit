@@ -170,6 +170,13 @@ private let logger = Logger(
             }
         )
         nativeInspectorProbeResult = finalResult
+        NSLog(
+            "[NativeInspectorProbe] status=%@ stage=%@ message=%@ requestID=%@",
+            debugStatusString(for: finalResult.status),
+            finalResult.stage,
+            finalResult.message,
+            finalResult.requestIdentifier ?? "n/a"
+        )
     }
 
     private func loadNativeInspectorProbeURL(_ url: URL) async throws {
@@ -211,6 +218,17 @@ private let logger = Logger(
 
         return url.absoluteString == expectedURL.absoluteString
             || (url.scheme == expectedURL.scheme && url.host == expectedURL.host)
+    }
+
+    private func debugStatusString(for status: NativeInspectorProbeStatus) -> String {
+        switch status {
+        case .running:
+            return "running"
+        case .succeeded:
+            return "succeeded"
+        case .failed:
+            return "failed"
+        }
     }
 #endif
 #if os(iOS)

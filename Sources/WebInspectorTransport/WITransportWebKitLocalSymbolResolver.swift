@@ -1,4 +1,4 @@
-#if os(iOS) && DEBUG
+#if os(iOS)
 import Foundation
 import MachO
 import MachOKit
@@ -14,7 +14,11 @@ private enum WIKWebKitLocalSymbolFailure: String {
 
 private struct WIKLoadedWebKitImage {
     let path: String
-    let header: UnsafePointer<mach_header>
+    let headerAddress: UInt
+
+    var header: UnsafePointer<mach_header> {
+        unsafe UnsafePointer<mach_header>(bitPattern: headerAddress)!
+    }
 }
 
 private struct WIKFileBackedLocalSymbols {
@@ -34,11 +38,10 @@ private enum WIKResolvedAddress {
     case outsideText(UInt64)
 }
 
-@objc(WIKWebKitLocalSymbolResolution)
-final class WIKWebKitLocalSymbolResolution: NSObject {
-    @objc let connectFrontendAddress: UInt64
-    @objc let disconnectFrontendAddress: UInt64
-    @objc let failureReason: String?
+private struct WIKWebKitLocalSymbolResolution: Sendable {
+    let connectFrontendAddress: UInt64
+    let disconnectFrontendAddress: UInt64
+    let failureReason: String?
 
     init(connectFrontendAddress: UInt64, disconnectFrontendAddress: UInt64, failureReason: String?) {
         self.connectFrontendAddress = connectFrontendAddress
@@ -47,8 +50,7 @@ final class WIKWebKitLocalSymbolResolution: NSObject {
     }
 }
 
-@objc(WIKWebKitLocalSymbolResolver)
-final class WIKWebKitLocalSymbolResolver: NSObject {
+private enum WIKWebKitLocalSymbolResolver {
     private static let webKitImagePath = "/System/Library/Frameworks/WebKit.framework/WebKit"
     private static let textSegmentName = "__TEXT"
     private static let sharedCacheFilePrefix = "dyld_shared_cache_"
@@ -66,8 +68,7 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
         disconnectSymbol: disconnectFrontendSymbol
     )
 
-    @objc(resolveCurrentWebKitAttachSymbols)
-    class func resolveCurrentWebKitAttachSymbols() -> WIKWebKitLocalSymbolResolution {
+    static func resolveCurrentWebKitAttachSymbols() -> WIKWebKitLocalSymbolResolution {
         cachedResolution
     }
 
@@ -112,7 +113,7 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
             return failure(.webKitImageMissing)
         }
 
-        let image = MachOImage(ptr: loadedImage.header)
+        let image = unsafe MachOImage(ptr: loadedImage.header)
         guard image.is64Bit, let text = textSegment(in: image) else {
             return failure(.webKitImageMissing, detail: "Missing a 64-bit __TEXT segment.")
         }
@@ -137,13 +138,13 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
         }
 
         var sharedCacheSize: UInt = 0
-        guard let sharedCachePointer = _dyld_get_shared_cache_range(&sharedCacheSize) else {
+        guard let sharedCachePointer = unsafe _dyld_get_shared_cache_range(&sharedCacheSize) else {
             return failure(.sharedCacheUnavailable)
         }
 
         let cache: DyldCacheLoaded
         do {
-            cache = try DyldCacheLoaded(ptr: sharedCachePointer)
+            cache = try unsafe DyldCacheLoaded(ptr: sharedCachePointer)
         } catch {
             return failure(.sharedCacheUnavailable, detail: error.localizedDescription)
         }
@@ -159,7 +160,7 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
             return failure(.sharedCacheUnavailable, detail: "The dyld cache slide was unavailable.")
         }
 
-        let textStart = UInt64(UInt(bitPattern: loadedImage.header))
+        let textStart = unsafe UInt64(UInt(bitPattern: loadedImage.header))
         let textRange = textStart ..< textStart + UInt64(text.virtualMemorySize)
 
         if let localSymbolsInfo = cache.localSymbolsInfo {
@@ -259,7 +260,7 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
         case let (.outsideText(address), _), let (_, .outsideText(address)):
             return failure(
                 .resolvedAddressOutsideWebKitText,
-                detail: String(format: "Resolved address 0x%llx.", address)
+                detail: unsafe String(format: "Resolved address 0x%llx.", address)
             )
         case (.missing, _), (_, .missing):
             return failure(.connectDisconnectSymbolMissing)
@@ -269,18 +270,18 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
     private static func loadedWebKitImage(pathSuffix: String) -> WIKLoadedWebKitImage? {
         let imageCount = _dyld_image_count()
         for imageIndex in 0 ..< imageCount {
-            guard let imageName = _dyld_get_image_name(imageIndex) else {
+            guard let imageName = unsafe _dyld_get_image_name(imageIndex) else {
                 continue
             }
 
-            let path = String(cString: imageName)
-            guard path.hasSuffix(pathSuffix), let header = _dyld_get_image_header(imageIndex) else {
+            let path = unsafe String(cString: imageName)
+            guard path.hasSuffix(pathSuffix), let header = unsafe _dyld_get_image_header(imageIndex) else {
                 continue
             }
 
             return WIKLoadedWebKitImage(
                 path: path,
-                header: header
+                headerAddress: UInt(bitPattern: header)
             )
         }
 
@@ -398,7 +399,7 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
         }
 
         let offset = UInt64(symbol.offset)
-        let address = UInt64(UInt(bitPattern: image.ptr)) + offset
+        let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + offset
         guard offset < UInt64(text.virtualMemorySize) else {
             return .outsideText(address)
         }
@@ -490,6 +491,86 @@ final class WIKWebKitLocalSymbolResolver: NSObject {
             disconnectFrontendAddress: 0,
             failureReason: reason
         )
+    }
+}
+
+struct WITransportAttachSymbolResolution: Sendable {
+    let connectFrontendAddress: UInt64
+    let disconnectFrontendAddress: UInt64
+    let failureReason: String?
+
+    var supportSnapshot: WITransportSupportSnapshot {
+        WITransportSupportSnapshot(
+            availability: isSupported ? .supported : .unsupported,
+            failureReason: failureReason
+        )
+    }
+
+    var isSupported: Bool {
+        connectFrontendAddress != 0 && disconnectFrontendAddress != 0 && failureReason == nil
+    }
+}
+
+enum WITransportWebKitLocalSymbolResolver {
+    static func currentAttachResolution() -> WITransportAttachSymbolResolution {
+        makeAttachResolution(from: WIKWebKitLocalSymbolResolver.resolveCurrentWebKitAttachSymbols())
+    }
+
+    static func resolveForTesting(
+        imagePathSuffix: String = "/System/Library/Frameworks/WebKit.framework/WebKit",
+        connectSymbol: String = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb",
+        disconnectSymbol: String = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE"
+    ) -> WITransportAttachSymbolResolution {
+        makeAttachResolution(
+            from: WIKWebKitLocalSymbolResolver.resolveForTesting(
+                imagePathSuffix: imagePathSuffix,
+                connectSymbol: connectSymbol,
+                disconnectSymbol: disconnectSymbol
+            )
+        )
+    }
+
+    private static func makeAttachResolution(from resolution: WIKWebKitLocalSymbolResolution) -> WITransportAttachSymbolResolution {
+        WITransportAttachSymbolResolution(
+            connectFrontendAddress: resolution.connectFrontendAddress,
+            disconnectFrontendAddress: resolution.disconnectFrontendAddress,
+            failureReason: resolution.failureReason
+        )
+    }
+}
+#endif
+
+#if !os(iOS)
+struct WITransportAttachSymbolResolution: Sendable {
+    let connectFrontendAddress: UInt64
+    let disconnectFrontendAddress: UInt64
+    let failureReason: String?
+
+    var supportSnapshot: WITransportSupportSnapshot {
+        WITransportSupportSnapshot(
+            availability: .unsupported,
+            failureReason: failureReason
+        )
+    }
+
+    var isSupported: Bool { false }
+}
+
+enum WITransportWebKitLocalSymbolResolver {
+    static func currentAttachResolution() -> WITransportAttachSymbolResolution {
+        WITransportAttachSymbolResolution(
+            connectFrontendAddress: 0,
+            disconnectFrontendAddress: 0,
+            failureReason: "WebInspectorTransport is only available on iOS."
+        )
+    }
+
+    static func resolveForTesting(
+        imagePathSuffix: String = "",
+        connectSymbol: String = "",
+        disconnectSymbol: String = ""
+    ) -> WITransportAttachSymbolResolution {
+        currentAttachResolution()
     }
 }
 #endif

@@ -3,7 +3,14 @@
 /WebInspectorKit/.build/
 .build-temp
 /Packages
-.swiftpm
+.swiftpm/*
+!.swiftpm/xcode/
+.swiftpm/xcode/*
+!.swiftpm/xcode/xcshareddata/
+.swiftpm/xcode/xcshareddata/*
+!.swiftpm/xcode/xcshareddata/xcschemes/
+.swiftpm/xcode/xcshareddata/xcschemes/*
+!.swiftpm/xcode/xcshareddata/xcschemes/WebInspectorTransport.xcscheme
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json

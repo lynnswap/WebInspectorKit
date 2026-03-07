@@ -22,6 +22,10 @@ let package = Package(
             targets: ["WebInspectorEngine"]
         ),
         .library(
+            name: "WebInspectorTransport",
+            targets: ["WebInspectorTransport"]
+        ),
+        .library(
             name: "WebInspectorRuntime",
             targets: ["WebInspectorRuntime"]
         ),
@@ -46,9 +50,31 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
             exact: "0.5.1"
+        ),
+        .package(
+            url: "https://github.com/p-x9/MachOKit",
+            exact: "0.46.1"
         )
     ],
     targets: [
+        .target(
+            name: "WebInspectorTransport",
+            dependencies: [
+                "WebInspectorTransportObjCShim",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorTransportObjCShim",
+            path: "Sources/WebInspectorTransportObjCShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedFramework("WebKit"),
+            ]
+        ),
         .target(
             name: "WebInspectorEngine",
             dependencies: [
@@ -131,6 +157,14 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WebInspectorTransportTests",
+            dependencies: [
+                "WebInspectorTransport"
+            ],
+            path: "Tests/WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorEngineTests",
             dependencies: [
                 "WebInspectorEngine",
@@ -190,5 +224,6 @@ let package = Package(
             capability: .buildTool()
         )
 
-    ]
+    ],
+    cxxLanguageStandard: .gnucxx20
 )
