@@ -38,6 +38,19 @@
             ReferencedContainer = "container:MiniBrowser.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
+      <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "ABA353D42EDFF1ED00489A00"
+               BuildableName = "MiniBrowserTests.xctest"
+               BlueprintName = "MiniBrowserTests"
+               ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+      </Testables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

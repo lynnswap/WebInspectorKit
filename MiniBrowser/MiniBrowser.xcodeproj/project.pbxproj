@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
+			77B94B4A0F2A4D0A8B64C01A /* MachOKit in Frameworks */ = {isa = PBXBuildFile; productRef = 77B94B4C0F2A4D0A8B64C01A /* MachOKit */; };
+			ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,20 +27,26 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		ABA353CA2EDFF1EC00489A00 /* MiniBrowser */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MiniBrowser;
-			sourceTree = "<group>";
-		};
+			77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */ = {
+				isa = PBXFileSystemSynchronizedRootGroup;
+				path = MiniBrowserTests;
+				sourceTree = "<group>";
+			};
+			ABA353CA2EDFF1EC00489A00 /* MiniBrowser */ = {
+				isa = PBXFileSystemSynchronizedRootGroup;
+				path = MiniBrowser;
+				sourceTree = "<group>";
+			};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		ABA353C52EDFF1EC00489A00 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
-			);
+			ABA353C52EDFF1EC00489A00 /* Frameworks */ = {
+				isa = PBXFrameworksBuildPhase;
+				buildActionMask = 2147483647;
+				files = (
+					77B94B4A0F2A4D0A8B64C01A /* MachOKit in Frameworks */,
+					ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
+				);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		ABA353D22EDFF1ED00489A00 /* Frameworks */ = {
@@ -54,10 +61,11 @@
 /* Begin PBXGroup section */
 		ABA353BF2EDFF1EC00489A00 = {
 			isa = PBXGroup;
-			children = (
-				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
-				ABA353C92EDFF1EC00489A00 /* Products */,
-			);
+				children = (
+					ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
+					77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
+					ABA353C92EDFF1EC00489A00 /* Products */,
+				);
 			sourceTree = "<group>";
 		};
 		ABA353C92EDFF1EC00489A00 /* Products */ = {
@@ -84,13 +92,14 @@
 			);
 			dependencies = (
 			);
-			fileSystemSynchronizedGroups = (
-				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
-			);
-			name = MiniBrowser;
-			packageProductDependencies = (
-				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
-			);
+				fileSystemSynchronizedGroups = (
+					ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
+				);
+				name = MiniBrowser;
+				packageProductDependencies = (
+					77B94B4C0F2A4D0A8B64C01A /* MachOKit */,
+					ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
+				);
 			productName = MiniBrowser;
 			productReference = ABA353C82EDFF1EC00489A00 /* MiniBrowser.app */;
 			productType = "com.apple.product-type.application";
@@ -105,12 +114,15 @@
 			);
 			buildRules = (
 			);
-			dependencies = (
-				ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
-			);
-			name = MiniBrowserTests;
-			packageProductDependencies = (
-			);
+				dependencies = (
+					ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
+				);
+				fileSystemSynchronizedGroups = (
+					77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
+				);
+				name = MiniBrowserTests;
+				packageProductDependencies = (
+				);
 			productName = MiniBrowserTests;
 			productReference = ABA353D52EDFF1ED00489A00 /* MiniBrowserTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -143,9 +155,10 @@
 			);
 			mainGroup = ABA353BF2EDFF1EC00489A00;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
-			);
+				packageReferences = (
+					77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */,
+					ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
+				);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ABA353C92EDFF1EC00489A00 /* Products */;
 			projectDirPath = "";
@@ -525,16 +538,32 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ..;
-		};
+			ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */ = {
+				isa = XCLocalSwiftPackageReference;
+				relativePath = ..;
+			};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+			77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */ = {
+				isa = XCRemoteSwiftPackageReference;
+				repositoryURL = "https://github.com/p-x9/MachOKit";
+				requirement = {
+					kind = exactVersion;
+					version = 0.46.1;
+				};
+			};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
-		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = WebInspectorKit;
+			77B94B4C0F2A4D0A8B64C01A /* MachOKit */ = {
+				isa = XCSwiftPackageProductDependency;
+				package = 77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */;
+				productName = MachOKit;
+			};
+			ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
+				isa = XCSwiftPackageProductDependency;
+				productName = WebInspectorKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

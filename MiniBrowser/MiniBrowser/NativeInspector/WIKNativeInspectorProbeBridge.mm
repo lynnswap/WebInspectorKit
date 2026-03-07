@@ -1,16 +1,14 @@
 #import "WIKNativeInspectorProbeBridge.h"
 #import "WIKInspectorABI.h"
+#import <WebKit/WebKit.h>
+#import "MiniBrowser-Swift.h"
 
 #import <TargetConditionals.h>
 #import <mach/mach.h>
-#import <mach-o/dyld.h>
-#import <mach-o/loader.h>
-#import <mach-o/nlist.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <memory>
 #import <string.h>
-#import <uuid/uuid.h>
 
 #if TARGET_OS_IPHONE && DEBUG
 namespace WIKNativeInspectorProbe {
@@ -45,32 +43,7 @@ static NSString *const attachStage = @"attach";
 static NSString *const eventStage = @"event";
 static NSString *const bodyFetchStage = @"body fetch";
 
-static const char *const webKitImageSuffix = "/System/Library/Frameworks/WebKit.framework/WebKit";
-static const char *const connectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb";
-static const char *const disconnectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE";
-
 extern void backendDispatcherDispatch(void *, const WTF::String&) asm("__ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE");
-
-#if !TARGET_OS_SIMULATOR
-struct KnownWebKitLocalSymbols {
-    uuid_t uuid;
-    uintptr_t connectFrontendVMAddr;
-    uintptr_t disconnectFrontendVMAddr;
-};
-
-static const KnownWebKitLocalSymbols knownDeviceWebKitLocalSymbols[] = {
-    {
-        { 0x6E, 0x97, 0x8F, 0xE3, 0x93, 0x4D, 0x3A, 0xE4, 0x96, 0xA2, 0xB4, 0x99, 0xFC, 0xA0, 0x86, 0x04 },
-        0x19e4c4080,
-        0x19e4c449c,
-    },
-    {
-        { 0x75, 0x5C, 0xF1, 0x67, 0xFA, 0xD4, 0x3D, 0x28, 0x8A, 0xE6, 0x34, 0xEB, 0x86, 0xD8, 0x80, 0xCA },
-        0x19e38ea70,
-        0x19e38ee8c,
-    },
-};
-#endif
 
 static NSString *stringValue(id value)
 {
@@ -148,145 +121,28 @@ static BOOL pointerIsWritableMapped(const void *pointer)
     return (info.protection & requiredProtection) == requiredProtection;
 }
 
-#if !TARGET_OS_SIMULATOR
-static BOOL imageUUID(const mach_header_64 *header, uuid_t uuidOut)
+static WIKWebKitLocalSymbolResolution *resolvedAttachSymbols()
 {
-    if (!header || !uuidOut || header->magic != MH_MAGIC_64)
-        return NO;
-
-    const load_command *command = reinterpret_cast<const load_command *>(header + 1);
-    for (uint32_t commandIndex = 0; commandIndex < header->ncmds; commandIndex++) {
-        if (command->cmd == LC_UUID) {
-            auto *uuidCommand = reinterpret_cast<const uuid_command *>(command);
-            memcpy(uuidOut, uuidCommand->uuid, sizeof(uuid_t));
-            return YES;
-        }
-        command = reinterpret_cast<const load_command *>(reinterpret_cast<const uint8_t *>(command) + command->cmdsize);
-    }
-
-    return NO;
-}
-
-static void *findKnownDeviceSymbol(const char *imageSuffix, const char *symbolName)
-{
-    NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol start symbol=%s", symbolName);
-    uint32_t imageCount = _dyld_image_count();
-    for (uint32_t imageIndex = 0; imageIndex < imageCount; imageIndex++) {
-        const char *imageName = _dyld_get_image_name(imageIndex);
-        if (!imageName || !strstr(imageName, imageSuffix))
-            continue;
-
-        NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol matched image=%s", imageName);
-
-        auto *header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(imageIndex));
-        if (!header || header->magic != MH_MAGIC_64)
-            return nullptr;
-
-        uuid_t imageUUIDValue { 0 };
-        if (!imageUUID(header, imageUUIDValue))
-            return nullptr;
-
-        char uuidBuffer[37] = { 0 };
-        uuid_unparse_upper(imageUUIDValue, uuidBuffer);
-        NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol image uuid=%s", uuidBuffer);
-
-        for (const auto& knownSymbols : knownDeviceWebKitLocalSymbols) {
-            if (uuid_compare(imageUUIDValue, knownSymbols.uuid))
-                continue;
-
-            uintptr_t vmaddr = 0;
-            if (!strcmp(symbolName, connectFrontendSymbol))
-                vmaddr = knownSymbols.connectFrontendVMAddr;
-            else if (!strcmp(symbolName, disconnectFrontendSymbol))
-                vmaddr = knownSymbols.disconnectFrontendVMAddr;
-
-            if (!vmaddr)
-                return nullptr;
-
-            intptr_t slide = _dyld_get_image_vmaddr_slide(imageIndex);
-            NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol resolved symbol=%s vmaddr=0x%llx slide=0x%llx", symbolName, static_cast<unsigned long long>(vmaddr), static_cast<unsigned long long>(slide));
-            return reinterpret_cast<void *>(slide + vmaddr);
-        }
-
-        NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol uuid unsupported");
-        return nullptr;
-    }
-
-    NSLog(@"[NativeInspectorProbe] findKnownDeviceSymbol image not found");
-    return nullptr;
-}
-#endif
-
-static void *findLocalSymbol(const char *imageSuffix, const char *symbolName)
-{
-#if TARGET_OS_SIMULATOR
-    uint32_t imageCount = _dyld_image_count();
-    for (uint32_t imageIndex = 0; imageIndex < imageCount; imageIndex++) {
-        const char *imageName = _dyld_get_image_name(imageIndex);
-        if (!imageName || !strstr(imageName, imageSuffix))
-            continue;
-
-        auto *header = reinterpret_cast<const mach_header_64 *>(_dyld_get_image_header(imageIndex));
-        if (!header || header->magic != MH_MAGIC_64)
-            continue;
-
-        intptr_t slide = _dyld_get_image_vmaddr_slide(imageIndex);
-        const load_command *command = reinterpret_cast<const load_command *>(header + 1);
-        const segment_command_64 *linkEditSegment = nullptr;
-        const symtab_command *symtab = nullptr;
-
-        for (uint32_t commandIndex = 0; commandIndex < header->ncmds; commandIndex++) {
-            if (command->cmd == LC_SEGMENT_64) {
-                auto *segment = reinterpret_cast<const segment_command_64 *>(command);
-                if (!strcmp(segment->segname, SEG_LINKEDIT))
-                    linkEditSegment = segment;
-            } else if (command->cmd == LC_SYMTAB)
-                symtab = reinterpret_cast<const symtab_command *>(command);
-
-            command = reinterpret_cast<const load_command *>(reinterpret_cast<const uint8_t *>(command) + command->cmdsize);
-        }
-
-        if (!linkEditSegment || !symtab)
-            continue;
-
-        uintptr_t linkEditBase = static_cast<uintptr_t>(slide + linkEditSegment->vmaddr - linkEditSegment->fileoff);
-        auto *symbolTable = reinterpret_cast<const nlist_64 *>(linkEditBase + symtab->symoff);
-        auto *stringTable = reinterpret_cast<const char *>(linkEditBase + symtab->stroff);
-
-        for (uint32_t symbolIndex = 0; symbolIndex < symtab->nsyms; symbolIndex++) {
-            uint32_t stringOffset = symbolTable[symbolIndex].n_un.n_strx;
-            if (!stringOffset)
-                continue;
-
-            const char *candidate = stringTable + stringOffset;
-            if (strcmp(candidate, symbolName))
-                continue;
-
-            return reinterpret_cast<void *>(slide + symbolTable[symbolIndex].n_value);
-        }
-    }
-
-    return nullptr;
-#else
-    if (void *knownAddress = findKnownDeviceSymbol(imageSuffix, symbolName)) {
-        NSLog(@"[NativeInspectorProbe] findLocalSymbol using known device symbol=%s address=%p", symbolName, knownAddress);
-        return knownAddress;
-    }
-    NSLog(@"[NativeInspectorProbe] findLocalSymbol known device symbol unavailable symbol=%s", symbolName);
-    return nullptr;
-#endif
+    static WIKWebKitLocalSymbolResolution *symbols = [WIKWebKitLocalSymbolResolver resolveCurrentWebKitAttachSymbols];
+    return symbols;
 }
 
 static ConnectFrontendFn connectFrontend()
 {
-    static ConnectFrontendFn fn = reinterpret_cast<ConnectFrontendFn>(findLocalSymbol(webKitImageSuffix, connectFrontendSymbol));
-    return fn;
+    WIKWebKitLocalSymbolResolution *symbols = resolvedAttachSymbols();
+    return reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(symbols.connectFrontendAddress));
 }
 
 static DisconnectFrontendFn disconnectFrontend()
 {
-    static DisconnectFrontendFn fn = reinterpret_cast<DisconnectFrontendFn>(findLocalSymbol(webKitImageSuffix, disconnectFrontendSymbol));
-    return fn;
+    WIKWebKitLocalSymbolResolution *symbols = resolvedAttachSymbols();
+    return reinterpret_cast<DisconnectFrontendFn>(static_cast<uintptr_t>(symbols.disconnectFrontendAddress));
+}
+
+static NSString *attachSymbolFailureReason()
+{
+    WIKWebKitLocalSymbolResolution *symbols = resolvedAttachSymbols();
+    return symbols.failureReason;
 }
 
 static ptrdiff_t ivarOffset(Class cls, const char *name)
@@ -672,15 +528,16 @@ private:
     auto *connect = WIKNativeInspectorProbe::connectFrontend();
     auto *disconnect = WIKNativeInspectorProbe::disconnectFrontend();
     if (!connect || !disconnect) {
+        NSString *failureReason = WIKNativeInspectorProbe::attachSymbolFailureReason() ?: @"connect/disconnect symbol missing";
         [self finishWithStatus:WIKNativeInspectorProbe::failedStatus
                          stage:WIKNativeInspectorProbe::symbolStage
-                       message:@"Missing private WebKit symbols required to attach the native frontend."
+                       message:failureReason
                      URLString:self.targetURLString
              requestIdentifier:nil
                    bodyPreview:nil
                  base64Encoded:NO
-               rawBackendError:nil
-                    rawMessage:nil];
+               rawBackendError:failureReason
+                    rawMessage:failureReason];
         return;
     }
     NSLog(@"[NativeInspectorProbe] attach symbols resolved connect=%p disconnect=%p", connect, disconnect);
