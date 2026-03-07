@@ -23,8 +23,21 @@ private let logger = Logger(
 #if os(iOS)
     private var refreshControl: UIRefreshControl?
 #endif
+
+#if os(iOS) && DEBUG
+    var nativeInspectorProbeResult: NativeInspectorProbeResult?
+    var isNativeInspectorProbeSheetPresented = false
+    var isNativeInspectorProbeRunning = false
+#endif
     
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
+
+#if os(iOS) && DEBUG
+    @ObservationIgnored private let nativeInspectorProbe = NativeInspectorProbe()
+    @ObservationIgnored private var pendingNativeInspectorNavigation: CheckedContinuation<Void, Error>?
+    @ObservationIgnored private var pendingNativeInspectorURL: URL?
+    @ObservationIgnored private var didAutoStartNativeInspectorProbe = false
+#endif
     
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
@@ -113,6 +126,93 @@ private let logger = Logger(
             webView.goForward()
         }
     }
+
+#if os(iOS) && DEBUG
+    func maybeAutoStartNativeInspectorProbe() {
+        guard !didAutoStartNativeInspectorProbe else {
+            return
+        }
+
+        guard ProcessInfo.processInfo.environment["MINIBROWSER_AUTO_RUN_NATIVE_PROBE"] == "1" else {
+            return
+        }
+
+        didAutoStartNativeInspectorProbe = true
+        startNativeInspectorProbe()
+    }
+
+    func startNativeInspectorProbe() {
+        guard !isNativeInspectorProbeRunning else {
+            return
+        }
+
+        isNativeInspectorProbeSheetPresented = true
+        Task { await runNativeInspectorProbe() }
+    }
+
+    private func runNativeInspectorProbe() async {
+        isNativeInspectorProbeRunning = true
+        defer {
+            isNativeInspectorProbeRunning = false
+        }
+
+        let finalResult = await nativeInspectorProbe.run(
+            on: webView,
+            loadInitialPage: { [weak self] url in
+                guard let self else {
+                    throw NativeInspectorProbeNavigationError.sessionReleased
+                }
+
+                try await self.loadNativeInspectorProbeURL(url)
+            },
+            update: { [weak self] result in
+                self?.nativeInspectorProbeResult = result
+            }
+        )
+        nativeInspectorProbeResult = finalResult
+    }
+
+    private func loadNativeInspectorProbeURL(_ url: URL) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            pendingNativeInspectorNavigation = continuation
+            pendingNativeInspectorURL = url
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    private func finishPendingNativeInspectorNavigation(for loadedURL: URL?) {
+        guard let continuation = pendingNativeInspectorNavigation else {
+            return
+        }
+
+        guard matchesPendingNativeInspectorURL(loadedURL) else {
+            return
+        }
+
+        pendingNativeInspectorNavigation = nil
+        pendingNativeInspectorURL = nil
+        continuation.resume()
+    }
+
+    private func failPendingNativeInspectorNavigation(failure: Error) {
+        guard let continuation = pendingNativeInspectorNavigation else {
+            return
+        }
+
+        pendingNativeInspectorNavigation = nil
+        pendingNativeInspectorURL = nil
+        continuation.resume(throwing: failure)
+    }
+
+    private func matchesPendingNativeInspectorURL(_ url: URL?) -> Bool {
+        guard let expectedURL = pendingNativeInspectorURL, let url else {
+            return false
+        }
+
+        return url.absoluteString == expectedURL.absoluteString
+            || (url.scheme == expectedURL.scheme && url.host == expectedURL.host)
+    }
+#endif
 #if os(iOS)
     private func configureRefreshControl() {
         let control = UIRefreshControl()
@@ -165,17 +265,23 @@ extension BrowserViewModel: WKNavigationDelegate {
         logger.debug("\(#function) authentication challenge")
         return(.useCredential, nil)
     }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError: Error) {
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError navigationError: Error) {
         logger.debug("\(#function) provisional navigation failed")
         isLoading = false
         estimatedProgress = .zero
+#if os(iOS) && DEBUG
+        failPendingNativeInspectorNavigation(failure: navigationError)
+#endif
 #if os(iOS)
         endRefreshingIfNeeded()
 #endif
     }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError navigationError: Error) {
         logger.debug("\(#function) navigation failed")
         isLoading = false
+#if os(iOS) && DEBUG
+        failPendingNativeInspectorNavigation(failure: navigationError)
+#endif
 #if os(iOS)
         endRefreshingIfNeeded()
 #endif
@@ -186,15 +292,37 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         logger.debug("\(#function) web content process terminated")
         isLoading = false
+#if os(iOS) && DEBUG
+        failPendingNativeInspectorNavigation(failure: NativeInspectorProbeNavigationError.webContentTerminated)
+#endif
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
         estimatedProgress = .zero
+#if os(iOS) && DEBUG
+        finishPendingNativeInspectorNavigation(for: webView.url)
+#endif
 #if os(iOS)
         endRefreshingIfNeeded()
 #endif
     }
 }
+
+#if os(iOS) && DEBUG
+private enum NativeInspectorProbeNavigationError: LocalizedError {
+    case sessionReleased
+    case webContentTerminated
+
+    var errorDescription: String? {
+        switch self {
+        case .sessionReleased:
+            "BrowserViewModel was released before the probe navigation completed."
+        case .webContentTerminated:
+            "The web content process terminated during the probe navigation."
+        }
+    }
+}
+#endif
 
 extension BrowserViewModel: WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
