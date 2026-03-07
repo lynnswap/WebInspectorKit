@@ -33,15 +33,25 @@ public final class NetworkSession: PageSession {
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: any NetworkPageDriving
     private let bodyFetcher: any NetworkBodyFetching
+    private let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
     private var bodyFetchTasks: [BodyFetchKey: (token: UUID, task: Task<Void, Never>)] = [:]
 
     var hasAttachedPageWebView: Bool {
         pageAgent.webView != nil
     }
 
+    package var transportCapabilities: Set<InspectorTransportCapability> {
+        transportCapabilityProvider?.inspectorTransportCapabilities ?? []
+    }
+
     public convenience init(configuration: NetworkConfiguration = .init()) {
         let pageAgent = NetworkPageAgent()
-        self.init(configuration: configuration, pageAgent: pageAgent, bodyFetcher: pageAgent)
+        self.init(
+            configuration: configuration,
+            pageAgent: pageAgent,
+            bodyFetcher: pageAgent,
+            transportCapabilityProvider: nil
+        )
     }
 
     package convenience init(
@@ -49,17 +59,24 @@ public final class NetworkSession: PageSession {
         bodyFetcher: any NetworkBodyFetching
     ) {
         let pageAgent = NetworkPageAgent()
-        self.init(configuration: configuration, pageAgent: pageAgent, bodyFetcher: bodyFetcher)
+        self.init(
+            configuration: configuration,
+            pageAgent: pageAgent,
+            bodyFetcher: bodyFetcher,
+            transportCapabilityProvider: nil
+        )
     }
 
     init(
         configuration: NetworkConfiguration,
         pageAgent: any NetworkPageDriving,
-        bodyFetcher: any NetworkBodyFetching
+        bodyFetcher: any NetworkBodyFetching,
+        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil
     ) {
         self.configuration = configuration
         self.pageAgent = pageAgent
         self.bodyFetcher = bodyFetcher
+        self.transportCapabilityProvider = transportCapabilityProvider
         self.store = pageAgent.store
         self.store.maxEntries = configuration.maxEntries
     }

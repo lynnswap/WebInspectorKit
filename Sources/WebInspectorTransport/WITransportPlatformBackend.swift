@@ -6,16 +6,48 @@ import WebKit
 protocol WITransportPlatformBackend: AnyObject {
     var supportSnapshot: WITransportSupportSnapshot { get }
 
+    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws
+    func detach()
+    func sendRootMessage(_ message: String) throws
+    func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data?
+}
+
+extension WITransportPlatformBackend {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+        _ = scope
+        _ = method
+        return nil
+    }
+}
+
+struct WITransportBackendMessageHandlers {
+    let handleRootMessage: (String) -> Void
+    let handlePageMessage: (String, String) -> Void
+    let handleFatalFailure: (String) -> Void
+}
+
+@MainActor
+protocol WITransportMessageEndpoint: AnyObject {
+    var supportSnapshot: WITransportSupportSnapshot { get }
+
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws
     func detach()
     func sendRootMessage(_ message: String) throws
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws
 }
 
-struct WITransportBackendMessageHandlers: Sendable {
-    let handleRootMessage: @Sendable (String) -> Void
-    let handlePageMessage: @Sendable (String, String) -> Void
-    let handleFatalFailure: @Sendable (String) -> Void
+@MainActor
+protocol WITransportFrontendHost: AnyObject {
+    var supportSnapshot: WITransportSupportSnapshot { get }
+
+    func attach(
+        to webView: WKWebView,
+        backendMessageHandler: @escaping (String) -> Void,
+        fatalFailureHandler: @escaping (String) -> Void
+    ) async throws
+    func mirrorBackendMessage(_ message: String)
+    func detach()
 }
 
 enum WITransportPlatformBackendFactory {
@@ -24,7 +56,10 @@ enum WITransportPlatformBackendFactory {
         #if os(iOS)
         return WITransportIOSPlatformBackend(configuration: configuration)
         #elseif os(macOS)
-        return WITransportMacPlatformBackend(configuration: configuration)
+        return WITransportMacDefaultBackendSelector.selectDefaultBackend(
+            remoteBackend: WITransportMacRemoteInspectorPlatformBackend(configuration: configuration),
+            nativeBackend: WITransportMacNativeInspectorPlatformBackend(configuration: configuration)
+        )
         #else
         return WITransportUnsupportedPlatformBackend(
             configuration: configuration,
@@ -34,20 +69,38 @@ enum WITransportPlatformBackendFactory {
     }
 }
 
+enum WITransportMacDefaultBackendSelector {
+    @MainActor
+    static func selectDefaultBackend(
+        remoteBackend: any WITransportPlatformBackend,
+        nativeBackend: any WITransportPlatformBackend
+    ) -> any WITransportPlatformBackend {
+        if remoteBackend.supportSnapshot.isSupported {
+            return remoteBackend
+        }
+        if nativeBackend.supportSnapshot.isSupported {
+            return nativeBackend
+        }
+        return remoteBackend
+    }
+}
+
 @MainActor
 private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBackend {
     let supportSnapshot: WITransportSupportSnapshot
 
     init(configuration: WITransportConfiguration, reason: String) {
         _ = configuration
-        self.supportSnapshot = WITransportSupportSnapshot(
+        supportSnapshot = WITransportSupportSnapshot(
             availability: .unsupported,
             backendKind: .unsupported,
             failureReason: reason
         )
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws {
+    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+        _ = webView
+        _ = messageHandlers
         throw WITransportError.unsupported(supportSnapshot.failureReason ?? "WebInspectorTransport is unsupported.")
     }
 
@@ -55,80 +108,322 @@ private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBa
     }
 
     func sendRootMessage(_ message: String) throws {
+        _ = message
         throw WITransportError.transportClosed
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
+        _ = message
+        _ = targetIdentifier
+        _ = outerIdentifier
         throw WITransportError.transportClosed
     }
 }
 
 @MainActor
 private final class WITransportIOSPlatformBackend: WITransportPlatformBackend {
-    private let impl: WITransportNativeInspectorPlatformBackend
+    private let endpoint: WITransportNativeInspectorMessageEndpoint
 
     init(configuration: WITransportConfiguration) {
-        impl = WITransportNativeInspectorPlatformBackend(
+        endpoint = WITransportNativeInspectorMessageEndpoint(
             configuration: configuration,
             resolution: WITransportNativeInspectorSymbolResolver.currentAttachResolution()
         )
     }
 
     var supportSnapshot: WITransportSupportSnapshot {
-        impl.supportSnapshot
+        endpoint.supportSnapshot
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws {
-        try impl.attach(to: webView, messageHandlers: messageHandlers)
+    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+        try endpoint.attach(to: webView, messageHandlers: messageHandlers)
     }
 
     func detach() {
-        impl.detach()
+        endpoint.detach()
     }
 
     func sendRootMessage(_ message: String) throws {
-        try impl.sendRootMessage(message)
+        try endpoint.sendRootMessage(message)
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        try impl.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
+        try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
     }
 }
 
 @MainActor
-private final class WITransportMacPlatformBackend: WITransportPlatformBackend {
-    private let impl: WITransportNativeInspectorPlatformBackend
+final class WITransportMacNativeInspectorPlatformBackend: WITransportPlatformBackend {
+    private let endpoint: WITransportNativeInspectorMessageEndpoint
 
     init(configuration: WITransportConfiguration) {
-        impl = WITransportNativeInspectorPlatformBackend(
+        endpoint = WITransportNativeInspectorMessageEndpoint(
             configuration: configuration,
             resolution: WITransportNativeInspectorSymbolResolver.currentAttachResolution()
         )
     }
 
-    var supportSnapshot: WITransportSupportSnapshot {
-        impl.supportSnapshot
+    init(endpoint: WITransportNativeInspectorMessageEndpoint) {
+        self.endpoint = endpoint
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws {
-        try impl.attach(to: webView, messageHandlers: messageHandlers)
+    var supportSnapshot: WITransportSupportSnapshot {
+        endpoint.supportSnapshot
+    }
+
+    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+        try endpoint.attach(to: webView, messageHandlers: messageHandlers)
     }
 
     func detach() {
-        impl.detach()
+        endpoint.detach()
     }
 
     func sendRootMessage(_ message: String) throws {
-        try impl.sendRootMessage(message)
+        try endpoint.sendRootMessage(message)
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        try impl.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
+        try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
+    }
+
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+        WITransportCompatibilityResponse.domEnableIfNeeded(scope: scope, method: method)
     }
 }
 
 @MainActor
-private final class WITransportNativeInspectorPlatformBackend: WITransportPlatformBackend {
+final class WITransportMacRemoteInspectorPlatformBackend: WITransportPlatformBackend {
+    private let configuration: WITransportConfiguration
+    private let transportEndpoint: any WITransportMessageEndpoint
+    private let frontendHost: any WITransportFrontendHost
+    private let composedSupportSnapshot: WITransportSupportSnapshot
+    private var attachState: AttachState = .detached
+    private var operatingMode: OperatingMode = .frontendHosted
+
+    private enum AttachState {
+        case detached
+        case attaching
+        case attached
+    }
+
+    private enum OperatingMode {
+        case frontendHosted
+        case transportOnly
+    }
+
+    #if os(macOS)
+    convenience init(configuration: WITransportConfiguration) {
+        self.init(
+            configuration: configuration,
+            transportEndpoint: WITransportNativeInspectorMessageEndpoint(
+                configuration: configuration,
+                resolution: WITransportNativeInspectorSymbolResolver.currentAttachResolution()
+            ),
+            frontendHost: WITransportRemoteInspectorFrontendHost(configuration: configuration)
+        )
+    }
+    #endif
+
+    init(
+        configuration: WITransportConfiguration,
+        transportEndpoint: any WITransportMessageEndpoint,
+        frontendHost: any WITransportFrontendHost
+    ) {
+        self.configuration = configuration
+        self.transportEndpoint = transportEndpoint
+        self.frontendHost = frontendHost
+        composedSupportSnapshot = WITransportMacRemoteInspectorPlatformBackend.makeSupportSnapshot(
+            transportEndpointSnapshot: transportEndpoint.supportSnapshot,
+            frontendHostSnapshot: frontendHost.supportSnapshot
+        )
+    }
+
+    var supportSnapshot: WITransportSupportSnapshot {
+        switch operatingMode {
+        case .frontendHosted:
+            composedSupportSnapshot
+        case .transportOnly:
+            transportEndpoint.supportSnapshot
+        }
+    }
+
+    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+        guard composedSupportSnapshot.isSupported || transportEndpoint.supportSnapshot.isSupported else {
+            throw WITransportError.unsupported(
+                composedSupportSnapshot.failureReason
+                    ?? transportEndpoint.supportSnapshot.failureReason
+                    ?? "The macOS remote inspector backend is unavailable."
+            )
+        }
+        guard attachState == .detached else {
+            throw WITransportError.alreadyAttached
+        }
+
+        attachState = .attaching
+        operatingMode = .frontendHosted
+
+        let transportHandlers = WITransportBackendMessageHandlers(
+            handleRootMessage: { [frontendHost] message in
+                frontendHost.mirrorBackendMessage(message)
+                messageHandlers.handleRootMessage(message)
+            },
+            handlePageMessage: messageHandlers.handlePageMessage,
+            handleFatalFailure: { [frontendHost] message in
+                frontendHost.detach()
+                messageHandlers.handleFatalFailure(message)
+            }
+        )
+
+        let frontendCommandForwarder = WITransportBufferedRootMessageForwarder(
+            logHandler: configuration.logHandler,
+            fatalFailureHandler: { [transportEndpoint] message in
+                transportEndpoint.detach()
+                messageHandlers.handleFatalFailure(message)
+            },
+            sendMessage: { [transportEndpoint] message in
+                try transportEndpoint.sendRootMessage(message)
+            }
+        )
+
+        do {
+            guard unsafe webView.window != nil else {
+                try attachTransportOnly(to: webView, messageHandlers: messageHandlers)
+                return
+            }
+
+            do {
+                try await frontendHost.attach(
+                    to: webView,
+                    backendMessageHandler: { message in
+                        frontendCommandForwarder.handle(message)
+                    },
+                    fatalFailureHandler: { [transportEndpoint] message in
+                        transportEndpoint.detach()
+                        messageHandlers.handleFatalFailure(message)
+                    }
+                )
+            } catch {
+                frontendHost.detach()
+                do {
+                    try attachTransportOnly(to: webView, messageHandlers: messageHandlers)
+                    configuration.logHandler?("[WebInspectorTransport] remote frontend host attach failed; continuing with transport-only mode")
+                    return
+                } catch let fallbackError as WITransportError {
+                    let hostReason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription
+                    let fallbackReason = fallbackError.errorDescription ?? String(describing: fallbackError)
+                    throw WITransportError.attachFailed(
+                        "Remote frontend host attach failed (\(hostReason)); transport-only fallback failed (\(fallbackReason))"
+                    )
+                }
+            }
+
+            try transportEndpoint.attach(to: webView, messageHandlers: transportHandlers)
+            frontendCommandForwarder.activate()
+            attachState = .attached
+        } catch let error as WITransportError {
+            attachState = .detached
+            frontendHost.detach()
+            transportEndpoint.detach()
+            operatingMode = .frontendHosted
+            throw error
+        } catch {
+            attachState = .detached
+            frontendHost.detach()
+            transportEndpoint.detach()
+            operatingMode = .frontendHosted
+            throw WITransportError.attachFailed(error.localizedDescription)
+        }
+    }
+
+    func detach() {
+        attachState = .detached
+        operatingMode = .frontendHosted
+        frontendHost.detach()
+        transportEndpoint.detach()
+    }
+
+    func sendRootMessage(_ message: String) throws {
+        try transportEndpoint.sendRootMessage(message)
+    }
+
+    func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
+        try transportEndpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
+    }
+
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+        WITransportCompatibilityResponse.domEnableIfNeeded(scope: scope, method: method)
+    }
+
+    private func attachTransportOnly(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws {
+        try transportEndpoint.attach(to: webView, messageHandlers: messageHandlers)
+        operatingMode = .transportOnly
+        attachState = .attached
+    }
+}
+
+private enum WITransportCompatibilityResponse {
+    static func domEnableIfNeeded(scope: WITransportTargetScope, method: String) -> Data? {
+        guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
+            return nil
+        }
+        return Data("{}".utf8)
+    }
+}
+
+@MainActor
+private final class WITransportBufferedRootMessageForwarder {
+    private let logHandler: WITransportLogHandler?
+    private let fatalFailureHandler: (String) -> Void
+    private let sendMessage: (String) throws -> Void
+    private var bufferedMessages: [String] = []
+    private var isTransportReady = false
+
+    init(
+        logHandler: WITransportLogHandler?,
+        fatalFailureHandler: @escaping (String) -> Void,
+        sendMessage: @escaping (String) throws -> Void
+    ) {
+        self.logHandler = logHandler
+        self.fatalFailureHandler = fatalFailureHandler
+        self.sendMessage = sendMessage
+    }
+
+    func handle(_ message: String) {
+        guard isTransportReady else {
+            bufferedMessages.append(message)
+            return
+        }
+
+        forward(message)
+    }
+
+    func activate() {
+        guard !isTransportReady else {
+            return
+        }
+
+        isTransportReady = true
+        let pendingMessages = bufferedMessages
+        bufferedMessages.removeAll(keepingCapacity: false)
+        for message in pendingMessages {
+            forward(message)
+        }
+    }
+
+    private func forward(_ message: String) {
+        do {
+            try sendMessage(message)
+        } catch {
+            let reason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription
+            logHandler?("[WebInspectorTransport] remote frontend host backend dispatch failed: \(reason)")
+            fatalFailureHandler(reason)
+        }
+    }
+}
+
+@MainActor
+final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoint {
     private let configuration: WITransportConfiguration
     private let resolution: WITransportAttachSymbolResolution
     private var bridge: WITransportBridge?
@@ -185,3 +480,132 @@ private final class WITransportNativeInspectorPlatformBackend: WITransportPlatfo
         )
     }
 }
+
+#if os(macOS)
+@MainActor
+final class WITransportRemoteInspectorFrontendHost: WITransportFrontendHost {
+    private let configuration: WITransportConfiguration
+    private var host: NSObject?
+    private var fatalFailureHandler: ((String) -> Void)?
+
+    init(configuration: WITransportConfiguration) {
+        self.configuration = configuration
+    }
+
+    var supportSnapshot: WITransportSupportSnapshot {
+        let failureReason = WITransportRemoteInspectorHostAvailabilityFailureReason()
+        let isSupported = failureReason == nil
+        return WITransportSupportSnapshot(
+            availability: isSupported ? .supported : .unsupported,
+            backendKind: .macOSRemoteInspector,
+            capabilities: isSupported ? [.remoteFrontendHosting] : [],
+            failureReason: failureReason
+        )
+    }
+
+    func attach(
+        to webView: WKWebView,
+        backendMessageHandler: @escaping (String) -> Void,
+        fatalFailureHandler: @escaping (String) -> Void
+    ) async throws {
+        let snapshot = supportSnapshot
+        guard snapshot.isSupported else {
+            throw WITransportError.unsupported(snapshot.failureReason ?? "The remote inspector frontend host is unavailable.")
+        }
+
+        guard let host = WITransportCreateRemoteInspectorHost(webView) else {
+            throw WITransportError.attachFailed("Failed to create the remote inspector frontend host.")
+        }
+
+        WITransportRemoteInspectorHostSetBackendMessageHandler(host) { (message: String) in
+            backendMessageHandler(message)
+        }
+        WITransportRemoteInspectorHostSetFatalFailureHandler(host) { [logHandler = configuration.logHandler] (message: String) in
+            logHandler?("[WebInspectorTransport] remote frontend host fatal failure: \(message)")
+            fatalFailureHandler(message)
+        }
+
+        var error: NSError?
+        guard unsafe WITransportRemoteInspectorHostAttach(host, &error) else {
+            WITransportRemoteInspectorHostDetach(host)
+            throw WITransportError.attachFailed(error?.localizedDescription ?? "Failed to attach the remote inspector frontend host.")
+        }
+
+        self.host = host
+        self.fatalFailureHandler = fatalFailureHandler
+
+        do {
+            try await settleHiddenWindowState(for: host)
+        } catch {
+            detach()
+            throw error
+        }
+
+    }
+
+    func mirrorBackendMessage(_ message: String) {
+        guard let host else {
+            return
+        }
+
+        var error: NSError?
+        guard unsafe WITransportRemoteInspectorHostSendMessageToFrontend(host, message, &error) else {
+            let reason = error?.localizedDescription ?? "Failed to mirror a backend message into the remote inspector frontend host."
+            configuration.logHandler?("[WebInspectorTransport] remote frontend host mirror failed: \(reason)")
+            fatalFailureHandler?(reason)
+            return
+        }
+    }
+
+    func detach() {
+        if let host {
+            WITransportRemoteInspectorHostDetach(host)
+        }
+        host = nil
+        fatalFailureHandler = nil
+    }
+
+    private func settleHiddenWindowState(for host: NSObject) async throws {
+        for _ in 0..<8 {
+            WITransportRemoteInspectorHostPerformVisibilityMaintenance(host)
+            if !WITransportRemoteInspectorHostIsWindowVisible(host)
+                && !WITransportRemoteInspectorHostIsWindowKey(host)
+                && !WITransportRemoteInspectorHostIsWindowMain(host) {
+                try await Task.sleep(for: .milliseconds(50))
+                continue
+            }
+
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        WITransportRemoteInspectorHostPerformVisibilityMaintenance(host)
+        guard !WITransportRemoteInspectorHostIsWindowVisible(host)
+                && !WITransportRemoteInspectorHostIsWindowKey(host)
+                && !WITransportRemoteInspectorHostIsWindowMain(host) else {
+            throw WITransportError.attachFailed("The remote inspector window could not be kept hidden.")
+        }
+    }
+}
+
+private extension WITransportMacRemoteInspectorPlatformBackend {
+    static func makeSupportSnapshot(
+        transportEndpointSnapshot: WITransportSupportSnapshot,
+        frontendHostSnapshot: WITransportSupportSnapshot
+    ) -> WITransportSupportSnapshot {
+        let isSupported = transportEndpointSnapshot.isSupported && frontendHostSnapshot.isSupported
+        let failureReason = transportEndpointSnapshot.failureReason
+            ?? frontendHostSnapshot.failureReason
+        let capabilities = isSupported
+            ? transportEndpointSnapshot.capabilities
+                .union(frontendHostSnapshot.capabilities)
+            : []
+
+        return WITransportSupportSnapshot(
+            availability: isSupported ? .supported : .unsupported,
+            backendKind: .macOSRemoteInspector,
+            capabilities: capabilities,
+            failureReason: failureReason
+        )
+    }
+}
+#endif

@@ -59,24 +59,6 @@ public final class WITransportSession {
         self.router = router
 
         do {
-            try backend.attach(
-                to: webView,
-                messageHandlers: WITransportBackendMessageHandlers(
-                    handleRootMessage: { [router] message in
-                        Task {
-                            await router.handleIncomingRootMessage(message)
-                        }
-                    },
-                    handlePageMessage: { [router] message, targetIdentifier in
-                        Task {
-                            await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
-                        }
-                    },
-                    handleFatalFailure: { [logHandler = configuration.logHandler] message in
-                        logHandler?("[WebInspectorTransport] transport fatal failure: \(message)")
-                    }
-                )
-            )
             await router.connect(
                 rootDispatcher: { [sessionReference = SessionReference(self)] message in
                     try await MainActor.run {
@@ -97,8 +79,32 @@ public final class WITransportSession {
                     }
                 }
             )
+            try await backend.attach(
+                to: webView,
+                messageHandlers: WITransportBackendMessageHandlers(
+                    handleRootMessage: { [router] message in
+                        Task {
+                            await router.handleIncomingRootMessage(message)
+                        }
+                    },
+                    handlePageMessage: { [router] message, targetIdentifier in
+                        Task {
+                            await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
+                        }
+                    },
+                    handleFatalFailure: { [sessionReference = SessionReference(self)] message in
+                        Task { @MainActor in
+                            sessionReference.session?.handleBackendFatalFailure(message)
+                        }
+                    }
+                )
+            )
+            supportSnapshot = backend.supportSnapshot
 
             try await router.waitForPageTarget(timeout: configuration.responseTimeout)
+            guard state == .attaching, self.backend != nil, self.router != nil else {
+                throw WITransportError.transportClosed
+            }
             state = .attached
             log("attached")
         } catch {
@@ -162,11 +168,11 @@ private extension WITransportSession {
     }
 
     func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> Data {
-        guard let router else {
+        guard let router, let backend else {
             throw WITransportError.notAttached
         }
 
-        if let compatibilityResponse = compatibilityResponse(scope: scope, method: method) {
+        if let compatibilityResponse = backend.compatibilityResponse(scope: scope, method: method) {
             return compatibilityResponse
         }
 
@@ -190,12 +196,23 @@ private extension WITransportSession {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
     }
 
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        switch (supportSnapshot.backendKind, scope, method) {
-        case (.macOSNativeInspector, .page, WITransportCommands.DOM.Enable.method):
-            return Data("{}".utf8)
-        default:
-            return nil
+    func handleBackendFatalFailure(_ message: String) {
+        log("transport fatal failure: \(message)")
+        guard state != .detached else {
+            return
+        }
+
+        let router = self.router
+        backend?.detach()
+        backend = nil
+        self.router = nil
+        webView = nil
+        state = .detached
+
+        if let router {
+            Task {
+                await router.disconnect()
+            }
         }
     }
 }

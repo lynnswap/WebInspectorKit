@@ -9,6 +9,7 @@ public final class DOMSession {
 
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: any DOMPageDriving
+    private let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
     private var autoSnapshotEnabled = false
 
     var isAutoSnapshotEnabled: Bool {
@@ -26,16 +27,22 @@ public final class DOMSession {
     }
 
     public convenience init(configuration: DOMConfiguration = .init()) {
-        self.init(configuration: configuration, pageAgent: DOMPageAgent(configuration: configuration))
+        self.init(
+            configuration: configuration,
+            pageAgent: DOMPageAgent(configuration: configuration),
+            transportCapabilityProvider: nil
+        )
     }
 
     init(
         configuration: DOMConfiguration = .init(),
-        pageAgent: any DOMPageDriving
+        pageAgent: any DOMPageDriving,
+        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil
     ) {
         self.configuration = configuration
         graphStore = DOMGraphStore()
         self.pageAgent = pageAgent
+        self.transportCapabilityProvider = transportCapabilityProvider
         self.pageAgent.sink = bundleSink
     }
 
@@ -55,6 +62,10 @@ public final class DOMSession {
 
     public var hasPageWebView: Bool {
         pageAgent.webView != nil
+    }
+
+    package var transportCapabilities: Set<InspectorTransportCapability> {
+        transportCapabilityProvider?.inspectorTransportCapabilities ?? []
     }
 
     @discardableResult
