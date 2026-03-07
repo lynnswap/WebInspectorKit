@@ -1,4 +1,5 @@
 #import "WIKNativeInspectorProbeBridge.h"
+#import "WIKInspectorABI.h"
 
 #import <TargetConditionals.h>
 #import <mach/mach.h>
@@ -7,12 +8,11 @@
 #import <mach-o/nlist.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <memory>
 #import <string.h>
 #import <uuid/uuid.h>
 
 #if TARGET_OS_IPHONE && DEBUG
-#import "JavaScriptCore/inspector/InspectorFrontendChannel.h"
-
 namespace WIKNativeInspectorProbe {
 
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
@@ -305,18 +305,6 @@ static id invokeObjectGetter(id target, NSString *selectorName)
     return reinterpret_cast<Getter>(objc_msgSend)(target, selector);
 }
 
-#if TARGET_OS_SIMULATOR
-static void *invokePointerGetter(id target, NSString *selectorName)
-{
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![target respondsToSelector:selector])
-        return nullptr;
-
-    using Getter = void *(*)(id, SEL);
-    return reinterpret_cast<Getter>(objc_msgSend)(target, selector);
-}
-#endif
-
 static BOOL invokeVoid(id target, NSString *selectorName)
 {
     SEL selector = NSSelectorFromString(selectorName);
@@ -456,8 +444,7 @@ public:
 
     void sendMessageToFrontend(const WTF::String& message) override
     {
-        auto retained = message.createNSString();
-        NSString *messageString = retained ? [retained.get() copy] : @"";
+        NSString *messageString = WIKInspectorABI::copyNSString(message);
         __weak WIKNativeInspectorProbeSession *owner = m_owner;
         dispatch_async(dispatch_get_main_queue(), ^{
             [owner handleFrontendMessageString:messageString];
@@ -580,13 +567,8 @@ private:
 
     _inspector = WIKNativeInspectorProbe::invokeObjectGetter(self.webView, @"_inspector");
     ptrdiff_t webViewPageOffset = NSNotFound;
-    BOOL pageGetterSkipped = NO;
+    BOOL pageGetterSkipped = YES;
     void *pageFromGetter = nullptr;
-#if TARGET_OS_SIMULATOR
-    pageFromGetter = WIKNativeInspectorProbe::invokePointerGetter(self.webView, @"_page");
-#else
-    pageGetterSkipped = YES;
-#endif
     void *pageFromIvar = WIKNativeInspectorProbe::pageProxyPointer(self.webView, &webViewPageOffset);
     BOOL pageSourcesDisagree = pageFromGetter && pageFromIvar && pageFromGetter != pageFromIvar;
     void *page = pageSourcesDisagree ? nullptr : (pageFromGetter ?: pageFromIvar);
@@ -1120,8 +1102,8 @@ private:
         return;
     }
 
-    WTF::String payloadString(jsonString);
-    WIKNativeInspectorProbe::backendDispatcherDispatch(_backendDispatcher, payloadString);
+    WIKInspectorABI::ConstructedString payloadString(jsonString);
+    WIKNativeInspectorProbe::backendDispatcherDispatch(_backendDispatcher, payloadString.get());
 }
 
 - (void)sendTargetCommandWithOuterIdentifier:(NSNumber *)outerIdentifier
