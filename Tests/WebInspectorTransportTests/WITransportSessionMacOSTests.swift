@@ -37,13 +37,19 @@ final class WITransportSessionMacOSTests: XCTestCase {
             Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init)),
             baselineVisibleWindowIdentifiers
         )
-        XCTAssertEqual(session.supportSnapshot.backendKind, .macOSRemoteInspector)
-        XCTAssertTrue(session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
+        XCTAssertTrue(session.supportSnapshot.isSupported)
+        if session.supportSnapshot.backendKind == .macOSRemoteInspector {
+            XCTAssertTrue(session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
+        } else {
+            XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
+            XCTAssertFalse(session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
+        }
 
         _ = try await session.page.send(WITransportCommands.DOM.Enable())
         let document = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 4))
+        let outerHTMLNodeID = document.root.children?.first?.nodeId ?? document.root.nodeId
         let outerHTML = try await session.page.send(
-            WITransportCommands.DOM.GetOuterHTML(nodeId: document.root.nodeId)
+            WITransportCommands.DOM.GetOuterHTML(nodeId: outerHTMLNodeID)
         )
 
         XCTAssertEqual(document.root.nodeName, "#document")

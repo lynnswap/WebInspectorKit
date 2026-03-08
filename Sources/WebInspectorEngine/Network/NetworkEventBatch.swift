@@ -337,6 +337,54 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     }
 }
 
+extension HTTPNetworkEvent {
+    init(
+        kind: HTTPNetworkEventKind,
+        sessionID: String,
+        requestID: Int,
+        url: String?,
+        method: String?,
+        statusCode: Int?,
+        statusText: String?,
+        mimeType: String?,
+        requestHeaders: NetworkHeaders,
+        responseHeaders: NetworkHeaders,
+        startTimeSeconds: TimeInterval,
+        endTimeSeconds: TimeInterval?,
+        wallTimeSeconds: TimeInterval?,
+        encodedBodyLength: Int?,
+        decodedBodySize: Int?,
+        errorDescription: String?,
+        requestType: String?,
+        requestBody: NetworkBody?,
+        requestBodyBytesSent: Int?,
+        responseBody: NetworkBody?,
+        blockedCookies: [String]
+    ) {
+        self.kind = kind
+        self.sessionID = sessionID
+        self.requestID = requestID
+        self.url = url
+        self.method = method
+        self.statusCode = statusCode
+        self.statusText = statusText
+        self.mimeType = mimeType
+        self.requestHeaders = requestHeaders
+        self.responseHeaders = responseHeaders
+        self.startTimeSeconds = startTimeSeconds
+        self.endTimeSeconds = endTimeSeconds
+        self.wallTimeSeconds = wallTimeSeconds
+        self.encodedBodyLength = encodedBodyLength
+        self.decodedBodySize = decodedBodySize
+        self.errorDescription = errorDescription
+        self.requestType = requestType
+        self.requestBody = requestBody
+        self.requestBodyBytesSent = requestBodyBytesSent
+        self.responseBody = responseBody
+        self.blockedCookies = blockedCookies
+    }
+}
+
 struct WSNetworkEvent: NetworkEventProtocol {
     let kind: WSNetworkEventKind
     let sessionID: String
@@ -358,6 +406,50 @@ struct WSNetworkEvent: NetworkEventProtocol {
     let errorDescription: String?
     let requestHeaders: NetworkHeaders
     let closeWasClean: Bool?
+
+    init(
+        kind: WSNetworkEventKind,
+        sessionID: String,
+        requestID: Int,
+        url: String?,
+        startTimeSeconds: TimeInterval,
+        endTimeSeconds: TimeInterval?,
+        wallTimeSeconds: TimeInterval?,
+        framePayload: String?,
+        framePayloadIsBase64: Bool,
+        framePayloadSize: Int?,
+        frameDirection: NetworkWebSocketFrame.Direction?,
+        frameOpcode: Int?,
+        framePayloadTruncated: Bool,
+        statusCode: Int?,
+        statusText: String?,
+        closeCode: Int?,
+        closeReason: String?,
+        errorDescription: String?,
+        requestHeaders: NetworkHeaders,
+        closeWasClean: Bool?
+    ) {
+        self.kind = kind
+        self.sessionID = sessionID
+        self.requestID = requestID
+        self.url = url
+        self.startTimeSeconds = startTimeSeconds
+        self.endTimeSeconds = endTimeSeconds
+        self.wallTimeSeconds = wallTimeSeconds
+        self.framePayload = framePayload
+        self.framePayloadIsBase64 = framePayloadIsBase64
+        self.framePayloadSize = framePayloadSize
+        self.frameDirection = frameDirection
+        self.frameOpcode = frameOpcode
+        self.framePayloadTruncated = framePayloadTruncated
+        self.statusCode = statusCode
+        self.statusText = statusText
+        self.closeCode = closeCode
+        self.closeReason = closeReason
+        self.errorDescription = errorDescription
+        self.requestHeaders = requestHeaders
+        self.closeWasClean = closeWasClean
+    }
 
     init?(dictionary: NSDictionary) {
         guard let type = dictionary["type"] as? String,

@@ -453,7 +453,8 @@ export function setSnapshot(
             return;
         }
         snapshot.root = normalizedRoot;
-        indexNode(normalizedRoot, 0, null);
+        const rootDepth = normalizedRoot.nodeType === Node.DOCUMENT_NODE ? -1 : 0;
+        indexNode(normalizedRoot, rootDepth, null);
         if (dom.tree) {
             dom.tree.appendChild(buildNode(normalizedRoot));
         }

@@ -8,24 +8,24 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
-        store.select(localID: 2)
+        store.select(nodeID: 2)
 
         store.applyMutationBundle(
             .init(
                 events: [
                     .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [makeNode(localID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "updated")])]
+                        parentNodeID: 1,
+                        nodes: [makeNode(nodeID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "updated")])]
                     ),
                 ]
             )
         )
 
-        #expect(store.selectedID?.localID == 2)
-        #expect(store.selectedEntry?.id.localID == 2)
+        #expect(store.selectedID?.nodeID == 2)
+        #expect(store.selectedEntry?.id.nodeID == 2)
         #expect(store.selectedEntry?.attributes.first?.value == "updated")
     }
 
@@ -34,15 +34,15 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
-        store.select(localID: 2)
+        store.select(nodeID: 2)
 
         store.applyMutationBundle(
             .init(
                 events: [
-                    .childNodeRemoved(parentLocalID: 1, nodeLocalID: 2),
+                    .childNodeRemoved(parentNodeID: 1, nodeID: 2),
                 ]
             )
         )
@@ -55,8 +55,8 @@ struct DOMGraphStoreTests {
     func documentUpdatedInMutationBundleResetsGenerationAndSelection() {
         let store = DOMGraphStore()
         let initialGeneration = store.documentGeneration
-        store.applySnapshot(.init(root: makeNode(localID: 1)))
-        store.select(localID: 1)
+        store.applySnapshot(.init(root: makeNode(nodeID: 1)))
+        store.select(nodeID: 1)
 
         store.applyMutationBundle(
             .init(
@@ -75,9 +75,10 @@ struct DOMGraphStoreTests {
     @Test
     func clearingSelectionAlsoClearsMatchedStylesOnPreviouslySelectedEntry() {
         let store = DOMGraphStore()
+        store.applySnapshot(.init(root: makeNode(nodeID: 42)))
         store.applySelectionSnapshot(
             .init(
-                localID: 42,
+                nodeID: 42,
                 preview: "<div>",
                 attributes: [],
                 path: ["html", "body", "div"],
@@ -105,10 +106,31 @@ struct DOMGraphStoreTests {
         store.applySelectionSnapshot(nil)
 
         #expect(store.selectedID == nil)
-        #expect(store.entry(forLocalID: 42)?.matchedStyles.isEmpty == true)
-        #expect(store.entry(forLocalID: 42)?.matchedStylesTruncated == false)
-        #expect(store.entry(forLocalID: 42)?.blockedStylesheetCount == 0)
-        #expect(store.entry(forLocalID: 42)?.isLoadingMatchedStyles == false)
+        #expect(store.entry(forNodeID: 42)?.matchedStyles.isEmpty == true)
+        #expect(store.entry(forNodeID: 42)?.matchedStylesTruncated == false)
+        #expect(store.entry(forNodeID: 42)?.blockedStylesheetCount == 0)
+        #expect(store.entry(forNodeID: 42)?.isLoadingMatchedStyles == false)
+    }
+
+    @Test
+    func unknownSelectionDoesNotCreatePlaceholderEntry() {
+        let store = DOMGraphStore()
+        store.applySnapshot(.init(root: makeNode(nodeID: 1)))
+
+        let applied = store.applySelectionSnapshot(
+            .init(
+                nodeID: 99,
+                preview: "<div id='detached'>",
+                attributes: [],
+                path: [],
+                selectorPath: "#detached",
+                styleRevision: 0
+            )
+        )
+
+        #expect(applied == false)
+        #expect(store.selectedID == nil)
+        #expect(store.entry(forNodeID: 99) == nil)
     }
 
     @Test
@@ -116,21 +138,21 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
         store.applyMutationBundle(
             .init(
                 events: [
-                    .replaceSubtree(root: makeNode(localID: 999, children: [makeNode(localID: 1000)])),
+                    .replaceSubtree(root: makeNode(nodeID: 999, children: [makeNode(nodeID: 1000)])),
                 ]
             )
         )
 
-        #expect(store.rootID?.localID == 1)
-        #expect(store.entry(forLocalID: 2) != nil)
-        #expect(store.entry(forLocalID: 999) == nil)
+        #expect(store.rootID?.nodeID == 1)
+        #expect(store.entry(forNodeID: 2) != nil)
+        #expect(store.entry(forNodeID: 999) == nil)
     }
 
     @Test
@@ -138,22 +160,22 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2)])
             )
         )
 
         store.applyMutationBundle(
             .init(
                 events: [
-                    .replaceSubtree(root: makeNode(localID: 1, children: [makeNode(localID: 3)])),
+                    .replaceSubtree(root: makeNode(nodeID: 1, children: [makeNode(nodeID: 3)])),
                 ]
             )
         )
 
-        #expect(store.rootID?.localID == 1)
-        #expect(store.entry(forLocalID: 2) == nil)
-        #expect(store.entry(forLocalID: 3) != nil)
-        #expect(store.entry(forLocalID: 1)?.children.map(\.id.localID) == [3])
+        #expect(store.rootID?.nodeID == 1)
+        #expect(store.entry(forNodeID: 2) == nil)
+        #expect(store.entry(forNodeID: 3) != nil)
+        #expect(store.entry(forNodeID: 1)?.children.map(\.id.nodeID) == [3])
     }
 
     @Test
@@ -161,7 +183,7 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2), makeNode(nodeID: 3)])
             )
         )
 
@@ -169,15 +191,15 @@ struct DOMGraphStoreTests {
             .init(
                 events: [
                     .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 999,
-                        node: makeNode(localID: 4)
+                        parentNodeID: 1,
+                        previousNodeID: 999,
+                        node: makeNode(nodeID: 4)
                     ),
                 ]
             )
         )
 
-        let childOrder = store.entry(forLocalID: 1)?.children.map(\.id.localID) ?? []
+        let childOrder = store.entry(forNodeID: 1)?.children.map(\.id.nodeID) ?? []
         #expect(childOrder == [2, 3, 4])
     }
 
@@ -187,9 +209,9 @@ struct DOMGraphStoreTests {
         store.applySnapshot(
             .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     childCount: 10,
-                    children: [makeNode(localID: 2)]
+                    children: [makeNode(nodeID: 2)]
                 )
             )
         )
@@ -198,16 +220,16 @@ struct DOMGraphStoreTests {
             .init(
                 events: [
                     .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 2,
-                        node: makeNode(localID: 3)
+                        parentNodeID: 1,
+                        previousNodeID: 2,
+                        node: makeNode(nodeID: 3)
                     ),
                 ]
             )
         )
 
-        #expect(store.entry(forLocalID: 1)?.childCount == 11)
-        #expect(store.entry(forLocalID: 1)?.children.map(\.id.localID) == [2, 3])
+        #expect(store.entry(forNodeID: 1)?.childCount == 11)
+        #expect(store.entry(forNodeID: 1)?.children.map(\.id.nodeID) == [2, 3])
     }
 
     @Test
@@ -215,7 +237,7 @@ struct DOMGraphStoreTests {
         let store = DOMGraphStore()
         store.applySnapshot(
             .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
+                root: makeNode(nodeID: 1, children: [makeNode(nodeID: 2), makeNode(nodeID: 3)])
             )
         )
 
@@ -223,49 +245,16 @@ struct DOMGraphStoreTests {
             .init(
                 events: [
                     .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 0,
-                        node: makeNode(localID: 4)
+                        parentNodeID: 1,
+                        previousNodeID: 0,
+                        node: makeNode(nodeID: 4)
                     ),
                 ]
             )
         )
 
-        let childOrder = store.entry(forLocalID: 1)?.children.map(\.id.localID) ?? []
+        let childOrder = store.entry(forNodeID: 1)?.children.map(\.id.nodeID) ?? []
         #expect(childOrder == [4, 2, 3])
-    }
-
-    @Test
-    func replaceSubtreeForDetachedPlaceholderDoesNotPromotePlaceholderToRoot() {
-        let store = DOMGraphStore()
-        store.applySnapshot(
-            .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)])
-            )
-        )
-        store.applySelectionSnapshot(
-            .init(
-                localID: 99,
-                preview: "<div id='detached'>",
-                attributes: [],
-                path: [],
-                selectorPath: "#detached",
-                styleRevision: 0
-            )
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .replaceSubtree(root: makeNode(localID: 99, children: [makeNode(localID: 100)])),
-                ]
-            )
-        )
-
-        #expect(store.rootID?.localID == 1)
-        #expect(store.entry(forLocalID: 2) != nil)
-        #expect(store.entry(forLocalID: 99) != nil)
-        #expect(store.entry(forLocalID: 99)?.parent == nil)
     }
 
     @Test
@@ -274,9 +263,9 @@ struct DOMGraphStoreTests {
         store.applySnapshot(
             .init(
                 root: makeNode(
-                    localID: 1,
+                    nodeID: 1,
                     childCount: 10,
-                    children: [makeNode(localID: 2)]
+                    children: [makeNode(nodeID: 2)]
                 )
             )
         )
@@ -285,19 +274,19 @@ struct DOMGraphStoreTests {
             .init(
                 events: [
                     .replaceSubtree(
-                        root: makeNode(localID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "replaced")])
+                        root: makeNode(nodeID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "replaced")])
                     ),
                 ]
             )
         )
 
-        #expect(store.entry(forLocalID: 1)?.childCount == 10)
-        #expect(store.entry(forLocalID: 1)?.children.map(\.id.localID) == [2])
-        #expect(store.entry(forLocalID: 2)?.attributes.first?.value == "replaced")
+        #expect(store.entry(forNodeID: 1)?.childCount == 10)
+        #expect(store.entry(forNodeID: 1)?.children.map(\.id.nodeID) == [2])
+        #expect(store.entry(forNodeID: 2)?.attributes.first?.value == "replaced")
     }
 
     private func makeNode(
-        localID: UInt64,
+        nodeID: Int,
         nodeType: Int = 1,
         nodeName: String = "DIV",
         localName: String = "div",
@@ -309,8 +298,7 @@ struct DOMGraphStoreTests {
         children: [DOMGraphNodeDescriptor] = []
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
-            localID: localID,
-            backendNodeID: localID <= UInt64(Int.max) ? Int(localID) : nil,
+            nodeID: nodeID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,

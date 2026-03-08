@@ -1,6 +1,8 @@
+#if os(iOS) && DEBUG
 import XCTest
 @testable import MiniBrowser
 
+@MainActor
 final class NativeInspectorProbeTests: XCTestCase {
     func testProbeResultIsTerminalForSucceededStatus() {
         let result = NativeInspectorProbeResult(
@@ -34,3 +36,4 @@ final class NativeInspectorProbeTests: XCTestCase {
         XCTAssertFalse(result.isTerminal)
     }
 }
+#endif

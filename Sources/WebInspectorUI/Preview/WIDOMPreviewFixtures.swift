@@ -27,18 +27,18 @@ enum WIDOMPreviewFixtures {
         case .empty:
             break
         case .selected:
-            let localID: UInt64 = 42
+            let nodeID = 6
             let attributes = [
-                DOMAttribute(nodeId: 42, name: "alt", value: "スノーボード 2026"),
-                DOMAttribute(nodeId: 42, name: "id", value: "hplogo"),
-                DOMAttribute(nodeId: 42, name: "src", value: "/logos/doodles/2026/snowboarding.gif")
+                DOMAttribute(nodeId: nodeID, name: "aria-label", value: "スノーボード"),
+                DOMAttribute(nodeId: nodeID, name: "class", value: "hero-label"),
+                DOMAttribute(nodeId: nodeID, name: "data-kind", value: "doodle")
             ]
             graphStore.applySelectionSnapshot(
                 .init(
-                    localID: localID,
+                    nodeID: nodeID,
                     preview: "<span aria-label=\"スノーボード\">...</span>",
                     attributes: attributes,
-                    path: [],
+                    path: ["html", "body", "div", "span"],
                     selectorPath: "#hplogo > span",
                     styleRevision: 0
                 )
@@ -55,14 +55,14 @@ enum WIDOMPreviewFixtures {
                 )
             ]
             graphStore.applyMatchedStyles(
-                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                for: localID
+                .init(nodeId: nodeID, rules: rules, truncated: false, blockedStylesheetCount: 0),
+                for: nodeID
             )
         case .selectedEditableAttributes:
-            let localID: UInt64 = 101
+            let nodeID = 8
             let attributes = [
                 DOMAttribute(
-                    nodeId: 101,
+                    nodeId: nodeID,
                     name: "style",
                     value: """
                     border:none;
@@ -72,19 +72,19 @@ enum WIDOMPreviewFixtures {
                     min-height:1px
                     """
                 ),
-                DOMAttribute(nodeId: 101, name: "alt", value: "スノーボード 2026"),
+                DOMAttribute(nodeId: nodeID, name: "alt", value: "スノーボード 2026"),
                 DOMAttribute(
-                    nodeId: 101,
+                    nodeId: nodeID,
                     name: "src",
                     value: "/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif"
                 )
             ]
             graphStore.applySelectionSnapshot(
                 .init(
-                    localID: localID,
+                    nodeID: nodeID,
                     preview: "<img alt=\"スノーボード 2026\" src=\"/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif\">",
                     attributes: attributes,
-                    path: [],
+                    path: ["html", "body", "div", "img"],
                     selectorPath: "#hplogo > img",
                     styleRevision: 0
                 )
@@ -102,8 +102,8 @@ enum WIDOMPreviewFixtures {
                 )
             ]
             graphStore.applyMatchedStyles(
-                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                for: localID
+                .init(nodeId: nodeID, rules: rules, truncated: false, blockedStylesheetCount: 0),
+                for: nodeID
             )
         }
     }
@@ -123,109 +123,164 @@ enum WIDOMPreviewFixtures {
     }
 
     static func applySampleTree(to inspector: WIDOMModel) {
-        guard
-            let data = try? JSONSerialization.data(withJSONObject: sampleSnapshotBundle, options: []),
-            let bundle = String(data: data, encoding: .utf8)
-        else {
-            return
-        }
-        inspector.enqueueMutationBundle(bundle, preserveState: true)
+        let snapshot = DOMGraphSnapshot(
+            root: DOMGraphNodeDescriptor(
+                nodeID: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                nodeValue: "",
+                attributes: [],
+                childCount: 1,
+                layoutFlags: [],
+                isRendered: true,
+                children: [
+                    DOMGraphNodeDescriptor(
+                        nodeID: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        nodeValue: "",
+                        attributes: [DOMAttribute(nodeId: 2, name: "lang", value: "ja")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: [
+                            DOMGraphNodeDescriptor(
+                                nodeID: 3,
+                                nodeType: 1,
+                                nodeName: "HEAD",
+                                localName: "head",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 0,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            ),
+                            DOMGraphNodeDescriptor(
+                                nodeID: 4,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                nodeValue: "",
+                                attributes: [DOMAttribute(nodeId: 4, name: "class", value: "preview")],
+                                childCount: 2,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        nodeID: 5,
+                                        nodeType: 1,
+                                        nodeName: "DIV",
+                                        localName: "div",
+                                        nodeValue: "",
+                                        attributes: [DOMAttribute(nodeId: 5, name: "id", value: "hplogo")],
+                                        childCount: 2,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: [
+                                            DOMGraphNodeDescriptor(
+                                                nodeID: 6,
+                                                nodeType: 1,
+                                                nodeName: "SPAN",
+                                                localName: "span",
+                                                nodeValue: "",
+                                                attributes: [
+                                                    DOMAttribute(nodeId: 6, name: "aria-label", value: "スノーボード"),
+                                                    DOMAttribute(nodeId: 6, name: "class", value: "hero-label"),
+                                                    DOMAttribute(nodeId: 6, name: "data-kind", value: "doodle")
+                                                ],
+                                                childCount: 1,
+                                                layoutFlags: [],
+                                                isRendered: true,
+                                                children: [
+                                                    DOMGraphNodeDescriptor(
+                                                        nodeID: 7,
+                                                        nodeType: 3,
+                                                        nodeName: "#text",
+                                                        localName: "",
+                                                        nodeValue: "WebInspector Preview",
+                                                        attributes: [],
+                                                        childCount: 0,
+                                                        layoutFlags: [],
+                                                        isRendered: true,
+                                                        children: []
+                                                    )
+                                                ]
+                                            ),
+                                            DOMGraphNodeDescriptor(
+                                                nodeID: 8,
+                                                nodeType: 1,
+                                                nodeName: "IMG",
+                                                localName: "img",
+                                                nodeValue: "",
+                                                attributes: [
+                                                    DOMAttribute(
+                                                        nodeId: 8,
+                                                        name: "style",
+                                                        value: """
+                                                        border:none;
+                                                        max-width:100%;
+                                                        margin:8px 0;
+                                                        min-width:1px;
+                                                        min-height:1px
+                                                        """
+                                                    ),
+                                                    DOMAttribute(nodeId: 8, name: "alt", value: "スノーボード 2026"),
+                                                    DOMAttribute(
+                                                        nodeId: 8,
+                                                        name: "src",
+                                                        value: "/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif"
+                                                    )
+                                                ],
+                                                childCount: 0,
+                                                layoutFlags: [],
+                                                isRendered: true,
+                                                children: []
+                                            )
+                                        ]
+                                    ),
+                                    DOMGraphNodeDescriptor(
+                                        nodeID: 9,
+                                        nodeType: 1,
+                                        nodeName: "SECTION",
+                                        localName: "section",
+                                        nodeValue: "",
+                                        attributes: [DOMAttribute(nodeId: 9, name: "class", value: "content")],
+                                        childCount: 0,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            selectedNodeID: 6
+        )
+
+        inspector.session.graphStore.resetForDocumentUpdate()
+        inspector.session.graphStore.applySnapshot(snapshot)
+        inspector.session.graphStore.select(nodeID: snapshot.selectedNodeID)
+        inspector.setExpandedEntryIDsForTesting([
+            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 1),
+            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 2),
+            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 4),
+            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 5),
+        ])
     }
 
     private static var pageLoaderByInspector: [ObjectIdentifier: WIDOMPreviewPageLoader] = [:]
-    private static let sampleSnapshotBundle: NSDictionary = [
-        "version": 1,
-        "kind": "snapshot",
-        "snapshot": [
-            "root": [
-                "nodeId": 1,
-                "nodeType": 9,
-                "nodeName": "#document",
-                "localName": "",
-                "nodeValue": "",
-                "childNodeCount": 1,
-                "children": [
-                    [
-                        "nodeId": 2,
-                        "nodeType": 1,
-                        "nodeName": "HTML",
-                        "localName": "html",
-                        "nodeValue": "",
-                        "childNodeCount": 2,
-                        "attributes": ["lang", "ja"],
-                        "children": [
-                            [
-                                "nodeId": 3,
-                                "nodeType": 1,
-                                "nodeName": "HEAD",
-                                "localName": "head",
-                                "nodeValue": "",
-                                "childNodeCount": 0,
-                            ],
-                            [
-                                "nodeId": 4,
-                                "nodeType": 1,
-                                "nodeName": "BODY",
-                                "localName": "body",
-                                "nodeValue": "",
-                                "childNodeCount": 2,
-                                "attributes": ["class", "preview"],
-                                "children": [
-                                    [
-                                        "nodeId": 5,
-                                        "nodeType": 1,
-                                        "nodeName": "DIV",
-                                        "localName": "div",
-                                        "nodeValue": "",
-                                        "childNodeCount": 1,
-                                        "attributes": ["id", "preview-root"],
-                                        "children": [
-                                            [
-                                                "nodeId": 6,
-                                                "nodeType": 1,
-                                                "nodeName": "SPAN",
-                                                "localName": "span",
-                                                "nodeValue": "",
-                                                "childNodeCount": 1,
-                                                "attributes": ["aria-label", "スノーボード"],
-                                                "children": [
-                                                    [
-                                                        "nodeId": 7,
-                                                        "nodeType": 3,
-                                                        "nodeName": "#text",
-                                                        "localName": "",
-                                                        "nodeValue": "WebInspector Preview",
-                                                        "childNodeCount": 0,
-                                                    ],
-                                                ],
-                                            ],
-                                        ],
-                                    ],
-                                    [
-                                        "nodeId": 8,
-                                        "nodeType": 1,
-                                        "nodeName": "SECTION",
-                                        "localName": "section",
-                                        "nodeValue": "",
-                                        "childNodeCount": 0,
-                                        "attributes": ["class", "content"],
-                                    ],
-                                ],
-                            ],
-                        ],
-                    ],
-                ],
-            ],
-            "selectedNodeId": 6,
-            "selectedNodePath": [0, 1, 0, 0],
-        ],
-    ]
 }
 
 @MainActor
 private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
     private let inspector: WIDOMModel
     private let webView: WKWebView
+
     var pageWebView: WKWebView {
         webView
     }
@@ -258,13 +313,16 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
         <meta charset="utf-8" />
         <title>DOM Preview</title>
       </head>
-      <body>
-        <main id="preview-root">
-          <header class="hero"><h1>WebInspector Preview</h1></header>
-          <section class="content">
-            <article data-kind="sample">sample node</article>
-          </section>
-        </main>
+      <body class="preview">
+        <div id="hplogo">
+          <span aria-label="スノーボード" class="hero-label" data-kind="doodle">WebInspector Preview</span>
+          <img
+            style="border:none;max-width:100%;margin:8px 0;min-width:1px;min-height:1px"
+            alt="スノーボード 2026"
+            src="/logos/doodles/2026/snowboarding-2026-feb-18-a-6753651837111226-law.gif"
+          />
+        </div>
+        <section class="content"></section>
       </body>
     </html>
     """

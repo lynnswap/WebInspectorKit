@@ -4,12 +4,12 @@ import WebKit
 @testable import WebInspectorEngine
 
 @MainActor
-struct NetworkResourceLoadObserverTests {
+struct NetworkLegacyResourceLoadObserverTests {
     @Test
     func dropsFetchAndXHRResourceTypesFromNativeObserver() {
         let webView = makeWebView()
         var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
+        let observer = NetworkLegacyResourceLoadObserver(sessionID: "native-session") { event in
             events.append(event)
         }
 
@@ -45,10 +45,10 @@ struct NetworkResourceLoadObserverTests {
     }
 
     @Test
-    func convertsNonXHRNativeCallbacksToHTTPNetworkEvents() throws {
+    func convertsNonXHRNativeCallbacksToHTTPNetworkEvents() {
         let webView = makeWebView()
         var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
+        let observer = NetworkLegacyResourceLoadObserver(sessionID: "native-session") { event in
             events.append(event)
         }
 
@@ -88,10 +88,10 @@ struct NetworkResourceLoadObserverTests {
     }
 
     @Test
-    func synthesizesStartEventWhenCompleteArrivesBeforeSend() {
+    func synthesesStartEventWhenCompleteArrivesBeforeSend() {
         let webView = makeWebView()
         var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
+        let observer = NetworkLegacyResourceLoadObserver(sessionID: "native-session") { event in
             events.append(event)
         }
 
@@ -120,11 +120,10 @@ struct NetworkResourceLoadObserverTests {
     @Test
     func attachReturnsFalseWhenSelectorIsUnavailable() {
         let webView = makeWebView()
-        let observer = NetworkResourceLoadObserver(
+        let observer = NetworkLegacyResourceLoadObserver(
             sessionID: "native-session",
             supportsResourceLoadDelegate: { _ in false }
-        ) { _ in
-        }
+        ) { _ in }
 
         let attached = observer.attach(to: webView)
 
@@ -135,7 +134,7 @@ struct NetworkResourceLoadObserverTests {
     func skipsCallbacksWhenEventEmissionIsDisabled() {
         let webView = makeWebView()
         var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(
+        let observer = NetworkLegacyResourceLoadObserver(
             sessionID: "native-session",
             isEventEmissionEnabled: { false }
         ) { event in
@@ -164,88 +163,6 @@ struct NetworkResourceLoadObserverTests {
         #expect(events.isEmpty)
     }
 
-    @Test
-    func keepsInFlightCallbacksUntilCompletionAfterEmissionIsDisabled() {
-        let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
-        let emissionState = EmissionState(enabled: true)
-        let observer = NetworkResourceLoadObserver(
-            sessionID: "native-session",
-            isEventEmissionEnabled: { emissionState.enabled }
-        ) { event in
-            events.append(event)
-        }
-
-        let info = FakeResourceLoadInfo(
-            loadID: 101,
-            resourceType: 10,
-            url: URL(string: "https://example.com/inflight.js")!,
-            method: "GET"
-        )
-        var request = URLRequest(url: URL(string: "https://example.com/inflight.js")!)
-        request.httpMethod = "GET"
-        let response = HTTPURLResponse(
-            url: URL(string: "https://example.com/inflight.js")!,
-            statusCode: 200,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["content-type": "application/javascript"]
-        )!
-
-        observer.handleDidSendRequest(webView: webView, resourceLoad: info, request: request)
-        emissionState.enabled = false
-        observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
-
-        #expect(events.count == 2)
-        #expect(events[0].kind == .requestWillBeSent)
-        #expect(events[1].kind == .loadingFinished)
-        #expect(events[0].requestID == events[1].requestID)
-
-        let nextInfo = FakeResourceLoadInfo(
-            loadID: 102,
-            resourceType: 10,
-            url: URL(string: "https://example.com/new.js")!,
-            method: "GET"
-        )
-        observer.handleDidSendRequest(webView: webView, resourceLoad: nextInfo, request: request)
-        observer.handleDidComplete(webView: webView, resourceLoad: nextInfo, error: nil, response: response)
-        #expect(events.count == 2)
-    }
-
-    @Test
-    func ignoresFollowUpsForLoadsStartedWhileEmissionWasDisabledAfterReenable() {
-        let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
-        let emissionState = EmissionState(enabled: false)
-        let observer = NetworkResourceLoadObserver(
-            sessionID: "native-session",
-            isEventEmissionEnabled: { emissionState.enabled }
-        ) { event in
-            events.append(event)
-        }
-
-        let info = FakeResourceLoadInfo(
-            loadID: 103,
-            resourceType: 10,
-            url: URL(string: "https://example.com/suppressed.js")!,
-            method: "GET"
-        )
-        var request = URLRequest(url: URL(string: "https://example.com/suppressed.js")!)
-        request.httpMethod = "GET"
-        let response = HTTPURLResponse(
-            url: URL(string: "https://example.com/suppressed.js")!,
-            statusCode: 200,
-            httpVersion: "HTTP/1.1",
-            headerFields: ["content-type": "application/javascript"]
-        )!
-
-        observer.handleDidSendRequest(webView: webView, resourceLoad: info, request: request)
-        emissionState.enabled = true
-        observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
-        observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
-
-        #expect(events.isEmpty)
-    }
-
     private func makeWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -253,28 +170,21 @@ struct NetworkResourceLoadObserverTests {
     }
 }
 
-@MainActor
-private final class EmissionState {
-    var enabled: Bool
-
-    init(enabled: Bool) {
-        self.enabled = enabled
-    }
-}
-
 @objcMembers
+@MainActor
 private final class FakeResourceLoadInfo: NSObject {
-    let resourceLoadID: NSNumber
-    let resourceType: NSNumber
-    let eventTimestamp: NSDate
-    let originalURL: NSURL
-    let originalHTTPMethod: NSString
+    dynamic let resourceLoadID: UInt64
+    dynamic let resourceType: Int
+    dynamic let originalURL: URL
+    dynamic let originalHTTPMethod: String
+    dynamic let eventTimestamp: Date
 
-    init(loadID: UInt64, resourceType: Int, url: URL, method: String, timestamp: Date = Date()) {
-        self.resourceLoadID = NSNumber(value: loadID)
-        self.resourceType = NSNumber(value: resourceType)
-        self.eventTimestamp = timestamp as NSDate
-        self.originalURL = url as NSURL
-        self.originalHTTPMethod = method as NSString
+    init(loadID: UInt64, resourceType: Int, url: URL, method: String) {
+        resourceLoadID = loadID
+        self.resourceType = resourceType
+        originalURL = url
+        originalHTTPMethod = method
+        eventTimestamp = Date()
+        super.init()
     }
 }

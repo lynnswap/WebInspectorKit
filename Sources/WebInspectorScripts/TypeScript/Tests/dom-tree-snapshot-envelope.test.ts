@@ -83,9 +83,9 @@ describe("dom-tree-snapshot envelope conversion", () => {
         expect(treeState.selectedNodeId).toBe(102);
 
         const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
+            | { nodeId?: number | null }
             | undefined;
-        expect(messagePayload?.id).toBe(102);
+        expect(messagePayload?.nodeId).toBe(102);
     });
 
     it("keeps fallback child structure when serialized root is shallower than fallback", () => {
@@ -128,9 +128,9 @@ describe("dom-tree-snapshot envelope conversion", () => {
         expect(treeState.selectedNodeId).toBe(202);
 
         const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
+            | { nodeId?: number | null }
             | undefined;
-        expect(messagePayload?.id).toBe(202);
+        expect(messagePayload?.nodeId).toBe(202);
     });
 
     it("resolves selection by path when selectedNodeId is missing", () => {
@@ -167,9 +167,9 @@ describe("dom-tree-snapshot envelope conversion", () => {
         expect(treeState.selectedNodeId).toBe(302);
 
         const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
+            | { nodeId?: number | null }
             | undefined;
-        expect(messagePayload?.id).toBe(302);
+        expect(messagePayload?.nodeId).toBe(302);
     });
 
     it("falls back to descriptor payload when envelope schemaVersion is unsupported", () => {

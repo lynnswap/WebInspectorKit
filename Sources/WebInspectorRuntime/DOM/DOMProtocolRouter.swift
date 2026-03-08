@@ -33,7 +33,7 @@ final class DOMProtocolRouter {
         do {
             switch request.method {
             case "DOM.getDocument":
-                let depth = request.params.intValue(forKey: "depth") ?? configuration.snapshotDepth
+                let depth = request.params.intValue(forKey: "depth") ?? configuration.rootBootstrapDepth
                 let snapshot = try await session.captureSnapshotPayload(maxDepth: depth)
                 let object = makeObjectResponse(id: request.id, result: snapshot, errorMessage: nil)
                 return RoutingOutcome(
@@ -43,10 +43,9 @@ final class DOMProtocolRouter {
                 )
 
             case "DOM.requestChildNodes":
-                let depth = request.params.intValue(forKey: "depth") ?? configuration.subtreeDepth
                 let nodeID = request.params.intValue(forKey: "nodeId") ?? 0
-                let subtree = try await session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
-                let object = makeObjectResponse(id: request.id, result: subtree, errorMessage: nil)
+                _ = try await session.requestChildNodes(parentNodeId: nodeID)
+                let object = makeObjectResponse(id: request.id, result: NSNull(), errorMessage: nil)
                 return RoutingOutcome(
                     responseJSON: nil,
                     responseObject: object,

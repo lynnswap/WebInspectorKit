@@ -26,16 +26,16 @@ let package = Package(
             targets: ["WebInspectorTransport"]
         ),
         .library(
-            name: "WebInspectorRuntime",
-            targets: ["WebInspectorRuntime"]
-        ),
-        .library(
             name: "WebInspectorBridge",
             targets: ["WebInspectorBridge"]
         ),
         .library(
             name: "WebInspectorScripts",
             targets: ["WebInspectorScripts"]
+        ),
+        .library(
+            name: "WebInspectorRuntime",
+            targets: ["WebInspectorRuntime"]
         ),
         .library(
             name: "WebInspectorUI",
@@ -81,6 +81,7 @@ let package = Package(
             dependencies: [
                 "WebInspectorBridge",
                 "WebInspectorScripts",
+                "WebInspectorTransport",
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -88,7 +89,7 @@ let package = Package(
             name: "WebInspectorRuntime",
             dependencies: [
                 "WebInspectorEngine",
-                "WebInspectorBridge",
+                "WebInspectorTransport",
                 "WebInspectorScripts",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
@@ -113,7 +114,7 @@ let package = Package(
             swiftSettings: strictSwiftSettings,
             plugins: [
                 .plugin(name: "WebInspectorKitObfuscatePlugin")
-            ],
+            ]
         ),
         .target(
             name: "WebInspectorBridgeObjCShim",
@@ -130,7 +131,7 @@ let package = Package(
             dependencies: [
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
-                "WebInspectorBridge",
+                "WebInspectorBridgeObjCShim",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             resources: [
@@ -169,6 +170,7 @@ let package = Package(
             name: "WebInspectorEngineTests",
             dependencies: [
                 "WebInspectorEngine",
+                "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorEngineTests",

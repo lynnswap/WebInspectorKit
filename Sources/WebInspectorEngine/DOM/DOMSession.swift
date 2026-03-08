@@ -1,8 +1,15 @@
 import WebKit
+import WebInspectorTransport
 
 @MainActor
 public final class DOMSession {
     public typealias AttachmentResult = (shouldReload: Bool, preserveState: Bool)
+
+    private struct DefaultPageAgentComponents {
+        let pageAgent: any DOMPageDriving
+        let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
+        let transportSupportSnapshot: WITransportSupportSnapshot?
+    }
 
     public private(set) var configuration: DOMConfiguration
     public let graphStore: DOMGraphStore
@@ -10,40 +17,74 @@ public final class DOMSession {
     public private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: any DOMPageDriving
     private let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
+    private let fallbackTransportSupportSnapshot: WITransportSupportSnapshot?
     private var autoSnapshotEnabled = false
-
-    var isAutoSnapshotEnabled: Bool {
-        autoSnapshotEnabled
-    }
-
-    package var bridgeMode: WIBridgeMode {
-        pageAgent.currentBridgeMode
-    }
-
-    public weak var bundleSink: (any DOMBundleSink)? {
+    package weak var eventSink: (any DOMProtocolEventSink)? {
         didSet {
-            pageAgent.sink = bundleSink
+            pageAgent.eventSink = eventSink
         }
     }
 
     public convenience init(configuration: DOMConfiguration = .init()) {
+        let graphStore = DOMGraphStore()
+        let components = Self.makeDefaultPageAgentComponents(
+            configuration: configuration,
+            graphStore: graphStore
+        )
         self.init(
             configuration: configuration,
-            pageAgent: DOMPageAgent(configuration: configuration),
-            transportCapabilityProvider: nil
+            graphStore: graphStore,
+            pageAgent: components.pageAgent,
+            transportCapabilityProvider: components.transportCapabilityProvider,
+            transportSupportSnapshot: components.transportSupportSnapshot
+        )
+    }
+
+    package convenience init(
+        configuration: DOMConfiguration = .init(),
+        graphStore: DOMGraphStore = DOMGraphStore(),
+        defaultTransportSupportSnapshot: WITransportSupportSnapshot
+    ) {
+        let components = Self.makeDefaultPageAgentComponents(
+            configuration: configuration,
+            graphStore: graphStore,
+            transportSupportSnapshot: defaultTransportSupportSnapshot
+        )
+        self.init(
+            configuration: configuration,
+            graphStore: graphStore,
+            pageAgent: components.pageAgent,
+            transportCapabilityProvider: components.transportCapabilityProvider,
+            transportSupportSnapshot: components.transportSupportSnapshot
+        )
+    }
+
+    convenience init(
+        configuration: DOMConfiguration = .init(),
+        graphStore: DOMGraphStore = DOMGraphStore(),
+        pageAgent: any DOMPageDriving
+    ) {
+        self.init(
+            configuration: configuration,
+            graphStore: graphStore,
+            pageAgent: pageAgent,
+            transportCapabilityProvider: pageAgent as? (any InspectorTransportCapabilityProviding)
         )
     }
 
     init(
         configuration: DOMConfiguration = .init(),
+        graphStore: DOMGraphStore = DOMGraphStore(),
         pageAgent: any DOMPageDriving,
-        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil
+        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil,
+        transportSupportSnapshot: WITransportSupportSnapshot? = nil
     ) {
         self.configuration = configuration
-        graphStore = DOMGraphStore()
+        self.graphStore = graphStore
         self.pageAgent = pageAgent
         self.transportCapabilityProvider = transportCapabilityProvider
-        self.pageAgent.sink = bundleSink
+        fallbackTransportSupportSnapshot = transportSupportSnapshot
+        self.pageAgent.eventSink = eventSink
     }
 
     public func updateConfiguration(_ configuration: DOMConfiguration) {
@@ -64,8 +105,20 @@ public final class DOMSession {
         pageAgent.webView != nil
     }
 
+    package var isAutoSnapshotEnabled: Bool {
+        autoSnapshotEnabled
+    }
+
     package var transportCapabilities: Set<InspectorTransportCapability> {
-        transportCapabilityProvider?.inspectorTransportCapabilities ?? []
+        let fallbackCapabilities = Self.fallbackTransportCapabilities(from: fallbackTransportSupportSnapshot)
+        guard let providerCapabilities = transportCapabilityProvider?.inspectorTransportCapabilities else {
+            return fallbackCapabilities
+        }
+        return providerCapabilities.union(fallbackCapabilities)
+    }
+
+    public var transportSupportSnapshot: WITransportSupportSnapshot? {
+        transportCapabilityProvider?.inspectorTransportSupportSnapshot ?? fallbackTransportSupportSnapshot
     }
 
     @discardableResult
@@ -117,7 +170,7 @@ public final class DOMSession {
     }
 }
 
-// MARK: - Snapshot API (for DOMTreeView)
+// MARK: - Snapshot API
 
 public extension DOMSession {
     func captureSnapshot(maxDepth: Int) async throws -> String {
@@ -133,7 +186,26 @@ public extension DOMSession {
     }
 }
 
-// MARK: - Snapshot API (bridge/object)
+// MARK: - Document API
+
+public extension DOMSession {
+    func reloadDocument(preserveState: Bool = false) async throws {
+        try await pageAgent.reloadDocument(preserveState: preserveState)
+    }
+
+    func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor] {
+        try await pageAgent.requestChildNodes(parentNodeId: parentNodeId)
+    }
+}
+
+extension DOMSession {
+    package func reloadDocument(preserveState: Bool, requestedDepth: Int?) async throws {
+        try await pageAgent.reloadDocument(
+            preserveState: preserveState,
+            requestedDepth: requestedDepth
+        )
+    }
+}
 
 extension DOMSession {
     package func captureSnapshotPayload(maxDepth: Int) async throws -> Any {
@@ -148,7 +220,7 @@ extension DOMSession {
 // MARK: - Selection / Highlight
 
 public extension DOMSession {
-    func beginSelectionMode() async throws -> DOMPageAgent.SelectionModeResult {
+    func beginSelectionMode() async throws -> DOMSelectionModeResult {
         try await pageAgent.beginSelectionMode()
     }
 
@@ -162,6 +234,12 @@ public extension DOMSession {
 
     func hideHighlight() async {
         await pageAgent.hideHighlight()
+    }
+}
+
+extension DOMSession {
+    package func rememberPendingSelection(nodeId: Int?) {
+        pageAgent.rememberPendingSelection(nodeId: nodeId)
     }
 }
 
@@ -204,3 +282,48 @@ public extension DOMSession {
         try await selectionCopyText(nodeId: nodeId, kind: .selectorPath)
     }
 }
+
+private extension DOMSession {
+    private static func fallbackTransportCapabilities(
+        from snapshot: WITransportSupportSnapshot?
+    ) -> Set<InspectorTransportCapability> {
+        Set(snapshot?.capabilities.compactMap { InspectorTransportCapability(rawValue: $0.rawValue) } ?? [])
+    }
+
+    private static func shouldUseTransportDriver(for snapshot: WITransportSupportSnapshot) -> Bool {
+        snapshot.isSupported
+    }
+
+    private static func makeDefaultPageAgentComponents(
+        configuration: DOMConfiguration,
+        graphStore: DOMGraphStore,
+        transportSupportSnapshot: WITransportSupportSnapshot? = nil
+    ) -> DefaultPageAgentComponents {
+        let preflightSnapshot = transportSupportSnapshot ?? WITransportSession().supportSnapshot
+        let driver: any DOMPageDriving
+        let capabilityProvider: (any InspectorTransportCapabilityProviding)?
+
+        if shouldUseTransportDriver(for: preflightSnapshot) {
+            let transportDriver = DOMTransportDriver(configuration: configuration, graphStore: graphStore)
+            driver = transportDriver
+            capabilityProvider = transportSupportSnapshot == nil ? transportDriver : nil
+        } else {
+            driver = DOMLegacyPageDriver(configuration: configuration, graphStore: graphStore)
+            capabilityProvider = nil
+        }
+
+        return DefaultPageAgentComponents(
+            pageAgent: driver,
+            transportCapabilityProvider: capabilityProvider,
+            transportSupportSnapshot: preflightSnapshot
+        )
+    }
+}
+
+#if DEBUG
+extension DOMSession {
+    package func testPageAgentTypeName() -> String {
+        String(describing: type(of: pageAgent))
+    }
+}
+#endif

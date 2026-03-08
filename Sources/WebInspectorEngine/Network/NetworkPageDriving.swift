@@ -10,5 +10,3 @@ protocol NetworkPageDriving: AnyObject, NetworkBodyFetching {
     func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?)
     func clearNetworkLogs()
 }
-
-extension NetworkPageAgent: NetworkPageDriving {}

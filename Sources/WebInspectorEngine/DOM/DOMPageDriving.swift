@@ -2,14 +2,15 @@ import WebKit
 
 @MainActor
 protocol DOMPageDriving: AnyObject {
-    var sink: (any DOMBundleSink)? { get set }
-    var currentBridgeMode: WIBridgeMode { get }
+    var eventSink: (any DOMProtocolEventSink)? { get set }
     var webView: WKWebView? { get }
 
     func updateConfiguration(_ configuration: DOMConfiguration)
     func attachPageWebView(_ newWebView: WKWebView?)
     func detachPageWebView()
     func setAutoSnapshot(enabled: Bool) async
+    func reloadDocument(preserveState: Bool, requestedDepth: Int?) async throws
+    func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor]
 
     func captureSnapshot(maxDepth: Int) async throws -> String
     func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String
@@ -17,10 +18,11 @@ protocol DOMPageDriving: AnyObject {
     func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any
     func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any
 
-    func beginSelectionMode() async throws -> DOMPageAgent.SelectionModeResult
+    func beginSelectionMode() async throws -> DOMSelectionModeResult
     func cancelSelectionMode() async
     func highlight(nodeId: Int) async
     func hideHighlight() async
+    func rememberPendingSelection(nodeId: Int?)
 
     func removeNode(nodeId: Int) async
     func removeNodeWithUndo(nodeId: Int) async -> Int?
@@ -32,4 +34,8 @@ protocol DOMPageDriving: AnyObject {
     func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String
 }
 
-extension DOMPageAgent: DOMPageDriving {}
+extension DOMPageDriving {
+    func reloadDocument(preserveState: Bool) async throws {
+        try await reloadDocument(preserveState: preserveState, requestedDepth: nil)
+    }
+}

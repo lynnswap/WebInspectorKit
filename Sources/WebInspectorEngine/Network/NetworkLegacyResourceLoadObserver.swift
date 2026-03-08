@@ -1,15 +1,15 @@
 import Foundation
 import OSLog
-import WebKit
 import WebInspectorBridge
+import WebKit
 
-private let networkResourceObserverLogger = Logger(
+private let networkLegacyResourceObserverLogger = Logger(
     subsystem: "WebInspectorKit",
-    category: "NetworkResourceLoadObserver"
+    category: "NetworkLegacyResourceLoadObserver"
 )
 
 @MainActor
-final class NetworkResourceLoadObserver: NSObject {
+final class NetworkLegacyResourceLoadObserver: NSObject {
     private struct LoadState {
         var requestID: Int
         var resourceType: Int
@@ -82,14 +82,14 @@ final class NetworkResourceLoadObserver: NSObject {
         }
 
         guard supportsResourceLoadDelegate(webView) else {
-            networkResourceObserverLogger.notice(
+            networkLegacyResourceObserverLogger.notice(
                 "native observer unavailable selector=\(WISPISymbols.setResourceLoadDelegateSelector, privacy: .public)"
             )
             return false
         }
 
         guard setResourceLoadDelegate(webView, self) else {
-            networkResourceObserverLogger.error("native observer failed to set delegate")
+            networkLegacyResourceObserverLogger.error("native observer failed to set delegate")
             return false
         }
         attachedWebView = webView
@@ -151,8 +151,9 @@ final class NetworkResourceLoadObserver: NSObject {
 }
 
 @MainActor
-extension NetworkResourceLoadObserver {
+extension NetworkLegacyResourceLoadObserver {
     func handleDidSendRequest(webView: WKWebView, resourceLoad: AnyObject, request: URLRequest) {
+        _ = webView
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
         guard shouldProcessStart(for: loadID) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
@@ -171,6 +172,7 @@ extension NetworkResourceLoadObserver {
     }
 
     func handleDidReceiveResponse(webView: WKWebView, resourceLoad: AnyObject, response: URLResponse) {
+        _ = webView
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
         guard shouldProcessFollowUp(for: loadID, terminal: false) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
@@ -195,6 +197,7 @@ extension NetworkResourceLoadObserver {
         error: NSError?,
         response: URLResponse?
     ) {
+        _ = webView
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
         guard shouldProcessFollowUp(for: loadID, terminal: true) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
@@ -227,6 +230,7 @@ extension NetworkResourceLoadObserver {
         response: URLResponse,
         request: URLRequest
     ) {
+        _ = webView
         guard let loadID = resourceLoadID(from: resourceLoad) else { return }
         guard shouldProcessFollowUp(for: loadID, terminal: false) else { return }
         let resourceType = resourceTypeValue(from: resourceLoad)
@@ -248,7 +252,7 @@ extension NetworkResourceLoadObserver {
 }
 
 @MainActor
-private extension NetworkResourceLoadObserver {
+private extension NetworkLegacyResourceLoadObserver {
     private func shouldProcessStart(for loadID: UInt64) -> Bool {
         guard isEventEmissionEnabled() else {
             statesByLoadID.removeValue(forKey: loadID)
@@ -576,8 +580,7 @@ private extension NetworkResourceLoadObserver {
             return nil
         }
         var request = URLRequest(url: url)
-        let method = (originalHTTPMethod(from: resourceLoad) ?? "GET").uppercased()
-        request.httpMethod = method
+        request.httpMethod = (originalHTTPMethod(from: resourceLoad) ?? "GET").uppercased()
         return request
     }
 }

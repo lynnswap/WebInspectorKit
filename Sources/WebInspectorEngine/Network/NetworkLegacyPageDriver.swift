@@ -1,16 +1,10 @@
 import Foundation
 import OSLog
-import WebKit
-import WebInspectorScripts
 import WebInspectorBridge
+import WebInspectorScripts
+import WebKit
 
-public enum NetworkLoggingMode: String, Sendable {
-    case active
-    case buffering
-    case stopped
-}
-
-private let networkLogger = Logger(subsystem: "WebInspectorKit", category: "NetworkPageAgent")
+private let networkLegacyLogger = Logger(subsystem: "WebInspectorKit", category: "NetworkLegacyPageDriver")
 private let networkPresenceProbeScript: String = """
 (function() { /* webInspectorNetworkAgent */ })();
 """
@@ -21,7 +15,7 @@ private let networkControlTokenWindowKey = "__wiNetworkControlToken"
 private let networkPageHookModeWindowKey = "__wiNetworkPageHookMode"
 
 @MainActor
-public final class NetworkPageAgent: NSObject, PageAgent {
+final class NetworkLegacyPageDriver: NSObject, NetworkPageDriving, PageAgent {
     private enum HandlerName: String, CaseIterable {
         case networkEvents = "webInspectorNetworkEvents"
         case networkReset = "webInspectorNetworkReset"
@@ -44,15 +38,14 @@ public final class NetworkPageAgent: NSObject, PageAgent {
 
     weak var webView: WKWebView?
     let store = NetworkStore()
+
     private var loggingMode: NetworkLoggingMode = .buffering
     private var configureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
-    private var nativeResourceObserver: NetworkResourceLoadObserver?
+    private var nativeResourceObserver: NetworkLegacyResourceLoadObserver?
     private var nativeObserverEnabled = false
     private var nativeSessionID = ""
     private var networkMessageAuthToken = UUID().uuidString.lowercased()
-    // Native observer is the primary source for non-XHR resources.
-    // XHR/fetch remain page-hooked to preserve reliable body capture.
     private let nativeObserverIncludesFetchAndXHR = false
 
     private let runtime: WISPIRuntime
@@ -74,7 +67,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     isolated deinit {
         configureTask?.cancel()
         clearTask?.cancel()
-        detachPageWebView()
+        detachPageWebView(preparing: .stopped)
     }
 
     func setMode(_ mode: NetworkLoggingMode) {
@@ -86,19 +79,6 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         scheduleConfigure(mode: mode, clearExisting: false, on: webView)
     }
 
-    func waitForPendingConfigurationForTesting() async {
-        await configureTask?.value
-    }
-
-    func clearNetworkLogs() {
-        store.clear()
-        scheduleClear(on: webView)
-    }
-}
-
-// MARK: - WIPageAgent
-
-extension NetworkPageAgent {
     func attachPageWebView(_ newWebView: WKWebView?) {
         replacePageWebView(with: newWebView)
     }
@@ -117,6 +97,17 @@ extension NetworkPageAgent {
         replacePageWebView(with: nil)
     }
 
+    func clearNetworkLogs() {
+        store.clear()
+        scheduleClear(on: webView)
+    }
+
+    package func waitForPendingConfigurationForTesting() async {
+        await configureTask?.value
+    }
+}
+
+extension NetworkLegacyPageDriver {
     func willDetachPageWebView(_ webView: WKWebView) {
         detachNativeResourceObserver(from: webView)
         detachMessageHandlers(from: webView)
@@ -138,16 +129,15 @@ extension NetworkPageAgent {
         nativeSessionID = ""
         store.reset()
     }
+}
 
-    func fetchBody(bodyRef: String?, bodyHandle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
-        switch await fetchBodyResult(bodyRef: bodyRef, bodyHandle: bodyHandle, role: role) {
-        case .fetched(let body):
-            return body
-        case .agentUnavailable, .bodyUnavailable:
-            return nil
-        }
+extension NetworkLegacyPageDriver: NetworkBodyFetching {
+    package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        await fetchBodyResult(bodyRef: ref, bodyHandle: handle, role: role)
     }
+}
 
+extension NetworkLegacyPageDriver {
     func fetchBodyResult(
         bodyRef: String?,
         bodyHandle: AnyObject?,
@@ -197,14 +187,9 @@ extension NetworkPageAgent {
     }
 }
 
-extension NetworkPageAgent: NetworkBodyFetching {
-    package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
-        await fetchBodyResult(bodyRef: ref, bodyHandle: handle, role: role)
-    }
-}
-
-extension NetworkPageAgent: WKScriptMessageHandler {
-    public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+extension NetworkLegacyPageDriver: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        _ = userContentController
         guard message.frameInfo.isMainFrame else {
             return
         }
@@ -222,21 +207,20 @@ extension NetworkPageAgent: WKScriptMessageHandler {
         case .valid:
             break
         case .missing:
-            networkLogger.notice("network batch missing auth token, reconfiguring page token")
+            networkLegacyLogger.notice("network batch missing auth token, reconfiguring page token")
             scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
             return
         case .mismatched:
-            networkLogger.error("dropped network batch: auth token mismatch")
+            networkLegacyLogger.error("dropped network batch: auth token mismatch")
             return
         }
         guard let batch = decodeNetworkBatch(from: message.body) else { return }
         if batch.version != 1 {
-            networkLogger.debug("unsupported network batch version: \(batch.version, privacy: .public)")
+            networkLegacyLogger.debug("unsupported network batch version: \(batch.version, privacy: .public)")
             return
         }
         if let dropped = batch.dropped, dropped > 0 {
-            // TODO: Surface dropped event counts in the store/UI.
-            networkLogger.debug("network batch dropped events: \(dropped, privacy: .public)")
+            networkLegacyLogger.debug("network batch dropped events: \(dropped, privacy: .public)")
         }
         store.applyNetworkBatch(batch)
     }
@@ -246,18 +230,18 @@ extension NetworkPageAgent: WKScriptMessageHandler {
         case .valid:
             break
         case .missing:
-            networkLogger.notice("network reset missing auth token, reconfiguring page token")
+            networkLegacyLogger.notice("network reset missing auth token, reconfiguring page token")
             scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
             return
         case .mismatched:
-            networkLogger.error("dropped network reset: auth token mismatch")
+            networkLegacyLogger.error("dropped network reset: auth token mismatch")
             return
         }
         store.reset()
     }
 }
 
-private extension NetworkPageAgent {
+private extension NetworkLegacyPageDriver {
     private func performBodyFetch(
         bodyRef: String?,
         bodyHandle: AnyObject?,
@@ -305,7 +289,7 @@ private extension NetworkPageAgent {
         }
         bridgeMode = runtime.modeForAttachment(webView: webView)
         bridgeModeLocked = true
-        networkLogger.notice("bridge_mode=\(self.bridgeMode.rawValue, privacy: .public)")
+        networkLegacyLogger.notice("bridge_mode=\(self.bridgeMode.rawValue, privacy: .public)")
     }
 
     func lockToLegacyMode(_ reason: String) {
@@ -314,18 +298,14 @@ private extension NetworkPageAgent {
         }
         bridgeMode = .legacyJSON
         bridgeModeLocked = true
-        networkLogger.error("bridge_mode=legacyJSON \(reason, privacy: .public)")
+        networkLegacyLogger.error("bridge_mode=legacyJSON \(reason, privacy: .public)")
     }
 
     func scheduleConfigure(mode: NetworkLoggingMode, clearExisting: Bool, on targetWebView: WKWebView?) {
         configureTask?.cancel()
         configureTask = Task { [weak self] in
             guard let self else { return }
-            await configureNetworkLogging(
-                mode: mode,
-                clearExisting: clearExisting,
-                on: targetWebView
-            )
+            await configureNetworkLogging(mode: mode, clearExisting: clearExisting, on: targetWebView)
         }
     }
 
@@ -352,7 +332,7 @@ private extension NetworkPageAgent {
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue, contentWorld: .page)
         }
-        networkLogger.debug("detached network message handlers")
+        networkLegacyLogger.debug("detached network message handlers")
     }
 
     func installNetworkAgentScriptIfNeeded(
@@ -401,7 +381,6 @@ private extension NetworkPageAgent {
         let scriptSource = shouldEvaluateAgentScript ? loadNetworkAgentScriptSource() : nil
 
         if scriptWasInstalled {
-            // Avoid repeatedly appending the same bootstrap script on reconfigure/reattach.
             if controllerStateRegistry.networkTokenBootstrapSignature(on: controller) != tokenBootstrapSignature {
                 controller.addUserScript(tokenScript)
                 controllerStateRegistry.setNetworkTokenBootstrapSignature(tokenBootstrapSignature, on: controller)
@@ -430,7 +409,7 @@ private extension NetworkPageAgent {
                     _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
                 }
             } catch {
-                networkLogger.error("failed to refresh network agent bootstrap: \(error.localizedDescription, privacy: .public)")
+                networkLegacyLogger.error("failed to refresh network agent bootstrap: \(error.localizedDescription, privacy: .public)")
             }
             return
         }
@@ -461,16 +440,16 @@ private extension NetworkPageAgent {
             _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
             _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
         } catch {
-            networkLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
         }
-        networkLogger.debug("installed network agent user script")
+        networkLegacyLogger.debug("installed network agent user script")
     }
 
     func loadNetworkAgentScriptSource() -> String? {
         do {
             return try WebInspectorScripts.networkAgent()
         } catch {
-            networkLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("failed to prepare network inspector script: \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -482,10 +461,10 @@ private extension NetworkPageAgent {
     ) async -> BodyFetchAvailability {
         await waitForPendingConfigurationIfNeeded(in: webView)
         let initialAvailability = await probeBodyFetchAvailability(in: webView)
-        guard initialAvailability.satisfies(
+        guard !initialAvailability.satisfies(
             requiresReferenceAPI: requiresReferenceAPI,
             requiresHandleAPI: requiresHandleAPI
-        ) == false else {
+        ) else {
             return initialAvailability
         }
 
@@ -501,20 +480,22 @@ private extension NetworkPageAgent {
         requiresReferenceAPI: Bool,
         requiresHandleAPI: Bool
     ) async -> BodyFetchAvailability {
-        networkLogger.notice("network body api unavailable, reinstalling page agent")
+        _ = requiresReferenceAPI
+        _ = requiresHandleAPI
+        networkLegacyLogger.notice("network body api unavailable, reinstalling page agent")
         await installNetworkAgentScriptIfNeeded(on: webView, forceCurrentPageAgentInjection: true)
         await configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
         return await probeBodyFetchAvailability(in: webView)
     }
 
-    private func waitForPendingConfigurationIfNeeded(in webView: WKWebView) async {
+    func waitForPendingConfigurationIfNeeded(in webView: WKWebView) async {
         guard self.webView === webView else {
             return
         }
         await configureTask?.value
     }
 
-    private func fetchSentinelState(from result: Any?) -> String? {
+    func fetchSentinelState(from result: Any?) -> String? {
         guard let payload = result as? NSDictionary else {
             return nil
         }
@@ -548,7 +529,7 @@ private extension NetworkPageAgent {
                 hasGetBodyForHandle: hasGetBodyForHandle
             )
         } catch {
-            networkLogger.error("failed to probe network body api: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("failed to probe network body api: \(error.localizedDescription, privacy: .public)")
             return BodyFetchAvailability(hasGetBody: false, hasGetBodyForHandle: false)
         }
     }
@@ -572,7 +553,7 @@ private extension NetworkPageAgent {
         let nativeObserverShouldOwnResources = nativeObserverEnabled && mode == .active
         let resourceObserverMode = nativeObserverShouldOwnResources ? "disabled" : "enabled"
         let pageHookMode = resolvedPageHookMode()
-        networkLogger.notice(
+        networkLegacyLogger.notice(
             "network_page_hook mode=\(pageHookMode, privacy: .public) resource_observer=\(resourceObserverMode, privacy: .public) native_enabled=\(self.nativeObserverEnabled, privacy: .public) native_session=\(self.nativeSessionID, privacy: .public)"
         )
 
@@ -606,7 +587,7 @@ private extension NetworkPageAgent {
                 contentWorld: .page
             )
         } catch {
-            networkLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("configure network logging failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -623,7 +604,7 @@ private extension NetworkPageAgent {
                 contentWorld: .page
             )
         } catch {
-            networkLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("clear network records failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -697,7 +678,7 @@ private extension NetworkPageAgent {
             return .fetched(body)
         } catch {
             lockToLegacyMode("runtime_probe_failed=getBodyForHandle")
-            networkLogger.error("getBodyForHandle failed: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("getBodyForHandle failed: \(error.localizedDescription, privacy: .public)")
             return .agentUnavailable
         }
     }
@@ -748,7 +729,7 @@ private extension NetworkPageAgent {
             }
             return .fetched(body)
         } catch {
-            networkLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
+            networkLegacyLogger.error("getBody failed: \(error.localizedDescription, privacy: .public)")
             return .agentUnavailable
         }
     }
@@ -805,7 +786,7 @@ private extension NetworkPageAgent {
 
     func attachNativeResourceObserver(to webView: WKWebView) {
         let sessionID = "native-\(UUID().uuidString.lowercased())"
-        let observer = NetworkResourceLoadObserver(
+        let observer = NetworkLegacyResourceLoadObserver(
             sessionID: sessionID,
             includeFetchAndXHR: nativeObserverIncludesFetchAndXHR,
             isEventEmissionEnabled: { [weak self] in
@@ -823,18 +804,17 @@ private extension NetworkPageAgent {
 
         if attached {
             nativeResourceObserver = observer
-            networkLogger.notice(
+            networkLegacyLogger.notice(
                 "native_resource_observer attached session=\(sessionID, privacy: .public) include_fetch_xhr=\(self.nativeObserverIncludesFetchAndXHR, privacy: .public)"
             )
         } else {
             nativeResourceObserver = nil
-            networkLogger.notice("native_resource_observer unavailable, fallback=js_only")
+            networkLegacyLogger.notice("native_resource_observer unavailable, fallback=js_only")
         }
     }
 
     func resolvedPageHookMode() -> String {
-        // Keep page hook enabled so XHR/fetch body handles/refs are always captured.
-        return "enabled"
+        "enabled"
     }
 
     func detachNativeResourceObserver(from webView: WKWebView) {
@@ -842,6 +822,31 @@ private extension NetworkPageAgent {
         nativeResourceObserver = nil
         nativeObserverEnabled = false
         nativeSessionID = ""
-        networkLogger.debug("native_resource_observer detached")
+        networkLegacyLogger.debug("native_resource_observer detached")
     }
 }
+
+#if DEBUG
+extension NetworkLegacyPageDriver {
+    func testCurrentBridgeMode() -> WIBridgeMode {
+        bridgeMode
+    }
+
+    func testAuthToken() -> String {
+        networkMessageAuthToken
+    }
+
+    func testHandleNetworkEventsPayload(_ payload: Any) {
+        switch validateMessageAuthToken(payload) {
+        case .valid:
+            break
+        case .missing, .mismatched:
+            return
+        }
+        guard let batch = decodeNetworkBatch(from: payload) else {
+            return
+        }
+        store.applyNetworkBatch(batch)
+    }
+}
+#endif

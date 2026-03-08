@@ -16,7 +16,11 @@ package struct WISPIObjCBridgeClient: WISPIBridgeClient {
         setters: [String: Bool]
     ) -> WKContentWorld? {
         let values = setters.mapValues(NSNumber.init(value:))
-        return WIKRuntimeBridge.makeContentWorld(withConfigurationClassName: configurationClassName, worldSelectorName: worldSelectorName, setters: values)
+        return WIKRuntimeBridge.makeContentWorld(
+            withConfigurationClassName: configurationClassName,
+            worldSelectorName: worldSelectorName,
+            setters: values
+        )
     }
 
     package func makeJSBuffer(
@@ -25,7 +29,12 @@ package struct WISPIObjCBridgeClient: WISPIBridgeClient {
         allocSelectorName: String,
         initSelectorName: String
     ) -> AnyObject? {
-        WIKRuntimeBridge.makeJSBuffer(with: data, classNames: classNames, allocSelectorName: allocSelectorName, initSelectorName: initSelectorName) as AnyObject?
+        WIKRuntimeBridge.makeJSBuffer(
+            with: data,
+            classNames: classNames,
+            allocSelectorName: allocSelectorName,
+            initSelectorName: initSelectorName
+        ) as AnyObject?
     }
 
     package func addBuffer(
@@ -36,7 +45,14 @@ package struct WISPIObjCBridgeClient: WISPIBridgeClient {
         world: WKContentWorld,
         isPublicSignature: Bool
     ) -> Bool {
-        WIKRuntimeBridge.addBuffer(on: controller, selectorName: selectorName, buffer: buffer, name: name, contentWorld: world, isPublicSignature: isPublicSignature)
+        WIKRuntimeBridge.addBuffer(
+            on: controller,
+            selectorName: selectorName,
+            buffer: buffer,
+            name: name,
+            contentWorld: world,
+            isPublicSignature: isPublicSignature
+        )
     }
 
     package func removeBuffer(
@@ -45,6 +61,11 @@ package struct WISPIObjCBridgeClient: WISPIBridgeClient {
         name: String,
         world: WKContentWorld
     ) -> Bool {
-        WIKRuntimeBridge.removeBuffer(on: controller, selectorName: selectorName, name: name, contentWorld: world)
+        WIKRuntimeBridge.removeBuffer(
+            on: controller,
+            selectorName: selectorName,
+            name: name,
+            contentWorld: world
+        )
     }
 }

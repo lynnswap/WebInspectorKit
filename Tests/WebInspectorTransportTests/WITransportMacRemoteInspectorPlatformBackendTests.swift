@@ -132,6 +132,29 @@ struct WITransportMacRemoteInspectorPlatformBackendTests {
     }
 
     @Test
+    func backendSupportSnapshotRemainsSupportedWhenOnlyTransportEndpointIsAvailable() {
+        let endpoint = FakeMessageEndpoint()
+        let host = FakeFrontendHost(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .unsupported,
+                backendKind: .macOSRemoteInspector,
+                capabilities: [],
+                failureReason: "frontend host unavailable"
+            )
+        )
+        let backend = WITransportMacRemoteInspectorPlatformBackend(
+            configuration: .init(),
+            transportEndpoint: endpoint,
+            frontendHost: host
+        )
+
+        #expect(backend.supportSnapshot.backendKind == .macOSRemoteInspector)
+        #expect(backend.supportSnapshot.isSupported)
+        #expect(backend.supportSnapshot.capabilities.contains(.domDomain))
+        #expect(backend.supportSnapshot.capabilities.contains(.remoteFrontendHosting) == false)
+    }
+
+    @Test
     func backendReportsFrontendHostFatalFailures() async throws {
         let endpoint = FakeMessageEndpoint()
         let host = FakeFrontendHost()
@@ -234,6 +257,43 @@ struct WITransportMacRemoteInspectorPlatformBackendTests {
             frontendHost: host
         )
         let webView = WKWebView(frame: .zero)
+
+        try await backend.attach(
+            to: webView,
+            messageHandlers: WITransportBackendMessageHandlers(
+                handleRootMessage: { _ in },
+                handlePageMessage: { _, _ in },
+                handleFatalFailure: { _ in }
+            )
+        )
+
+        #expect(host.attachCallCount == 0)
+        #expect(backend.supportSnapshot.backendKind == .macOSNativeInspector)
+        #expect(!backend.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
+    }
+
+    @Test
+    func backendSkipsFrontendHostAttachWhenRemoteFrontendHostingIsUnavailable() async throws {
+        let endpoint = FakeMessageEndpoint()
+        let host = FakeFrontendHost(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .unsupported,
+                backendKind: .macOSRemoteInspector,
+                capabilities: [],
+                failureReason: "frontend host unavailable"
+            )
+        )
+        let backend = WITransportMacRemoteInspectorPlatformBackend(
+            configuration: .init(),
+            transportEndpoint: endpoint,
+            frontendHost: host
+        )
+        let webView = WKWebView(frame: .zero)
+        let window = makeHostWindow(with: webView)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
 
         try await backend.attach(
             to: webView,

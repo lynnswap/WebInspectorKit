@@ -18,6 +18,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
     public let documentURL: String?
     public let baseURL: String?
     public let frameId: String?
+    public let layoutFlags: [String]?
 
     public init(
         nodeId: Int,
@@ -30,7 +31,8 @@ public struct WITransportDOMNode: Decodable, Sendable {
         attributes: [String]?,
         documentURL: String?,
         baseURL: String?,
-        frameId: String?
+        frameId: String?,
+        layoutFlags: [String]?
     ) {
         self.nodeId = nodeId
         self.nodeType = nodeType
@@ -43,6 +45,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
         self.documentURL = documentURL
         self.baseURL = baseURL
         self.frameId = frameId
+        self.layoutFlags = layoutFlags
     }
 }
 
@@ -114,6 +117,32 @@ public extension WITransportCommands.Network {
         }
 
         public static let method = "Network.getResponseBody"
+    }
+
+    struct GetRequestPostData: WITransportPageCommand, Sendable {
+        public struct Parameters: Encodable, Sendable {
+            public let requestId: String
+
+            public init(requestId: String) {
+                self.requestId = requestId
+            }
+        }
+
+        public struct Response: Decodable, Sendable {
+            public let postData: String
+
+            public init(postData: String) {
+                self.postData = postData
+            }
+        }
+
+        public let parameters: Parameters
+
+        public init(requestId: String) {
+            parameters = Parameters(requestId: requestId)
+        }
+
+        public static let method = "Network.getRequestPostData"
     }
 }
 

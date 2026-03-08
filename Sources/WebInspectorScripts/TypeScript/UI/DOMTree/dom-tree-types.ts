@@ -14,6 +14,7 @@ export const NODE_TYPES = {
     ELEMENT_NODE: 1,
     TEXT_NODE: 3,
     COMMENT_NODE: 8,
+    DOCUMENT_NODE: 9,
 } as const;
 
 export type NodeTypeValue = (typeof NODE_TYPES)[keyof typeof NODE_TYPES];
@@ -301,7 +302,7 @@ export interface WebKitBridge {
 
 /** Selection notification payload */
 export interface SelectionPayload {
-    id: number | null;
+    nodeId: number | null;
     preview: string;
     attributes: NodeAttribute[];
     path: string[];
@@ -310,7 +311,7 @@ export interface SelectionPayload {
 
 /** Selector path response */
 export interface SelectorPathResponse {
-    id: number | null;
+    nodeId: number | null;
     selectorPath: string;
 }
 

@@ -1,12 +1,10 @@
 import Testing
 import WebKit
-import WebInspectorEngine
-@testable import WebInspectorUI
+@testable import WebInspectorEngine
 @testable import WebInspectorRuntime
+@testable import WebInspectorTransport
 
 @MainActor
-
-
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
@@ -31,23 +29,7 @@ struct DOMInspectorTests {
         #expect(inspector.hasPageWebView == false)
         #expect(inspector.session.lastPageWebView == nil)
         #expect(inspector.selectedEntry == nil)
-    }
-
-    @Test
-    func attachSwitchingPageClearsPendingMutationBundles() {
-        let controller = WIModel()
-        let inspector = controller.dom
-        let firstWebView = makeTestWebView()
-        let secondWebView = makeTestWebView()
-
-        inspector.attach(to: firstWebView)
-        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
-        #expect(inspector.pendingMutationBundleCount == 1)
-
-        inspector.attach(to: secondWebView)
-
-        #expect(inspector.session.lastPageWebView === secondWebView)
-        #expect(inspector.pendingMutationBundleCount == 0)
+        #expect(inspector.treeRows.isEmpty)
     }
 
     @Test
@@ -62,23 +44,28 @@ struct DOMInspectorTests {
     }
 
     @Test
-    func updateSnapshotDepthClampsAndUpdatesConfiguration() {
-        let controller = WIModel()
-        let inspector = controller.dom
-        inspector.updateSnapshotDepth(0)
-        #expect(inspector.session.configuration.snapshotDepth == 1)
-
-        inspector.updateSnapshotDepth(6)
-        #expect(inspector.session.configuration.snapshotDepth == 6)
-    }
-
-    @Test
     func updateAndRemoveAttributeMutateSelectionState() {
         let controller = WIModel()
         let inspector = controller.dom
+        inspector.session.graphStore.applySnapshot(
+            .init(
+                root: DOMGraphNodeDescriptor(
+                    nodeID: 7,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
         inspector.session.graphStore.applySelectionSnapshot(
             .init(
-                localID: 7,
+                nodeID: 7,
                 preview: "<div id=\"foo\">",
                 attributes: [
                     DOMAttribute(nodeId: 7, name: "class", value: "old"),
@@ -98,24 +85,32 @@ struct DOMInspectorTests {
     }
 
     @Test
-    func detachClearsErrorMessage() async {
+    func detachClearsErrorMessageAndGraphState() async {
         let controller = WIModel()
         let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        inspector.attach(to: webView)
+        await loadHTML(
+            """
+            <html><body><main><div id="target">Hello</div></main></body></html>
+            """,
+            in: webView
+        )
         await inspector.reloadInspector()
-        #expect(inspector.errorMessage != nil)
+        let loaded = await waitForCondition {
+            inspector.treeRows.isEmpty == false
+        }
+        #expect(loaded == true)
 
-        inspector.detach()
+        guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
+            Issue.record("expected a loaded DOM root before mutating selection state")
+            return
+        }
 
-        #expect(inspector.errorMessage == nil)
-    }
-
-    @Test
-    func detachClearsMatchedStylesState() {
-        let controller = WIModel()
-        let inspector = controller.dom
         inspector.session.graphStore.applySelectionSnapshot(
             .init(
-                localID: 11,
+                nodeID: selectedNodeID,
                 preview: "<div class=\"target\">",
                 attributes: [],
                 path: [],
@@ -125,7 +120,7 @@ struct DOMInspectorTests {
         )
         inspector.session.graphStore.applyMatchedStyles(
             .init(
-                nodeId: 11,
+                nodeId: selectedNodeID,
                 rules: [
                     DOMMatchedStyleRule(
                         origin: .author,
@@ -137,19 +132,136 @@ struct DOMInspectorTests {
                 truncated: true,
                 blockedStylesheetCount: 3
             ),
-            for: 11
+            for: selectedNodeID
         )
-        inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
+        inspector.session.graphStore.beginMatchedStylesLoading(for: selectedNodeID)
 
         inspector.detach()
 
+        #expect(inspector.errorMessage == nil)
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.session.graphStore.entriesByID.isEmpty)
+        #expect(inspector.treeRows.isEmpty)
+    }
+
+    @Test
+    func reloadInspectorLoadsTreeRowsForAttachedPage() async {
+        let controller = makeTransportController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        inspector.attach(to: webView)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <main id="content">
+                        <section><h1>Hello</h1><p>World</p></section>
+                    </main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        await inspector.reloadInspector()
+
+        let loaded = await waitForCondition {
+            inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
+        }
+        #expect(loaded == true)
+        #expect(inspector.treeRows.count > 0)
+        #expect(inspector.transportSupportSnapshot != nil)
+    }
+
+    @Test
+    func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
+        let controller = WIModel(
+            domSession: DOMSession(
+                configuration: .init(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            ),
+            networkSession: NetworkSession(
+                configuration: .init(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            )
+        )
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        inspector.attach(to: webView)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <main id="legacy-content">
+                        <section><h1>Hello</h1><p>Legacy</p></section>
+                    </main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        await inspector.reloadInspector()
+
+        let loaded = await waitForCondition {
+            inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
+        }
+        #expect(loaded == true)
+        #expect(inspector.transportSupportSnapshot?.isSupported == false)
+        #expect(inspector.treeRows.count > 0)
+    }
+
+    @Test
+    func selectingEntryLoadsMatchedStylesViaTransportWithoutProtocolEnable() async {
+        let controller = makeTransportController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        inspector.attach(to: webView)
+        await loadHTML(
+            """
+            <html>
+                <head>
+                    <style>
+                        #content {
+                            color: rgb(255, 0, 0);
+                            display: block;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <main id="content">Hello</main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let snapshot = try? await withTimeout(.seconds(10), description: "captureSnapshot for matched styles") {
+            try await inspector.session.captureSnapshot(maxDepth: 5)
+        }
+        guard let snapshot,
+              let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
+            Issue.record("target node was not found in transport snapshot")
+            return
+        }
+
+        do {
+            let payload = try await withTimeout(.seconds(10), description: "matchedStyles for #content") {
+                try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
+            }
+            #expect(payload.rules.contains(where: { $0.selectorText.contains("#content") }))
+            #expect(inspector.errorMessage == nil)
+        } catch {
+            Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")
+        }
     }
 
     @Test
     func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        let controller = WIModel()
+        let controller = makeTransportController()
         let inspector = controller.dom
         let webView = makeTestWebView()
         let undoManager = UndoManager()
@@ -164,8 +276,11 @@ struct DOMInspectorTests {
 
         inspector.attach(to: webView)
         await loadHTML(html, in: webView)
+        await inspector.reloadInspector()
 
-        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        let snapshot = try await withTimeout(.seconds(10), description: "captureSnapshot") {
+            try await inspector.session.captureSnapshot(maxDepth: 5)
+        }
         guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
               let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
         else {
@@ -174,14 +289,16 @@ struct DOMInspectorTests {
         }
 
         inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-        inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
-
-        let bothDeleted = await waitForCondition {
-            let firstExists = await domNodeExists(withID: "first", in: webView)
-            let secondExists = await domNodeExists(withID: "second", in: webView)
-            return !firstExists && !secondExists
+        let firstDeleted = await waitForCondition {
+            await domNodeExists(withID: "first", in: webView) == false
         }
-        #expect(bothDeleted == true)
+        #expect(firstDeleted == true)
+
+        inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
+        let secondDeleted = await waitForCondition {
+            await domNodeExists(withID: "second", in: webView) == false
+        }
+        #expect(secondDeleted == true)
 
         undoManager.undo()
         let secondRestored = await waitForCondition {
@@ -205,12 +322,23 @@ struct DOMInspectorTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
+    private func makeTransportController() -> WIModel {
+        WIModel(
+            domSession: DOMSession(configuration: .init()),
+            networkSession: NetworkSession(bodyFetcher: NoopBodyFetcher())
+        )
+    }
+
     private func loadHTML(_ html: String, in webView: WKWebView) async {
         let navigationDelegate = NavigationDelegate()
         webView.navigationDelegate = navigationDelegate
 
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
+            navigationDelegate.timeoutTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(10))
+                navigationDelegate.resumeIfNeeded()
+            }
             webView.loadHTMLString(html, baseURL: nil)
         }
     }
@@ -229,12 +357,35 @@ struct DOMInspectorTests {
         return await condition()
     }
 
+    private func withTimeout<T: Sendable>(
+        _ duration: Duration,
+        description: String,
+        operation: @escaping @MainActor @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(for: duration)
+                throw TimeoutError(description: description)
+            }
+
+            let value = try await group.next()
+            group.cancelAll()
+            guard let value else {
+                throw TimeoutError(description: description)
+            }
+            return value
+        }
+    }
+
     private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
         let rawValue = try? await webView.callAsyncJavaScript(
             "return document.getElementById(identifier) !== null;",
             arguments: ["identifier": id],
             in: nil,
-            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+            contentWorld: .page
         )
         return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
@@ -280,20 +431,52 @@ struct DOMInspectorTests {
     }
 }
 
+private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
+    WITransportSupportSnapshot(
+        availability: .unsupported,
+        backendKind: .unsupported,
+        capabilities: [],
+        failureReason: "unsupported for test"
+    )
+}
+
+private struct TimeoutError: Error, LocalizedError {
+    let description: String
+
+    var errorDescription: String? {
+        "Timed out while waiting for \(description)."
+    }
+}
+
+@MainActor
+private final class NoopBodyFetcher: NetworkBodyFetching {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        _ = ref
+        _ = handle
+        _ = role
+        return .agentUnavailable
+    }
+}
+
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {
     var continuation: CheckedContinuation<Void, Never>?
+    var timeoutTask: Task<Void, Never>?
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        continuation?.resume()
-        continuation = nil
+        resumeIfNeeded()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        continuation?.resume()
-        continuation = nil
+        resumeIfNeeded()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        resumeIfNeeded()
+    }
+
+    func resumeIfNeeded() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
         continuation?.resume()
         continuation = nil
     }

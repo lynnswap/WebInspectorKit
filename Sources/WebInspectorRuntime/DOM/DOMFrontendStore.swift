@@ -1,7 +1,7 @@
 import Observation
 import OSLog
 import WebInspectorEngine
-import WebInspectorBridge
+import WebInspectorScripts
 import WebKit
 
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "DOMFrontendStore")
@@ -9,6 +9,33 @@ private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "DO
 @MainActor
 @Observable
 final class DOMFrontendStore: NSObject {
+    private struct FrontendBootstrapState {
+        let readyState: String
+        let hasFrontend: Bool
+        let hasProtocolHandler: Bool
+    }
+
+    private struct FrontendAssetState {
+        let readyState: String
+        let stylesheetCount: Int
+        let hasLinkedDOMTreeStylesheet: Bool
+        let hasInlineFallbackStylesheet: Bool
+        let backgroundColor: String
+    }
+
+    private struct ProtocolRequestContext {
+        let id: Int
+        let method: String
+        let nodeID: Int?
+        let documentGeneration: UInt64
+
+        var isDocumentGenerationBound: Bool {
+            method == "DOM.getDocument"
+                || method == "DOM.requestChildNodes"
+                || method == "DOM.getSelectorPath"
+        }
+    }
+
     private enum HandlerName: String, CaseIterable {
         case protocolMessage = "webInspectorProtocol"
         case ready = "webInspectorReady"
@@ -20,100 +47,86 @@ final class DOMFrontendStore: NSObject {
     let session: DOMSession
     private(set) var webView: InspectorWebView?
     private var isReady = false
-    private let mutationPipeline: DOMMutationPipeline
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
+    private var pendingProtocolEvents: [[String: Any]] = []
     private var configuration: DOMConfiguration
-    private var matchedStylesTask: Task<Void, Never>?
-    private var matchedStylesRequestToken = 0
     private let protocolRouter: DOMProtocolRouter
     private let payloadNormalizer = DOMPayloadNormalizer()
-    private let bridgeRuntime = WISPIRuntime.shared
+
     var onRecoverableError: (@MainActor (String) -> Void)?
 
     init(session: DOMSession) {
         self.session = session
         configuration = session.configuration
-        mutationPipeline = DOMMutationPipeline(
-            session: session,
-            bridgeRuntime: bridgeRuntime,
-            configuration: session.configuration
-        )
         protocolRouter = DOMProtocolRouter(session: session)
         super.init()
-        session.bundleSink = self
+        session.eventSink = self
+    }
+
+    var hasInspectorWebView: Bool {
+        webView != nil
     }
 
     func makeInspectorWebView() -> InspectorWebView {
         if let webView {
             attachInspectorWebView()
-            mutationPipeline.attachWebView(webView)
             return webView
         }
 
         let newWebView = InspectorWebView()
-
         webView = newWebView
         attachInspectorWebView()
-        mutationPipeline.attachWebView(newWebView)
         loadInspector(in: newWebView)
         return newWebView
     }
 
     func detachInspectorWebView() {
-        guard let webView else { return }
+        guard let webView else {
+            return
+        }
         detachInspectorWebView(ifMatches: webView)
         resetInspectorState()
-        mutationPipeline.attachWebView(nil)
         self.webView = nil
-    }
-
-    func enqueueMutationBundle(_ bundle: Any, preserveState: Bool) {
-        mutationPipeline.enqueueMutationBundle(bundle, preserveState: preserveState)
-    }
-
-    func clearPendingMutationBundles() {
-        mutationPipeline.clearPendingMutationBundles()
-    }
-
-    var pendingMutationBundleCount: Int {
-        mutationPipeline.pendingMutationBundleCount
     }
 
     func setPreferredDepth(_ depth: Int) {
         pendingPreferredDepth = depth
-        if isReady {
-            Task {
-                await applyPreferredDepthNow(depth)
-            }
+        guard isReady else {
+            return
+        }
+        Task {
+            await applyPreferredDepthNow(depth)
         }
     }
 
     func requestDocument(depth: Int, preserveState: Bool) {
         pendingDocumentRequest = (depth, preserveState)
-        if isReady {
-            Task {
-                await requestDocumentNow(depth: depth, preserveState: preserveState)
-            }
+        guard isReady else {
+            return
+        }
+        Task {
+            await requestDocumentNow(depth: depth, preserveState: preserveState)
         }
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
         self.configuration = configuration
-        mutationPipeline.updateConfiguration(configuration)
     }
 
     private func applyConfigurationToInspector() async {
-        guard let webView else { return }
-        let config = configuration
+        guard let webView else {
+            return
+        }
+
         do {
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOMFrontend?.updateConfig?.(config)",
                 arguments: [
                     "config": [
-                        "snapshotDepth": config.snapshotDepth,
-                        "subtreeDepth": config.subtreeDepth,
-                        "autoUpdateDebounce": config.autoUpdateDebounce,
+                        "snapshotDepth": configuration.rootBootstrapDepth,
+                        "subtreeDepth": configuration.expandedSubtreeFetchDepth,
+                        "autoUpdateDebounce": configuration.autoUpdateDebounce,
                     ],
                 ],
                 contentWorld: .page
@@ -124,7 +137,9 @@ final class DOMFrontendStore: NSObject {
     }
 
     private func attachInspectorWebView() {
-        guard let webView else { return }
+        guard let webView else {
+            return
+        }
 
         let controller = webView.configuration.userContentController
         HandlerName.allCases.forEach {
@@ -135,16 +150,17 @@ final class DOMFrontendStore: NSObject {
     }
 
     private func detachInspectorWebView(ifMatches webView: InspectorWebView) {
-        guard self.webView === webView else { return }
+        guard self.webView === webView else {
+            return
+        }
         detachMessageHandlers(from: webView)
     }
 
     private func resetInspectorState() {
-        cancelMatchedStylesRequest()
         isReady = false
-        mutationPipeline.reset()
         pendingPreferredDepth = nil
         pendingDocumentRequest = nil
+        pendingProtocolEvents.removeAll(keepingCapacity: false)
     }
 
     private func detachMessageHandlers(from webView: InspectorWebView) {
@@ -159,26 +175,29 @@ final class DOMFrontendStore: NSObject {
     private func loadInspector(in webView: InspectorWebView) {
         guard
             let mainURL = WIAssets.mainFileURL,
-            let baseURL = WIAssets.resourcesDirectory
+            let readAccessURL = WIAssets.resourcesReadAccessURL
         else {
             inspectorLogger.error("missing inspector resources")
             return
         }
+
         isReady = false
-        mutationPipeline.setReady(false)
-        webView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
+        inspectorLogger.notice(
+            "loading inspector resources html=\(mainURL.path(percentEncoded: false), privacy: .public) readAccess=\(readAccessURL.path(percentEncoded: false), privacy: .public)"
+        )
+        webView.loadFileURL(mainURL, allowingReadAccessTo: readAccessURL)
     }
 
     isolated deinit {
-        cancelMatchedStylesRequest()
-        mutationPipeline.reset()
         if let webView {
             detachMessageHandlers(from: webView)
         }
     }
 
     private func applyPreferredDepthNow(_ depth: Int) async {
-        guard let webView else { return }
+        guard let webView else {
+            return
+        }
         do {
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOMFrontend?.setPreferredDepth?.(depth)",
@@ -191,11 +210,13 @@ final class DOMFrontendStore: NSObject {
     }
 
     private func requestDocumentNow(depth: Int, preserveState: Bool) async {
-        guard let webView else { return }
-        if !preserveState {
-            payloadNormalizer.resetForDocumentUpdate()
-            session.graphStore.resetForDocumentUpdate()
+        guard let webView else {
+            return
         }
+
+        inspectorLogger.notice(
+            "requesting frontend document depth=\(depth, privacy: .public) preserveState=\(preserveState, privacy: .public)"
+        )
         do {
             try await webView.callAsyncVoidJavaScript(
                 "window.webInspectorDOMFrontend?.requestDocument?.(options)",
@@ -208,26 +229,11 @@ final class DOMFrontendStore: NSObject {
     }
 }
 
-extension DOMFrontendStore: DOMBundleSink {
-    func domDidEmit(bundle: DOMBundle) {
-        switch bundle.payload {
-        case let .jsonString(rawJSON):
-            if let delta = payloadNormalizer.normalizeBundlePayload(rawJSON) {
-                applyGraphDelta(delta)
-            }
-            enqueueMutationBundle(rawJSON, preserveState: true)
-        case let .objectEnvelope(object):
-            if let delta = payloadNormalizer.normalizeBundlePayload(object) {
-                applyGraphDelta(delta)
-            }
-            enqueueMutationBundle(object, preserveState: true)
-        }
-    }
-}
-
 extension DOMFrontendStore: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let handlerName = HandlerName(rawValue: message.name) else { return }
+        guard let handlerName = HandlerName(rawValue: message.name) else {
+            return
+        }
 
         switch handlerName {
         case .protocolMessage:
@@ -245,16 +251,26 @@ extension DOMFrontendStore: WKScriptMessageHandler {
 }
 
 private extension DOMFrontendStore {
-    private func handleReadyMessage() {
+    func handleReadyMessage() {
+        guard !isReady else {
+            return
+        }
         isReady = true
-        mutationPipeline.setReady(true)
+        inspectorLogger.notice("dom frontend ready")
         Task {
             await applyConfigurationToInspector()
-            await flushPendingWork()
+            let didRequestDocument = await flushPendingWork()
+            if didRequestDocument == false, session.hasPageWebView {
+                let preserveState = session.graphStore.rootID != nil
+                await requestDocumentNow(
+                    depth: preserveState ? configuration.fullReloadDepth : configuration.rootBootstrapDepth,
+                    preserveState: preserveState
+                )
+            }
         }
     }
 
-    private func handleLogMessage(_ payload: Any) {
+    func handleLogMessage(_ payload: Any) {
         if let dictionary = payload as? NSDictionary,
            let logMessage = dictionary["message"] as? String {
             inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
@@ -263,7 +279,7 @@ private extension DOMFrontendStore {
         }
     }
 
-    private func handleDOMSelectionMessage(_ payload: Any) {
+    func handleDOMSelectionMessage(_ payload: Any) {
         let previousSelectedSnapshot: (
             id: DOMEntryID,
             preview: String,
@@ -279,15 +295,12 @@ private extension DOMFrontendStore {
                 styleRevision: $0.styleRevision
             )
         }
-        applyGraphDelta(payloadNormalizer.normalizeSelectionPayload(payload))
+        applyFrontendSelectionPayload(payloadNormalizer.selectionPayload(from: payload))
         guard let selected = session.graphStore.selectedEntry else {
-            cancelMatchedStylesRequest()
             return
         }
 
-        guard let nodeID = selected.backendNodeID else {
-            return
-        }
+        let nodeID = selected.id.nodeID
 
         let didSelectNewNode = previousSelectedSnapshot?.id != selected.id
         let didStyleRelevantSnapshotChange = !didSelectNewNode && (
@@ -296,195 +309,436 @@ private extension DOMFrontendStore {
                 || previousSelectedSnapshot?.attributes != selected.attributes
                 || previousSelectedSnapshot?.styleRevision != selected.styleRevision
         )
-        let shouldRefetchForCurrentNode = !selected.isLoadingMatchedStyles
-            && selected.matchedStyles.isEmpty
-        if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchForCurrentNode {
-            startMatchedStylesRequest(nodeID: nodeID, selectionID: selected.id)
+        if didSelectNewNode || didStyleRelevantSnapshotChange {
+            inspectorLogger.notice(
+                "frontend selection updated nodeId=\(nodeID, privacy: .public); matched styles refresh is delegated to WIDOMModel"
+            )
         }
     }
 
-    private func handleDOMSelectorMessage(_ payload: Any) {
-        if let delta = payloadNormalizer.normalizeSelectorPayload(payload) {
-            applyGraphDelta(delta)
+    func handleDOMSelectorMessage(_ payload: Any) {
+        if let selectorPayload = payloadNormalizer.selectorPayload(from: payload) {
+            applyFrontendSelectorPayload(selectorPayload)
         }
     }
 
-    private func flushPendingWork() async {
+    func flushPendingWork() async -> Bool {
+        var didRequestDocument = false
+
         if let preferredDepth = pendingPreferredDepth {
             await applyPreferredDepthNow(preferredDepth)
             pendingPreferredDepth = nil
         }
+
         if let request = pendingDocumentRequest {
             await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
             pendingDocumentRequest = nil
-        }
-        await mutationPipeline.flushPendingBundlesNow()
-    }
-
-    private func startMatchedStylesRequest(nodeID: Int, selectionID: DOMEntryID) {
-        cancelMatchedStylesRequest()
-        let requestToken = matchedStylesRequestToken
-        session.graphStore.beginMatchedStylesLoading(for: selectionID.localID)
-
-        matchedStylesTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let payload = try await self.session.matchedStyles(nodeId: nodeID)
-                guard !Task.isCancelled else { return }
-                guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
-                self.session.graphStore.applyMatchedStyles(payload, for: selectionID.localID)
-            } catch {
-                guard !Task.isCancelled else { return }
-                guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
-                self.session.graphStore.clearMatchedStyles(for: selectionID.localID)
-                inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
+            didRequestDocument = true
+            if !pendingProtocolEvents.isEmpty {
+                inspectorLogger.notice(
+                    "dropping \(self.pendingProtocolEvents.count, privacy: .public) buffered DOM protocol event(s) after document reload request"
+                )
+                pendingProtocolEvents.removeAll(keepingCapacity: true)
             }
         }
+
+        if !didRequestDocument, !pendingProtocolEvents.isEmpty {
+            let events = pendingProtocolEvents
+            pendingProtocolEvents.removeAll(keepingCapacity: true)
+            for event in events {
+                _ = await dispatchToFrontend(message: event)
+            }
+        }
+
+        return didRequestDocument
     }
 
-    private func cancelMatchedStylesRequest() {
-        matchedStylesTask?.cancel()
-        matchedStylesTask = nil
-        matchedStylesRequestToken += 1
-    }
-
-    private func handleProtocolPayload(_ payload: Any?) {
-        let method = protocolRequestMethod(from: payload)
-        let resetDocumentHint = protocolRequestWantsDocumentReset(method: method, from: payload)
+    func handleProtocolPayload(_ payload: Any?) {
+        let requestContext = protocolRequestContext(from: payload)
+        let method = requestContext?.method
         Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                return
+            }
+            if let method {
+                inspectorLogger.notice("routing DOM protocol method \(method, privacy: .public)")
+            }
             let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
             if let recoverableError = outcome.recoverableError {
                 onRecoverableError?(recoverableError)
             }
+            if let requestContext,
+               requestContext.isDocumentGenerationBound,
+               let staleResponse = staleProtocolResponseIfNeeded(for: requestContext) {
+                inspectorLogger.notice(
+                    "dropping stale DOM response for \(requestContext.method, privacy: .public) node=\(String(describing: requestContext.nodeID), privacy: .public) generation=\(requestContext.documentGeneration, privacy: .public) current=\(self.session.graphStore.documentGeneration, privacy: .public)"
+                )
+                await requestFreshDocumentAfterStaleNodeResponse()
+                _ = await dispatchToFrontend(message: staleResponse)
+                return
+            }
             if let responseObject = outcome.responseObject {
-                if let method,
-                   let delta = payloadNormalizer.normalizeProtocolResponse(
-                    method: method,
-                    responseObject: responseObject,
-                    resetDocument: resetDocumentHint
-                   ) {
-                    applyGraphDelta(delta)
-                }
+                // Transport-backed sessions own the authoritative graph; protocol responses only feed the frontend.
                 let delivered = await dispatchToFrontend(message: responseObject)
                 if delivered {
+                    if let method {
+                        inspectorLogger.notice("delivered DOM response to frontend for \(method, privacy: .public)")
+                    }
                     return
                 }
 
                 let fallbackJSON = outcome.responseJSON
                     ?? protocolRouter.fallbackJSONResponse(forObjectResponse: responseObject)
-                guard let responseJSON = fallbackJSON else { return }
+                guard let responseJSON = fallbackJSON else {
+                    return
+                }
                 inspectorLogger.debug("retrying protocol response dispatch with JSON fallback")
                 _ = await dispatchToFrontend(message: responseJSON)
                 return
             }
-            guard let responseJSON = outcome.responseJSON else { return }
+            guard let responseJSON = outcome.responseJSON else {
+                return
+            }
             _ = await dispatchToFrontend(message: responseJSON)
         }
     }
 
-    private func applyGraphDelta(_ delta: DOMGraphDelta) {
-        switch delta {
-        case let .snapshot(snapshot, resetDocument):
-            if resetDocument {
-                session.graphStore.resetForDocumentUpdate()
-            }
-            session.graphStore.applySnapshot(snapshot)
+    func applyFrontendSelectionPayload(_ selectionPayload: DOMSelectionSnapshotPayload?) {
+        session.graphStore.applySelectionSnapshot(selectionPayload)
+    }
 
-        case let .mutations(bundle):
-            session.graphStore.applyMutationBundle(bundle)
+    func applyFrontendSelectorPayload(_ selectorPayload: DOMSelectorPathPayload) {
+        session.graphStore.applySelectorPath(selectorPayload)
+    }
 
-        case let .replaceSubtree(root):
-            session.graphStore.applyMutationBundle(
-                .init(events: [.replaceSubtree(root: root)])
+    private func frontendBootstrapState(in webView: WKWebView) async -> FrontendBootstrapState? {
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return {
+                    readyState: document.readyState,
+                    hasFrontend: !!window.webInspectorDOMFrontend?.__installed,
+                    hasProtocolHandler: !!window.webkit?.messageHandlers?.webInspectorProtocol
+                }
+                """,
+                arguments: [:],
+                contentWorld: .page
             )
-
-        case let .selection(selectionPayload):
-            session.graphStore.applySelectionSnapshot(selectionPayload)
-
-        case let .selectorPath(selectorPayload):
-            session.graphStore.applySelectorPath(selectorPayload)
+            guard let dictionary = result as? [String: Any] else {
+                return nil
+            }
+            return FrontendBootstrapState(
+                readyState: dictionary["readyState"] as? String ?? "unknown",
+                hasFrontend: dictionary["hasFrontend"] as? Bool ?? false,
+                hasProtocolHandler: dictionary["hasProtocolHandler"] as? Bool ?? false
+            )
+        } catch {
+            inspectorLogger.error("inspect frontend bootstrap failed: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
-    private func protocolRequestMethod(from payload: Any?) -> String? {
+    private func frontendAssetState(in webView: WKWebView) async -> FrontendAssetState? {
+        do {
+            let result = try await webView.callAsyncJavaScript(
+                """
+                return {
+                    readyState: document.readyState,
+                    stylesheetCount: document.styleSheets.length,
+                    hasLinkedDOMTreeStylesheet: Array.from(document.styleSheets).some((sheet) => {
+                        const href = sheet.href || "";
+                        return href.includes("dom-tree-view.css");
+                    }),
+                    hasInlineFallbackStylesheet: !!document.getElementById("wi-dom-tree-inline-style"),
+                    backgroundColor: window.getComputedStyle(document.body).backgroundColor
+                }
+                """,
+                arguments: [:],
+                contentWorld: .page
+            )
+            guard let dictionary = result as? [String: Any] else {
+                return nil
+            }
+            return FrontendAssetState(
+                readyState: dictionary["readyState"] as? String ?? "unknown",
+                stylesheetCount: dictionary["stylesheetCount"] as? Int ?? 0,
+                hasLinkedDOMTreeStylesheet: dictionary["hasLinkedDOMTreeStylesheet"] as? Bool ?? false,
+                hasInlineFallbackStylesheet: dictionary["hasInlineFallbackStylesheet"] as? Bool ?? false,
+                backgroundColor: dictionary["backgroundColor"] as? String ?? "unknown"
+            )
+        } catch {
+            inspectorLogger.error("inspect frontend asset state failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func installFallbackFrontendBootstrapIfNeeded(in webView: WKWebView) async {
+        guard let state = await frontendBootstrapState(in: webView), state.hasFrontend == false else {
+            return
+        }
+
+        inspectorLogger.notice(
+            "reinstalling DOM frontend bootstrap readyState=\(state.readyState, privacy: .public) handler=\(state.hasProtocolHandler, privacy: .public)"
+        )
+
+        do {
+            let scriptSource = try WebInspectorScripts.domTreeView()
+            try await webView.callAsyncVoidJavaScript(
+                """
+                (0, eval)(source);
+                """,
+                arguments: ["source": scriptSource],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("fallback frontend bootstrap failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func ensureFrontendStylesheetIfNeeded(in webView: WKWebView) async {
+        guard let assetState = await frontendAssetState(in: webView) else {
+            return
+        }
+
+        if assetState.hasLinkedDOMTreeStylesheet || assetState.hasInlineFallbackStylesheet {
+            inspectorLogger.notice(
+                "frontend stylesheet ready readyState=\(assetState.readyState, privacy: .public) count=\(assetState.stylesheetCount, privacy: .public) linked=\(assetState.hasLinkedDOMTreeStylesheet, privacy: .public) inline=\(assetState.hasInlineFallbackStylesheet, privacy: .public) background=\(assetState.backgroundColor, privacy: .public)"
+            )
+            return
+        }
+
+        inspectorLogger.notice(
+            "injecting inline DOM stylesheet readyState=\(assetState.readyState, privacy: .public) count=\(assetState.stylesheetCount, privacy: .public)"
+        )
+
+        do {
+            let stylesheetSource = try WIAssets.stylesheetSource()
+            try await webView.callAsyncVoidJavaScript(
+                """
+                if (!document.getElementById(styleID)) {
+                    const style = document.createElement("style");
+                    style.id = styleID;
+                    style.textContent = source;
+                    document.head.appendChild(style);
+                }
+                """,
+                arguments: [
+                    "styleID": "wi-dom-tree-inline-style",
+                    "source": stylesheetSource,
+                ],
+                contentWorld: .page
+            )
+        } catch {
+            inspectorLogger.error("inline stylesheet injection failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        if let hydratedState = await frontendAssetState(in: webView) {
+            inspectorLogger.notice(
+                "frontend stylesheet state after recovery count=\(hydratedState.stylesheetCount, privacy: .public) linked=\(hydratedState.hasLinkedDOMTreeStylesheet, privacy: .public) inline=\(hydratedState.hasInlineFallbackStylesheet, privacy: .public) background=\(hydratedState.backgroundColor, privacy: .public)"
+            )
+        }
+    }
+
+    func recoverFrontendIfNeeded(for webView: WKWebView) async {
+        await installFallbackFrontendBootstrapIfNeeded(in: webView)
+        await ensureFrontendStylesheetIfNeeded(in: webView)
+
+        if let state = await frontendBootstrapState(in: webView) {
+            inspectorLogger.notice(
+                "frontend bootstrap state readyState=\(state.readyState, privacy: .public) frontend=\(state.hasFrontend, privacy: .public) handler=\(state.hasProtocolHandler, privacy: .public)"
+            )
+            guard state.hasFrontend, state.hasProtocolHandler else {
+                return
+            }
+            handleReadyMessage()
+        }
+    }
+
+    func prepareForFrontendReloadIfNeeded() {
+        guard isReady else {
+            return
+        }
+
+        isReady = false
+        if pendingDocumentRequest == nil, session.graphStore.rootID != nil {
+            pendingDocumentRequest = (
+                depth: configuration.fullReloadDepth,
+                preserveState: true
+            )
+        }
+    }
+
+    func protocolRequestMethod(from payload: Any?) -> String? {
+        protocolRequestContext(from: payload)?.method
+    }
+
+    private func protocolRequestContext(from payload: Any?) -> ProtocolRequestContext? {
+        guard let dictionary = protocolRequestDictionary(from: payload) else {
+            return nil
+        }
+        guard let method = dictionary["method"] as? String else {
+            return nil
+        }
+        guard let identifier = parseProtocolIdentifier(dictionary["id"]) else {
+            return nil
+        }
+
+        let params = dictionary["params"] as? [String: Any]
+        let nodeID = params?["nodeId"] as? Int
+            ?? params?["parentNodeId"] as? Int
+            ?? params?["parentId"] as? Int
+        return ProtocolRequestContext(
+            id: identifier,
+            method: method,
+            nodeID: nodeID,
+            documentGeneration: session.graphStore.documentGeneration
+        )
+    }
+
+    func protocolRequestDictionary(from payload: Any?) -> [String: Any]? {
         guard let payload else {
             return nil
         }
 
         if let dictionary = payload as? [String: Any] {
-            return dictionary["method"] as? String
+            return dictionary
         }
         if let dictionary = payload as? NSDictionary {
-            return dictionary["method"] as? String
+            return dictionary as? [String: Any]
         }
         if let string = payload as? String,
            let data = string.data(using: .utf8),
            let object = try? JSONSerialization.jsonObject(with: data),
            let dictionary = object as? [String: Any] {
-            return dictionary["method"] as? String
+            return dictionary
         }
         return nil
     }
 
-    private func protocolRequestWantsDocumentReset(method: String?, from payload: Any?) -> Bool {
-        guard method == "DOM.getDocument",
-              let payload
-        else {
-            return false
+    func parseProtocolIdentifier(_ value: Any?) -> Int? {
+        switch value {
+        case is Bool:
+            return nil
+        case let intValue as Int:
+            return intValue
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                return nil
+            }
+            let doubleValue = number.doubleValue
+            guard doubleValue.isFinite else {
+                return nil
+            }
+            let truncated = doubleValue.rounded(.towardZero)
+            guard truncated == doubleValue else {
+                return nil
+            }
+            guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
+                return nil
+            }
+            return Int(truncated)
+        case let stringValue as String:
+            return Int(stringValue)
+        case let doubleValue as Double where doubleValue.isFinite:
+            let truncated = doubleValue.rounded(.towardZero)
+            guard truncated == doubleValue else {
+                return nil
+            }
+            guard truncated >= Double(Int.min), truncated <= Double(Int.max) else {
+                return nil
+            }
+            return Int(truncated)
+        default:
+            return nil
         }
+    }
 
-        let dictionary: [String: Any]?
-        if let direct = payload as? [String: Any] {
-            dictionary = direct
-        } else if let nsDirect = payload as? NSDictionary {
-            dictionary = nsDirect as? [String: Any]
-        } else if let string = payload as? String,
-                  let data = string.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data),
-                  let decoded = object as? [String: Any] {
-            dictionary = decoded
+    private func staleProtocolResponseIfNeeded(for context: ProtocolRequestContext) -> [String: Any]? {
+        let nodeIsMissingFromCurrentDocument: Bool
+        if let nodeID = context.nodeID {
+            nodeIsMissingFromCurrentDocument = session.graphStore.entry(forNodeID: nodeID) == nil
         } else {
-            dictionary = nil
+            nodeIsMissingFromCurrentDocument = false
         }
 
-        guard let dictionary else {
-            return true
+        guard context.documentGeneration != session.graphStore.documentGeneration
+            || nodeIsMissingFromCurrentDocument else {
+            return nil
         }
 
-        guard let rawParams = dictionary["params"] else {
-            return true
+        switch context.method {
+        case "DOM.getDocument":
+            return makeCurrentDocumentResponse(id: context.id)
+        case "DOM.requestChildNodes":
+            return ["id": context.id, "result": NSNull()]
+        case "DOM.getSelectorPath":
+            return ["id": context.id, "result": ["selectorPath": ""]]
+        default:
+            return nil
+        }
+    }
+
+    func makeCurrentDocumentResponse(id: Int) -> [String: Any]? {
+        guard let rootID = session.graphStore.rootID,
+              let rootEntry = session.graphStore.entry(for: rootID) else {
+            return ["id": id, "result": [:]]
         }
 
-        let params: [String: Any]
-        if let direct = rawParams as? [String: Any] {
-            params = direct
-        } else if let nsDirect = rawParams as? NSDictionary,
-                  let bridged = nsDirect as? [String: Any] {
-            params = bridged
-        } else {
-            return true
+        var result: [String: Any] = [
+            "root": serializedNode(from: rootEntry)
+        ]
+        if let selectedNodeID = session.graphStore.selectedEntry?.id.nodeID {
+            result["selectedNodeId"] = selectedNodeID
         }
+        return ["id": id, "result": result]
+    }
 
-        let preserveState: Bool?
-        if let boolValue = params["preserveState"] as? Bool {
-            preserveState = boolValue
-        } else if let number = params["preserveState"] as? NSNumber {
-            preserveState = number.boolValue
-        } else {
-            preserveState = nil
+    func serializedNode(from entry: DOMEntry) -> [String: Any] {
+        var node: [String: Any] = [
+            "nodeId": entry.id.nodeID,
+            "nodeType": entry.nodeType,
+            "nodeName": entry.nodeName,
+            "localName": entry.localName,
+            "nodeValue": entry.nodeValue,
+            "childNodeCount": entry.childCount,
+        ]
+        if !entry.attributes.isEmpty {
+            node["attributes"] = entry.attributes.flatMap { [$0.name, $0.value] }
         }
-        guard let preserveState else {
-            return true
+        if !entry.layoutFlags.isEmpty {
+            node["layoutFlags"] = entry.layoutFlags
         }
-        return preserveState == false
+        if !entry.children.isEmpty {
+            node["children"] = entry.children.map(serializedNode(from:))
+        }
+        return node
+    }
+
+    func requestFreshDocumentAfterStaleNodeResponse() async {
+        let preserveState = session.graphStore.rootID != nil
+        let refreshDepth = preserveState
+            ? configuration.fullReloadDepth
+            : configuration.rootBootstrapDepth
+
+        pendingDocumentRequest = (
+            depth: refreshDepth,
+            preserveState: preserveState
+        )
+        guard isReady else {
+            return
+        }
+        await requestDocumentNow(
+            depth: refreshDepth,
+            preserveState: preserveState
+        )
+        pendingDocumentRequest = nil
     }
 
     @discardableResult
-    private func dispatchToFrontend(message: Any) async -> Bool {
-        guard let webView else { return true }
+    func dispatchToFrontend(message: Any) async -> Bool {
+        guard let webView else {
+            return true
+        }
         do {
             try await webView.callAsyncVoidJavaScript(
                 """
@@ -511,7 +765,54 @@ private extension DOMFrontendStore {
     }
 }
 
+extension DOMFrontendStore: DOMProtocolEventSink {
+    func domDidReceiveProtocolEvent(method: String, paramsData: Data) {
+        let paramsObject: Any
+        if let object = try? JSONSerialization.jsonObject(with: paramsData) {
+            paramsObject = object
+        } else {
+            paramsObject = [:] as [String: Any]
+        }
+
+        let message: [String: Any] = [
+            "method": method,
+            "params": paramsObject,
+        ]
+
+        guard webView != nil else {
+            return
+        }
+
+        if !isReady {
+            pendingProtocolEvents.append(message)
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            _ = await dispatchToFrontend(message: message)
+        }
+    }
+}
+
 extension DOMFrontendStore: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let currentWebView = self.webView, currentWebView === webView else {
+            return
+        }
+
+        prepareForFrontendReloadIfNeeded()
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await recoverFrontendIfNeeded(for: webView)
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         inspectorLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
     }
@@ -523,29 +824,74 @@ extension DOMFrontendStore: WKNavigationDelegate {
 
 #if DEBUG
 extension DOMFrontendStore {
-    var testBundleFlushInterval: TimeInterval {
-        mutationPipeline.currentBundleFlushInterval
-    }
-
-    var testHasPendingBundleFlushTask: Bool {
-        mutationPipeline.hasPendingBundleFlushTask
-    }
-
     func testSetReady(_ ready: Bool) {
         isReady = ready
-        mutationPipeline.setReady(ready)
     }
 
-    var testMatchedStylesRequestToken: Int {
-        matchedStylesRequestToken
+    var testIsReady: Bool {
+        isReady
+    }
+
+    var testPendingDocumentRequest: (depth: Int, preserveState: Bool)? {
+        pendingDocumentRequest
+    }
+
+    var testPendingProtocolEventCount: Int {
+        pendingProtocolEvents.count
     }
 
     func testHandleDOMSelectionMessage(_ payload: Any) {
         handleDOMSelectionMessage(payload)
     }
 
-    func testProtocolRequestWantsDocumentReset(method: String?, payload: Any?) -> Bool {
-        protocolRequestWantsDocumentReset(method: method, from: payload)
+    func testPrepareForFrontendReloadIfNeeded() {
+        prepareForFrontendReloadIfNeeded()
+    }
+
+    func testSetPendingDocumentRequest(depth: Int, preserveState: Bool) {
+        pendingDocumentRequest = (depth, preserveState)
+    }
+
+    func testSetPendingProtocolEvents(_ events: [[String: Any]]) {
+        pendingProtocolEvents = events
+    }
+
+    func testFlushPendingWork() async -> Bool {
+        await flushPendingWork()
+    }
+
+    func testHandleProtocolPayload(_ payload: Any?) async {
+        handleProtocolPayload(payload)
+        await Task.yield()
+        await Task.yield()
+    }
+
+    func testRequestFreshDocumentAfterStaleNodeResponse() async {
+        await requestFreshDocumentAfterStaleNodeResponse()
+    }
+
+    func testParseProtocolIdentifier(_ value: Any?) -> Int? {
+        parseProtocolIdentifier(value)
+    }
+
+    func testMakeCurrentDocumentResponse(id: Int) -> [String: Any]? {
+        makeCurrentDocumentResponse(id: id)
+    }
+
+    func testStaleProtocolResponseIfNeeded(
+        id: Int,
+        method: String,
+        nodeID: Int?,
+        documentGeneration: UInt64
+    ) -> [String: Any]? {
+        staleProtocolResponseIfNeeded(
+            for: .init(
+                id: id,
+                method: method,
+                nodeID: nodeID,
+                documentGeneration: documentGeneration
+            )
+        )
     }
 }
 #endif

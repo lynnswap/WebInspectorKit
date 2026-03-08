@@ -1,7 +1,7 @@
 import WebKit
+import ObservationBridge
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationBridge
 
 #if canImport(AppKit)
 import AppKit
@@ -10,9 +10,9 @@ import AppKit
 public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMModel
     private var contextMenuNodeID: Int?
-    private var observationHandles: Set<ObservationHandle> = []
-
+    private weak var inspectorWebView: WKWebView?
     private let errorLabel = NSTextField(labelWithString: "")
+    private var observationHandles: Set<ObservationHandle> = []
 
     public init(inspector: WIDOMModel) {
         self.inspector = inspector
@@ -33,6 +33,7 @@ public final class WIDOMTreeViewController: NSViewController {
 
         let inspectorWebView = inspector.makeInspectorWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
+        self.inspectorWebView = inspectorWebView
         inspector.setDOMContextMenuProvider { [weak self] nodeID in
             guard let self else {
                 return nil
@@ -41,12 +42,8 @@ public final class WIDOMTreeViewController: NSViewController {
             return self.makeTreeContextMenu()
         }
 
-        errorLabel.translatesAutoresizingMaskIntoConstraints = false
-        errorLabel.isHidden = true
-        errorLabel.textColor = .secondaryLabelColor
-        errorLabel.maximumNumberOfLines = 3
-
         view.addSubview(inspectorWebView)
+        configureErrorLabel()
         view.addSubview(errorLabel)
 
         NSLayoutConstraint.activate([
@@ -54,23 +51,14 @@ public final class WIDOMTreeViewController: NSViewController {
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            errorLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            errorLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            errorLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            errorLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
         ])
 
-        observeState()
-        updateErrorLabel(errorMessage: inspector.errorMessage)
-    }
-
-    private func observeState() {
-        inspector.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] newErrorMessage in
-            self?.updateErrorLabel(errorMessage: newErrorMessage)
-        }
-        .store(in: &observationHandles)
+        startObservingErrorState()
+        updateErrorPresentation()
     }
 
     private func makeCopyMenu() -> NSMenu {
@@ -112,17 +100,6 @@ public final class WIDOMTreeViewController: NSViewController {
 
         return menu
     }
-
-    private func updateErrorLabel(errorMessage: String?) {
-        if let errorMessage, !errorMessage.isEmpty {
-            errorLabel.stringValue = errorMessage
-            errorLabel.isHidden = false
-        } else {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
-        }
-    }
-
     @objc
     private func copyHTML(_ sender: NSMenuItem) {
         copyNodeForContextMenu(kind: .html)
@@ -171,6 +148,41 @@ public final class WIDOMTreeViewController: NSViewController {
                 return
             }
         }
+    }
+
+    private func configureErrorLabel() {
+        errorLabel.translatesAutoresizingMaskIntoConstraints = false
+        errorLabel.alignment = .center
+        errorLabel.lineBreakMode = .byWordWrapping
+        errorLabel.maximumNumberOfLines = 0
+        errorLabel.textColor = .secondaryLabelColor
+        errorLabel.isHidden = true
+        errorLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    private func startObservingErrorState() {
+        inspector.observe(
+            \.errorMessage,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updateErrorPresentation()
+        }
+        .store(in: &observationHandles)
+
+        inspector.session.graphStore.observe(
+            \.rootID,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updateErrorPresentation()
+        }
+        .store(in: &observationHandles)
+    }
+
+    private func updateErrorPresentation() {
+        let shouldShowError = !(inspector.errorMessage?.isEmpty ?? true)
+        errorLabel.stringValue = shouldShowError ? (inspector.errorMessage ?? "") : ""
+        errorLabel.isHidden = !shouldShowError
+        inspectorWebView?.isHidden = false
     }
 }
 

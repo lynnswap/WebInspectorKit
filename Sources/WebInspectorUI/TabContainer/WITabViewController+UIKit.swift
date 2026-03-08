@@ -282,8 +282,8 @@ import SwiftUI
 #Preview("Tab Container (UIKit)") {
     WIUIKitPreviewContainer {
         let session = WIModel()
-        WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
+        WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)
         return WITabViewController(
             session,

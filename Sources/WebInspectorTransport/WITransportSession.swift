@@ -15,6 +15,7 @@ public final class WITransportSession {
     private let configuration: WITransportConfiguration
     private let backendFactory: @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend
     private weak var webView: WKWebView?
+    private var originalInspectability: Bool?
     private var backend: (any WITransportPlatformBackend)?
     private var router: WITransportMessageRouter?
 
@@ -44,9 +45,14 @@ public final class WITransportSession {
             throw WITransportError.alreadyAttached
         }
 
+        let originalInspectability = prepareInspectability(for: webView)
+        self.originalInspectability = originalInspectability
+
         let backend = backendFactory(configuration)
         supportSnapshot = backend.supportSnapshot
         guard backend.supportSnapshot.isSupported else {
+            restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+            self.originalInspectability = nil
             throw WITransportError.unsupported(backend.supportSnapshot.failureReason ?? "inspector backend unavailable")
         }
 
@@ -114,6 +120,8 @@ public final class WITransportSession {
             self.router = nil
             self.webView = nil
             state = .detached
+            restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+            self.originalInspectability = nil
 
             let reason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription
             if case .unsupported = (error as? WITransportError) {
@@ -137,11 +145,27 @@ public final class WITransportSession {
                 await router.disconnect()
             }
         }
+        restoreInspectabilityIfNeeded()
         backend = nil
         router = nil
         webView = nil
         state = .detached
         log("detached")
+    }
+}
+
+package extension WITransportSession {
+    func eventStream(
+        scope: WITransportTargetScope,
+        methods: Set<String>?,
+        bufferingLimit: Int?
+    ) async -> AsyncStream<WITransportEventEnvelope> {
+        guard let router else {
+            return AsyncStream { continuation in
+                continuation.finish()
+            }
+        }
+        return await router.events(scope: scope, methods: methods, bufferingLimit: bufferingLimit)
     }
 }
 
@@ -179,21 +203,34 @@ private extension WITransportSession {
         return try await router.send(scope: scope, method: method, parametersData: parametersData)
     }
 
-    func eventStream(
-        scope: WITransportTargetScope,
-        methods: Set<String>?,
-        bufferingLimit: Int?
-    ) async -> AsyncStream<WITransportEventEnvelope> {
-        guard let router else {
-            return AsyncStream { continuation in
-                continuation.finish()
-            }
-        }
-        return await router.events(scope: scope, methods: methods, bufferingLimit: bufferingLimit)
-    }
-
     func log(_ message: String) {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
+    }
+
+    func prepareInspectability(for webView: WKWebView) -> Bool? {
+        guard #available(iOS 16.4, macOS 13.3, *) else {
+            return nil
+        }
+
+        let originalInspectability = webView.isInspectable
+        webView.isInspectable = true
+        return originalInspectability
+    }
+
+    func restoreInspectabilityIfNeeded() {
+        guard let webView else {
+            originalInspectability = nil
+            return
+        }
+        restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+    }
+
+    func restoreInspectabilityIfNeeded(on webView: WKWebView, originalValue: Bool?) {
+        guard #available(iOS 16.4, macOS 13.3, *), let originalValue else {
+            return
+        }
+
+        webView.isInspectable = originalValue
     }
 
     func handleBackendFatalFailure(_ message: String) {
@@ -204,10 +241,12 @@ private extension WITransportSession {
 
         let router = self.router
         backend?.detach()
+        restoreInspectabilityIfNeeded()
         backend = nil
         self.router = nil
         webView = nil
         state = .detached
+        originalInspectability = nil
 
         if let router {
             Task {

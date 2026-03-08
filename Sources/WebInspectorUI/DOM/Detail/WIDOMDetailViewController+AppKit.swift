@@ -52,8 +52,8 @@ private struct ElementDetailsMacRootView: View {
         let initialValue: String
 
         var id: String {
-            let localID = nodeID?.localID ?? 0
-            return "\(localID):\(name)"
+            let nodeID = nodeID?.nodeID ?? 0
+            return "\(nodeID):\(name)"
         }
     }
 

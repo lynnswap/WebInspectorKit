@@ -1,6 +1,7 @@
 import Testing
 import WebKit
 @testable import WebInspectorEngine
+@testable import WebInspectorTransport
 
 @MainActor
 struct NetworkSessionTests {
@@ -23,6 +24,52 @@ struct NetworkSessionTests {
         #expect(pageAgent.attachedWebViews.first === webView)
         #expect(pageAgent.observedModes == [.active, .buffering])
         #expect(pageAgent.clearCount == 1)
+    }
+
+    @Test
+    func defaultSessionUsesLegacyFallbackWhenTransportIsUnsupported() async throws {
+        let session = NetworkSession(
+            configuration: .init(),
+            defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+        )
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
+        await loadHTML("<html><body><p>legacy network</p></body></html>", in: webView)
+        await waitForLegacyNetworkBootstrap(in: webView)
+
+        #expect(session.transportSupportSnapshot?.isSupported == false)
+        #expect(session.transportCapabilities.isEmpty)
+
+        let body = await session.fetchBody(ref: nil, handle: "token" as NSString, role: .response)
+        #expect(body?.full == "token")
+    }
+
+    @Test
+    func bodyFetcherInitializerChoosesLegacyDriverWhenTransportIsUnsupported() {
+        let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
+        let session = NetworkSession(
+            configuration: .init(),
+            bodyFetcher: fetcher,
+            defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+        )
+
+        #expect(session.transportSupportSnapshot?.isSupported == false)
+        #expect(session.testPageAgentTypeName() == "NetworkLegacyPageDriver")
+    }
+
+    @Test
+    func macOSRemoteTransportWithoutFrontendHostingStillUsesTransportDriver() {
+        let session = NetworkSession(
+            configuration: .init(),
+            defaultTransportSupportSnapshot: .init(
+                availability: .supported,
+                backendKind: .macOSRemoteInspector,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .networkDomain],
+                failureReason: "frontend host unavailable"
+            )
+        )
+
+        #expect(session.testPageAgentTypeName() == "NetworkTransportDriver")
     }
 
     @Test
@@ -50,7 +97,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -90,7 +138,8 @@ struct NetworkSessionTests {
     func requestBodyIfNeededDoesNotRetryFailedBody() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -118,7 +167,8 @@ struct NetworkSessionTests {
             .agentUnavailable
         })
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -152,7 +202,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -179,7 +230,8 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
 
@@ -215,7 +267,8 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = NetworkBody(
@@ -241,6 +294,47 @@ struct NetworkSessionTests {
         }
         #expect(failed)
         #expect(fetcher.fetchRefs.isEmpty)
+    }
+
+    @Test
+    func requestBodyIfNeededKeepsInlinePreviewWhenDeferredRequestLoadingIsUnsupported() async {
+        let fetcher = StubNetworkBodyFetcher(
+            supportedRoles: [.response]
+        ) { _, _, _ in
+            Issue.record("fetchBody should not run for unsupported request-body loading")
+            return nil
+        }
+        let session = NetworkSession(bodyFetcher: fetcher)
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
+
+        let entry = makeEntry()
+        let body = NetworkBody(
+            kind: .text,
+            preview: "request-preview",
+            full: nil,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: true,
+            summary: nil,
+            reference: nil,
+            handle: nil,
+            formEntries: [],
+            fetchState: .inline,
+            role: .request
+        )
+        entry.requestBody = body
+
+        session.requestBodyIfNeeded(for: entry, role: .request)
+
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
+        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(body.fetchState == .inline)
+        #expect(body.preview == "request-preview")
+        #expect(body.full == nil)
     }
 
     private func makeEntry() -> NetworkEntry {
@@ -283,16 +377,81 @@ struct NetworkSessionTests {
         }
         return condition()
     }
+
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async {
+        for _ in 0..<200 {
+            let raw = try? await webView.evaluateJavaScript(
+                """
+                (() => ({
+                    tokenReady: Boolean(window.__wiNetworkControlToken),
+                    handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
+                    agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
+                }))();
+                """,
+                in: nil,
+                contentWorld: .page
+            )
+            let payload = raw as? NSDictionary
+            let tokenReady = (payload?["tokenReady"] as? Bool) ?? ((payload?["tokenReady"] as? NSNumber)?.boolValue ?? false)
+            let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
+            let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
+            if tokenReady && handlerReady && agentReady {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+}
+
+@MainActor
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        _ = webView
+        _ = navigation
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        _ = webView
+        _ = navigation
+        _ = error
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        _ = webView
+        _ = navigation
+        _ = error
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
     private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
+    private let supportedRoles: Set<NetworkBody.Role>
     private(set) var fetchRefs: [String?] = []
 
     init(
+        supportedRoles: Set<NetworkBody.Role> = Set(NetworkBody.Role.allCases),
         onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
     ) {
+        self.supportedRoles = supportedRoles
         self.onFetch = { ref, handle, role in
             guard let body = await onFetch(ref, handle, role) else {
                 return .bodyUnavailable
@@ -302,9 +461,15 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
     }
 
     init(
+        supportedRoles: Set<NetworkBody.Role> = Set(NetworkBody.Role.allCases),
         resultOnFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
     ) {
+        self.supportedRoles = supportedRoles
         self.onFetch = resultOnFetch
+    }
+
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        supportedRoles.contains(role)
     }
 
     func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
@@ -343,4 +508,13 @@ private final class StubNetworkPageDriver: NetworkPageDriving {
     func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         .bodyUnavailable
     }
+}
+
+private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
+    WITransportSupportSnapshot(
+        availability: .unsupported,
+        backendKind: .unsupported,
+        capabilities: [],
+        failureReason: "unsupported for test"
+    )
 }

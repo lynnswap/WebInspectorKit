@@ -107,6 +107,9 @@ function updateNodeElementState(element: HTMLElement | null, node: DOMNode): voi
 export function buildNode(node: DOMNode): HTMLElement {
     const container = document.createElement("div");
     container.className = "tree-node";
+    if (node.nodeType === NODE_TYPES.DOCUMENT_NODE) {
+        container.classList.add("tree-node--document-root");
+    }
     container.dataset.nodeId = String(node.id);
     container.style.setProperty("--depth", String(node.depth || 0));
     container.style.setProperty("--indent-depth", String(clampIndentDepth(node.depth || 0)));
@@ -426,6 +429,9 @@ export function processPendingNodeRenders(): void {
 
 /** Determine if a node should be expanded by default */
 export function nodeShouldBeExpanded(node: DOMNode): boolean {
+    if (node.nodeType === NODE_TYPES.DOCUMENT_NODE) {
+        return true;
+    }
     if (treeState.openState.has(node.id)) {
         return treeState.openState.get(node.id)!;
     }
@@ -1033,7 +1039,9 @@ function buildSelectionPath(node: DOMNode | null): string[] {
     let current: DOMNode | undefined = node;
     let guard = 0;
     while (current && guard < 200) {
-        labels.unshift(renderPreview(current));
+        if (current.nodeType !== NODE_TYPES.DOCUMENT_NODE) {
+            labels.unshift(renderPreview(current));
+        }
         if (!current.parentId) {
             break;
         }
@@ -1055,7 +1063,7 @@ function notifyNativeSelection(node: DOMNode | null): void {
     }
     const payload = node
         ? {
-              id: typeof node.id === "number" ? node.id : null,
+              nodeId: typeof node.id === "number" ? node.id : null,
               preview: renderPreview(node),
               attributes: Array.isArray(node.attributes)
                   ? node.attributes.map((attr) => ({
@@ -1090,7 +1098,7 @@ async function notifyNativeSelectorPath(node: DOMNode | null): Promise<void> {
     const currentToken = ++selectorRequestToken;
 
     if (!nodeId) {
-        handler.postMessage({ id: null, selectorPath: "" });
+        handler.postMessage({ nodeId: null, selectorPath: "" });
         return;
     }
 
@@ -1100,12 +1108,12 @@ async function notifyNativeSelectorPath(node: DOMNode | null): Promise<void> {
             return;
         }
         const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
-        handler.postMessage({ id: nodeId, selectorPath });
+        handler.postMessage({ nodeId, selectorPath });
     } catch {
         if (currentToken !== selectorRequestToken) {
             return;
         }
-        handler.postMessage({ id: nodeId, selectorPath: "" });
+        handler.postMessage({ nodeId, selectorPath: "" });
     }
 }
 

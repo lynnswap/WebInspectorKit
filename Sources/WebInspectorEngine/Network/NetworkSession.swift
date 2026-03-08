@@ -1,9 +1,17 @@
 import Foundation
 import WebKit
+import WebInspectorTransport
 
 @MainActor
 package protocol NetworkBodyFetching: AnyObject {
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool
     func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult
+}
+
+extension NetworkBodyFetching {
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        true
+    }
 }
 
 package enum NetworkBodyFetchResult {
@@ -17,6 +25,13 @@ public final class NetworkSession: PageSession {
     private struct BodyFetchKey: Hashable {
         let entryID: UUID
         let role: NetworkBody.Role
+    }
+
+    private struct DefaultPageAgentComponents {
+        let pageAgent: any NetworkPageDriving
+        let bodyFetcher: any NetworkBodyFetching
+        let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
+        let transportSupportSnapshot: WITransportSupportSnapshot?
     }
 
     public typealias AttachmentResult = Void
@@ -34,6 +49,7 @@ public final class NetworkSession: PageSession {
     private let pageAgent: any NetworkPageDriving
     private let bodyFetcher: any NetworkBodyFetching
     private let transportCapabilityProvider: (any InspectorTransportCapabilityProviding)?
+    private let fallbackTransportSupportSnapshot: WITransportSupportSnapshot?
     private var bodyFetchTasks: [BodyFetchKey: (token: UUID, task: Task<Void, Never>)] = [:]
 
     var hasAttachedPageWebView: Bool {
@@ -41,16 +57,41 @@ public final class NetworkSession: PageSession {
     }
 
     package var transportCapabilities: Set<InspectorTransportCapability> {
-        transportCapabilityProvider?.inspectorTransportCapabilities ?? []
+        let fallbackCapabilities = Self.fallbackTransportCapabilities(from: fallbackTransportSupportSnapshot)
+        guard let providerCapabilities = transportCapabilityProvider?.inspectorTransportCapabilities else {
+            return fallbackCapabilities
+        }
+        return providerCapabilities.union(fallbackCapabilities)
+    }
+
+    public var transportSupportSnapshot: WITransportSupportSnapshot? {
+        transportCapabilityProvider?.inspectorTransportSupportSnapshot ?? fallbackTransportSupportSnapshot
     }
 
     public convenience init(configuration: NetworkConfiguration = .init()) {
-        let pageAgent = NetworkPageAgent()
+        let components = Self.makeDefaultPageAgentComponents()
         self.init(
             configuration: configuration,
-            pageAgent: pageAgent,
-            bodyFetcher: pageAgent,
-            transportCapabilityProvider: nil
+            pageAgent: components.pageAgent,
+            bodyFetcher: components.bodyFetcher,
+            transportCapabilityProvider: components.transportCapabilityProvider,
+            transportSupportSnapshot: components.transportSupportSnapshot
+        )
+    }
+
+    package convenience init(
+        configuration: NetworkConfiguration = .init(),
+        defaultTransportSupportSnapshot: WITransportSupportSnapshot
+    ) {
+        let components = Self.makeDefaultPageAgentComponents(
+            transportSupportSnapshot: defaultTransportSupportSnapshot
+        )
+        self.init(
+            configuration: configuration,
+            pageAgent: components.pageAgent,
+            bodyFetcher: components.bodyFetcher,
+            transportCapabilityProvider: components.transportCapabilityProvider,
+            transportSupportSnapshot: components.transportSupportSnapshot
         )
     }
 
@@ -58,12 +99,37 @@ public final class NetworkSession: PageSession {
         configuration: NetworkConfiguration = .init(),
         bodyFetcher: any NetworkBodyFetching
     ) {
-        let pageAgent = NetworkPageAgent()
         self.init(
             configuration: configuration,
-            pageAgent: pageAgent,
             bodyFetcher: bodyFetcher,
-            transportCapabilityProvider: nil
+            defaultTransportSupportSnapshot: WITransportSession().supportSnapshot
+        )
+    }
+
+    package convenience init(
+        configuration: NetworkConfiguration = .init(),
+        bodyFetcher: any NetworkBodyFetching,
+        defaultTransportSupportSnapshot: WITransportSupportSnapshot
+    ) {
+        let preflightSnapshot = defaultTransportSupportSnapshot
+        let driver: any NetworkPageDriving
+        let capabilityProvider: (any InspectorTransportCapabilityProviding)?
+
+        if Self.shouldUseTransportDriver(for: preflightSnapshot) {
+            let transportDriver = NetworkTransportDriver()
+            driver = transportDriver
+            capabilityProvider = transportDriver
+        } else {
+            driver = NetworkLegacyPageDriver()
+            capabilityProvider = nil
+        }
+
+        self.init(
+            configuration: configuration,
+            pageAgent: driver,
+            bodyFetcher: bodyFetcher,
+            transportCapabilityProvider: capabilityProvider,
+            transportSupportSnapshot: preflightSnapshot
         )
     }
 
@@ -71,12 +137,14 @@ public final class NetworkSession: PageSession {
         configuration: NetworkConfiguration,
         pageAgent: any NetworkPageDriving,
         bodyFetcher: any NetworkBodyFetching,
-        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil
+        transportCapabilityProvider: (any InspectorTransportCapabilityProviding)? = nil,
+        transportSupportSnapshot: WITransportSupportSnapshot? = nil
     ) {
         self.configuration = configuration
         self.pageAgent = pageAgent
         self.bodyFetcher = bodyFetcher
         self.transportCapabilityProvider = transportCapabilityProvider
+        fallbackTransportSupportSnapshot = transportSupportSnapshot
         self.store = pageAgent.store
         self.store.maxEntries = configuration.maxEntries
     }
@@ -134,6 +202,9 @@ public final class NetworkSession: PageSession {
         guard shouldFetch(body) else {
             return
         }
+        guard bodyFetcher.supportsDeferredLoading(for: role) else {
+            return
+        }
 
         let bodyRef = body.reference
         let bodyHandle = body.handle
@@ -179,6 +250,54 @@ public final class NetworkSession: PageSession {
         bodyFetchTasks[key] = (token, task)
     }
 }
+
+private extension NetworkSession {
+    private static func fallbackTransportCapabilities(
+        from snapshot: WITransportSupportSnapshot?
+    ) -> Set<InspectorTransportCapability> {
+        Set(snapshot?.capabilities.compactMap { InspectorTransportCapability(rawValue: $0.rawValue) } ?? [])
+    }
+
+    private static func shouldUseTransportDriver(for snapshot: WITransportSupportSnapshot) -> Bool {
+        snapshot.isSupported
+    }
+
+    private static func makeDefaultPageAgentComponents(
+        transportSupportSnapshot: WITransportSupportSnapshot? = nil
+    ) -> DefaultPageAgentComponents {
+        let preflightSnapshot = transportSupportSnapshot ?? WITransportSession().supportSnapshot
+        let pageAgent: any NetworkPageDriving
+        let bodyFetcher: any NetworkBodyFetching
+        let capabilityProvider: (any InspectorTransportCapabilityProviding)?
+
+        if shouldUseTransportDriver(for: preflightSnapshot) {
+            let transportDriver = NetworkTransportDriver()
+            pageAgent = transportDriver
+            bodyFetcher = transportDriver
+            capabilityProvider = transportSupportSnapshot == nil ? transportDriver : nil
+        } else {
+            let legacyDriver = NetworkLegacyPageDriver()
+            pageAgent = legacyDriver
+            bodyFetcher = legacyDriver
+            capabilityProvider = nil
+        }
+
+        return DefaultPageAgentComponents(
+            pageAgent: pageAgent,
+            bodyFetcher: bodyFetcher,
+            transportCapabilityProvider: capabilityProvider,
+            transportSupportSnapshot: preflightSnapshot
+        )
+    }
+}
+
+#if DEBUG
+extension NetworkSession {
+    package func testPageAgentTypeName() -> String {
+        String(describing: type(of: pageAgent))
+    }
+}
+#endif
 
 private extension NetworkSession {
     private func cancelAllBodyFetches() {

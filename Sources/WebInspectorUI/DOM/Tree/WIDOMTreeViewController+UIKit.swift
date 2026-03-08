@@ -57,8 +57,8 @@ public final class WIDOMTreeViewController: UIViewController {
         }
 
         observeState()
-        updateErrorPresentation(errorMessage: inspector.errorMessage)
         updateNavigationControls()
+        updateErrorPresentation()
     }
 
     private var pickSymbolName: String {
@@ -106,13 +106,6 @@ public final class WIDOMTreeViewController: UIViewController {
 
     private func observeState() {
         inspector.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] newErrorMessage in
-            self?.updateErrorPresentation(errorMessage: newErrorMessage)
-        }
-        .store(in: &observationHandles)
-        inspector.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -126,6 +119,13 @@ public final class WIDOMTreeViewController: UIViewController {
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
+        inspector.observe(
+            \.errorMessage,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updateErrorPresentation()
+        }
+        .store(in: &observationHandles)
         inspector.session.graphStore.observe(
             \.selectedID,
             options: [.removeDuplicates]
@@ -133,22 +133,18 @@ public final class WIDOMTreeViewController: UIViewController {
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
+        inspector.session.graphStore.observe(
+            \.rootID,
+            options: [.removeDuplicates]
+        ) { [weak self] _ in
+            self?.updateErrorPresentation()
+        }
+        .store(in: &observationHandles)
     }
 
     private func scheduleNavigationControlsUpdate() {
         navigationUpdateCoalescer.schedule { [weak self] in
             self?.updateNavigationControls()
-        }
-    }
-
-    private func updateErrorPresentation(errorMessage: String?) {
-        if let errorMessage, !errorMessage.isEmpty {
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = errorMessage
-            configuration.image = UIImage(systemName: "exclamationmark.triangle")
-            contentUnavailableConfiguration = configuration
-        } else {
-            contentUnavailableConfiguration = nil
         }
     }
 
@@ -163,6 +159,26 @@ public final class WIDOMTreeViewController: UIViewController {
         } else {
             navigationItem.additionalOverflowItems = nil
         }
+    }
+
+    private func updateErrorPresentation() {
+        guard let message = inspector.errorMessage,
+              !message.isEmpty else {
+            contentUnavailableConfiguration = nil
+            navigationItem.prompt = nil
+            return
+        }
+
+        if inspector.session.graphStore.rootID == nil {
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.text = message
+            contentUnavailableConfiguration = configuration
+            navigationItem.prompt = nil
+            return
+        }
+
+        contentUnavailableConfiguration = nil
+        navigationItem.prompt = message
     }
 
     @objc

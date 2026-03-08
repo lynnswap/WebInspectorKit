@@ -3,6 +3,7 @@ import Observation
 import ObservationBridge
 import WebKit
 import WebInspectorEngine
+import WebInspectorTransport
 
 @MainActor
 @Observable
@@ -39,6 +40,10 @@ public final class WINetworkModel {
 
     public var store: NetworkStore {
         session.store
+    }
+
+    public var transportSupportSnapshot: WITransportSupportSnapshot? {
+        session.transportSupportSnapshot
     }
 
     public var displayEntries: [NetworkEntry] {

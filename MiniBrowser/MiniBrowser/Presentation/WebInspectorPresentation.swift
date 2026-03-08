@@ -7,27 +7,29 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WIModel
-) {
+    inspectorController: WIModel,
+    tabs: [WITab] = [.dom(), .network()]
+) -> Bool {
     guard let presenter = resolvePresenter(from: windowScene) else {
-        return
+        return false
     }
 
     if let existing = findPresentedContainer(from: presenter) {
-        existing.setTabs([.dom(), .network()])
+        existing.setTabs(tabs)
         existing.setInspectorController(inspectorController)
         existing.setPageWebView(model.webView)
-        return
+        return true
     }
 
     let container = WITabViewController(
         inspectorController,
         webView: model.webView,
-        tabs: [.dom(), .network()]
+        tabs: tabs
     )
     container.modalPresentationStyle = .pageSheet
     applyDefaultDetents(to: container)
     presenter.present(container, animated: true)
+    return true
 }
 
 @MainActor
@@ -156,22 +158,23 @@ private let inspectorWindowStore = InspectorWindowStore()
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WIModel
-) {
+    inspectorController: WIModel,
+    tabs: [WITab] = [.dom(), .network()]
+) -> Bool {
     if let existingWindow = inspectorWindowStore.window,
        let existingContainer = existingWindow.contentViewController as? WITabViewController {
-        existingContainer.setTabs([.dom(), .network()])
+        existingContainer.setTabs(tabs)
         existingContainer.setInspectorController(inspectorController)
         existingContainer.setPageWebView(model.webView)
         existingWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        return
+        return true
     }
 
     let container = WITabViewController(
         inspectorController,
         webView: model.webView,
-        tabs: [.dom(), .network()]
+        tabs: tabs
     )
     let window = NSWindow(contentViewController: container)
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -193,5 +196,6 @@ func presentWebInspector(
     inspectorWindowStore.window = window
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    return true
 }
 #endif

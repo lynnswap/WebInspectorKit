@@ -7,6 +7,10 @@ import {
 import { renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 import type { DOMEventEntry, DOMNode } from "../UI/DOMTree/dom-tree-types";
 
+type WebKitMockHandler = {
+    postMessage: ReturnType<typeof vi.fn>;
+};
+
 function makeNode(id: number, children: DOMNode[] = []): DOMNode {
     return {
         id,
@@ -45,6 +49,10 @@ function resetTreeState() {
     }
     renderState.frameId = null;
     renderState.pendingNodes.clear();
+}
+
+function protocolHandler(): WebKitMockHandler {
+    return window.webkit?.messageHandlers?.webInspectorProtocol as WebKitMockHandler;
 }
 
 describe("dom-tree-updates", () => {
@@ -229,6 +237,7 @@ describe("dom-tree-updates", () => {
 
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
+        expect(protocolHandler().postMessage).not.toHaveBeenCalled();
     });
 
     it("increments style revision for unknown child removals in shallow snapshots", () => {
@@ -247,6 +256,7 @@ describe("dom-tree-updates", () => {
 
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
+        expect(protocolHandler().postMessage).not.toHaveBeenCalled();
     });
 
     it("increments style revision for unknown child removals under known parents with incomplete children", () => {
@@ -298,6 +308,40 @@ describe("dom-tree-updates", () => {
 
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
+        expect(protocolHandler().postMessage).not.toHaveBeenCalled();
+    });
+
+    it("refreshes an expanded missing subtree when DOM mutations target it", async () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+        treeState.openState.set(999, true);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeInserted",
+            params: {
+                parentNodeId: 999,
+                node: {
+                    nodeId: 1001,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: [],
+                    childNodeCount: 0,
+                    children: []
+                }
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        await Promise.resolve();
+
+        const message = protocolHandler().postMessage.mock.calls.at(-1)?.[0] as
+            | { method?: string; params?: { nodeId?: number } }
+            | undefined;
+        expect(message?.method).toBe("DOM.requestChildNodes");
+        expect(message?.params?.nodeId).toBe(999);
     });
 
     it("increments style revision for unknown text mutations in shallow snapshots", () => {
@@ -316,5 +360,6 @@ describe("dom-tree-updates", () => {
 
         vi.advanceTimersByTime(16);
         expect(treeState.styleRevision).toBe(1);
+        expect(protocolHandler().postMessage).not.toHaveBeenCalled();
     });
 });

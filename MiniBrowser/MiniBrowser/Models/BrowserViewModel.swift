@@ -20,6 +20,11 @@ private let logger = Logger(
     var isLoading = false
     var currentURL :URL?
     var underPageBackgroundColor: Color?
+    var webContentTerminationCount = 0
+    var lastWebContentTerminationDate: Date?
+    var lastWebContentTerminationURL: URL?
+    var lastNavigationErrorDescription: String?
+    var didFinishNavigationCount = 0
 #if os(iOS)
     private var refreshControl: UIRefreshControl?
 #endif
@@ -287,6 +292,7 @@ extension BrowserViewModel: WKNavigationDelegate {
         logger.debug("\(#function) provisional navigation failed")
         isLoading = false
         estimatedProgress = .zero
+        lastNavigationErrorDescription = navigationError.localizedDescription
 #if os(iOS) && DEBUG
         failPendingNativeInspectorNavigation(failure: navigationError)
 #endif
@@ -297,6 +303,7 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError navigationError: Error) {
         logger.debug("\(#function) navigation failed")
         isLoading = false
+        lastNavigationErrorDescription = navigationError.localizedDescription
 #if os(iOS) && DEBUG
         failPendingNativeInspectorNavigation(failure: navigationError)
 #endif
@@ -310,6 +317,9 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         logger.debug("\(#function) web content process terminated")
         isLoading = false
+        webContentTerminationCount += 1
+        lastWebContentTerminationDate = Date()
+        lastWebContentTerminationURL = webView.url
 #if os(iOS) && DEBUG
         failPendingNativeInspectorNavigation(failure: NativeInspectorProbeNavigationError.webContentTerminated)
 #endif
@@ -317,6 +327,8 @@ extension BrowserViewModel: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isLoading = false
         estimatedProgress = .zero
+        lastNavigationErrorDescription = nil
+        didFinishNavigationCount += 1
 #if os(iOS) && DEBUG
         finishPendingNativeInspectorNavigation(for: webView.url)
 #endif

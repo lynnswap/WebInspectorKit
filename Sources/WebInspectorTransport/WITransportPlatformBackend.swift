@@ -78,10 +78,7 @@ enum WITransportMacDefaultBackendSelector {
         if remoteBackend.supportSnapshot.isSupported {
             return remoteBackend
         }
-        if nativeBackend.supportSnapshot.isSupported {
-            return nativeBackend
-        }
-        return remoteBackend
+        return nativeBackend
     }
 }
 
@@ -149,6 +146,10 @@ private final class WITransportIOSPlatformBackend: WITransportPlatformBackend {
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
         try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
+    }
+
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+        WITransportCompatibilityResponse.domEnableIfNeeded(scope: scope, method: method)
     }
 }
 
@@ -263,6 +264,8 @@ final class WITransportMacRemoteInspectorPlatformBackend: WITransportPlatformBac
         attachState = .attaching
         operatingMode = .frontendHosted
 
+        let canHostRemoteFrontend = composedSupportSnapshot.capabilities.contains(.remoteFrontendHosting)
+
         let transportHandlers = WITransportBackendMessageHandlers(
             handleRootMessage: { [frontendHost] message in
                 frontendHost.mirrorBackendMessage(message)
@@ -287,7 +290,13 @@ final class WITransportMacRemoteInspectorPlatformBackend: WITransportPlatformBac
         )
 
         do {
-            guard unsafe webView.window != nil else {
+            guard canHostRemoteFrontend else {
+                try attachTransportOnly(to: webView, messageHandlers: messageHandlers)
+                configuration.logHandler?("[WebInspectorTransport] remote frontend host unavailable; attaching in transport-only mode")
+                return
+            }
+
+            guard isHostedInWindow(webView) else {
                 try attachTransportOnly(to: webView, messageHandlers: messageHandlers)
                 return
             }
@@ -360,14 +369,28 @@ final class WITransportMacRemoteInspectorPlatformBackend: WITransportPlatformBac
         operatingMode = .transportOnly
         attachState = .attached
     }
+
+    private func isHostedInWindow(_ webView: WKWebView) -> Bool {
+        #if os(macOS)
+        unsafe webView.window != nil
+        #else
+        webView.window != nil
+        #endif
+    }
 }
 
 private enum WITransportCompatibilityResponse {
     static func domEnableIfNeeded(scope: WITransportTargetScope, method: String) -> Data? {
-        guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
+        guard scope == .page else {
             return nil
         }
-        return Data("{}".utf8)
+        if method == WITransportCommands.DOM.Enable.method {
+            return Data("{}".utf8)
+        }
+        if method == "CSS.enable" {
+            return Data("{}".utf8)
+        }
+        return nil
     }
 }
 
@@ -481,6 +504,38 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
     }
 }
 
+private extension WITransportMacRemoteInspectorPlatformBackend {
+    static func makeSupportSnapshot(
+        transportEndpointSnapshot: WITransportSupportSnapshot,
+        frontendHostSnapshot: WITransportSupportSnapshot
+    ) -> WITransportSupportSnapshot {
+        let isSupported = transportEndpointSnapshot.isSupported
+        let failureReason: String?
+        let capabilities: Set<WITransportCapability>
+
+        if transportEndpointSnapshot.isSupported {
+            failureReason = frontendHostSnapshot.isSupported
+                ? nil
+                : frontendHostSnapshot.failureReason
+            capabilities = frontendHostSnapshot.isSupported
+                ? transportEndpointSnapshot.capabilities
+                    .union(frontendHostSnapshot.capabilities)
+                : transportEndpointSnapshot.capabilities
+        } else {
+            failureReason = transportEndpointSnapshot.failureReason
+                ?? frontendHostSnapshot.failureReason
+            capabilities = []
+        }
+
+        return WITransportSupportSnapshot(
+            availability: isSupported ? .supported : .unsupported,
+            backendKind: .macOSRemoteInspector,
+            capabilities: capabilities,
+            failureReason: failureReason
+        )
+    }
+}
+
 #if os(macOS)
 @MainActor
 final class WITransportRemoteInspectorFrontendHost: WITransportFrontendHost {
@@ -584,28 +639,6 @@ final class WITransportRemoteInspectorFrontendHost: WITransportFrontendHost {
                 && !WITransportRemoteInspectorHostIsWindowMain(host) else {
             throw WITransportError.attachFailed("The remote inspector window could not be kept hidden.")
         }
-    }
-}
-
-private extension WITransportMacRemoteInspectorPlatformBackend {
-    static func makeSupportSnapshot(
-        transportEndpointSnapshot: WITransportSupportSnapshot,
-        frontendHostSnapshot: WITransportSupportSnapshot
-    ) -> WITransportSupportSnapshot {
-        let isSupported = transportEndpointSnapshot.isSupported && frontendHostSnapshot.isSupported
-        let failureReason = transportEndpointSnapshot.failureReason
-            ?? frontendHostSnapshot.failureReason
-        let capabilities = isSupported
-            ? transportEndpointSnapshot.capabilities
-                .union(frontendHostSnapshot.capabilities)
-            : []
-
-        return WITransportSupportSnapshot(
-            availability: isSupported ? .supported : .unsupported,
-            backendKind: .macOSRemoteInspector,
-            capabilities: capabilities,
-            failureReason: failureReason
-        )
     }
 }
 #endif

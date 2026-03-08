@@ -5,7 +5,7 @@ import WebInspectorRuntime
 
 #if canImport(AppKit)
 import AppKit
-import WebInspectorBridge
+import WebInspectorBridgeObjCShim
 
 @MainActor
 public final class WITabViewController: NSViewController, NSToolbarDelegate {
@@ -592,11 +592,11 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private static func menuToolbarControl(from item: NSMenuToolbarItem) -> NSView? {
-        WIAppKitBridge.menuToolbarControl(from: item)
+        WIKRuntimeBridge.menuToolbarControl(from: item)
     }
 
     private static func window(for view: NSView) -> NSWindow? {
-        WIAppKitBridge.window(for: view)
+        WIKRuntimeBridge.window(for: view)
     }
 
     private func makeNetworkFilterMenu() -> NSMenu {
@@ -856,8 +856,8 @@ import SwiftUI
 #Preview("Tab Container (AppKit)") {
     WIAppKitPreviewContainer {
         let session = WIModel()
-        WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
+        WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)
         return WITabViewController(
             session,

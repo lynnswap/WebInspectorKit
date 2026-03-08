@@ -1,6 +1,7 @@
 import Observation
 import WebKit
 import WebInspectorEngine
+import WebInspectorTransport
 
 @MainActor
 @Observable
@@ -57,6 +58,14 @@ public final class WIModel {
         self.tabs = tabs
         applyNormalizedSelection(preferredTab: selectedTab)
         syncRuntimeStateFromTabs()
+    }
+
+    public var domTransportSupportSnapshot: WITransportSupportSnapshot? {
+        dom.transportSupportSnapshot
+    }
+
+    public var networkTransportSupportSnapshot: WITransportSupportSnapshot? {
+        network.transportSupportSnapshot
     }
 
     package func setSelectedTabFromUI(_ tab: WITab?) {

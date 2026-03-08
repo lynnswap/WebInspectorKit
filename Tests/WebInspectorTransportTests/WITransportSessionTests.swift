@@ -60,6 +60,33 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func macOSDefaultBackendSelectorKeepsRemoteBackendForTransportOnlyFallback() {
+        let remoteBackend = FakeSessionBackend(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .supported,
+                backendKind: .macOSRemoteInspector,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
+                failureReason: "frontend host unavailable"
+            )
+        )
+        let nativeBackend = FakeSessionBackend(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .unsupported,
+                backendKind: .macOSNativeInspector,
+                capabilities: [],
+                failureReason: "native attach unavailable"
+            )
+        )
+
+        let selectedBackend = WITransportMacDefaultBackendSelector.selectDefaultBackend(
+            remoteBackend: remoteBackend,
+            nativeBackend: nativeBackend
+        )
+
+        #expect(selectedBackend as AnyObject === remoteBackend)
+    }
+
+    @Test
     func fatalBackendFailureDetachesSessionAndClosesTransport() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
@@ -116,6 +143,69 @@ struct WITransportSessionTests {
         #expect(session.supportSnapshot.backendKind == .macOSNativeInspector)
         #expect(!session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
     }
+
+    @Test
+    func compatibilityResponseAllowsDOMEnableWithoutSendingPageMessage() async throws {
+        let backend = FakeSessionBackend(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .supported,
+                backendKind: .iOSNativeInspector,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
+                failureReason: nil
+            ),
+            compatibilityResponseProvider: { scope, method in
+                guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
+                    return nil
+                }
+                return Data("{}".utf8)
+            }
+        )
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = WKWebView(frame: .zero)
+
+        try await session.attach(to: webView)
+        _ = try await session.page.send(WITransportCommands.DOM.Enable())
+
+        #expect(backend.sentPageMessageCount == 0)
+    }
+
+    @Test
+    func compatibilityResponseAllowsCSSEnableWithoutSendingPageMessage() async throws {
+        let backend = FakeSessionBackend(
+            supportSnapshot: WITransportSupportSnapshot(
+                availability: .supported,
+                backendKind: .iOSNativeInspector,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
+                failureReason: nil
+            ),
+            compatibilityResponseProvider: { scope, method in
+                guard scope == .page, method == TestCSSEnable.method else {
+                    return nil
+                }
+                return Data("{}".utf8)
+            }
+        )
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = WKWebView(frame: .zero)
+
+        try await session.attach(to: webView)
+        _ = try await session.page.send(TestCSSEnable())
+
+        #expect(backend.sentPageMessageCount == 0)
+    }
+}
+
+private struct TestCSSEnable: WITransportPageCommand, Sendable {
+    typealias Response = WIEmptyTransportResponse
+    let parameters = WIEmptyTransportParameters()
+
+    static let method = "CSS.enable"
 }
 
 @MainActor
@@ -124,6 +214,8 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
 
     private var messageHandlers: WITransportBackendMessageHandlers?
     private let supportSnapshotAfterAttach: WITransportSupportSnapshot?
+    private let compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)?
+    private(set) var sentPageMessageCount = 0
 
     init(
         supportSnapshot: WITransportSupportSnapshot = WITransportSupportSnapshot(
@@ -132,10 +224,12 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
             capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
             failureReason: nil
         ),
-        supportSnapshotAfterAttach: WITransportSupportSnapshot? = nil
+        supportSnapshotAfterAttach: WITransportSupportSnapshot? = nil,
+        compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)? = nil
     ) {
         self.supportSnapshot = supportSnapshot
         self.supportSnapshotAfterAttach = supportSnapshotAfterAttach
+        self.compatibilityResponseProvider = compatibilityResponseProvider
     }
 
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
@@ -161,12 +255,11 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         _ = message
         _ = targetIdentifier
         _ = outerIdentifier
+        sentPageMessageCount += 1
     }
 
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
-        _ = scope
-        _ = method
-        return nil
+        compatibilityResponseProvider?(scope, method)
     }
 
     func emitFatalFailure(_ message: String) {

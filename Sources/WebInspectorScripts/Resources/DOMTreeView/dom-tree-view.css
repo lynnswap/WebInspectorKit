@@ -162,6 +162,15 @@ html {
     background: var(--hover-overlay);
 }
 
+.tree-node--document-root {
+    padding-left: 0;
+    border-left: none;
+}
+
+.tree-node--document-root > .tree-node__row {
+    display: none;
+}
+
 .tree-node.is-selected > .tree-node__row {
     background: var(--accent-soft);
     border-left: 2px solid var(--accent);

@@ -198,8 +198,12 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
 
 static NSError *selectorFailureError(id inspectorObject, void *pageProxy, void *controller, void *backendDispatcher)
 {
+#if !TARGET_OS_OSX
     if (!inspectorObject)
         return makeError(ErrorCodeAttachFailed, @"WKWebView._inspector was unavailable.");
+#else
+    (void)inspectorObject;
+#endif
     if (!pageProxy)
         return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageProxy from WKWebView.");
     if (!controller)
@@ -267,6 +271,45 @@ private:
 - (WKWebView *)webView
 {
     return _webView;
+}
+
+- (BOOL)attachedControllerIsStillValid
+{
+    if (!_controller || !_backendDispatcher)
+        return NO;
+
+    WKWebView *webView = self.webView;
+    if (!webView)
+        return NO;
+
+    void *page = WITransportBridgePrivate::pageProxyPointer(webView);
+    if (!page)
+        return NO;
+
+    for (ptrdiff_t candidateOffset : WITransportBridgePrivate::controllerCandidateOffsets) {
+        void *candidateController = nullptr;
+        void *candidateBackendDispatcher = nullptr;
+        BOOL valid = WITransportBridgePrivate::controllerCandidateAtOffset(
+            page,
+            candidateOffset,
+            &candidateController,
+            &candidateBackendDispatcher
+        );
+        if (valid && candidateController == _controller && candidateBackendDispatcher == _backendDispatcher)
+            return YES;
+    }
+
+    return NO;
+}
+
+- (void)invalidateAttachmentState
+{
+    _frontendAttached = NO;
+    _frontendChannel.reset();
+    _disconnectFrontend = nullptr;
+    _inspector = nil;
+    _controller = nullptr;
+    _backendDispatcher = nullptr;
 }
 
 - (void)dealloc
@@ -340,7 +383,13 @@ private:
     _controller = controller;
     _backendDispatcher = backendDispatcher;
 
-    if (!_inspector || !_controller || !_backendDispatcher) {
+#if TARGET_OS_OSX
+    BOOL requiresInspectorConnection = NO;
+#else
+    BOOL requiresInspectorConnection = YES;
+#endif
+
+    if ((requiresInspectorConnection && !_inspector) || !_controller || !_backendDispatcher) {
         NSError *transportError = WITransportBridgePrivate::selectorFailureError(_inspector, page, controller, backendDispatcher);
         if (error)
             *error = transportError;
@@ -349,6 +398,10 @@ private:
         return NO;
     }
 
+#if TARGET_OS_OSX
+    // Transport-only attach should not create the local Web Inspector frontend on macOS.
+    // Doing so spawns an extra frontend/WebContent path and destabilizes sandboxed hosts.
+#else
     if (!WITransportBridgePrivate::invokeVoid(_inspector, @"connect")) {
         NSError *transportError = WITransportBridgePrivate::makeError(
             WITransportBridgePrivate::ErrorCodeAttachFailed,
@@ -360,6 +413,7 @@ private:
         [self detach];
         return NO;
     }
+#endif
 
     _frontendChannel = std::make_unique<WITransportFrontendChannel>(self);
     connectFrontend(_controller, *_frontendChannel, false, false);
@@ -369,7 +423,8 @@ private:
 
 - (BOOL)sendRootJSONString:(NSString *)message error:(NSError * _Nullable __autoreleasing *)error
 {
-    if (!_backendDispatcher) {
+    if (!_backendDispatcher || ![self attachedControllerIsStillValid]) {
+        [self invalidateAttachmentState];
         if (error) {
             *error = WITransportBridgePrivate::makeError(
                 WITransportBridgePrivate::ErrorCodeNotAttached,
@@ -453,15 +508,15 @@ private:
 
 - (void)detach
 {
-    if (_frontendAttached && _frontendChannel && _controller && _disconnectFrontend)
+    BOOL canDisconnectFrontend = NO;
+    if (_frontendAttached && _frontendChannel && _controller && _disconnectFrontend) {
+        canDisconnectFrontend = [self attachedControllerIsStillValid];
+    }
+
+    if (canDisconnectFrontend)
         _disconnectFrontend(_controller, *_frontendChannel);
 
-    _frontendAttached = NO;
-    _frontendChannel.reset();
-    _disconnectFrontend = nullptr;
-    _inspector = nil;
-    _controller = nullptr;
-    _backendDispatcher = nullptr;
+    [self invalidateAttachmentState];
 }
 
 - (void)handleFrontendMessageString:(NSString *)messageString

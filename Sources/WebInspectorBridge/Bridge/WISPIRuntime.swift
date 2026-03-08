@@ -231,7 +231,6 @@ package final class WISPIRuntime {
             delegate: delegate
         )
     }
-
 }
 
 extension WISPIRuntime {

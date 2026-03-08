@@ -365,6 +365,10 @@ export async function requestNodeRefresh(
     const targetNodeId =
         typeof options.parentId === "number" && options.parentId > 0 ? options.parentId : nodeId;
 
+    if (!shouldRefreshMissingNodeTarget(targetNodeId)) {
+        return;
+    }
+
     if (treeState.pendingRefreshRequests.has(targetNodeId)) {
         return;
     }
@@ -388,6 +392,22 @@ export async function requestNodeRefresh(
     } finally {
         treeState.pendingRefreshRequests.delete(targetNodeId);
     }
+}
+
+function shouldRefreshMissingNodeTarget(targetNodeId: number): boolean {
+    if (typeof targetNodeId !== "number" || targetNodeId <= 0) {
+        return false;
+    }
+    if (treeState.nodes.has(targetNodeId)) {
+        return true;
+    }
+    if (treeState.selectedNodeId === targetNodeId) {
+        return true;
+    }
+    if (treeState.openState.get(targetNodeId) === true) {
+        return true;
+    }
+    return Array.isArray(treeState.selectionChain) && treeState.selectionChain.includes(targetNodeId);
 }
 
 /** Refresh tree after DOM updates */
