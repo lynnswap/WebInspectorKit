@@ -20,7 +20,7 @@ final class WINetworkFilterMenuCoordinator {
     init(queryModel: WINetworkQueryModel) {
         self.queryModel = queryModel
 
-        queryModel.observeTask(\.effectiveFilters) { [weak self] effectiveFilters in
+        queryModel.observe(\.effectiveFilters) { [weak self] effectiveFilters in
             self?.applyMenuStateAfterMutation(effectiveFilters: effectiveFilters)
         }
         .store(in: &observationHandles)

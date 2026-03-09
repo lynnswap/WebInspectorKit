@@ -205,7 +205,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     private func startObservingBodyState() {
         bodyObservationHandles.removeAll()
-        bodyState.observeTask(
+        bodyState.observe(
             [
                 \.kind,
                 \.preview,

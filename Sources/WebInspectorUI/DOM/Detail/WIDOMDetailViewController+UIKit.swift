@@ -218,21 +218,21 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
         inspector.observe(
             \.hasPageWebView,
-            options: WIObservationOptions.dedupe
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
             \.isSelectingElement,
-            options: WIObservationOptions.dedupe
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
         graphStore.observe(
             \.selectedID,
-            options: WIObservationOptions.dedupe
+            options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
             self?.scheduleContentUpdate()
@@ -240,7 +240,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         .store(in: &stateObservationHandles)
         graphStore.observe(
             \.entriesByID,
-            options: WIObservationOptions.debounced
+            options: WIObservationOptions.domDetailContent
         ) { [weak self] _ in
             self?.scheduleContentUpdate()
         }

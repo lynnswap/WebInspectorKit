@@ -316,6 +316,58 @@ struct WIDOMModelTests {
         }
         #expect(refreshed == true)
     }
+
+    @Test
+    func rapidSelectionSnapshotBurstRefreshesMatchedStylesForLatestRevision() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree())
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil
+        }
+        #expect(loaded == true)
+
+        let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
+        inspector.selectEntry(bodyID)
+
+        let initialRefresh = await waitUntil {
+            driver.matchedStylesRequests == [3]
+                && driver.matchedStylesRequestRevisions.isEmpty == false
+        }
+        #expect(initialRefresh == true)
+
+        for revision in 1...3 {
+            graphStore.applySelectionSnapshot(
+                .init(
+                    nodeID: 3,
+                    preview: "<body data-revision=\"\(revision)\">",
+                    attributes: [],
+                    path: ["html", "body"],
+                    selectorPath: "html > body.revision-\(revision)",
+                    styleRevision: revision
+                )
+            )
+        }
+
+        let refreshed = await waitUntil {
+            driver.matchedStylesRequests.count >= 2
+                && driver.matchedStylesRequestRevisions.last == 3
+        }
+        #expect(refreshed == true)
+        #expect(driver.matchedStylesRequestRevisions.contains(1) == false)
+        #expect(driver.matchedStylesRequestRevisions.contains(2) == false)
+    }
 }
 
 @MainActor
@@ -334,6 +386,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     private(set) var hideHighlightCallCount = 0
     private(set) var reloadRequestedDepths: [Int] = []
     private(set) var matchedStylesRequests: [Int] = []
+    private(set) var matchedStylesRequestRevisions: [Int] = []
 
     init(
         graphStore: DOMGraphStore,
@@ -401,6 +454,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
         _ = maxRules
         matchedStylesRequests.append(nodeId)
+        matchedStylesRequestRevisions.append(graphStore.selectedEntry?.styleRevision ?? -1)
         if let matchedStylesError {
             throw matchedStylesError
         }

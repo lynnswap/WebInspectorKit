@@ -366,7 +366,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             self?.scheduleToolbarStateUpdate()
         }
         .store(in: &toolbarObservationHandles)
-        inspectorController.network.store.observeTask(
+        inspectorController.network.store.observe(
             [\.entries]
         ) { [weak self] in
             self?.scheduleToolbarStateUpdate()

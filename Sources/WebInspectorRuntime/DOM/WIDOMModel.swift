@@ -11,9 +11,9 @@ import UIKit
 
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMModel")
 private let domDeleteUndoHistoryLimit = 128
-private let domGraphObservationDebounce = ObservationDebounce(
+private let domGraphObservationThrottle = ObservationThrottle(
     interval: .milliseconds(80),
-    mode: .immediateFirst
+    mode: .latest
 )
 
 @MainActor
@@ -310,7 +310,7 @@ private extension WIDOMModel {
 
         graphStore.observe(
             \.entriesByID,
-            options: [.debounce(domGraphObservationDebounce)]
+            options: [.rateLimit(.throttle(domGraphObservationThrottle))]
         ) { [weak self] _ in
             self?.pruneTreeState()
             self?.scheduleMatchedStylesRefreshIfNeeded(force: false)
