@@ -119,7 +119,8 @@ struct NetworkInspectorTests {
             }
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
         entry.responseBody = makeBody(reference: "resp_ref", role: .response)
@@ -155,7 +156,8 @@ struct NetworkInspectorTests {
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
 
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchRefs == ["resp_ref"]
@@ -171,7 +173,8 @@ struct NetworkInspectorTests {
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
 
         inspector.selectEntry(entry)
@@ -203,7 +206,8 @@ struct NetworkInspectorTests {
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let firstEntry = makeEntry()
         let firstBody = makeBody(reference: "slow-ref", role: .response)
@@ -246,7 +250,8 @@ struct NetworkInspectorTests {
         inspector.selectEntry(entry)
 
         inspector.detach()
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         for _ in 0..<64 {
             await Task.yield()

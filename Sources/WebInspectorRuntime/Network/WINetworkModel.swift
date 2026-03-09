@@ -147,7 +147,6 @@ private extension WINetworkModel {
 
         let selectedEntryID = selectedEntry.id
         selectedEntryFetchTask = Task { @MainActor [weak self] in
-            await Task.yield()
             guard let self, self.isAttachedToPage else {
                 return
             }
