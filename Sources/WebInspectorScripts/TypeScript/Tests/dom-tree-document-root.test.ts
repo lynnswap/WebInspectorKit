@@ -82,4 +82,49 @@ describe("dom-tree document root rendering", () => {
             | undefined;
         expect(messagePayload?.path).toEqual(["<html>", "<body>"]);
     });
+
+    it("marks unrendered nodes so the frontend can deemphasize them", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    attributes: [],
+                    layoutFlags: ["rendered"],
+                    childNodeCount: 1,
+                    children: [{
+                        nodeId: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [],
+                        layoutFlags: ["rendered"],
+                        childNodeCount: 1,
+                        children: [{
+                            nodeId: 4,
+                            nodeType: 1,
+                            nodeName: "SCRIPT",
+                            localName: "script",
+                            attributes: [],
+                            layoutFlags: [],
+                            childNodeCount: 0,
+                            children: []
+                        }]
+                    }]
+                }]
+            }
+        }, { preserveState: false });
+
+        const scriptElement = treeState.elements.get(4);
+        expect(treeState.nodes.get(4)?.isRendered).toBe(false);
+        expect(scriptElement?.classList.contains("is-unrendered")).toBe(true);
+        expect(scriptElement?.classList.contains("is-rendered")).toBe(false);
+    });
 });

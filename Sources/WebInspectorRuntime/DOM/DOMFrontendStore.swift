@@ -370,10 +370,13 @@ private extension DOMFrontendStore {
             if let requestContext,
                requestContext.isDocumentGenerationBound,
                let staleResponse = staleProtocolResponseIfNeeded(for: requestContext) {
+                let shouldRefreshDocument = shouldRequestFreshDocumentAfterStaleResponse(for: requestContext)
                 inspectorLogger.notice(
-                    "dropping stale DOM response for \(requestContext.method, privacy: .public) node=\(String(describing: requestContext.nodeID), privacy: .public) generation=\(requestContext.documentGeneration, privacy: .public) current=\(self.session.graphStore.documentGeneration, privacy: .public)"
+                    "\(shouldRefreshDocument ? "dropping" : "responding to") stale DOM response for \(requestContext.method, privacy: .public) node=\(String(describing: requestContext.nodeID), privacy: .public) generation=\(requestContext.documentGeneration, privacy: .public) current=\(self.session.graphStore.documentGeneration, privacy: .public)"
                 )
-                await requestFreshDocumentAfterStaleNodeResponse()
+                if shouldRefreshDocument {
+                    await requestFreshDocumentAfterStaleNodeResponse()
+                }
                 _ = await dispatchToFrontend(message: staleResponse)
                 return
             }
@@ -661,8 +664,13 @@ private extension DOMFrontendStore {
             nodeIsMissingFromCurrentDocument = false
         }
 
-        guard context.documentGeneration != session.graphStore.documentGeneration
-            || nodeIsMissingFromCurrentDocument else {
+        let generationChanged = context.documentGeneration != session.graphStore.documentGeneration
+        let treatMissingNodeAsStale = shouldTreatMissingNodeAsStale(
+            for: context,
+            nodeIsMissingFromCurrentDocument: nodeIsMissingFromCurrentDocument
+        )
+
+        guard generationChanged || treatMissingNodeAsStale else {
             return nil
         }
 
@@ -675,6 +683,37 @@ private extension DOMFrontendStore {
             return ["id": context.id, "result": ["selectorPath": ""]]
         default:
             return nil
+        }
+    }
+
+    private func shouldTreatMissingNodeAsStale(
+        for context: ProtocolRequestContext,
+        nodeIsMissingFromCurrentDocument: Bool
+    ) -> Bool {
+        guard nodeIsMissingFromCurrentDocument else {
+            return false
+        }
+
+        switch context.method {
+        case "DOM.getSelectorPath", "DOM.requestChildNodes":
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func shouldRequestFreshDocumentAfterStaleResponse(
+        for context: ProtocolRequestContext
+    ) -> Bool {
+        if context.documentGeneration != session.graphStore.documentGeneration {
+            return true
+        }
+
+        switch context.method {
+        case "DOM.getSelectorPath", "DOM.requestChildNodes":
+            return false
+        default:
+            return true
         }
     }
 

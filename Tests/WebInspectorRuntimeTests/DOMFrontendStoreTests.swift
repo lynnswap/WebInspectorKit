@@ -170,12 +170,63 @@ struct DOMFrontendStoreTests {
         #expect(pendingRequest?.preserveState == true)
         #expect(pendingRequest?.depth == session.configuration.fullReloadDepth)
     }
+
+    @Test
+    func staleSelectorPathResponseForMissingNodeDoesNotQueueDocumentRefresh() async {
+        let graphStore = DOMGraphStore()
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+        )
+        let store = DOMFrontendStore(session: session)
+
+        store.testSetReady(true)
+        await store.testHandleProtocolPayload([
+            "id": 17,
+            "method": "DOM.getSelectorPath",
+            "params": [
+                "nodeId": 999,
+            ],
+        ])
+
+        #expect(store.testPendingDocumentRequest == nil)
+    }
+
+    @Test
+    func requestChildNodesForNodeMissingFromAuthoritativeGraphDoesNotQueueDocumentRefresh() async {
+        let graphStore = DOMGraphStore()
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+
+        let pageDriver = StubDOMFrontendStorePageDriver(graphStore: graphStore)
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: pageDriver
+        )
+        let store = DOMFrontendStore(session: session)
+
+        store.testSetReady(true)
+        await store.testHandleProtocolPayload([
+            "id": 23,
+            "method": "DOM.requestChildNodes",
+            "params": [
+                "nodeId": 999,
+            ],
+        ])
+
+        #expect(store.testPendingDocumentRequest == nil)
+        #expect(pageDriver.requestedChildNodeIDs == [999])
+    }
 }
 
 @MainActor
 private final class StubDOMFrontendStorePageDriver: DOMPageDriving {
     weak var eventSink: (any DOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    private(set) var requestedChildNodeIDs: [Int] = []
 
     init(graphStore: DOMGraphStore) {
         _ = graphStore
@@ -203,7 +254,7 @@ private final class StubDOMFrontendStorePageDriver: DOMPageDriving {
     }
 
     func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor] {
-        _ = parentNodeId
+        requestedChildNodeIDs.append(parentNodeId)
         return []
     }
 

@@ -301,8 +301,9 @@ export function mergeNodeWithSource(
     const nextChildren: DOMNode[] = [];
     const childDepth = (target.depth || 0) + 1;
 
-    if (Array.isArray(source.children)) {
-        source.children.forEach((childSource, index) => {
+    const mergedSourceChildren = materializeChildrenForMerge(target, source);
+    if (Array.isArray(mergedSourceChildren)) {
+        mergedSourceChildren.forEach((childSource, index) => {
             let child = existingChildren.get(childSource.id);
             if (child) {
                 existingChildren.delete(childSource.id);
@@ -317,12 +318,109 @@ export function mergeNodeWithSource(
         });
     }
 
-    existingChildren.forEach((child) => {
-        removeNodeEntry(child);
+    const nextChildIDs = new Set(nextChildren.map((child) => child.id));
+    existingChildren.forEach((child, childID) => {
+        if (!nextChildIDs.has(childID)) {
+            removeNodeEntry(child);
+        }
     });
 
     target.children = nextChildren;
     treeState.nodes.set(target.id, target);
+}
+
+function materializeChildrenForMerge(
+    target: DOMNode,
+    source: DOMNode
+): DOMNode[] {
+    const sourceChildren = Array.isArray(source.children) ? source.children : [];
+    if (!sourceChildren.length) {
+        return sourceChildren;
+    }
+
+    const existingChildren = Array.isArray(target.children) ? target.children : [];
+    if (!existingChildren.length) {
+        return sourceChildren;
+    }
+
+    const existingConcreteChildren = existingChildren.filter((child) => !isPlaceholderNode(child));
+    if (!existingConcreteChildren.length) {
+        return sourceChildren;
+    }
+
+    const sourceConcreteChildren = sourceChildren.filter((child) => !isPlaceholderNode(child));
+    const sourceHasPartialChildren = source.childCount > sourceConcreteChildren.length;
+    if (!sourceHasPartialChildren || existingConcreteChildren.length > source.childCount) {
+        return sourceChildren;
+    }
+
+    if (!sourceConcreteChildren.length) {
+        return appendPlaceholderIfNeeded(
+            existingConcreteChildren,
+            source.childCount,
+            source.id,
+            source.isRendered !== false
+        );
+    }
+
+    const sourceChildrenById = new Map<number, DOMNode>();
+    sourceConcreteChildren.forEach((child) => {
+        sourceChildrenById.set(child.id, child);
+    });
+
+    const mergedConcreteChildren: DOMNode[] = [];
+    const seenChildIDs = new Set<number>();
+
+    for (const existingChild of existingConcreteChildren) {
+        const sourceChild = sourceChildrenById.get(existingChild.id);
+        if (sourceChild) {
+            mergedConcreteChildren.push(materializeNodeForMerge(sourceChild, existingChild));
+            seenChildIDs.add(existingChild.id);
+        }
+    }
+
+    for (const sourceChild of sourceConcreteChildren) {
+        if (!seenChildIDs.has(sourceChild.id)) {
+            mergedConcreteChildren.push(sourceChild);
+        }
+    }
+
+    const boundedConcreteChildren = mergedConcreteChildren.slice(0, Math.max(0, source.childCount));
+    return appendPlaceholderIfNeeded(
+        boundedConcreteChildren,
+        source.childCount,
+        source.id,
+        source.isRendered !== false
+    );
+}
+
+function materializeNodeForMerge(
+    source: DOMNode,
+    existing: DOMNode
+): DOMNode {
+    const mergedChildren = materializeChildrenForMerge(existing, source);
+    if (mergedChildren !== source.children) {
+        source.children = mergedChildren;
+    }
+    return source;
+}
+
+function appendPlaceholderIfNeeded(
+    children: DOMNode[],
+    childCount: number,
+    parentId: number,
+    parentRendered: boolean
+): DOMNode[] {
+    const concreteChildren = children.filter((child) => !isPlaceholderNode(child));
+    const remainingCount = Math.max(0, childCount - concreteChildren.length);
+    if (remainingCount == 0) {
+        return concreteChildren;
+    }
+    return concreteChildren.concat(createPlaceholderNode(parentId, remainingCount, parentRendered));
+}
+
+function isPlaceholderNode(node: DOMNode | null | undefined): boolean {
+    return !!node && node.nodeType === 0 && node.placeholderParentId != null;
 }
 
 // =============================================================================

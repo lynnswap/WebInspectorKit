@@ -33,6 +33,6 @@ struct WIAssetsTests {
                 options: .regularExpression
             ) == nil
         )
-        #expect(htmlSource.contains("deemphasize-unrendered") == false)
+        #expect(htmlSource.contains("deemphasize-unrendered"))
     }
 }

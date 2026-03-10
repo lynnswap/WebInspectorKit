@@ -646,6 +646,9 @@ function handleRowClick(event: MouseEvent, node: DOMNode): void {
         requestChildren(node);
         return;
     }
+    if (node.childCount > 0) {
+        toggleNode(node.id);
+    }
     selectNode(node.id);
 }
 
@@ -812,7 +815,6 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     }
 
     treeState.selectedNodeId = nodeId;
-    setNodeExpanded(nodeId, true);
     const node = treeState.nodes.get(nodeId);
     updateDetails(node ?? null);
     updateSelectionChain(nodeId);
