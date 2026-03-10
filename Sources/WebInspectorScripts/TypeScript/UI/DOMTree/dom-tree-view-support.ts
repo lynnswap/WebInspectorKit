@@ -42,6 +42,8 @@ import { sendCommand, reportInspectorError } from "./dom-tree-protocol";
 let selectorRequestToken = 0;
 let treeEventHandlersInstalled = false;
 let hoveredNodeId: number | null = null;
+const AUTO_HYDRATION_DESCENDANT_DEPTH = 2;
+const autoHydrationInFlightNodeIDs = new Set<number>();
 
 /** Ensure delegated event handlers are installed */
 export function ensureTreeEventHandlers(): void {
@@ -493,7 +495,86 @@ export function toggleNode(nodeId: number): void {
         return;
     }
     const current = nodeShouldBeExpanded(node);
-    setNodeExpanded(nodeId, !current);
+    const nextExpanded = !current;
+    setNodeExpanded(nodeId, nextExpanded);
+    if (nextExpanded) {
+        void autoHydrateDescendants(nodeId, AUTO_HYDRATION_DESCENDANT_DEPTH);
+    }
+}
+
+async function autoHydrateDescendants(nodeId: number, depthRemaining: number): Promise<void> {
+    if (depthRemaining <= 0) {
+        return;
+    }
+
+    const node = treeState.nodes.get(nodeId);
+    if (!node || isPlaceholderNode(node)) {
+        return;
+    }
+
+    if (needsChildFetch(node)) {
+        if (autoHydrationInFlightNodeIDs.has(nodeId)) {
+            return;
+        }
+
+        autoHydrationInFlightNodeIDs.add(nodeId);
+        try {
+            await requestChildren(node);
+        } finally {
+            autoHydrationInFlightNodeIDs.delete(nodeId);
+        }
+    }
+
+    const refreshedNode = treeState.nodes.get(nodeId);
+    if (!refreshedNode || !Array.isArray(refreshedNode.children)) {
+        return;
+    }
+
+    for (const child of refreshedNode.children) {
+        if (isPlaceholderNode(child)) {
+            continue;
+        }
+        await autoHydrateDescendants(child.id, depthRemaining - 1);
+    }
+}
+
+export async function autoHydrateChildSubtrees(
+    nodeId: number,
+    depthRemaining: number
+): Promise<void> {
+    if (depthRemaining <= 0) {
+        return;
+    }
+
+    const node = treeState.nodes.get(nodeId);
+    if (!node || !Array.isArray(node.children)) {
+        return;
+    }
+
+    for (const child of node.children) {
+        if (isPlaceholderNode(child)) {
+            continue;
+        }
+        await autoHydrateDescendants(child.id, depthRemaining);
+    }
+}
+
+export function resetAutoHydrationState(): void {
+    autoHydrationInFlightNodeIDs.clear();
+}
+
+function needsChildFetch(node: DOMNode): boolean {
+    if (node.childCount <= 0) {
+        return false;
+    }
+    const concreteChildCount = Array.isArray(node.children)
+        ? node.children.filter((child) => !isPlaceholderNode(child)).length
+        : 0;
+    return concreteChildCount < node.childCount;
+}
+
+function isPlaceholderNode(node: DOMNode | null | undefined): boolean {
+    return !!node && node.nodeType === 0 && node.placeholderParentId != null;
 }
 
 // =============================================================================

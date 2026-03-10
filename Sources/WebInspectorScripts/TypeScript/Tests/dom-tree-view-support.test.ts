@@ -2,11 +2,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
     ensureTreeEventHandlers,
+    resetAutoHydrationState,
+    toggleNode,
     selectNode,
     processPendingNodeRenders,
     scheduleNodeRender
 } from "../UI/DOMTree/dom-tree-view-support";
-import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
+import { dispatchMessageFromBackend } from "../UI/DOMTree/dom-tree-protocol";
+import { registerProtocolHandlers, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
 import { protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 import { TEXT_CONTENT_ATTRIBUTE } from "../UI/DOMTree/dom-tree-types";
 import type { DOMNode } from "../UI/DOMTree/dom-tree-types";
@@ -46,7 +49,31 @@ function resetRenderState() {
     treeState.selectionChain = [];
     treeState.snapshot = null;
     protocolState.pending.clear();
+    protocolState.eventHandlers.clear();
     protocolState.lastId = 0;
+    resetAutoHydrationState();
+}
+
+function protocolMessages(): Array<{ id?: number; method?: string; params?: { nodeId?: number } }> {
+    const handler = window.webkit?.messageHandlers?.webInspectorProtocol?.postMessage as
+        | ({ mock?: { calls: Array<[unknown]> } })
+        | undefined;
+    if (!handler?.mock) {
+        return [];
+    }
+    return handler.mock.calls
+        .map(([message]) => {
+            if (typeof message === "string") {
+                return JSON.parse(message) as { id?: number; method?: string; params?: { nodeId?: number } };
+            }
+            return message as { id?: number; method?: string; params?: { nodeId?: number } };
+        });
+}
+
+async function flushAsyncTasks(iterations = 6): Promise<void> {
+    for (let index = 0; index < iterations; index += 1) {
+        await Promise.resolve();
+    }
 }
 
 describe("dom-tree-view-support", () => {
@@ -219,5 +246,106 @@ describe("dom-tree-view-support", () => {
         expect(treeState.openState.get(3)).toBe(true);
         expect(treeState.openState.get(4)).toBe(true);
         expect(treeState.openState.get(5)).not.toBe(true);
+    });
+
+    it("auto-fetches missing descendants two levels below an expanded node even when command responses arrive before subtree events", async () => {
+        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+
+        registerProtocolHandlers();
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    attributes: [],
+                    childNodeCount: 1,
+                    children: [{
+                        nodeId: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [],
+                        childNodeCount: 1,
+                        children: [{
+                            nodeId: 4,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            attributes: [],
+                            childNodeCount: 1,
+                            children: []
+                        }]
+                    }]
+                }]
+            }
+        });
+
+        toggleNode(4);
+
+        const firstRequest = protocolMessages().find((message) =>
+            message.method === "DOM.requestChildNodes" && message.params?.nodeId === 4
+        );
+        expect(firstRequest).toBeDefined();
+
+        dispatchMessageFromBackend({
+            id: firstRequest?.id,
+            result: null
+        });
+        dispatchMessageFromBackend({
+            method: "DOM.setChildNodes",
+            params: {
+                parentNodeId: 4,
+                nodes: [{
+                    nodeId: 5,
+                    nodeType: 1,
+                    nodeName: "SPAN",
+                    localName: "span",
+                    attributes: [],
+                    childNodeCount: 1,
+                    children: []
+                }]
+            }
+        });
+
+        await flushAsyncTasks();
+
+        const secondRequest = protocolMessages().find((message) =>
+            message.method === "DOM.requestChildNodes" && message.params?.nodeId === 5
+        );
+        expect(secondRequest).toBeDefined();
+
+        dispatchMessageFromBackend({
+            id: secondRequest?.id,
+            result: null
+        });
+        dispatchMessageFromBackend({
+            method: "DOM.setChildNodes",
+            params: {
+                parentNodeId: 5,
+                nodes: [{
+                    nodeId: 6,
+                    nodeType: 1,
+                    nodeName: "EM",
+                    localName: "em",
+                    attributes: [],
+                    childNodeCount: 1,
+                    children: []
+                }]
+            }
+        });
+
+        await flushAsyncTasks();
+
+        const thirdRequest = protocolMessages().find((message) =>
+            message.method === "DOM.requestChildNodes" && message.params?.nodeId === 6
+        );
+        expect(thirdRequest).toBeUndefined();
     });
 });

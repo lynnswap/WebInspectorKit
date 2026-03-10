@@ -46,11 +46,13 @@ import {
     preserveExpansionState,
 } from "./dom-tree-model";
 import {
+    autoHydrateChildSubtrees,
     applyFilter,
     buildNode,
     captureTreeScrollPosition,
     ensureTreeEventHandlers,
     reopenSelectionAncestors,
+    resetAutoHydrationState,
     restoreTreeScrollPosition,
     scheduleNodeRender,
     selectNode,
@@ -416,6 +418,7 @@ export function setSnapshot(
         const preservedScrollPosition = preserveState ? captureTreeScrollPosition() : null;
 
         domTreeUpdater.reset();
+        resetAutoHydrationState();
         treeState.snapshot = snapshot;
         treeState.nodes.clear();
         treeState.elements.clear();
@@ -587,8 +590,12 @@ export function applySubtree(
             treeState.openState.set(key, value);
         });
 
+        const wasExpanded = treeState.openState.get(target.id) === true;
         scheduleNodeRender(target);
         setNodeExpanded(target.id, true);
+        if (wasExpanded) {
+            void autoHydrateChildSubtrees(target.id, 1);
+        }
 
         if (previousSelectionId) {
             if (!selectNode(previousSelectionId, { shouldHighlight: false })) {
@@ -660,8 +667,12 @@ function applySetChildNodes(params: {
         treeState.openState.set(key, value);
     });
 
+    const wasExpanded = treeState.openState.get(parent.id) === true;
     scheduleNodeRender(parent);
     setNodeExpanded(parent.id, true);
+    if (wasExpanded) {
+        void autoHydrateChildSubtrees(parent.id, 1);
+    }
 
     if (previousSelectionId) {
         if (!selectNode(previousSelectionId, { shouldHighlight: false })) {
