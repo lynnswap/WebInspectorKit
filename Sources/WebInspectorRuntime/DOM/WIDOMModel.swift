@@ -5,6 +5,10 @@ import WebKit
 import WebInspectorEngine
 import WebInspectorTransport
 
+#if canImport(AppKit)
+import AppKit
+#endif
+
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -435,6 +439,9 @@ private extension WIDOMModel {
 
     func startSelectionMode() {
         guard session.hasPageWebView else { return }
+#if canImport(AppKit)
+        focusPageWindowForSelectionIfNeeded()
+#endif
 #if canImport(UIKit)
         disablePageScrollingForSelection()
 #endif
@@ -485,6 +492,27 @@ private extension WIDOMModel {
         restorePageScrollingState()
 #endif
     }
+
+#if canImport(AppKit)
+    func focusPageWindowForSelectionIfNeeded() {
+        guard let pageWebView = session.lastPageWebView else {
+            return
+        }
+
+        let pageWindow = unsafe pageWebView.window
+        guard let pageWindow else {
+            return
+        }
+
+        if NSApp.isActive == false {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        pageWindow.makeKeyAndOrderFront(nil)
+        if pageWindow.firstResponder !== pageWebView {
+            pageWindow.makeFirstResponder(pageWebView)
+        }
+    }
+#endif
 
     func clearTreeState() {
         expandedEntryIDs.removeAll(keepingCapacity: false)

@@ -111,6 +111,7 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     private let registry: WISharedTransportRegistry
     private let logger = Logger(subsystem: "WebInspectorKit", category: "DOMTransportDriver")
     private let eventConsumerIdentifier = UUID()
+    private let selectionBridge: (any DOMSelectionBridging)?
     private weak var graphStore: DOMGraphStore?
     weak var eventSink: (any DOMProtocolEventSink)?
 
@@ -134,11 +135,13 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     init(
         configuration: DOMConfiguration,
         graphStore: DOMGraphStore,
-        registry: WISharedTransportRegistry = .shared
+        registry: WISharedTransportRegistry = .shared,
+        selectionBridge: (any DOMSelectionBridging)? = DOMTransportDriver.defaultSelectionBridge()
     ) {
         self.configuration = configuration
         self.graphStore = graphStore
         self.registry = registry
+        self.selectionBridge = selectionBridge
     }
 
     isolated deinit {
@@ -225,6 +228,24 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
         guard webView != nil else {
             throw WebInspectorCoreError.scriptUnavailable
         }
+        if let webView, let selectionBridge {
+            try await selectionBridge.installIfNeeded(on: webView)
+            let result = try await selectionBridge.beginSelection(on: webView)
+            guard result.cancelled == false else {
+                return result
+            }
+
+            let snapshotDepth = max(configuration.selectionRecoveryDepth, result.requiredDepth + 1)
+            guard let selectedNodeID = try await selectionBridge.resolveSelectedNodeID(
+                on: webView,
+                maxDepth: snapshotDepth
+            ) else {
+                throw WebInspectorCoreError.scriptUnavailable
+            }
+
+            pendingSelectedNodeID = selectedNodeID
+            return result
+        }
         let lease = try activeLease()
         try await lease.ensureAttached()
         try await lease.ensureDOMEventIngress()
@@ -250,6 +271,11 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     }
 
     func cancelSelectionMode() async {
+        if let webView, let selectionBridge {
+            await selectionBridge.cancelSelection(on: webView)
+            pendingSelectedNodeID = nil
+            return
+        }
         selectionTask?.cancel()
         selectionTask = nil
         finishSelectionRequest(result: .success(.init(cancelled: true, requiredDepth: 0)))
@@ -428,9 +454,22 @@ extension DOMTransportDriver {
 }
 
 private extension DOMTransportDriver {
+    static func defaultSelectionBridge() -> (any DOMSelectionBridging)? {
+#if canImport(AppKit)
+        DOMSelectionBridge()
+#else
+        nil
+#endif
+    }
+
     func tearDownLifecycle() {
         attachTask?.cancel()
         attachTask = nil
+        if let webView, let selectionBridge {
+            Task { @MainActor in
+                await selectionBridge.cancelSelection(on: webView)
+            }
+        }
         selectionTask?.cancel()
         selectionTask = nil
         pendingSelectedNodeID = nil
@@ -2050,6 +2089,10 @@ extension DOMTransportDriver {
             depthRemaining: depthRemaining,
             allowUnknownChildren: allowUnknownChildren
         )
+    }
+
+    var testPendingSelectedNodeID: Int? {
+        pendingSelectedNodeID
     }
 }
 #endif

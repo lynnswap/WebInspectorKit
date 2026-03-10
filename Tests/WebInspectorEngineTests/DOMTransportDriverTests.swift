@@ -1,4 +1,5 @@
 import Testing
+import WebKit
 import WebInspectorTransport
 @testable import WebInspectorEngine
 
@@ -136,6 +137,89 @@ struct DOMTransportDriverTests {
 
         #expect(populated.nodeId == 21)
         #expect(populated.children?.isEmpty == true)
+    }
+
+    @Test
+    func selectionModeUsesBridgeHelperOnMacAndStoresPendingSelectedNode() async throws {
+        let bridge = StubDOMSelectionBridge(
+            result: .init(cancelled: false, requiredDepth: 5),
+            selectedNodeID: 77
+        )
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore(),
+            selectionBridge: bridge
+        )
+        let webView = WKWebView(frame: .zero)
+        driver.webView = webView
+
+        let result = try await driver.beginSelectionMode()
+
+        #expect(result.cancelled == false)
+        #expect(result.requiredDepth == 5)
+        #expect(bridge.installCallCount == 1)
+        #expect(bridge.beginSelectionCallCount == 1)
+        #expect(bridge.resolvedDepths == [6])
+        #expect(driver.testPendingSelectedNodeID == 77)
+    }
+
+    @Test
+    func cancelSelectionModeUsesBridgeHelperAndClearsPendingSelectedNode() async {
+        let bridge = StubDOMSelectionBridge(
+            result: .init(cancelled: false, requiredDepth: 2),
+            selectedNodeID: 41
+        )
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore(),
+            selectionBridge: bridge
+        )
+        let webView = WKWebView(frame: .zero)
+        driver.webView = webView
+
+        _ = try? await driver.beginSelectionMode()
+        await driver.cancelSelectionMode()
+
+        #expect(bridge.cancelSelectionCallCount == 1)
+        #expect(driver.testPendingSelectedNodeID == nil)
+    }
+}
+
+@MainActor
+private final class StubDOMSelectionBridge: DOMSelectionBridging {
+    let result: DOMSelectionModeResult
+    let selectedNodeID: Int?
+
+    private(set) var installCallCount = 0
+    private(set) var beginSelectionCallCount = 0
+    private(set) var cancelSelectionCallCount = 0
+    private(set) var resolvedDepths: [Int] = []
+
+    init(result: DOMSelectionModeResult, selectedNodeID: Int?) {
+        self.result = result
+        self.selectedNodeID = selectedNodeID
+    }
+
+    func installIfNeeded(on webView: WKWebView) async throws {
+        _ = webView
+        installCallCount += 1
+    }
+
+    func beginSelection(on webView: WKWebView) async throws -> DOMSelectionModeResult {
+        _ = webView
+        beginSelectionCallCount += 1
+        return result
+    }
+
+    func cancelSelection(on webView: WKWebView) async {
+        _ = webView
+        cancelSelectionCallCount += 1
+    }
+
+    func resolveSelectedNodeID(on webView: WKWebView, maxDepth: Int) async throws -> Int? {
+        _ = webView
+        resolvedDepths.append(maxDepth)
+        return selectedNodeID
     }
 }
 

@@ -10,6 +10,21 @@ type SelectionResult = {
 
 type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
 
+function normalizeSelectionTarget(target: AnyNode | null) {
+    var current = target;
+    while (current) {
+        switch (current.nodeType) {
+        case Node.ELEMENT_NODE:
+        case Node.DOCUMENT_NODE:
+            return current;
+        default:
+            current = current.parentNode as AnyNode | null;
+            break;
+        }
+    }
+    return null;
+}
+
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {
         inspector.cursorBackup = {
@@ -141,7 +156,7 @@ export function startElementSelection() {
         state.cancel = cancelSelection;
 
         function selectTarget(target: AnyNode | null) {
-            var node = target || state.latestTarget;
+            var node = normalizeSelectionTarget(target) || normalizeSelectionTarget(state.latestTarget);
             if (!node) {
                 cancelSelection();
                 return;
@@ -181,7 +196,7 @@ export function startElementSelection() {
         }
 
         function updateLatestTarget(event: Event) {
-            var target = resolveEventTarget(event);
+            var target = normalizeSelectionTarget(resolveEventTarget(event));
             if (!target) {
                 return;
             }
@@ -220,7 +235,7 @@ export function startElementSelection() {
             interceptEvent(event);
         }
 
-        var moveEvents = ["pointermove", "mousemove", "touchmove"];
+        var moveEvents = ["pointermove", "mousemove", "touchmove", "pointerover", "mouseover"];
         var downEvents = ["pointerdown", "mousedown", "touchstart"];
         var upEvents = ["pointerup", "mouseup", "touchend"];
         var blockOnlyEvents = ["click", "contextmenu", "submit", "dragstart"];
