@@ -8,7 +8,7 @@ protocol DOMSelectionBridging: AnyObject {
     func installIfNeeded(on webView: WKWebView) async throws
     func beginSelection(on webView: WKWebView) async throws -> DOMSelectionModeResult
     func cancelSelection(on webView: WKWebView) async
-    func resolveSelectedNodeID(on webView: WKWebView, maxDepth: Int) async throws -> Int?
+    func resolveSelectedNodePath(on webView: WKWebView, maxDepth: Int) async throws -> [Int]?
 }
 
 @MainActor
@@ -67,7 +67,7 @@ final class DOMSelectionBridge: DOMSelectionBridging {
         )
     }
 
-    func resolveSelectedNodeID(on webView: WKWebView, maxDepth: Int) async throws -> Int? {
+    func resolveSelectedNodePath(on webView: WKWebView, maxDepth: Int) async throws -> [Int]? {
         let rawResult = try await webView.callAsyncJavaScript(
             """
             const maxSnapshotDepth = Math.max(1, maxDepth);
@@ -75,18 +75,18 @@ final class DOMSelectionBridge: DOMSelectionBridging {
                 return null;
             }
             const snapshot = window.webInspectorDOM.captureSnapshotEnvelope(maxSnapshotDepth);
-            return typeof snapshot?.selectedNodeId === "number" ? snapshot.selectedNodeId : null;
+            return Array.isArray(snapshot?.selectedNodePath) ? snapshot.selectedNodePath : null;
             """,
             arguments: ["maxDepth": max(1, maxDepth)],
             in: nil,
             contentWorld: bridgeWorld
         )
 
-        if let value = rawResult as? Int {
-            return value
+        if let values = rawResult as? [Int] {
+            return values
         }
-        if let value = rawResult as? NSNumber {
-            return value.intValue
+        if let values = rawResult as? [NSNumber] {
+            return values.map(\.intValue)
         }
         return nil
     }

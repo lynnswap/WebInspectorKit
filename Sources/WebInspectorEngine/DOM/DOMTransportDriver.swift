@@ -127,6 +127,8 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     private var selectionTask: Task<Void, Never>?
     private var nextSelectionToken = 1
     private var pendingSelectedNodeID: Int?
+    private var pendingSelectedNodePath: [Int]?
+    private var pendingSelectionRecoveryPathArmed = false
 
     private var nextUndoToken = 1
     private var undoStack: [Int] = []
@@ -166,6 +168,8 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
 
     func rememberPendingSelection(nodeId: Int?) {
         pendingSelectedNodeID = nodeId
+        pendingSelectedNodePath = nil
+        pendingSelectionRecoveryPathArmed = false
     }
 
     func reloadDocument(preserveState: Bool) async throws {
@@ -236,14 +240,16 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
             }
 
             let snapshotDepth = max(configuration.selectionRecoveryDepth, result.requiredDepth + 1)
-            guard let selectedNodeID = try await selectionBridge.resolveSelectedNodeID(
+            guard let selectedNodePath = try await selectionBridge.resolveSelectedNodePath(
                 on: webView,
                 maxDepth: snapshotDepth
             ) else {
                 throw WebInspectorCoreError.scriptUnavailable
             }
 
-            pendingSelectedNodeID = selectedNodeID
+            pendingSelectedNodeID = nil
+            pendingSelectedNodePath = selectedNodePath
+            pendingSelectionRecoveryPathArmed = true
             return result
         }
         let lease = try activeLease()
@@ -274,6 +280,8 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
         if let webView, let selectionBridge {
             await selectionBridge.cancelSelection(on: webView)
             pendingSelectedNodeID = nil
+            pendingSelectedNodePath = nil
+            pendingSelectionRecoveryPathArmed = false
             return
         }
         selectionTask?.cancel()
@@ -415,6 +423,8 @@ extension DOMTransportDriver {
             undoStack.removeAll(keepingCapacity: true)
             redoStack.removeAll(keepingCapacity: true)
             pendingSelectedNodeID = nil
+            pendingSelectedNodePath = nil
+            pendingSelectionRecoveryPathArmed = false
         }
 
         let lease = registry.acquireLease(for: webView)
@@ -450,6 +460,8 @@ extension DOMTransportDriver {
         undoStack.removeAll(keepingCapacity: true)
         redoStack.removeAll(keepingCapacity: true)
         pendingSelectedNodeID = nil
+        pendingSelectedNodePath = nil
+        pendingSelectionRecoveryPathArmed = false
     }
 }
 
@@ -473,6 +485,8 @@ private extension DOMTransportDriver {
         selectionTask?.cancel()
         selectionTask = nil
         pendingSelectedNodeID = nil
+        pendingSelectedNodePath = nil
+        pendingSelectionRecoveryPathArmed = false
         finishPendingChildNodeRequests(with: WITransportError.transportClosed)
         finishSelectionRequest(result: .success(.init(cancelled: true, requiredDepth: 0)))
         releaseLease()
@@ -778,6 +792,9 @@ private extension DOMTransportDriver {
         finishPendingDocumentBoundOperations()
         forwardProtocolEvent(method: "DOM.documentUpdated", paramsData: Data("{}".utf8))
         pendingSelectedNodeID = nil
+        if pendingSelectionRecoveryPathArmed == false {
+            pendingSelectedNodePath = nil
+        }
         guard autoSnapshotEnabled else {
             graphStore?.resetForDocumentUpdate()
             return
@@ -1418,7 +1435,14 @@ private extension DOMTransportDriver {
     }
 
     func applyDocument(root: WITransportDOMNode, preserveState: Bool) {
-        let previousSelection = preserveState ? (pendingSelectedNodeID ?? selectedNodeID()) : nil
+        let previousSelection: Int?
+        if preserveState {
+            previousSelection = pendingSelectedNodeID
+                ?? (pendingSelectionRecoveryPathArmed ? resolvedPendingSelectedNodeID(in: root) : nil)
+                ?? selectedNodeID()
+        } else {
+            previousSelection = nil
+        }
         let snapshot = DOMGraphSnapshot(
             root: nodeDescriptor(from: root),
             selectedNodeID: previousSelection
@@ -1427,12 +1451,47 @@ private extension DOMTransportDriver {
         graphStore?.resetForDocumentUpdate()
         if preserveState == false {
             pendingSelectedNodeID = nil
+            pendingSelectedNodePath = nil
+            pendingSelectionRecoveryPathArmed = false
         }
         graphStore?.applySnapshot(snapshot)
         if graphStore?.selectedEntry?.id.nodeID == pendingSelectedNodeID {
             pendingSelectedNodeID = nil
         }
+        if graphStore?.selectedEntry?.id.nodeID == previousSelection {
+            pendingSelectedNodePath = nil
+            pendingSelectionRecoveryPathArmed = false
+        }
         invalidateMatchedStylesForCurrentSelection()
+    }
+
+    func resolvedPendingSelectedNodeID(in root: WITransportDOMNode) -> Int? {
+        guard let pendingSelectedNodePath else {
+            return nil
+        }
+
+        var current = selectionPathRoot(in: root)
+        for index in pendingSelectedNodePath {
+            guard let children = current.children,
+                  index >= 0,
+                  index < children.count else {
+                return nil
+            }
+            current = children[index]
+        }
+        return current.nodeId
+    }
+
+    func selectionPathRoot(in root: WITransportDOMNode) -> WITransportDOMNode {
+        guard root.nodeType == 9 else {
+            return root
+        }
+
+        if let htmlChild = root.children?.first(where: { $0.nodeType == 1 }) {
+            return htmlChild
+        }
+
+        return root
     }
 
     func nodeDescriptor(from node: WITransportDOMNode) -> DOMGraphNodeDescriptor {
@@ -2093,6 +2152,15 @@ extension DOMTransportDriver {
 
     var testPendingSelectedNodeID: Int? {
         pendingSelectedNodeID
+    }
+
+    func testSetPendingSelectedNodePath(_ path: [Int]?) {
+        pendingSelectedNodePath = path
+        pendingSelectionRecoveryPathArmed = path != nil
+    }
+
+    func testResolvedPendingSelectedNodeID(in root: WITransportDOMNode) -> Int? {
+        resolvedPendingSelectedNodeID(in: root)
     }
 }
 #endif

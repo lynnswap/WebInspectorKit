@@ -143,7 +143,7 @@ struct DOMTransportDriverTests {
     func selectionModeUsesBridgeHelperOnMacAndStoresPendingSelectedNode() async throws {
         let bridge = StubDOMSelectionBridge(
             result: .init(cancelled: false, requiredDepth: 5),
-            selectedNodeID: 77
+            selectedNodePath: [0, 0]
         )
         let driver = DOMTransportDriver(
             configuration: .init(),
@@ -160,14 +160,14 @@ struct DOMTransportDriverTests {
         #expect(bridge.installCallCount == 1)
         #expect(bridge.beginSelectionCallCount == 1)
         #expect(bridge.resolvedDepths == [6])
-        #expect(driver.testPendingSelectedNodeID == 77)
+        #expect(driver.testPendingSelectedNodeID == nil)
     }
 
     @Test
     func cancelSelectionModeUsesBridgeHelperAndClearsPendingSelectedNode() async {
         let bridge = StubDOMSelectionBridge(
             result: .init(cancelled: false, requiredDepth: 2),
-            selectedNodeID: 41
+            selectedNodePath: [0]
         )
         let driver = DOMTransportDriver(
             configuration: .init(),
@@ -183,21 +183,130 @@ struct DOMTransportDriverTests {
         #expect(bridge.cancelSelectionCallCount == 1)
         #expect(driver.testPendingSelectedNodeID == nil)
     }
+
+    @Test
+    func preserveStateReloadResolvesPendingSelectionPathAgainstTransportSnapshot() {
+        let graphStore = DOMGraphStore()
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: graphStore
+        )
+        let body = makeNode(
+            nodeId: 3,
+            nodeType: 1,
+            nodeName: "BODY",
+            localName: "body",
+            children: []
+        )
+        let html = makeNode(
+            nodeId: 2,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            children: [body]
+        )
+        let document = makeNode(
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            children: [html],
+            layoutFlags: ["rendered"]
+        )
+
+        driver.testSetPendingSelectedNodePath([0])
+        driver.testApplyDocument(root: document, preserveState: true)
+
+        #expect(graphStore.selectedEntry?.id.nodeID == 3)
+    }
+
+    @Test
+    func pendingSelectionPathUsesHtmlAsItsRootWhenTransportSnapshotStartsAtDocument() {
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore()
+        )
+        let body = makeNode(
+            nodeId: 3,
+            nodeType: 1,
+            nodeName: "BODY",
+            localName: "body",
+            children: []
+        )
+        let html = makeNode(
+            nodeId: 2,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            children: [body]
+        )
+        let document = makeNode(
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            children: [html],
+            layoutFlags: ["rendered"]
+        )
+
+        driver.testSetPendingSelectedNodePath([])
+        #expect(driver.testResolvedPendingSelectedNodeID(in: document) == 2)
+
+        driver.testSetPendingSelectedNodePath([0])
+        #expect(driver.testResolvedPendingSelectedNodeID(in: document) == 3)
+    }
+
+    @Test
+    func clearingPendingSelectionDropsAnyBridgeDerivedSelectionPath() {
+        let graphStore = DOMGraphStore()
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: graphStore
+        )
+        let body = makeNode(
+            nodeId: 3,
+            nodeType: 1,
+            nodeName: "BODY",
+            localName: "body",
+            children: []
+        )
+        let html = makeNode(
+            nodeId: 2,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            children: [body]
+        )
+        let document = makeNode(
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            children: [html],
+            layoutFlags: ["rendered"]
+        )
+
+        driver.testSetPendingSelectedNodePath([0])
+        driver.rememberPendingSelection(nodeId: nil)
+        driver.testApplyDocument(root: document, preserveState: true)
+
+        #expect(graphStore.selectedEntry == nil)
+    }
 }
 
 @MainActor
 private final class StubDOMSelectionBridge: DOMSelectionBridging {
     let result: DOMSelectionModeResult
-    let selectedNodeID: Int?
+    let selectedNodePath: [Int]?
 
     private(set) var installCallCount = 0
     private(set) var beginSelectionCallCount = 0
     private(set) var cancelSelectionCallCount = 0
     private(set) var resolvedDepths: [Int] = []
 
-    init(result: DOMSelectionModeResult, selectedNodeID: Int?) {
+    init(result: DOMSelectionModeResult, selectedNodePath: [Int]?) {
         self.result = result
-        self.selectedNodeID = selectedNodeID
+        self.selectedNodePath = selectedNodePath
     }
 
     func installIfNeeded(on webView: WKWebView) async throws {
@@ -216,10 +325,10 @@ private final class StubDOMSelectionBridge: DOMSelectionBridging {
         cancelSelectionCallCount += 1
     }
 
-    func resolveSelectedNodeID(on webView: WKWebView, maxDepth: Int) async throws -> Int? {
+    func resolveSelectedNodePath(on webView: WKWebView, maxDepth: Int) async throws -> [Int]? {
         _ = webView
         resolvedDepths.append(maxDepth)
-        return selectedNodeID
+        return selectedNodePath
     }
 }
 
