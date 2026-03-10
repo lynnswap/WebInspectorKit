@@ -570,6 +570,7 @@ private extension DOMTransportDriver {
         let lease = try activeLease()
         try await lease.ensureAttached()
         try await lease.ensureDOMEventIngress()
+        try await lease.ensureCSSDomainReady()
 
         let requestedDepth = max(1, maxDepth)
         let rootResponse = try await lease.sendPage(
@@ -681,6 +682,7 @@ private extension DOMTransportDriver {
         let lease = try activeLease()
         try await lease.ensureAttached()
         try await lease.ensureDOMEventIngress()
+        try await lease.ensureCSSDomainReady()
 
         return try await withCheckedThrowingContinuation { continuation in
             childNodeContinuations[parentNodeId, default: []].append(continuation)
@@ -1086,6 +1088,7 @@ private extension DOMTransportDriver {
             "nodeName": node.nodeName,
             "localName": node.localName,
             "nodeValue": node.nodeValue,
+            "isRendered": resolvedRenderedState(for: node),
         ]
 
         if let childNodeCount = node.childNodeCount {
@@ -1496,6 +1499,7 @@ private extension DOMTransportDriver {
 
     func nodeDescriptor(from node: WITransportDOMNode) -> DOMGraphNodeDescriptor {
         let layoutFlags = node.layoutFlags ?? []
+        let isRendered = resolvedRenderedState(for: node)
         return DOMGraphNodeDescriptor(
             nodeID: node.nodeId,
             nodeType: node.nodeType,
@@ -1505,9 +1509,58 @@ private extension DOMTransportDriver {
             attributes: selectionAttributes(for: node),
             childCount: node.childNodeCount ?? node.children?.count ?? 0,
             layoutFlags: layoutFlags,
-            isRendered: layoutFlags.contains("rendered"),
+            isRendered: isRendered,
             children: (node.children ?? []).map(nodeDescriptor(from:))
         )
+    }
+
+    func resolvedRenderedState(for node: WITransportDOMNode) -> Bool {
+        switch node.nodeType {
+        case 9, 11:
+            return true
+        default:
+            break
+        }
+
+        if let layoutFlags = node.layoutFlags {
+            return layoutFlags.contains("rendered")
+        }
+
+        let localName = node.localName.isEmpty ? node.nodeName.lowercased() : node.localName.lowercased()
+        if ["script", "style", "noscript", "template"].contains(localName) {
+            return false
+        }
+
+        let attributes = attributeMap(for: node.attributes)
+        if attributes.keys.contains("hidden") {
+            return false
+        }
+        if let inlineStyle = attributes["style"]?.lowercased() {
+            if inlineStyle.contains("display:none") || inlineStyle.contains("display: none") {
+                return false
+            }
+            if inlineStyle.contains("visibility:hidden") || inlineStyle.contains("visibility: hidden") {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    func attributeMap(for rawAttributes: [String]?) -> [String: String] {
+        guard let rawAttributes else {
+            return [:]
+        }
+
+        var attributes: [String: String] = [:]
+        var index = 0
+        while index < rawAttributes.count {
+            let name = rawAttributes[index].lowercased()
+            let value = index + 1 < rawAttributes.count ? rawAttributes[index + 1] : ""
+            attributes[name] = value
+            index += 2
+        }
+        return attributes
     }
 
     func invalidateMatchedStylesIfNeeded(for event: DOMGraphMutationEvent) {

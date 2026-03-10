@@ -8,7 +8,6 @@ public enum WITransportTargetScope: String, Sendable {
 public enum WITransportBackendKind: String, Sendable {
     case iOSNativeInspector
     case macOSNativeInspector
-    case macOSRemoteInspector
     case unsupported
 }
 
@@ -18,7 +17,6 @@ public enum WITransportCapability: String, Hashable, Sendable {
     case pageTargetRouting
     case domDomain
     case networkDomain
-    case remoteFrontendHosting
 }
 
 public struct WIEmptyTransportParameters: Codable, Hashable, Sendable {

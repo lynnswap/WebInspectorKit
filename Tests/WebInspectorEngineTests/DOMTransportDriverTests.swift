@@ -34,6 +34,49 @@ struct DOMTransportDriverTests {
     }
 
     @Test
+    func nodeDescriptorKeepsDocumentNodesRenderedWithoutLayoutFlags() {
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore()
+        )
+
+        let documentNode = makeNode(
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            children: []
+        )
+
+        #expect(driver.testNodeDescriptor(from: documentNode).isRendered == true)
+    }
+
+    @Test
+    func nodeDescriptorInfersHiddenInlineStyleWithoutLayoutFlags() {
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore()
+        )
+
+        let hiddenNode = WITransportDOMNode(
+            nodeId: 21,
+            nodeType: 1,
+            nodeName: "DIV",
+            localName: "div",
+            nodeValue: "",
+            childNodeCount: 0,
+            children: [],
+            attributes: ["style", "display:none"],
+            documentURL: nil,
+            baseURL: nil,
+            frameId: nil,
+            layoutFlags: nil
+        )
+
+        #expect(driver.testNodeDescriptor(from: hiddenNode).isRendered == false)
+    }
+
+    @Test
     func xpathSkipsSyntheticDocumentRoot() {
         let driver = DOMTransportDriver(
             configuration: .init(),

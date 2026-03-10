@@ -58,6 +58,7 @@ public final class WIDOMModel {
     public private(set) var isSelectingElement = false
     public private(set) var expandedEntryIDs: Set<DOMEntryID> = []
     public private(set) var loadingChildEntryIDs: Set<DOMEntryID> = []
+    public private(set) var graphProjectionRevision: UInt64 = 0
 
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
     @ObservationIgnored private var pendingDeleteTask: Task<Void, Never>?
@@ -68,6 +69,7 @@ public final class WIDOMModel {
     @ObservationIgnored private var matchedStylesInFlightKey: MatchedStylesRefreshKey?
     @ObservationIgnored private var matchedStylesCompletedKey: MatchedStylesRefreshKey?
     @ObservationIgnored private var recoverableErrorHandler: (@MainActor (String) -> Void)?
+    @ObservationIgnored private var suppressNextSelectedIDRefresh = false
     @ObservationIgnored private let frontendStore: DOMFrontendStore
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -99,7 +101,8 @@ public final class WIDOMModel {
     }
 
     public var selectedEntry: DOMEntry? {
-        session.graphStore.selectedEntry
+        _ = graphProjectionRevision
+        return session.graphStore.selectedEntry
     }
 
     public var transportSupportSnapshot: WITransportSupportSnapshot? {
@@ -107,7 +110,8 @@ public final class WIDOMModel {
     }
 
     public var treeRows: [WIDOMTreeRow] {
-        buildTreeRows()
+        _ = graphProjectionRevision
+        return buildTreeRows()
     }
 
     package func setRecoverableErrorHandler(_ handler: (@MainActor (String) -> Void)?) {
@@ -128,7 +132,8 @@ public final class WIDOMModel {
     }
 
     package func entry(for id: DOMEntryID) -> DOMEntry? {
-        session.graphStore.entry(for: id)
+        _ = graphProjectionRevision
+        return session.graphStore.entry(for: id)
     }
 
     package func isExpanded(_ id: DOMEntryID) -> Bool {
@@ -144,8 +149,13 @@ public final class WIDOMModel {
     }
 
     package func selectEntry(_ id: DOMEntryID?) {
+        let previousSelectedID = session.graphStore.selectedID
         session.graphStore.select(id)
-        if let entryID = id,
+        let resolvedSelectedID = session.graphStore.selectedID
+        suppressNextSelectedIDRefresh = previousSelectedID != resolvedSelectedID
+        invalidateGraphProjection()
+        scheduleMatchedStylesRefreshIfNeeded(force: true)
+        if let entryID = resolvedSelectedID,
            let entry = session.graphStore.entry(for: entryID) {
             Task {
                 await self.session.highlight(nodeId: entry.id.nodeID)
@@ -308,7 +318,16 @@ private extension WIDOMModel {
             \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleMatchedStylesRefreshIfNeeded(force: true)
+            guard let self else {
+                return
+            }
+            if self.suppressNextSelectedIDRefresh {
+                self.suppressNextSelectedIDRefresh = false
+                self.invalidateGraphProjection()
+                return
+            }
+            self.scheduleMatchedStylesRefreshIfNeeded(force: true)
+            self.invalidateGraphProjection()
         }
         .store(in: &graphObservationHandles)
 
@@ -318,6 +337,7 @@ private extension WIDOMModel {
         ) { [weak self] _ in
             self?.pruneTreeState()
             self?.scheduleMatchedStylesRefreshIfNeeded(force: false)
+            self?.invalidateGraphProjection()
         }
         .store(in: &graphObservationHandles)
 
@@ -327,8 +347,16 @@ private extension WIDOMModel {
         ) { [weak self] _ in
             self?.pruneTreeState()
             self?.seedInitialExpansionStateIfNeeded()
+            self?.invalidateGraphProjection()
         }
         .store(in: &graphObservationHandles)
+    }
+
+    func invalidateGraphProjection() {
+        graphProjectionRevision &+= 1
+        if graphProjectionRevision == 0 {
+            graphProjectionRevision = 1
+        }
     }
 
     func reloadInspectorImpl(preserveState: Bool) async {

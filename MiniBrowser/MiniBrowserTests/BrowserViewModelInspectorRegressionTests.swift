@@ -156,9 +156,6 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         XCTAssertTrue(inspectorWindowAppeared, "The inspector window did not appear for the cross-origin HTTPS test.")
 
         let stayedAliveAfterAttach = await assertWebContentStaysAlive(model: model, duration: .seconds(2))
-        XCTExpectFailure(
-            "Known regression: opening the macOS native inspector on an HTTPS page can terminate the main WKWebView immediately after attach."
-        )
         XCTAssertTrue(
             stayedAliveAfterAttach,
             "The main WKWebView terminated immediately after opening the inspector during the HTTPS test. lastURL=\(model.lastWebContentTerminationURL?.absoluteString ?? "n/a")"

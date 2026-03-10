@@ -60,7 +60,10 @@ export function normalizeNodeDescriptor(
     }
 
     const layoutFlags = normalizeLayoutFlags(descriptor.layoutFlags);
-    const renderedSelf = resolveRenderedState(layoutFlags, descriptor.isRendered);
+    const renderedSelf =
+        nodeType === NODE_TYPES.DOCUMENT_NODE
+            ? true
+            : resolveRenderedState(layoutFlags, descriptor.isRendered);
     const isRendered = parentRendered && renderedSelf;
 
     const rawChildCount =

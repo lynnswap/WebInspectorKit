@@ -3,12 +3,15 @@ import WebInspectorRuntime
 
 #if canImport(AppKit)
 import AppKit
+import ObservationBridge
 import SwiftUI
 
 @MainActor
 public final class WIDOMDetailViewController: NSViewController {
     private let inspector: WIDOMModel
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
+    private var observationHandles: Set<ObservationHandle> = []
+    private var renderRefreshCount = 0
 
     public init(inspector: WIDOMModel) {
         self.inspector = inspector
@@ -41,6 +44,30 @@ public final class WIDOMDetailViewController: NSViewController {
             hostedView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hostedView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+
+        startObservingInspectorState()
+    }
+
+    private func startObservingInspectorState() {
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { [weak self] _ in
+            self?.refreshRootView()
+        }
+        .store(in: &observationHandles)
+
+        inspector.observe(\.errorMessage, options: [.removeDuplicates]) { [weak self] _ in
+            self?.refreshRootView()
+        }
+        .store(in: &observationHandles)
+    }
+
+    private func refreshRootView() {
+        renderRefreshCount += 1
+        hostingController?.rootView = ElementDetailsMacRootView(inspector: inspector)
+        hostingController?.view.layoutSubtreeIfNeeded()
+    }
+
+    var testRenderRefreshCount: Int {
+        renderRefreshCount
     }
 }
 

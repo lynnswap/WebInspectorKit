@@ -145,9 +145,6 @@ final class WISharedTransportRegistry {
             if supportSnapshot.capabilities.contains(.pageTargetRouting) {
                 mapped.insert(.pageTargetRouting)
             }
-            if supportSnapshot.capabilities.contains(.remoteFrontendHosting) {
-                mapped.insert(.remoteFrontendHosting)
-            }
 
             return mapped
         }
@@ -342,8 +339,8 @@ final class WISharedTransportRegistry {
         }
 
         func ensureCSSDomainReady() async throws {
-            // CSS getters do not require `CSS.enable` on the native transport path,
-            // and enabling the domain can crash WebContent on iOS simulator.
+            // CSS getters work without `CSS.enable` on the native transport path,
+            // and explicitly enabling the domain can crash WebContent on macOS HTTPS pages.
             try await ensureAttached()
         }
 
@@ -444,6 +441,7 @@ final class WISharedTransportRegistry {
             return message.contains("'DOM.enable' was not found")
                 || message.contains("DOM.enable was not found")
         }
+
     }
 
     private var entries: [ObjectIdentifier: Entry] = [:]

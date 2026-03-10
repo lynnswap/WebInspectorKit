@@ -156,15 +156,15 @@ struct DOMLegacyPageDriverTests {
     }
 
     @Test
-    func macOSRemoteTransportWithoutFrontendHostingStillUsesTransportDriver() {
+    func macOSNativeTransportUsesTransportDriver() {
         let session = DOMSession(
             configuration: .init(),
             graphStore: DOMGraphStore(),
             defaultTransportSupportSnapshot: .init(
                 availability: .supported,
-                backendKind: .macOSRemoteInspector,
+                backendKind: .macOSNativeInspector,
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
-                failureReason: "frontend host unavailable"
+                failureReason: nil
             )
         )
 

@@ -58,14 +58,14 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func macOSRemoteTransportWithoutFrontendHostingStillUsesTransportDriver() {
+    func macOSNativeTransportUsesTransportDriver() {
         let session = NetworkSession(
             configuration: .init(),
             defaultTransportSupportSnapshot: .init(
                 availability: .supported,
-                backendKind: .macOSRemoteInspector,
+                backendKind: .macOSNativeInspector,
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .networkDomain],
-                failureReason: "frontend host unavailable"
+                failureReason: nil
             )
         )
 

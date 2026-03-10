@@ -6,84 +6,11 @@ import WebKit
 @MainActor
 struct WITransportSessionTests {
     @Test
-    func macOSDefaultBackendSelectorFallsBackToNativeWhenRemoteHostIsUnavailable() {
-        let remoteBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .unsupported,
-                backendKind: .macOSRemoteInspector,
-                capabilities: [],
-                failureReason: "remote host unavailable"
-            )
-        )
-        let nativeBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
-                backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-                failureReason: nil
-            )
-        )
-
-        let selectedBackend = WITransportMacDefaultBackendSelector.selectDefaultBackend(
-            remoteBackend: remoteBackend,
-            nativeBackend: nativeBackend
-        )
-
-        #expect(selectedBackend as AnyObject === nativeBackend)
-    }
-
-    @Test
-    func macOSDefaultBackendSelectorPrefersRemoteHostWhenSupported() {
-        let remoteBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
-                backendKind: .macOSRemoteInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .remoteFrontendHosting],
-                failureReason: nil
-            )
-        )
-        let nativeBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
-                backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-                failureReason: nil
-            )
-        )
-
-        let selectedBackend = WITransportMacDefaultBackendSelector.selectDefaultBackend(
-            remoteBackend: remoteBackend,
-            nativeBackend: nativeBackend
-        )
-
-        #expect(selectedBackend as AnyObject === remoteBackend)
-    }
-
-    @Test
-    func macOSDefaultBackendSelectorKeepsRemoteBackendForTransportOnlyFallback() {
-        let remoteBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
-                backendKind: .macOSRemoteInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-                failureReason: "frontend host unavailable"
-            )
-        )
-        let nativeBackend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .unsupported,
-                backendKind: .macOSNativeInspector,
-                capabilities: [],
-                failureReason: "native attach unavailable"
-            )
-        )
-
-        let selectedBackend = WITransportMacDefaultBackendSelector.selectDefaultBackend(
-            remoteBackend: remoteBackend,
-            nativeBackend: nativeBackend
-        )
-
-        #expect(selectedBackend as AnyObject === remoteBackend)
+    func macOSDefaultBackendFactoryUsesNativeInspectorBackend() {
+        #if os(macOS)
+        let backend = WITransportPlatformBackendFactory.makeDefaultBackend(configuration: .init())
+        #expect(backend is WITransportMacNativeInspectorPlatformBackend)
+        #endif
     }
 
     @Test
@@ -121,9 +48,9 @@ struct WITransportSessionTests {
         let backend = FakeSessionBackend(
             supportSnapshot: WITransportSupportSnapshot(
                 availability: .supported,
-                backendKind: .macOSRemoteInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .remoteFrontendHosting],
-                failureReason: nil
+                backendKind: .macOSNativeInspector,
+                capabilities: [.rootMessaging],
+                failureReason: "preflight snapshot"
             ),
             supportSnapshotAfterAttach: WITransportSupportSnapshot(
                 availability: .supported,
@@ -141,7 +68,9 @@ struct WITransportSessionTests {
         try await session.attach(to: webView)
 
         #expect(session.supportSnapshot.backendKind == .macOSNativeInspector)
-        #expect(!session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
+        #expect(session.supportSnapshot.capabilities.contains(.domDomain))
+        #expect(session.supportSnapshot.capabilities.contains(.networkDomain))
+        #expect(session.supportSnapshot.failureReason == nil)
     }
 
     @Test

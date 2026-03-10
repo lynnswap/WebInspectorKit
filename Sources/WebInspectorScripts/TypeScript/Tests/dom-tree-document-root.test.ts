@@ -127,4 +127,52 @@ describe("dom-tree document root rendering", () => {
         expect(scriptElement?.classList.contains("is-unrendered")).toBe(true);
         expect(scriptElement?.classList.contains("is-rendered")).toBe(false);
     });
+
+    it("does not deemphasize rendered descendants when the internal document root has no layout flags", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    attributes: [],
+                    layoutFlags: ["rendered"],
+                    childNodeCount: 1,
+                    children: [{
+                        nodeId: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [],
+                        layoutFlags: ["rendered"],
+                        childNodeCount: 1,
+                        children: [{
+                            nodeId: 4,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            attributes: [],
+                            layoutFlags: ["rendered"],
+                            childNodeCount: 0,
+                            children: []
+                        }]
+                    }]
+                }]
+            }
+        }, { preserveState: false });
+
+        expect(treeState.nodes.get(1)?.isRendered).toBe(true);
+        expect(treeState.nodes.get(2)?.renderedSelf).toBe(true);
+        expect(treeState.nodes.get(3)?.renderedSelf).toBe(true);
+        expect(treeState.nodes.get(4)?.renderedSelf).toBe(true);
+        expect(treeState.elements.get(2)?.classList.contains("is-unrendered")).toBe(false);
+        expect(treeState.elements.get(3)?.classList.contains("is-unrendered")).toBe(false);
+        expect(treeState.elements.get(4)?.classList.contains("is-unrendered")).toBe(false);
+    });
 });

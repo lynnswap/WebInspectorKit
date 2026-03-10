@@ -1,9 +1,11 @@
 import Testing
 import WebKit
+import ObservationBridge
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 
 @MainActor
+@Suite(.serialized)
 struct WIDOMModelTests {
     @Test
     func attachBuildsNativeTreeRowsFromTransportSnapshot() async {
@@ -367,6 +369,187 @@ struct WIDOMModelTests {
         #expect(refreshed == true)
         #expect(driver.matchedStylesRequestRevisions.contains(1) == false)
         #expect(driver.matchedStylesRequestRevisions.contains(2) == false)
+    }
+
+    @Test
+    func observingSelectedEntryPublishesFrontendSelectionChanges() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree())
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+        var observationHandles = Set<ObservationHandle>()
+        var observedNodeIDs: [Int?] = []
+
+        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { selected in
+            observedNodeIDs.append(selected?.id.nodeID)
+        }
+        .store(in: &observationHandles)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil
+        }
+        #expect(loaded == true)
+
+        graphStore.applySelectionSnapshot(
+            .init(
+                nodeID: 3,
+                preview: "<body>",
+                attributes: [],
+                path: ["html", "body"],
+                selectorPath: "html > body",
+                styleRevision: 1
+            )
+        )
+
+        let published = await waitUntil {
+            observedNodeIDs.contains(3)
+        }
+        #expect(published == true)
+        #expect(inspector.selectedEntry?.id.nodeID == 3)
+    }
+
+    @Test
+    func frontendSelectionMessagePublishesInspectorSelectedEntry() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree())
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+        var observationHandles = Set<ObservationHandle>()
+        var observedNodeIDs: [Int?] = []
+
+        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { selected in
+            observedNodeIDs.append(selected?.id.nodeID)
+        }
+        .store(in: &observationHandles)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil
+        }
+        #expect(loaded == true)
+
+        inspector.withFrontendStore { store in
+            store.testHandleDOMSelectionMessage([
+                "nodeId": 3,
+                "preview": "<body>",
+                "attributes": [],
+                "path": ["html", "body"],
+                "selectorPath": "html > body",
+                "styleRevision": 1
+            ])
+        }
+
+        let published = await waitUntil {
+            observedNodeIDs.contains(3)
+        }
+        #expect(published == true)
+        #expect(inspector.selectedEntry?.selectorPath == "html > body")
+    }
+
+    @Test
+    func repeatedProgrammaticSelectionDoesNotBlockSubsequentObservedSelectionRefresh() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree())
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil && graphStore.entry(forNodeID: 2) != nil
+        }
+        #expect(loaded == true)
+
+        let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
+        inspector.selectEntry(bodyID)
+
+        let initialRefresh = await waitUntil {
+            driver.matchedStylesRequests.last == 3
+        }
+        #expect(initialRefresh == true)
+
+        inspector.selectEntry(bodyID)
+
+        graphStore.applySelectionSnapshot(
+            .init(
+                nodeID: 2,
+                preview: "<html>",
+                attributes: [],
+                path: ["html"],
+                selectorPath: "html",
+                styleRevision: 1
+            )
+        )
+
+        let observedRefresh = await waitUntil {
+            driver.matchedStylesRequests.last == 2
+        }
+        #expect(observedRefresh == true)
+    }
+
+    @Test
+    func staleProgrammaticSelectionDoesNotSuppressNextObservedSelectionRefresh() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree())
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil
+        }
+        #expect(loaded == true)
+
+        let staleID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 999)
+        inspector.selectEntry(staleID)
+
+        graphStore.applySelectionSnapshot(
+            .init(
+                nodeID: 3,
+                preview: "<body>",
+                attributes: [],
+                path: ["html", "body"],
+                selectorPath: "html > body",
+                styleRevision: 1
+            )
+        )
+
+        let refreshed = await waitUntil {
+            driver.matchedStylesRequests.last == 3
+        }
+        #expect(refreshed == true)
     }
 }
 

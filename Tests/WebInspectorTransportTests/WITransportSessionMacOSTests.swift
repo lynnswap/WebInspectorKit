@@ -38,12 +38,7 @@ final class WITransportSessionMacOSTests: XCTestCase {
             baselineVisibleWindowIdentifiers
         )
         XCTAssertTrue(session.supportSnapshot.isSupported)
-        if session.supportSnapshot.backendKind == .macOSRemoteInspector {
-            XCTAssertTrue(session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
-        } else {
-            XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
-            XCTAssertFalse(session.supportSnapshot.capabilities.contains(.remoteFrontendHosting))
-        }
+        XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
 
         _ = try await session.page.send(WITransportCommands.DOM.Enable())
         let document = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 4))

@@ -747,6 +747,7 @@ private extension DOMFrontendStore {
         if !entry.layoutFlags.isEmpty {
             node["layoutFlags"] = entry.layoutFlags
         }
+        node["isRendered"] = entry.isRendered
         if !entry.children.isEmpty {
             node["children"] = entry.children.map(serializedNode(from:))
         }

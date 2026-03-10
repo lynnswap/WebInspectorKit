@@ -29,8 +29,6 @@ static constexpr ptrdiff_t controllerCandidateOffsets[] = {
     webPageInspectorControllerOffset + 0x20,
 };
 
-extern void backendDispatcherDispatch(void *, const WTF::String&) asm("__ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE");
-
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
 
 enum ErrorCode : NSInteger {
@@ -153,15 +151,6 @@ static void *pageProxyPointer(WKWebView *webView)
     return safeReadPointer(storage, &page) ? page : nullptr;
 }
 
-static BOOL backendDispatcherPointer(void *controller, void **backendDispatcherOut)
-{
-    if (!controller || !backendDispatcherOut)
-        return NO;
-
-    auto *slot = reinterpret_cast<void **>(controller) + backendDispatcherStorageIndex;
-    return safeReadPointer(slot, backendDispatcherOut) && *backendDispatcherOut;
-}
-
 static BOOL frontendRouterPointer(void *controller, void **frontendRouterOut)
 {
     if (!controller || !frontendRouterOut)
@@ -169,6 +158,15 @@ static BOOL frontendRouterPointer(void *controller, void **frontendRouterOut)
 
     auto *slot = reinterpret_cast<void **>(controller) + frontendRouterStorageIndex;
     return safeReadPointer(slot, frontendRouterOut) && *frontendRouterOut;
+}
+
+static BOOL backendDispatcherPointer(void *controller, void **backendDispatcherOut)
+{
+    if (!controller || !backendDispatcherOut)
+        return NO;
+
+    auto *slot = reinterpret_cast<void **>(controller) + backendDispatcherStorageIndex;
+    return safeReadPointer(slot, backendDispatcherOut) && *backendDispatcherOut;
 }
 
 static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void **controllerOut, void **backendDispatcherOut)
@@ -195,6 +193,8 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
         *backendDispatcherOut = backendDispatcher;
     return YES;
 }
+
+extern void backendDispatcherDispatch(void *, const WTF::String&) asm("__ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE");
 
 static NSError *selectorFailureError(id inspectorObject, void *pageProxy, void *controller, void *backendDispatcher)
 {
@@ -232,7 +232,15 @@ public:
 
     ConnectionType connectionType() const override
     {
+#if TARGET_OS_OSX
+        // WebInspectorKit drives its own frontend on macOS and does not create
+        // WebKit's local inspector UI. Advertising this bridge as a remote
+        // frontend avoids local-frontend side effects inside WebKit that can
+        // destabilize the inspected page process during native attach.
+        return ConnectionType::Remote;
+#else
         return ConnectionType::Local;
+#endif
     }
 
     void sendMessageToFrontend(const WTF::String& message) override
