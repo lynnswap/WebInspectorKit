@@ -249,6 +249,24 @@ public final class NetworkSession: PageSession {
         }
         bodyFetchTasks[key] = (token, task)
     }
+
+    package func prepareForTransportRebind() {
+        guard transportSupportSnapshot?.backendKind == .macOSNativeInspector else {
+            return
+        }
+
+        cancelAllBodyFetches()
+        (pageAgent as? NetworkTransportRebindDriving)?.prepareForTransportRebind()
+    }
+
+    package func resumeAfterTransportRebind(to webView: WKWebView) {
+        guard transportSupportSnapshot?.backendKind == .macOSNativeInspector else {
+            return
+        }
+
+        lastPageWebView = webView
+        (pageAgent as? NetworkTransportRebindDriving)?.resumeAfterTransportRebind()
+    }
 }
 
 private extension NetworkSession {

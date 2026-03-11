@@ -170,6 +170,32 @@ public final class DOMSession {
     }
 }
 
+extension DOMSession {
+    package func prepareForTransportRebind() {
+        guard transportSupportSnapshot?.backendKind == .macOSNativeInspector else {
+            return
+        }
+
+        (pageAgent as? DOMTransportRebindDriving)?.prepareForTransportRebind()
+    }
+
+    package func resumeAfterTransportRebind(
+        to webView: WKWebView,
+        reloadDocument: Bool = true
+    ) async throws {
+        guard transportSupportSnapshot?.backendKind == .macOSNativeInspector else {
+            return
+        }
+
+        lastPageWebView = webView
+        (pageAgent as? DOMTransportRebindDriving)?.resumeAfterTransportRebind()
+        guard reloadDocument else {
+            return
+        }
+        try await pageAgent.reloadDocument(preserveState: false, requestedDepth: nil)
+    }
+}
+
 // MARK: - Snapshot API
 
 public extension DOMSession {
@@ -181,8 +207,13 @@ public extension DOMSession {
         try await pageAgent.captureSubtree(nodeId: nodeId, maxDepth: maxDepth)
     }
 
+    func styles(nodeId: Int, maxMatchedRules: Int = 0) async throws -> DOMNodeStylePayload {
+        try await pageAgent.styles(nodeId: nodeId, maxMatchedRules: maxMatchedRules)
+    }
+
+    @available(*, deprecated, message: "Use styles(nodeId:maxMatchedRules:) instead.")
     func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
-        try await pageAgent.matchedStyles(nodeId: nodeId, maxRules: maxRules)
+        try await styles(nodeId: nodeId, maxMatchedRules: maxRules).legacyMatchedStylesPayload
     }
 }
 

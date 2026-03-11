@@ -46,10 +46,14 @@ public struct WIDOMTreeRow: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 public final class WIDOMModel {
-    private struct MatchedStylesRefreshKey: Hashable {
+    private struct StyleRefreshKey: Hashable {
         let entryID: DOMEntryID
         let nodeID: Int
-        let styleRevision: Int
+        let sourceRevision: Int
+    }
+
+    private struct FrontendSelectionRecoveryKey: Hashable {
+        let nodeID: Int
     }
 
     public let session: DOMSession
@@ -65,11 +69,13 @@ public final class WIDOMModel {
     @ObservationIgnored private var pendingDeleteGeneration: UInt64 = 0
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var graphObservationHandles: Set<ObservationHandle> = []
-    @ObservationIgnored private var matchedStylesRefreshTask: Task<Void, Never>?
-    @ObservationIgnored private var matchedStylesInFlightKey: MatchedStylesRefreshKey?
-    @ObservationIgnored private var matchedStylesCompletedKey: MatchedStylesRefreshKey?
+    @ObservationIgnored private var styleRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var styleRefreshInFlightKey: StyleRefreshKey?
+    @ObservationIgnored private var styleRefreshCompletedKey: StyleRefreshKey?
     @ObservationIgnored private var recoverableErrorHandler: (@MainActor (String) -> Void)?
     @ObservationIgnored private var suppressNextSelectedIDRefresh = false
+    @ObservationIgnored private var frontendSelectionRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var frontendSelectionRecoveryKey: FrontendSelectionRecoveryKey?
     @ObservationIgnored private let frontendStore: DOMFrontendStore
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -83,13 +89,20 @@ public final class WIDOMModel {
         frontendStore = DOMFrontendStore(session: session)
         recoverableErrorHandler = onRecoverableError
         frontendStore.onRecoverableError = onRecoverableError
+        frontendStore.onSelectionSnapshotMiss = { [weak self] payload in
+            self?.recoverSelectionFromFrontendSnapshot(payload: payload)
+        }
+        frontendStore.onSelectionDidClear = { [weak self] in
+            self?.cancelFrontendSelectionRecovery()
+        }
         startObservingGraphStore()
     }
 
     isolated deinit {
         selectionTask?.cancel()
         pendingDeleteTask?.cancel()
-        matchedStylesRefreshTask?.cancel()
+        styleRefreshTask?.cancel()
+        frontendSelectionRecoveryTask?.cancel()
         clearDeleteUndoHistory()
 #if canImport(UIKit)
         restorePageScrollingState()
@@ -121,7 +134,7 @@ public final class WIDOMModel {
 
     package func makeInspectorWebView() -> WKWebView {
         let inspectorWebView = frontendStore.makeInspectorWebView()
-        if session.hasPageWebView {
+        if session.hasPageWebView, session.graphStore.rootID != nil {
             syncFrontendTreeIfNeeded(preserveState: session.graphStore.rootID != nil)
         }
         return inspectorWebView
@@ -154,7 +167,7 @@ public final class WIDOMModel {
         let resolvedSelectedID = session.graphStore.selectedID
         suppressNextSelectedIDRefresh = previousSelectedID != resolvedSelectedID
         invalidateGraphProjection()
-        scheduleMatchedStylesRefreshIfNeeded(force: true)
+        scheduleStyleRefreshIfNeeded(force: true)
         if let entryID = resolvedSelectedID,
            let entry = session.graphStore.entry(for: entryID) {
             Task {
@@ -321,12 +334,17 @@ private extension WIDOMModel {
             guard let self else {
                 return
             }
+            if let recoveryKey = self.frontendSelectionRecoveryKey,
+               let selectedID = graphStore.selectedID,
+               recoveryKey.nodeID != selectedID.nodeID {
+                self.cancelFrontendSelectionRecovery()
+            }
             if self.suppressNextSelectedIDRefresh {
                 self.suppressNextSelectedIDRefresh = false
                 self.invalidateGraphProjection()
                 return
             }
-            self.scheduleMatchedStylesRefreshIfNeeded(force: true)
+            self.scheduleStyleRefreshIfNeeded(force: true)
             self.invalidateGraphProjection()
         }
         .store(in: &graphObservationHandles)
@@ -336,7 +354,7 @@ private extension WIDOMModel {
             options: [.rateLimit(.throttle(domGraphObservationThrottle))]
         ) { [weak self] _ in
             self?.pruneTreeState()
-            self?.scheduleMatchedStylesRefreshIfNeeded(force: false)
+            self?.scheduleStyleRefreshIfNeeded(force: false)
             self?.invalidateGraphProjection()
         }
         .store(in: &graphObservationHandles)
@@ -398,7 +416,7 @@ private extension WIDOMModel {
                 preserveState: preserveState,
                 depth: requestedDepth
             )
-            scheduleMatchedStylesRefreshIfNeeded(force: true)
+            scheduleStyleRefreshIfNeeded(force: true)
         } catch is CancellationError {
             return
         } catch {
@@ -448,8 +466,8 @@ private extension WIDOMModel {
     func updateAttributeValueImpl(name: String, value: String) {
         guard let nodeId = selectedEntry?.id.nodeID else { return }
         session.graphStore.updateSelectedAttribute(name: name, value: value)
-        session.graphStore.invalidateMatchedStyles(for: nil)
-        scheduleMatchedStylesRefreshIfNeeded(force: true)
+        session.graphStore.invalidateStyle(for: nil, reason: .domMutation)
+        scheduleStyleRefreshIfNeeded(force: true)
         Task {
             await session.setAttribute(nodeId: nodeId, name: name, value: value)
         }
@@ -458,8 +476,8 @@ private extension WIDOMModel {
     func removeAttributeImpl(name: String) {
         guard let nodeId = selectedEntry?.id.nodeID else { return }
         session.graphStore.removeSelectedAttribute(name: name)
-        session.graphStore.invalidateMatchedStyles(for: nil)
-        scheduleMatchedStylesRefreshIfNeeded(force: true)
+        session.graphStore.invalidateStyle(for: nil, reason: .domMutation)
+        scheduleStyleRefreshIfNeeded(force: true)
         Task {
             await session.removeAttribute(nodeId: nodeId, name: name)
         }
@@ -545,10 +563,11 @@ private extension WIDOMModel {
     func clearTreeState() {
         expandedEntryIDs.removeAll(keepingCapacity: false)
         loadingChildEntryIDs.removeAll(keepingCapacity: false)
-        matchedStylesRefreshTask?.cancel()
-        matchedStylesRefreshTask = nil
-        matchedStylesInFlightKey = nil
-        matchedStylesCompletedKey = nil
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshInFlightKey = nil
+        styleRefreshCompletedKey = nil
+        cancelFrontendSelectionRecovery()
     }
 
     func enqueueDelete(nodeId: Int, undoManager: UndoManager?) {
@@ -830,7 +849,7 @@ private extension WIDOMModel {
     }
 
     func syncFrontendTreeIfNeeded(preserveState: Bool, depth: Int? = nil) {
-        guard frontendStore.hasInspectorWebView else {
+        guard frontendStore.hasInspectorWebView, session.graphStore.rootID != nil else {
             return
         }
         frontendStore.updateConfiguration(session.configuration)
@@ -841,81 +860,148 @@ private extension WIDOMModel {
         )
     }
 
-    func scheduleMatchedStylesRefreshIfNeeded(force: Bool) {
-        guard let selectedEntry else {
-            matchedStylesRefreshTask?.cancel()
-            matchedStylesRefreshTask = nil
-            matchedStylesInFlightKey = nil
-            matchedStylesCompletedKey = nil
+    func recoverSelectionFromFrontendSnapshot(payload: DOMSelectionSnapshotPayload) {
+        guard let nodeID = payload.nodeID, session.hasPageWebView else {
             return
         }
 
-        let refreshKey = MatchedStylesRefreshKey(
+        let recoveryKey = FrontendSelectionRecoveryKey(
+            nodeID: nodeID
+        )
+        if frontendSelectionRecoveryKey == recoveryKey {
+            return
+        }
+
+        frontendSelectionRecoveryTask?.cancel()
+        frontendSelectionRecoveryTask = nil
+        frontendSelectionRecoveryKey = recoveryKey
+
+        let minimumDepth = max(
+            session.configuration.selectionRecoveryDepth,
+            payload.path.count + 1
+        )
+        session.rememberPendingSelection(nodeId: nodeID)
+        frontendSelectionRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            await self.reloadInspectorImpl(
+                preserveState: true,
+                minimumDepth: minimumDepth
+            )
+
+            guard !Task.isCancelled, self.frontendSelectionRecoveryKey == recoveryKey else {
+                return
+            }
+            defer {
+                if self.frontendSelectionRecoveryKey == recoveryKey {
+                    self.clearFrontendSelectionRecoveryState(clearPendingSelection: true)
+                }
+            }
+
+            guard self.session.graphStore.selectedEntry?.id.nodeID == nodeID else {
+                self.publishRecoverableError("Failed to resolve selected DOM node.")
+                return
+            }
+        }
+    }
+
+    func cancelFrontendSelectionRecovery() {
+        frontendSelectionRecoveryTask?.cancel()
+        clearFrontendSelectionRecoveryState(clearPendingSelection: true)
+    }
+
+    func clearFrontendSelectionRecoveryState(clearPendingSelection: Bool) {
+        frontendSelectionRecoveryTask = nil
+        frontendSelectionRecoveryKey = nil
+        if clearPendingSelection {
+            session.rememberPendingSelection(nodeId: nil)
+        }
+    }
+
+    func scheduleStyleRefreshIfNeeded(force: Bool) {
+        guard let selectedEntry else {
+            styleRefreshTask?.cancel()
+            styleRefreshTask = nil
+            styleRefreshInFlightKey = nil
+            styleRefreshCompletedKey = nil
+            return
+        }
+
+        let refreshKey = StyleRefreshKey(
             entryID: selectedEntry.id,
             nodeID: selectedEntry.id.nodeID,
-            styleRevision: selectedEntry.styleRevision
+            sourceRevision: selectedEntry.style.sourceRevision
         )
 
-        if matchedStylesInFlightKey == refreshKey {
+        if styleRefreshInFlightKey == refreshKey {
             return
         }
-        if matchedStylesCompletedKey == refreshKey,
-           force == false,
-           selectedEntry.needsMatchedStylesRefresh == false {
+        if force == false,
+           selectedEntry.style.loadState != .idle,
+           styleRefreshCompletedKey == refreshKey,
+           selectedEntry.style.needsRefresh == false {
             return
         }
 
-        matchedStylesRefreshTask?.cancel()
-        matchedStylesInFlightKey = refreshKey
-        matchedStylesCompletedKey = nil
-        session.graphStore.beginMatchedStylesLoading(for: selectedEntry.id.nodeID)
-        matchedStylesRefreshTask = Task { @MainActor [weak self] in
+        styleRefreshTask?.cancel()
+        styleRefreshInFlightKey = refreshKey
+        styleRefreshCompletedKey = nil
+        session.graphStore.beginStyleLoading(for: selectedEntry.id.nodeID)
+        styleRefreshTask = Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
 
             do {
-                let payload = try await self.session.matchedStyles(nodeId: refreshKey.nodeID, maxRules: 0)
+                let payload = try await self.session.styles(
+                    nodeId: refreshKey.nodeID,
+                    maxMatchedRules: 0
+                )
                 guard !Task.isCancelled else {
-                    if self.matchedStylesInFlightKey == refreshKey {
-                        self.matchedStylesInFlightKey = nil
+                    if self.styleRefreshInFlightKey == refreshKey {
+                        self.styleRefreshInFlightKey = nil
                     }
                     return
                 }
                 guard self.session.graphStore.selectedID == refreshKey.entryID else {
-                    if self.matchedStylesInFlightKey == refreshKey {
-                        self.matchedStylesInFlightKey = nil
+                    if self.styleRefreshInFlightKey == refreshKey {
+                        self.styleRefreshInFlightKey = nil
                     }
                     return
                 }
-                self.matchedStylesCompletedKey = refreshKey
-                if self.matchedStylesInFlightKey == refreshKey {
-                    self.matchedStylesInFlightKey = nil
+                self.styleRefreshCompletedKey = refreshKey
+                if self.styleRefreshInFlightKey == refreshKey {
+                    self.styleRefreshInFlightKey = nil
                 }
-                self.session.graphStore.applyMatchedStyles(payload, for: refreshKey.entryID.nodeID)
+                self.session.graphStore.applyStyle(payload, for: refreshKey.entryID.nodeID)
             } catch is CancellationError {
-                if self.matchedStylesInFlightKey == refreshKey {
-                    self.matchedStylesInFlightKey = nil
+                if self.styleRefreshInFlightKey == refreshKey {
+                    self.styleRefreshInFlightKey = nil
                 }
                 return
             } catch {
                 guard !Task.isCancelled else {
-                    if self.matchedStylesInFlightKey == refreshKey {
-                        self.matchedStylesInFlightKey = nil
+                    if self.styleRefreshInFlightKey == refreshKey {
+                        self.styleRefreshInFlightKey = nil
                     }
                     return
                 }
                 guard self.session.graphStore.selectedID == refreshKey.entryID else {
-                    if self.matchedStylesInFlightKey == refreshKey {
-                        self.matchedStylesInFlightKey = nil
+                    if self.styleRefreshInFlightKey == refreshKey {
+                        self.styleRefreshInFlightKey = nil
                     }
                     return
                 }
-                self.matchedStylesCompletedKey = refreshKey
-                if self.matchedStylesInFlightKey == refreshKey {
-                    self.matchedStylesInFlightKey = nil
+                self.styleRefreshCompletedKey = refreshKey
+                if self.styleRefreshInFlightKey == refreshKey {
+                    self.styleRefreshInFlightKey = nil
                 }
-                self.session.graphStore.clearMatchedStyles(for: refreshKey.entryID.nodeID)
+                self.session.graphStore.failStyle(
+                    for: refreshKey.entryID.nodeID,
+                    message: error.localizedDescription
+                )
                 self.publishRecoverableError(error.localizedDescription)
             }
         }

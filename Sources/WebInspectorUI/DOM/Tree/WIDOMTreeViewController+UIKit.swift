@@ -162,23 +162,19 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func updateErrorPresentation() {
-        guard let message = inspector.errorMessage,
-              !message.isEmpty else {
+        guard let errorMessage = inspector.errorMessage,
+              errorMessage.isEmpty == false,
+              inspector.session.graphStore.rootID == nil else {
             contentUnavailableConfiguration = nil
             navigationItem.prompt = nil
             return
         }
 
-        if inspector.session.graphStore.rootID == nil {
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = message
-            contentUnavailableConfiguration = configuration
-            navigationItem.prompt = nil
-            return
-        }
-
-        contentUnavailableConfiguration = nil
-        navigationItem.prompt = message
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = String(localized: "Unable to Load DOM")
+        configuration.secondaryText = errorMessage
+        contentUnavailableConfiguration = configuration
+        navigationItem.prompt = errorMessage
     }
 
     @objc

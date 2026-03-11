@@ -44,18 +44,31 @@ enum WIDOMPreviewFixtures {
                 )
             )
             let rules = [
-                DOMMatchedStyleRule(
+                DOMStyleRule(
                     origin: .author,
                     selectorText: ".logo span[aria-label]",
                     declarations: [
-                        DOMMatchedStyleDeclaration(name: "display", value: "inline-block", important: false),
-                        DOMMatchedStyleDeclaration(name: "max-width", value: "100%", important: false)
+                        DOMStyleDeclaration(name: "display", value: "inline-block", important: false),
+                        DOMStyleDeclaration(name: "max-width", value: "100%", important: false)
                     ],
-                    sourceLabel: "styles.css:120"
+                    source: DOMStyleSource(label: "styles.css:120")
                 )
             ]
-            graphStore.applyMatchedStyles(
-                .init(nodeId: nodeID, rules: rules, truncated: false, blockedStylesheetCount: 0),
+            graphStore.applyStyle(
+                .init(
+                    nodeId: nodeID,
+                    matched: DOMMatchedStyleState(
+                        sections: [.init(kind: .element, relatedNodeId: nodeID, rules: rules)],
+                        isTruncated: false,
+                        blockedStylesheetCount: 0
+                    ),
+                    computed: DOMComputedStyleState(
+                        properties: [
+                            .init(name: "display", value: "inline-block", isImplicit: false),
+                            .init(name: "max-width", value: "100%", isImplicit: false)
+                        ]
+                    )
+                ),
                 for: nodeID
             )
         case .selectedEditableAttributes:
@@ -90,19 +103,33 @@ enum WIDOMPreviewFixtures {
                 )
             )
             let rules = [
-                DOMMatchedStyleRule(
+                DOMStyleRule(
                     origin: .author,
                     selectorText: ".logo img[alt]",
                     declarations: [
-                        DOMMatchedStyleDeclaration(name: "display", value: "inline-block", important: false),
-                        DOMMatchedStyleDeclaration(name: "max-width", value: "100%", important: false),
-                        DOMMatchedStyleDeclaration(name: "height", value: "auto", important: false)
+                        DOMStyleDeclaration(name: "display", value: "inline-block", important: false),
+                        DOMStyleDeclaration(name: "max-width", value: "100%", important: false),
+                        DOMStyleDeclaration(name: "height", value: "auto", important: false)
                     ],
-                    sourceLabel: "styles.css:188"
+                    source: DOMStyleSource(label: "styles.css:188")
                 )
             ]
-            graphStore.applyMatchedStyles(
-                .init(nodeId: nodeID, rules: rules, truncated: false, blockedStylesheetCount: 0),
+            graphStore.applyStyle(
+                .init(
+                    nodeId: nodeID,
+                    matched: DOMMatchedStyleState(
+                        sections: [.init(kind: .element, relatedNodeId: nodeID, rules: rules)],
+                        isTruncated: false,
+                        blockedStylesheetCount: 0
+                    ),
+                    computed: DOMComputedStyleState(
+                        properties: [
+                            .init(name: "display", value: "inline-block", isImplicit: false),
+                            .init(name: "max-width", value: "100%", isImplicit: false),
+                            .init(name: "height", value: "auto", isImplicit: false)
+                        ]
+                    )
+                ),
                 for: nodeID
             )
         }

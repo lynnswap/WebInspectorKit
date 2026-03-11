@@ -18,6 +18,17 @@ struct WIDOMTreeViewControllerAppKitTests {
 
         #expect(findWebView(in: controller.view) != nil)
     }
+
+    @Test
+    func doesNotShowErrorOverlayWhenRecoverableErrorExists() async {
+        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .empty)
+        let controller = WIDOMTreeViewController(inspector: inspector)
+
+        controller.loadViewIfNeeded()
+        await inspector.reloadInspector()
+
+        #expect(controller.testShowsErrorLabel == false)
+    }
 }
 
 @MainActor
@@ -49,6 +60,18 @@ struct WIDOMTreeViewControllerUIKitTests {
         controller.view.layoutIfNeeded()
 
         #expect(findWebView(in: controller.view) != nil)
+    }
+
+    @Test
+    func doesNotShowErrorOverlayWhenRecoverableErrorExists() async {
+        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .empty)
+        let controller = WIDOMTreeViewController(inspector: inspector)
+
+        controller.loadViewIfNeeded()
+        await inspector.reloadInspector()
+
+        #expect(controller.contentUnavailableConfiguration == nil)
+        #expect(controller.navigationItem.prompt == nil)
     }
 }
 

@@ -73,7 +73,7 @@ struct DOMGraphStoreTests {
     }
 
     @Test
-    func clearingSelectionAlsoClearsMatchedStylesOnPreviouslySelectedEntry() {
+    func clearingSelectionRetainsStyleStateOnPreviouslySelectedEntry() {
         let store = DOMGraphStore()
         store.applySnapshot(.init(root: makeNode(nodeID: 42)))
         store.applySelectionSnapshot(
@@ -106,9 +106,9 @@ struct DOMGraphStoreTests {
         store.applySelectionSnapshot(nil)
 
         #expect(store.selectedID == nil)
-        #expect(store.entry(forNodeID: 42)?.matchedStyles.isEmpty == true)
-        #expect(store.entry(forNodeID: 42)?.matchedStylesTruncated == false)
-        #expect(store.entry(forNodeID: 42)?.blockedStylesheetCount == 0)
+        #expect(store.entry(forNodeID: 42)?.matchedStyles.isEmpty == false)
+        #expect(store.entry(forNodeID: 42)?.matchedStylesTruncated == true)
+        #expect(store.entry(forNodeID: 42)?.blockedStylesheetCount == 2)
         #expect(store.entry(forNodeID: 42)?.isLoadingMatchedStyles == false)
     }
 

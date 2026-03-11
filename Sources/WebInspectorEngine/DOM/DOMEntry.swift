@@ -48,15 +48,10 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
     public var childCount: Int
     public var layoutFlags: [String]
     public var isRendered: Bool
-    public var styleRevision: Int
     public var preview: String
     public var path: [String]
     public var selectorPath: String
-    public var matchedStyles: [DOMMatchedStyleRule]
-    public var isLoadingMatchedStyles: Bool
-    public var needsMatchedStylesRefresh: Bool
-    public var matchedStylesTruncated: Bool
-    public var blockedStylesheetCount: Int
+    public let style: DOMStyleState
 
     public var parentID: DOMEntryID? {
         parent?.id
@@ -89,15 +84,16 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         childCount: Int,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
-        styleRevision: Int = 0,
         preview: String = "",
         path: [String] = [],
         selectorPath: String = "",
-        matchedStyles: [DOMMatchedStyleRule] = [],
-        isLoadingMatchedStyles: Bool = false,
-        needsMatchedStylesRefresh: Bool = false,
-        matchedStylesTruncated: Bool = false,
-        blockedStylesheetCount: Int = 0
+        styleRevision: Int? = nil,
+        matchedStyles: [DOMMatchedStyleRule]? = nil,
+        isLoadingMatchedStyles: Bool? = nil,
+        needsMatchedStylesRefresh: Bool? = nil,
+        matchedStylesTruncated: Bool? = nil,
+        blockedStylesheetCount: Int? = nil,
+        style: DOMStyleState = DOMStyleState()
     ) {
         self.id = id
         self.nodeType = nodeType
@@ -109,15 +105,33 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         self.childCount = childCount
         self.layoutFlags = layoutFlags
         self.isRendered = isRendered
-        self.styleRevision = styleRevision
         self.preview = preview
         self.path = path
         self.selectorPath = selectorPath
-        self.matchedStyles = matchedStyles
-        self.isLoadingMatchedStyles = isLoadingMatchedStyles
-        self.needsMatchedStylesRefresh = needsMatchedStylesRefresh
-        self.matchedStylesTruncated = matchedStylesTruncated
-        self.blockedStylesheetCount = blockedStylesheetCount
+        self.style = style
+
+        if let styleRevision {
+            style.recordSourceRevision(styleRevision)
+        }
+        if let matchedStyles {
+            style.setMatchedForCompatibility(
+                rules: matchedStyles.map(\.styleRule),
+                isTruncated: matchedStylesTruncated ?? false,
+                blockedStylesheetCount: blockedStylesheetCount ?? 0
+            )
+        } else if matchedStylesTruncated != nil || blockedStylesheetCount != nil {
+            style.setMatchedForCompatibility(
+                rules: style.matched.allRules,
+                isTruncated: matchedStylesTruncated ?? style.matched.isTruncated,
+                blockedStylesheetCount: blockedStylesheetCount ?? style.matched.blockedStylesheetCount
+            )
+        }
+        if let isLoadingMatchedStyles {
+            style.setLoadStateForCompatibility(isLoading: isLoadingMatchedStyles)
+        }
+        if let needsMatchedStylesRefresh {
+            style.setNeedsRefreshForCompatibility(needsMatchedStylesRefresh)
+        }
     }
 
     public nonisolated static func == (lhs: DOMEntry, rhs: DOMEntry) -> Bool {
@@ -128,12 +142,76 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         hasher.combine(id)
     }
 
-    func clearMatchedStyles(requiresRefresh: Bool = false) {
-        matchedStyles = []
-        matchedStylesTruncated = false
-        blockedStylesheetCount = 0
-        isLoadingMatchedStyles = false
-        needsMatchedStylesRefresh = requiresRefresh
+    @available(*, deprecated, message: "Use style.sourceRevision instead.")
+    public var styleRevision: Int {
+        get {
+            style.sourceRevision
+        }
+        set {
+            style.recordSourceRevision(newValue)
+        }
+    }
+
+    @available(*, deprecated, message: "Use style.matched.allRules instead.")
+    public var matchedStyles: [DOMMatchedStyleRule] {
+        get {
+            style.matched.allRules.map(DOMMatchedStyleRule.init)
+        }
+        set {
+            style.setMatchedForCompatibility(
+                rules: newValue.map(\.styleRule),
+                isTruncated: style.matched.isTruncated,
+                blockedStylesheetCount: style.matched.blockedStylesheetCount
+            )
+        }
+    }
+
+    @available(*, deprecated, message: "Use style.isLoading instead.")
+    public var isLoadingMatchedStyles: Bool {
+        get {
+            style.isLoading
+        }
+        set {
+            style.setLoadStateForCompatibility(isLoading: newValue)
+        }
+    }
+
+    @available(*, deprecated, message: "Use style.needsRefresh instead.")
+    public var needsMatchedStylesRefresh: Bool {
+        get {
+            style.needsRefresh
+        }
+        set {
+            style.setNeedsRefreshForCompatibility(newValue)
+        }
+    }
+
+    @available(*, deprecated, message: "Use style.matched.isTruncated instead.")
+    public var matchedStylesTruncated: Bool {
+        get {
+            style.matched.isTruncated
+        }
+        set {
+            style.setMatchedForCompatibility(
+                rules: style.matched.allRules,
+                isTruncated: newValue,
+                blockedStylesheetCount: style.matched.blockedStylesheetCount
+            )
+        }
+    }
+
+    @available(*, deprecated, message: "Use style.matched.blockedStylesheetCount instead.")
+    public var blockedStylesheetCount: Int {
+        get {
+            style.matched.blockedStylesheetCount
+        }
+        set {
+            style.setMatchedForCompatibility(
+                rules: style.matched.allRules,
+                isTruncated: style.matched.isTruncated,
+                blockedStylesheetCount: newValue
+            )
+        }
     }
 }
 

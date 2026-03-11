@@ -61,13 +61,29 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
         let continuation: CheckedContinuation<DOMSelectionModeResult, Error>
     }
 
-    fileprivate struct CSSMatchedStylesResponse: Decodable {
-        let matchedCSSRules: [CSSRuleMatch]?
-    }
-
     fileprivate struct CSSInlineStylesResponse: Decodable {
         let inlineStyle: CSSStylePayload?
         let attributesStyle: CSSStylePayload?
+    }
+
+    fileprivate struct CSSMatchedStylesResponse: Decodable {
+        let matchedCSSRules: [CSSRuleMatch]?
+        let pseudoElements: [CSSPseudoElementMatches]?
+        let inherited: [CSSInheritedStyleEntry]?
+    }
+
+    fileprivate struct CSSComputedStyleResponse: Decodable {
+        let computedStyle: [CSSComputedStylePropertyPayload]?
+    }
+
+    fileprivate struct CSSPseudoElementMatches: Decodable {
+        let pseudoId: String
+        let matches: [CSSRuleMatch]
+    }
+
+    fileprivate struct CSSInheritedStyleEntry: Decodable {
+        let inlineStyle: CSSStylePayload?
+        let matchedCSSRules: [CSSRuleMatch]?
     }
 
     fileprivate struct CSSRuleMatch: Decodable {
@@ -78,6 +94,8 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     fileprivate struct CSSRulePayload: Decodable {
         let selectorList: CSSSelectorListPayload
         let sourceURL: String?
+        let sourceLine: Int?
+        let origin: String?
         let style: CSSStylePayload
         let groupings: [CSSGroupingPayload]?
     }
@@ -92,6 +110,7 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
     }
 
     fileprivate struct CSSGroupingPayload: Decodable {
+        let type: String?
         let text: String?
     }
 
@@ -106,6 +125,11 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
         let parsedOk: Bool?
         let status: String?
         let implicit: Bool?
+    }
+
+    fileprivate struct CSSComputedStylePropertyPayload: Decodable {
+        let name: String
+        let value: String
     }
 
     private let registry: WISharedTransportRegistry
@@ -202,19 +226,21 @@ final class DOMTransportDriver: NSObject, DOMPageDriving, PageAgent, InspectorTr
         return try jsonString(from: envelope)
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
+    func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
         let lease = try activeLease()
         try await lease.ensureAttached()
         try await lease.ensureCSSDomainReady()
 
         async let inlineResponse = inlineStylesResult(nodeId: nodeId, lease: lease)
         async let matchedResponse = matchedStylesResult(nodeId: nodeId, lease: lease)
+        async let computedResponse = computedStyleResult(nodeId: nodeId, lease: lease)
 
-        return try await makeMatchedStylesPayload(
+        return try await makeStylePayload(
             nodeId: nodeId,
-            maxRules: maxRules,
+            maxMatchedRules: maxMatchedRules,
             inlineResult: inlineResponse,
-            matchedResult: matchedResponse
+            matchedResult: matchedResponse,
+            computedResult: computedResponse
         )
     }
 
@@ -427,33 +453,7 @@ extension DOMTransportDriver {
             pendingSelectionRecoveryPathArmed = false
         }
 
-        let lease = registry.acquireLease(for: webView)
-        self.lease = lease
-        lease.addDOMConsumer(eventConsumerIdentifier) { [weak self] event in
-            self?.handle(event)
-        }
-
-        attachTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            do {
-                try await lease.ensureAttached()
-                if self.autoSnapshotEnabled {
-                    try await self.reloadDocument(preserveState: false)
-                }
-                try await lease.ensureDOMEventIngress()
-            } catch {
-                guard self.shouldLogAttachFailure(error, lease: lease) else {
-                    self.attachTask = nil
-                    return
-                }
-                self.logger.error("dom transport attach failed: \(error.localizedDescription, privacy: .public)")
-            }
-
-            self.attachTask = nil
-        }
+        startLeaseAttachment(for: webView, reloadDocumentOnAttach: autoSnapshotEnabled)
     }
 
     func didClearPageWebView() {
@@ -462,6 +462,34 @@ extension DOMTransportDriver {
         pendingSelectedNodeID = nil
         pendingSelectedNodePath = nil
         pendingSelectionRecoveryPathArmed = false
+    }
+}
+
+extension DOMTransportDriver: DOMTransportRebindDriving {
+    func prepareForTransportRebind() {
+        attachTask?.cancel()
+        attachTask = nil
+        if let webView, let selectionBridge {
+            Task { @MainActor in
+                await selectionBridge.cancelSelection(on: webView)
+            }
+        }
+        selectionTask?.cancel()
+        selectionTask = nil
+        finishPendingChildNodeRequests(with: CancellationError())
+        finishSelectionRequest(result: .success(.init(cancelled: true, requiredDepth: 0)))
+        releaseLease()
+    }
+
+    func resumeAfterTransportRebind() {
+        guard let webView else {
+            return
+        }
+        guard lease == nil else {
+            return
+        }
+
+        startLeaseAttachment(for: webView, reloadDocumentOnAttach: false)
     }
 }
 
@@ -490,6 +518,40 @@ private extension DOMTransportDriver {
         finishPendingChildNodeRequests(with: WITransportError.transportClosed)
         finishSelectionRequest(result: .success(.init(cancelled: true, requiredDepth: 0)))
         releaseLease()
+    }
+
+    func startLeaseAttachment(for webView: WKWebView, reloadDocumentOnAttach: Bool) {
+        attachTask?.cancel()
+        attachTask = nil
+        releaseLease()
+
+        let lease = registry.acquireLease(for: webView)
+        self.lease = lease
+        lease.addDOMConsumer(eventConsumerIdentifier) { [weak self] event in
+            self?.handle(event)
+        }
+
+        attachTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await lease.ensureAttached()
+                if reloadDocumentOnAttach {
+                    try await self.reloadDocument(preserveState: false)
+                }
+                try await lease.ensureDOMEventIngress()
+            } catch {
+                guard self.shouldLogAttachFailure(error, lease: lease) else {
+                    self.attachTask = nil
+                    return
+                }
+                self.logger.error("dom transport attach failed: \(error.localizedDescription, privacy: .public)")
+            }
+
+            self.attachTask = nil
+        }
     }
 
     func releaseLease() {
@@ -722,6 +784,10 @@ private extension DOMTransportDriver {
              "DOM.attributeRemoved",
              "DOM.characterDataModified":
             handleMutation(envelope)
+        case "CSS.styleSheetChanged":
+            handleStyleSheetChanged(envelope)
+        case "CSS.mediaQueryResultChanged":
+            handleMediaQueryResultChanged(envelope)
         default:
             return
         }
@@ -742,7 +808,7 @@ private extension DOMTransportDriver {
                 .setChildNodes(parentNodeID: parentEntry.id.nodeID, nodes: params.nodes.map(nodeDescriptor(from:))),
             ])
         )
-        invalidateMatchedStylesIfNeeded(changedNodeID: parentEntry.id.nodeID)
+        invalidateStyleIfNeeded(changedNodeID: parentEntry.id.nodeID)
     }
 
     func handleInspect(_ envelope: WITransportEventEnvelope) {
@@ -770,7 +836,6 @@ private extension DOMTransportDriver {
                 let didApplySelection = self.graphStore?.applySelectionSnapshot(selectionUpdate.payload) ?? false
                 if didApplySelection {
                     self.pendingSelectedNodeID = nil
-                    self.invalidateMatchedStylesForCurrentSelection()
                 } else {
                     _ = self.graphStore?.applySelectionSnapshot(nil)
                     self.pendingSelectedNodeID = selectionUpdate.payload.nodeID
@@ -822,7 +887,17 @@ private extension DOMTransportDriver {
 
         graphStore?.applyMutationBundle(.init(events: [event]))
         restorePendingSelectionIfPossible()
-        invalidateMatchedStylesIfNeeded(for: event)
+        invalidateStyleIfNeeded(for: event)
+    }
+
+    func handleStyleSheetChanged(_ envelope: WITransportEventEnvelope) {
+        forwardProtocolEvent(envelope)
+        invalidateStyleForCurrentSelection(reason: .styleSheetChanged)
+    }
+
+    func handleMediaQueryResultChanged(_ envelope: WITransportEventEnvelope) {
+        forwardProtocolEvent(envelope)
+        invalidateStyleForCurrentSelection(reason: .mediaQueryChanged)
     }
 
     func requiredDepth(for nodeId: Int) async throws -> Int {
@@ -1148,14 +1223,28 @@ private extension DOMTransportDriver {
         }
     }
 
-    func makeMatchedStylesPayload(
+    func computedStyleResult(
         nodeId: Int,
-        maxRules: Int,
+        lease: WISharedTransportRegistry.Lease
+    ) async -> Result<CSSComputedStyleResponse, Error> {
+        do {
+            return .success(try await lease.sendPage(EngineCSSGetComputedStyleForNode(nodeId: nodeId)))
+        } catch {
+            logger.debug("computed style fetch failed for node \(nodeId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .failure(error)
+        }
+    }
+
+    func makeStylePayload(
+        nodeId: Int,
+        maxMatchedRules: Int,
         inlineResult: Result<CSSInlineStylesResponse, Error>,
-        matchedResult: Result<CSSMatchedStylesResponse, Error>
-    ) throws -> DOMMatchedStylesPayload {
+        matchedResult: Result<CSSMatchedStylesResponse, Error>,
+        computedResult: Result<CSSComputedStyleResponse, Error>
+    ) throws -> DOMNodeStylePayload {
         let inline: CSSInlineStylesResponse?
         let matched: CSSMatchedStylesResponse?
+        let computed: CSSComputedStyleResponse?
 
         switch inlineResult {
         case let .success(response):
@@ -1171,40 +1260,190 @@ private extension DOMTransportDriver {
             matched = nil
         }
 
+        switch computedResult {
+        case let .success(response):
+            computed = response
+        case .failure:
+            computed = nil
+        }
+
         if case let .failure(inlineError) = inlineResult,
-           case .failure = matchedResult {
+           case let .failure(matchedError) = matchedResult,
+           case let .failure(computedError) = computedResult {
+            if isMissingNodeStyleFetchError(inlineError)
+                && isMissingNodeStyleFetchError(matchedError)
+                && isMissingNodeStyleFetchError(computedError) {
+                return DOMNodeStylePayload(
+                    nodeId: nodeId,
+                    matched: .empty,
+                    computed: .empty
+                )
+            }
             throw inlineError
         }
-        if case let .failure(matchedError) = matchedResult,
-           case .failure = inlineResult {
-            throw matchedError
-        }
 
-        let effectiveMaxRules = maxRules > 0 ? maxRules : Int.max
-        var rules: [DOMMatchedStyleRule] = []
-        rules.reserveCapacity(8)
-
-        if let inlineRule = makeInlineRule(from: inline?.inlineStyle ?? inline?.attributesStyle) {
-            rules.append(inlineRule)
-        }
-
-        let authorRules = (matched?.matchedCSSRules ?? []).compactMap(makeAuthorRule(from:))
-        rules.append(contentsOf: authorRules)
-
-        let truncated = rules.count > effectiveMaxRules
-        if truncated {
-            rules = Array(rules.prefix(effectiveMaxRules))
-        }
-
-        return DOMMatchedStylesPayload(
+        let fullMatchedState = makeMatchedStyleState(
             nodeId: nodeId,
-            rules: rules,
-            truncated: truncated,
+            inline: inline,
+            matched: matched,
+            maxMatchedRules: 0
+        )
+        let matchedState = makeMatchedStyleState(
+            nodeId: nodeId,
+            inline: inline,
+            matched: matched,
+            maxMatchedRules: maxMatchedRules
+        )
+        let computedState = makeComputedStyleState(
+            computed,
+            matchedPropertyNames: Set(fullMatchedState.allRules.flatMap { rule in
+                rule.declarations.map(\.name)
+            })
+        )
+
+        return DOMNodeStylePayload(
+            nodeId: nodeId,
+            matched: matchedState,
+            computed: computedState
+        )
+    }
+
+    func makeMatchedStyleState(
+        nodeId: Int,
+        inline: CSSInlineStylesResponse?,
+        matched: CSSMatchedStylesResponse?,
+        maxMatchedRules: Int
+    ) -> DOMMatchedStyleState {
+        var sections: [DOMStyleSection] = []
+
+        if let elementSection = makeElementStyleSection(
+            nodeId: nodeId,
+            inline: inline,
+            matches: matched?.matchedCSSRules ?? []
+        ) {
+            sections.append(elementSection)
+        }
+
+        for pseudo in matched?.pseudoElements ?? [] {
+            let rules = pseudo.matches.compactMap(makeAuthorRule(from:))
+            guard !rules.isEmpty else {
+                continue
+            }
+            sections.append(
+                DOMStyleSection(
+                    kind: .pseudoElement,
+                    title: pseudoElementTitle(for: pseudo.pseudoId),
+                    relatedNodeId: nil,
+                    rules: rules
+                )
+            )
+        }
+
+        if let selectedEntry = entry(for: nodeId) {
+            let ancestorEntries = ancestorEntries(for: selectedEntry)
+            for (index, inheritedEntry) in (matched?.inherited ?? []).enumerated() {
+                let rules = makeInheritedRules(from: inheritedEntry)
+                guard !rules.isEmpty else {
+                    continue
+                }
+                let ancestor = ancestorEntries.indices.contains(index) ? ancestorEntries[index] : nil
+                sections.append(
+                    DOMStyleSection(
+                        kind: .inherited,
+                        title: ancestor.map(inheritedSectionTitle(for:)),
+                        relatedNodeId: ancestor?.id.nodeID,
+                        rules: rules
+                    )
+                )
+            }
+        }
+
+        let effectiveMaxRules = maxMatchedRules > 0 ? maxMatchedRules : Int.max
+        let truncation = truncateStyleSections(sections, maxRules: effectiveMaxRules)
+        return DOMMatchedStyleState(
+            sections: truncation.sections,
+            isTruncated: truncation.truncated,
             blockedStylesheetCount: 0
         )
     }
 
-    func makeInlineRule(from style: CSSStylePayload?) -> DOMMatchedStyleRule? {
+    func isMissingNodeStyleFetchError(_ error: any Error) -> Bool {
+        guard let transportError = error as? WITransportError else {
+            return false
+        }
+        guard case let .remoteError(_, method, message) = transportError else {
+            return false
+        }
+        guard method == EngineCSSGetInlineStylesForNode.method
+            || method == EngineCSSGetMatchedStylesForNode.method
+            || method == EngineCSSGetComputedStyleForNode.method else {
+            return false
+        }
+        return message.localizedCaseInsensitiveContains("missing node for given nodeId")
+    }
+
+    func makeElementStyleSection(
+        nodeId: Int,
+        inline: CSSInlineStylesResponse?,
+        matches: [CSSRuleMatch]
+    ) -> DOMStyleSection? {
+        var rules: [DOMStyleRule] = []
+        rules.reserveCapacity(2 + matches.count)
+
+        if let inlineRule = makeInlineRule(
+            from: inline?.inlineStyle,
+            origin: .inline,
+            selectorText: "element.style",
+            sourceLabel: "<element>"
+        ) {
+            rules.append(inlineRule)
+        }
+
+        if let attributeRule = makeInlineRule(
+            from: inline?.attributesStyle,
+            origin: .attribute,
+            selectorText: "HTML attributes",
+            sourceLabel: "<attributes>"
+        ) {
+            rules.append(attributeRule)
+        }
+
+        rules.append(contentsOf: matches.compactMap(makeAuthorRule(from:)))
+
+        guard !rules.isEmpty else {
+            return nil
+        }
+
+        return DOMStyleSection(
+            kind: .element,
+            title: nil,
+            relatedNodeId: nodeId,
+            rules: rules
+        )
+    }
+
+    func makeInheritedRules(from entry: CSSInheritedStyleEntry) -> [DOMStyleRule] {
+        var rules: [DOMStyleRule] = []
+
+        if let inlineRule = makeInlineRule(
+            from: entry.inlineStyle,
+            origin: .inline,
+            selectorText: "element.style",
+            sourceLabel: "<element>"
+        ) {
+            rules.append(inlineRule)
+        }
+
+        rules.append(contentsOf: (entry.matchedCSSRules ?? []).compactMap(makeAuthorRule(from:)))
+        return rules
+    }
+
+    func makeInlineRule(
+        from style: CSSStylePayload?,
+        origin: DOMStyleOrigin,
+        selectorText: String,
+        sourceLabel: String
+    ) -> DOMStyleRule? {
         guard let style else {
             return nil
         }
@@ -1212,53 +1451,87 @@ private extension DOMTransportDriver {
         guard !declarations.isEmpty else {
             return nil
         }
-        return DOMMatchedStyleRule(
-            origin: .inline,
-            selectorText: "element.style",
+
+        return DOMStyleRule(
+            origin: origin,
+            selectorText: selectorText,
+            matchedSelectorTexts: [],
             declarations: declarations,
-            sourceLabel: "<element>",
-            atRuleContext: []
+            source: DOMStyleSource(label: sourceLabel),
+            groupings: []
         )
     }
 
-    func makeAuthorRule(from match: CSSRuleMatch) -> DOMMatchedStyleRule? {
+    func makeAuthorRule(from match: CSSRuleMatch) -> DOMStyleRule? {
         let declarations = match.rule.style.cssProperties.compactMap(makeDeclaration(from:))
         guard !declarations.isEmpty else {
             return nil
         }
 
-        let selectorText: String
-        if !match.matchingSelectors.isEmpty {
-            let matchingSelectors: [String] = match.matchingSelectors.compactMap { index in
-                guard match.rule.selectorList.selectors.indices.contains(index) else {
-                    return nil
-                }
-                return match.rule.selectorList.selectors[index].text
+        let matchedSelectorTexts: [String] = match.matchingSelectors.compactMap { index in
+            guard match.rule.selectorList.selectors.indices.contains(index) else {
+                return nil
             }
-            selectorText = matchingSelectors.isEmpty ? match.rule.selectorList.text : matchingSelectors.joined(separator: ", ")
+            return match.rule.selectorList.selectors[index].text
+        }
+
+        let selectorText: String
+        if !matchedSelectorTexts.isEmpty {
+            selectorText = matchedSelectorTexts.joined(separator: ", ")
         } else {
             selectorText = match.rule.selectorList.text
         }
 
-        let sourceLabel: String
-        if let sourceURL = match.rule.sourceURL,
-           let candidate = URL(string: sourceURL)?.lastPathComponent,
-           !candidate.isEmpty {
-            sourceLabel = candidate
-        } else {
-            sourceLabel = "<style>"
-        }
-
-        return DOMMatchedStyleRule(
-            origin: .author,
+        return DOMStyleRule(
+            origin: styleOrigin(from: match.rule.origin),
             selectorText: selectorText,
+            matchedSelectorTexts: matchedSelectorTexts,
             declarations: declarations,
-            sourceLabel: sourceLabel,
-            atRuleContext: match.rule.groupings?.compactMap(\.text) ?? []
+            source: makeStyleSource(from: match.rule),
+            groupings: (match.rule.groupings ?? []).compactMap(makeGrouping(from:))
         )
     }
 
-    func makeDeclaration(from property: CSSPropertyPayload) -> DOMMatchedStyleDeclaration? {
+    func makeStyleSource(from rule: CSSRulePayload) -> DOMStyleSource {
+        let label: String
+        if let sourceURL = rule.sourceURL,
+           let candidate = URL(string: sourceURL)?.lastPathComponent,
+           !candidate.isEmpty {
+            label = candidate
+        } else {
+            label = "<style>"
+        }
+
+        return DOMStyleSource(
+            label: label,
+            url: rule.sourceURL,
+            line: rule.sourceLine,
+            column: nil
+        )
+    }
+
+    func makeGrouping(from payload: CSSGroupingPayload) -> DOMStyleGrouping? {
+        guard let text = payload.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return nil
+        }
+        return DOMStyleGrouping(kind: payload.type, text: text)
+    }
+
+    func styleOrigin(from payload: String?) -> DOMStyleOrigin {
+        switch payload?.lowercased() {
+        case "user":
+            return .user
+        case "user-agent", "useragent":
+            return .userAgent
+        case "inspector":
+            return .inspector
+        default:
+            return .author
+        }
+    }
+
+    func makeDeclaration(from property: CSSPropertyPayload) -> DOMStyleDeclaration? {
         if property.parsedOk == false {
             return nil
         }
@@ -1270,11 +1543,94 @@ private extension DOMTransportDriver {
             return nil
         }
 
-        return DOMMatchedStyleDeclaration(
+        return DOMStyleDeclaration(
             name: property.name,
             value: property.value,
-            important: property.priority == "important"
+            important: property.priority == "important",
+            isImplicit: property.implicit ?? false,
+            isOverridden: false
         )
+    }
+
+    func makeComputedStyleState(
+        _ response: CSSComputedStyleResponse?,
+        matchedPropertyNames: Set<String>
+    ) -> DOMComputedStyleState {
+        let properties = (response?.computedStyle ?? []).map { property in
+            DOMComputedStyleProperty(
+                name: property.name,
+                value: property.value,
+                isImplicit: !matchedPropertyNames.contains(property.name)
+            )
+        }
+
+        return DOMComputedStyleState(properties: properties)
+    }
+
+    func ancestorEntries(for entry: DOMEntry) -> [DOMEntry] {
+        var result: [DOMEntry] = []
+        var current = entry.parent
+        while let resolved = current {
+            result.append(resolved)
+            current = resolved.parent
+        }
+        return result
+    }
+
+    func inheritedSectionTitle(for entry: DOMEntry) -> String {
+        let name = entry.localName.isEmpty ? entry.nodeName : entry.localName
+        return name.isEmpty ? "Inherited" : "Inherited from <\(name)>"
+    }
+
+    func pseudoElementTitle(for pseudoId: String) -> String {
+        if pseudoId.hasPrefix(":") {
+            return pseudoId
+        }
+        return "::\(pseudoId)"
+    }
+
+    func truncateStyleSections(
+        _ sections: [DOMStyleSection],
+        maxRules: Int
+    ) -> (sections: [DOMStyleSection], truncated: Bool) {
+        guard maxRules != Int.max else {
+            return (sections, false)
+        }
+
+        var remaining = max(0, maxRules)
+        var truncated = false
+        var result: [DOMStyleSection] = []
+
+        for section in sections {
+            guard remaining > 0 else {
+                if !section.rules.isEmpty {
+                    truncated = true
+                }
+                continue
+            }
+
+            if section.rules.count <= remaining {
+                result.append(section)
+                remaining -= section.rules.count
+                continue
+            }
+
+            truncated = true
+            let prefix = Array(section.rules.prefix(remaining))
+            if !prefix.isEmpty {
+                result.append(
+                    DOMStyleSection(
+                        kind: section.kind,
+                        title: section.title,
+                        relatedNodeId: section.relatedNodeId,
+                        rules: prefix
+                    )
+                )
+            }
+            remaining = 0
+        }
+
+        return (result, truncated)
     }
 
     func findNode(nodeId: Int, in node: WITransportDOMNode) -> WITransportDOMNode? {
@@ -1364,7 +1720,7 @@ private extension DOMTransportDriver {
             attributes: entry.attributes,
             path: entry.path.isEmpty ? pathComponents(for: entry) : entry.path,
             selectorPath: selectorPath(for: nodeId) ?? "",
-            styleRevision: entry.styleRevision
+            styleRevision: entry.style.sourceRevision
         )
     }
 
@@ -1465,7 +1821,6 @@ private extension DOMTransportDriver {
             pendingSelectedNodePath = nil
             pendingSelectionRecoveryPathArmed = false
         }
-        invalidateMatchedStylesForCurrentSelection()
     }
 
     func resolvedPendingSelectedNodeID(in root: WITransportDOMNode) -> Int? {
@@ -1563,19 +1918,19 @@ private extension DOMTransportDriver {
         return attributes
     }
 
-    func invalidateMatchedStylesIfNeeded(for event: DOMGraphMutationEvent) {
+    func invalidateStyleIfNeeded(for event: DOMGraphMutationEvent) {
         switch event {
         case let .childNodeInserted(parentNodeID, _, _),
              let .childNodeRemoved(parentNodeID, _),
              let .setChildNodes(parentNodeID, _):
-            invalidateMatchedStylesIfNeeded(changedNodeID: parentNodeID)
+            invalidateStyleIfNeeded(changedNodeID: parentNodeID)
         case let .attributeModified(nodeID, _, _, _, _),
              let .attributeRemoved(nodeID, _, _, _),
              let .characterDataModified(nodeID, _, _, _),
              let .childNodeCountUpdated(nodeID, _, _, _):
-            invalidateMatchedStylesIfNeeded(changedNodeID: nodeID)
+            invalidateStyleIfNeeded(changedNodeID: nodeID)
         case .replaceSubtree, .documentUpdated:
-            invalidateMatchedStylesForCurrentSelection()
+            resetStyleForCurrentSelection()
         }
     }
 
@@ -1588,20 +1943,23 @@ private extension DOMTransportDriver {
         }
 
         self.pendingSelectedNodeID = nil
-        invalidateMatchedStylesForCurrentSelection()
     }
 
-    func invalidateMatchedStylesIfNeeded(changedNodeID: Int) {
+    func invalidateStyleIfNeeded(changedNodeID: Int) {
         guard let selectedEntry = graphStore?.selectedEntry else {
             return
         }
         if selectedEntry.id.nodeID == changedNodeID || isAncestor(nodeID: changedNodeID, of: selectedEntry) {
-            graphStore?.invalidateMatchedStyles(for: selectedEntry.id.nodeID)
+            graphStore?.invalidateStyle(for: selectedEntry.id.nodeID, reason: .domMutation)
         }
     }
 
-    func invalidateMatchedStylesForCurrentSelection() {
-        graphStore?.invalidateMatchedStyles(for: nil)
+    func invalidateStyleForCurrentSelection(reason: DOMStyleInvalidationReason) {
+        graphStore?.invalidateStyle(for: nil, reason: reason)
+    }
+
+    func resetStyleForCurrentSelection() {
+        graphStore?.resetStyle(for: nil)
     }
 
     func isAncestor(nodeID: Int, of entry: DOMEntry) -> Bool {
@@ -2156,7 +2514,7 @@ private struct EngineCSSGetMatchedStylesForNode: WITransportPageCommand, Sendabl
     let parameters: Parameters
 
     init(nodeId: Int) {
-        parameters = Parameters(nodeId: nodeId, includePseudo: false, includeInherited: false)
+        parameters = Parameters(nodeId: nodeId, includePseudo: true, includeInherited: true)
     }
 
     static let method = "CSS.getMatchedStylesForNode"
@@ -2175,6 +2533,21 @@ private struct EngineCSSGetInlineStylesForNode: WITransportPageCommand, Sendable
     }
 
     static let method = "CSS.getInlineStylesForNode"
+}
+
+private struct EngineCSSGetComputedStyleForNode: WITransportPageCommand, Sendable {
+    struct Parameters: Encodable, Sendable {
+        let nodeId: Int
+    }
+
+    typealias Response = DOMTransportDriver.CSSComputedStyleResponse
+    let parameters: Parameters
+
+    init(nodeId: Int) {
+        parameters = Parameters(nodeId: nodeId)
+    }
+
+    static let method = "CSS.getComputedStyleForNode"
 }
 
 #if DEBUG
@@ -2214,6 +2587,38 @@ extension DOMTransportDriver {
 
     func testResolvedPendingSelectedNodeID(in root: WITransportDOMNode) -> Int? {
         resolvedPendingSelectedNodeID(in: root)
+    }
+
+    func testMakeStylePayloadForFailures(
+        nodeId: Int,
+        maxMatchedRules: Int,
+        inlineError: any Error,
+        matchedError: any Error,
+        computedError: any Error
+    ) throws -> DOMNodeStylePayload {
+        try makeStylePayload(
+            nodeId: nodeId,
+            maxMatchedRules: maxMatchedRules,
+            inlineResult: .failure(inlineError),
+            matchedResult: .failure(matchedError),
+            computedResult: .failure(computedError)
+        )
+    }
+
+    @available(*, deprecated, message: "Use testMakeStylePayloadForFailures instead.")
+    func testMakeMatchedStylesPayloadForFailures(
+        nodeId: Int,
+        maxRules: Int,
+        inlineError: any Error,
+        matchedError: any Error
+    ) throws -> DOMMatchedStylesPayload {
+        try testMakeStylePayloadForFailures(
+            nodeId: nodeId,
+            maxMatchedRules: maxRules,
+            inlineError: inlineError,
+            matchedError: matchedError,
+            computedError: matchedError
+        ).legacyMatchedStylesPayload
     }
 }
 #endif

@@ -189,15 +189,13 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 
     func testOpeningDOMOnlyInspectorCharacterizesHTTPSAttachRegression() async throws {
         try await assertInspectorAttachBehaviorAcrossHTTPSNavigation(
-            tabs: [.dom()],
-            expectedFailureReason: "Known regression under investigation: DOM-only macOS inspector attach may still terminate the main WKWebView immediately after attach."
+            tabs: [.dom()]
         )
     }
 
     func testOpeningNetworkOnlyInspectorCharacterizesHTTPSAttachRegression() async throws {
         try await assertInspectorAttachBehaviorAcrossHTTPSNavigation(
-            tabs: [.network()],
-            expectedFailureReason: "Known regression under investigation: Network-only macOS inspector attach may still terminate the main WKWebView immediately after attach."
+            tabs: [.network()]
         )
     }
 }
@@ -205,8 +203,7 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 @MainActor
 private extension BrowserViewModelInspectorRegressionTests {
     func assertInspectorAttachBehaviorAcrossHTTPSNavigation(
-        tabs: [WITab],
-        expectedFailureReason: String
+        tabs: [WITab]
     ) async throws {
         let tabIdentifiers = tabs.map { $0.identifier }.joined(separator: ",")
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
@@ -247,7 +244,6 @@ private extension BrowserViewModelInspectorRegressionTests {
         XCTAssertTrue(inspectorWindowAppeared, "The inspector window did not appear for the characterization test.")
 
         let stayedAliveAfterAttach = await assertWebContentStaysAlive(model: model, duration: .seconds(2))
-        XCTExpectFailure(expectedFailureReason, strict: false)
         XCTAssertTrue(
             stayedAliveAfterAttach,
             "The main WKWebView terminated immediately after opening the inspector. tabs=\(tabIdentifiers) lastURL=\(model.lastWebContentTerminationURL?.absoluteString ?? "n/a")"

@@ -431,12 +431,24 @@ private:
 
 - (BOOL)sendRootJSONString:(NSString *)message error:(NSError * _Nullable __autoreleasing *)error
 {
-    if (!_backendDispatcher || ![self attachedControllerIsStillValid]) {
+    if (!_backendDispatcher) {
         [self invalidateAttachmentState];
         if (error) {
             *error = WITransportBridgePrivate::makeError(
                 WITransportBridgePrivate::ErrorCodeNotAttached,
                 @"The root BackendDispatcher is unavailable."
+            );
+        }
+        return NO;
+    }
+    if (![self attachedControllerIsStillValid]) {
+        NSString *failureMessage = @"The root BackendDispatcher is unavailable.";
+        [self invalidateAttachmentState];
+        [self reportFatalFailure:failureMessage];
+        if (error) {
+            *error = WITransportBridgePrivate::makeError(
+                WITransportBridgePrivate::ErrorCodeNotAttached,
+                failureMessage
             );
         }
         return NO;

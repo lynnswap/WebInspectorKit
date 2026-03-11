@@ -160,21 +160,21 @@ final class DOMLegacyPageDriver: NSObject, DOMPageDriving, PageAgent {
         return json
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
+    func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
         let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorDOM.matchedStylesForNode(identifier, options)",
+            "return window.webInspectorDOM.stylesForNode(identifier, options)",
             arguments: [
                 "identifier": nodeId,
-                "options": ["maxRules": maxRules],
+                "options": ["maxRules": maxMatchedRules],
             ],
             in: nil,
             contentWorld: bridgeWorld
         )
         let data = try serializePayload(rawResult)
-        return try JSONDecoder().decode(DOMMatchedStylesPayload.self, from: data)
+        return try JSONDecoder().decode(DOMNodeStylePayload.self, from: data)
     }
 
     func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
@@ -481,7 +481,6 @@ private extension DOMLegacyPageDriver {
         if graphStore?.selectedEntry?.id.nodeID == pendingSelectedNodeID {
             pendingSelectedNodeID = nil
         }
-        graphStore?.invalidateMatchedStyles(for: nil)
     }
 
     func resolveBridgeModeIfNeeded(with webView: WKWebView) {

@@ -185,6 +185,112 @@ describe("dom-tree-view-support", () => {
         expect(targetElement?.classList.contains("is-collapsed")).toBe(false);
     });
 
+    it("keeps a clicked expandable row open across preserve-state snapshot refreshes", () => {
+        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    attributes: [],
+                    childNodeCount: 1,
+                    children: [{
+                        nodeId: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [],
+                        childNodeCount: 1,
+                        children: [{
+                            nodeId: 4,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            attributes: ["id", "content"],
+                            childNodeCount: 1,
+                            children: [{
+                                nodeId: 5,
+                                nodeType: 1,
+                                nodeName: "SPAN",
+                                localName: "span",
+                                attributes: [],
+                                childNodeCount: 0,
+                                children: []
+                            }]
+                        }]
+                    }]
+                }]
+            }
+        });
+
+        ensureTreeEventHandlers();
+
+        const targetElement = treeState.elements.get(4);
+        const row = targetElement?.querySelector(".tree-node__row") as HTMLElement | null;
+        row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+        expect(treeState.selectedNodeId).toBe(4);
+        expect(treeState.openState.get(4)).toBe(true);
+        expect(targetElement?.classList.contains("is-collapsed")).toBe(false);
+
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    attributes: [],
+                    childNodeCount: 1,
+                    children: [{
+                        nodeId: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [],
+                        childNodeCount: 1,
+                        children: [{
+                            nodeId: 4,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            attributes: ["id", "content"],
+                            childNodeCount: 1,
+                            children: [{
+                                nodeId: 5,
+                                nodeType: 1,
+                                nodeName: "SPAN",
+                                localName: "span",
+                                attributes: [],
+                                childNodeCount: 0,
+                                children: []
+                            }]
+                        }]
+                    }]
+                }]
+            },
+            selectedNodeId: 4
+        }, { preserveState: true });
+
+        const refreshedTargetElement = treeState.elements.get(4);
+        expect(treeState.selectedNodeId).toBe(4);
+        expect(treeState.openState.get(4)).toBe(true);
+        expect(refreshedTargetElement?.classList.contains("is-collapsed")).toBe(false);
+    });
+
     it("reveals ancestors without forcing the selected node open", () => {
         document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
 

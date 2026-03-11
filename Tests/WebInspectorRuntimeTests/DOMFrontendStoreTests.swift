@@ -53,6 +53,83 @@ struct DOMFrontendStoreTests {
     }
 
     @Test
+    func readyMessageDoesNotBootstrapFrontendDocumentWhenAuthoritativeGraphIsEmpty() async {
+        let graphStore = DOMGraphStore()
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+        )
+        let pageWebView = WKWebView(frame: .zero)
+        _ = session.attach(to: pageWebView)
+
+        let store = DOMFrontendStore(session: session)
+        _ = store.makeInspectorWebView()
+
+        store.testHandleReadyMessage()
+        await Task.yield()
+        await Task.yield()
+
+        #expect(store.testRequestedDocuments.isEmpty)
+    }
+
+    @Test
+    func frontendDocumentBootstrapUsesAuthoritativeGraphSnapshotWhenGraphIsLoaded() throws {
+        let graphStore = DOMGraphStore()
+        graphStore.applySnapshot(.init(root: makeDocumentTreeWithMissingBodyChildren()))
+
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+        )
+
+        let store = DOMFrontendStore(session: session)
+        let response = try #require(
+            store.testImmediateFrontendResponseIfPossible(
+                id: 71,
+                method: "DOM.getDocument",
+                nodeID: nil,
+                documentGeneration: graphStore.documentGeneration
+            )
+        )
+        let result = try #require(response["result"] as? [String: Any])
+        let root = try #require(result["root"] as? [String: Any])
+        let html = try #require((root["children"] as? [[String: Any]])?.first)
+        let body = try #require((html["children"] as? [[String: Any]])?.first)
+
+        #expect(response["id"] as? Int == 71)
+        #expect(body["nodeId"] as? Int == 3)
+        #expect(body["childNodeCount"] as? Int == 1)
+        #expect((body["children"] as? [[String: Any]])?.isEmpty != false)
+    }
+
+    @Test
+    func immediateFrontendDocumentResponseIsDisabledForStaleGeneration() {
+        let graphStore = DOMGraphStore()
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+        let staleGeneration = graphStore.documentGeneration
+        graphStore.resetForDocumentUpdate()
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+        )
+
+        let store = DOMFrontendStore(session: session)
+        let response = store.testImmediateFrontendResponseIfPossible(
+            id: 72,
+            method: "DOM.getDocument",
+            nodeID: nil,
+            documentGeneration: staleGeneration
+        )
+
+        #expect(response == nil)
+    }
+
+    @Test
     func staleGetDocumentResponseReturnsCurrentSnapshot() throws {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
@@ -269,9 +346,9 @@ private final class StubDOMFrontendStorePageDriver: DOMPageDriving {
         return "{}"
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
-        _ = maxRules
-        return .init(nodeId: nodeId, rules: [], truncated: false, blockedStylesheetCount: 0)
+    func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
+        _ = maxMatchedRules
+        return .init(nodeId: nodeId, matched: .empty, computed: .empty)
     }
 
     func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
@@ -373,6 +450,47 @@ private func makeDocumentTree() -> DOMGraphNodeDescriptor {
                         attributes: [],
                         childCount: 0,
                         layoutFlags: ["rendered"],
+                        isRendered: true,
+                        children: []
+                    )
+                ]
+            )
+        ]
+    )
+}
+
+private func makeDocumentTreeWithMissingBodyChildren() -> DOMGraphNodeDescriptor {
+    DOMGraphNodeDescriptor(
+        nodeID: 1,
+        nodeType: 9,
+        nodeName: "#document",
+        localName: "",
+        nodeValue: "",
+        attributes: [],
+        childCount: 1,
+        layoutFlags: [],
+        isRendered: true,
+        children: [
+            DOMGraphNodeDescriptor(
+                nodeID: 2,
+                nodeType: 1,
+                nodeName: "HTML",
+                localName: "html",
+                nodeValue: "",
+                attributes: [],
+                childCount: 1,
+                layoutFlags: [],
+                isRendered: true,
+                children: [
+                    DOMGraphNodeDescriptor(
+                        nodeID: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        nodeValue: "",
+                        attributes: [],
+                        childCount: 1,
+                        layoutFlags: [],
                         isRendered: true,
                         children: []
                     )

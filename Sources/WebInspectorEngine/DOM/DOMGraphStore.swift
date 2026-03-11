@@ -135,15 +135,12 @@ public final class DOMGraphStore {
 
     @discardableResult
     public func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) -> Bool {
-        let previousSelectedID = selectedID
         guard let payload, let nodeID = payload.nodeID else {
-            clearMatchedStyles(for: previousSelectedID)
             selectedID = nil
             return false
         }
 
         guard let entry = entry(forNodeID: nodeID) else {
-            clearMatchedStyles(for: previousSelectedID)
             selectedID = nil
             return false
         }
@@ -152,7 +149,7 @@ public final class DOMGraphStore {
         entry.preview = payload.preview
         entry.path = payload.path
         entry.selectorPath = payload.selectorPath
-        entry.styleRevision = payload.styleRevision
+        entry.style.recordSourceRevision(payload.styleRevision)
         entry.attributes = normalizeAttributes(payload.attributes, nodeID: entry.id.nodeID)
 
         entriesByID[entryID] = entry
@@ -178,51 +175,43 @@ public final class DOMGraphStore {
         }
     }
 
-    public func beginMatchedStylesLoading(for nodeID: Int) {
+    public func beginStyleLoading(for nodeID: Int) {
         let entryID = makeID(nodeID: nodeID)
         guard selectedID == entryID, let entry = entriesByID[entryID] else {
             return
         }
 
-        entry.isLoadingMatchedStyles = true
-        entry.needsMatchedStylesRefresh = false
-        entry.matchedStyles = []
-        entry.matchedStylesTruncated = false
-        entry.blockedStylesheetCount = 0
+        entry.style.beginLoading()
         entriesByID[entryID] = entry
         entriesByNodeID[nodeID] = entry
     }
 
-    public func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for nodeID: Int) {
+    public func applyStyle(_ payload: DOMNodeStylePayload, for nodeID: Int) {
         let entryID = makeID(nodeID: nodeID)
-        guard selectedID == entryID, let entry = entriesByID[entryID] else {
+        guard let entry = entriesByID[entryID] else {
             return
         }
         guard entry.id.nodeID == payload.nodeId else {
             return
         }
 
-        entry.matchedStyles = payload.rules
-        entry.matchedStylesTruncated = payload.truncated
-        entry.blockedStylesheetCount = payload.blockedStylesheetCount
-        entry.isLoadingMatchedStyles = false
-        entry.needsMatchedStylesRefresh = false
+        entry.style.apply(payload)
         entriesByID[entryID] = entry
         entriesByNodeID[nodeID] = entry
     }
 
-    public func clearMatchedStyles(for nodeID: Int?) {
-        let resolvedID: DOMEntryID?
-        if let nodeID {
-            resolvedID = makeID(nodeID: nodeID)
-        } else {
-            resolvedID = selectedID
+    public func failStyle(for nodeID: Int, message: String) {
+        let entryID = makeID(nodeID: nodeID)
+        guard let entry = entriesByID[entryID] else {
+            return
         }
 
-        clearMatchedStyles(for: resolvedID)
+        entry.style.fail(message)
+        entriesByID[entryID] = entry
+        entriesByNodeID[nodeID] = entry
     }
 
-    public func invalidateMatchedStyles(for nodeID: Int?) {
+    public func resetStyle(for nodeID: Int?) {
         let resolvedID: DOMEntryID?
         if let nodeID {
             resolvedID = makeID(nodeID: nodeID)
@@ -230,7 +219,41 @@ public final class DOMGraphStore {
             resolvedID = selectedID
         }
 
-        clearMatchedStyles(for: resolvedID, requiresRefresh: true)
+        resetStyle(for: resolvedID)
+    }
+
+    public func invalidateStyle(
+        for nodeID: Int?,
+        reason: DOMStyleInvalidationReason
+    ) {
+        let resolvedID: DOMEntryID?
+        if let nodeID {
+            resolvedID = makeID(nodeID: nodeID)
+        } else {
+            resolvedID = selectedID
+        }
+
+        invalidateStyle(for: resolvedID, reason: reason)
+    }
+
+    @available(*, deprecated, message: "Use beginStyleLoading(for:) instead.")
+    public func beginMatchedStylesLoading(for nodeID: Int) {
+        beginStyleLoading(for: nodeID)
+    }
+
+    @available(*, deprecated, message: "Use applyStyle(_:for:) instead.")
+    public func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for nodeID: Int) {
+        applyStyle(payload.stylePayload, for: nodeID)
+    }
+
+    @available(*, deprecated, message: "Use resetStyle(for:) instead.")
+    public func clearMatchedStyles(for nodeID: Int?) {
+        resetStyle(for: nodeID)
+    }
+
+    @available(*, deprecated, message: "Use invalidateStyle(for:reason:) instead.")
+    public func invalidateMatchedStyles(for nodeID: Int?) {
+        invalidateStyle(for: nodeID, reason: .manualRefresh)
     }
 
     public func updateSelectedAttribute(name: String, value: String) {
@@ -262,12 +285,25 @@ public final class DOMGraphStore {
 }
 
 private extension DOMGraphStore {
-    func clearMatchedStyles(for entryID: DOMEntryID?, requiresRefresh: Bool = false) {
+    func resetStyle(for entryID: DOMEntryID?, sourceRevision: Int = 0) {
         guard let entryID, let entry = entriesByID[entryID] else {
             return
         }
 
-        entry.clearMatchedStyles(requiresRefresh: requiresRefresh)
+        entry.style.reset(sourceRevision: sourceRevision)
+        entriesByID[entryID] = entry
+        entriesByNodeID[entry.id.nodeID] = entry
+    }
+
+    func invalidateStyle(
+        for entryID: DOMEntryID?,
+        reason: DOMStyleInvalidationReason
+    ) {
+        guard let entryID, let entry = entriesByID[entryID] else {
+            return
+        }
+
+        entry.style.invalidate(reason: reason)
         entriesByID[entryID] = entry
         entriesByNodeID[entry.id.nodeID] = entry
     }

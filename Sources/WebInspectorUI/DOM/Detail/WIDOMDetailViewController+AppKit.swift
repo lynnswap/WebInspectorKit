@@ -11,6 +11,9 @@ public final class WIDOMDetailViewController: NSViewController {
     private let inspector: WIDOMModel
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
     private var observationHandles: Set<ObservationHandle> = []
+    private var selectedObservationHandles: Set<ObservationHandle> = []
+    private weak var observedSelectedEntry: DOMEntry?
+    private weak var observedSelectedStyle: DOMStyleState?
     private var renderRefreshCount = 0
 
     public init(inspector: WIDOMModel) {
@@ -58,12 +61,55 @@ public final class WIDOMDetailViewController: NSViewController {
             self?.refreshRootView()
         }
         .store(in: &observationHandles)
+
+        inspector.session.graphStore.observe(\.selectedID, options: [.removeDuplicates]) { [weak self] _ in
+            self?.reconnectSelectedObservationIfNeeded()
+            self?.refreshRootView()
+        }
+        .store(in: &observationHandles)
+
+        inspector.session.graphStore.observe(\.entriesByID, options: WIObservationOptions.domDetailContent) { [weak self] _ in
+            self?.reconnectSelectedObservationIfNeeded()
+        }
+        .store(in: &observationHandles)
+
+        reconnectSelectedObservationIfNeeded()
     }
 
     private func refreshRootView() {
         renderRefreshCount += 1
         hostingController?.rootView = ElementDetailsMacRootView(inspector: inspector)
         hostingController?.view.layoutSubtreeIfNeeded()
+    }
+
+    private func reconnectSelectedObservationIfNeeded() {
+        let selectedEntry = inspector.selectedEntry
+        let selectedStyle = selectedEntry?.style
+
+        if observedSelectedEntry === selectedEntry, observedSelectedStyle === selectedStyle {
+            return
+        }
+
+        selectedObservationHandles.removeAll()
+        observedSelectedEntry = selectedEntry
+        observedSelectedStyle = selectedStyle
+
+        guard let selectedEntry, let selectedStyle else {
+            refreshRootView()
+            return
+        }
+
+        selectedEntry.observe([\.preview, \.nodeValue, \.attributes, \.selectorPath]) { [weak self] in
+            self?.refreshRootView()
+        }
+        .store(in: &selectedObservationHandles)
+
+        selectedStyle.observe([\.loadState, \.matched, \.computed, \.errorMessage]) { [weak self] in
+            self?.refreshRootView()
+        }
+        .store(in: &selectedObservationHandles)
+
+        refreshRootView()
     }
 
     var testRenderRefreshCount: Int {
@@ -115,6 +161,10 @@ private struct ElementDetailsMacRootView: View {
 
                 Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
                     stylesSection
+                }
+
+                Section(wiLocalized("dom.element.section.computed", default: "Computed")) {
+                    computedSection
                 }
 
                 Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
@@ -187,31 +237,63 @@ private struct ElementDetailsMacRootView: View {
 
     @ViewBuilder
     private var stylesSection: some View {
-        if selectedEntry?.isLoadingMatchedStyles == true {
+        if selectedEntry?.style.isLoading == true && (selectedEntry?.style.matched.isEmpty ?? true) {
             infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if (selectedEntry?.matchedStyles ?? []).isEmpty {
+        } else if selectedEntry?.style.matched.isEmpty ?? true {
             infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
         } else {
-            ForEach(Array((selectedEntry?.matchedStyles ?? []).enumerated()), id: \.offset) { _, rule in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(rule.selectorText)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(styleRuleDetail(rule))
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(12)
+            let matchedSections = selectedEntry?.style.matched.sections ?? []
+            let includeElementFallback = matchedSections.count > 1
+            ForEach(Array(matchedSections.enumerated()), id: \.offset) { _, section in
+                let sectionTitle = styleRuleSectionTitle(for: section, includeElementFallback: includeElementFallback)
+                ForEach(Array(section.rules.enumerated()), id: \.offset) { _, rule in
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let sectionTitle {
+                            Text(sectionTitle)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(rule.selectorText)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(styleRuleDetail(rule))
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(12)
+                    }
                 }
             }
 
-            if selectedEntry?.matchedStylesTruncated == true {
+            if selectedEntry?.style.matched.isTruncated == true {
                 infoRow(message: wiLocalized("dom.element.styles.truncated"), color: .secondary)
             }
-            if let blockedStylesheetCount = selectedEntry?.blockedStylesheetCount, blockedStylesheetCount > 0 {
+            if let blockedStylesheetCount = selectedEntry?.style.matched.blockedStylesheetCount,
+               blockedStylesheetCount > 0 {
                 infoRow(
                     message: "\(blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
                     color: .secondary
                 )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var computedSection: some View {
+        if selectedEntry?.style.isLoading == true && (selectedEntry?.style.computed.isEmpty ?? true) {
+            infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
+        } else if selectedEntry?.style.computed.isEmpty ?? true {
+            infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
+        } else {
+            ForEach(Array((selectedEntry?.style.computed.properties ?? []).enumerated()), id: \.offset) { _, property in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(property.name)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(property.value)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(6)
+                }
             }
         }
     }
@@ -249,13 +331,13 @@ private struct ElementDetailsMacRootView: View {
         }
     }
 
-    private func styleRuleDetail(_ rule: DOMMatchedStyleRule) -> String {
+    private func styleRuleDetail(_ rule: DOMStyleRule) -> String {
         var parts: [String] = []
-        if !rule.sourceLabel.isEmpty {
-            parts.append(rule.sourceLabel)
+        if !rule.source.label.isEmpty {
+            parts.append(rule.source.label)
         }
-        if !rule.atRuleContext.isEmpty {
-            parts.append(contentsOf: rule.atRuleContext)
+        if !rule.groupings.isEmpty {
+            parts.append(contentsOf: rule.groupings.map(\.text))
         }
         let declarations = rule.declarations.map { declaration in
             let importantSuffix = declaration.important ? " !important" : ""
@@ -265,6 +347,24 @@ private struct ElementDetailsMacRootView: View {
             parts.append(declarations)
         }
         return parts.joined(separator: "\n")
+    }
+
+    private func styleRuleSectionTitle(
+        for section: DOMStyleSection,
+        includeElementFallback: Bool
+    ) -> String? {
+        if let title = section.title, !title.isEmpty {
+            return title
+        }
+
+        switch section.kind {
+        case .element:
+            return includeElementFallback ? wiLocalized("dom.element.section.element") : nil
+        case .pseudoElement:
+            return "::pseudo-element"
+        case .inherited:
+            return "Inherited"
+        }
     }
 
     private func infoRow(message: String, color: Color) -> some View {

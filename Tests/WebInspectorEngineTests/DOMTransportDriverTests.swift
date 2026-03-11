@@ -335,6 +335,36 @@ struct DOMTransportDriverTests {
 
         #expect(graphStore.selectedEntry == nil)
     }
+
+    @Test
+    func missingNodeStyleFetchReturnsEmptyMatchedStylesPayload() throws {
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore()
+        )
+
+        let inlineError = WITransportError.remoteError(
+            scope: .page,
+            method: "CSS.getInlineStylesForNode",
+            message: "Missing node for given nodeId"
+        )
+        let matchedError = WITransportError.remoteError(
+            scope: .page,
+            method: "CSS.getMatchedStylesForNode",
+            message: "Missing node for given nodeId"
+        )
+
+        let payload = try driver.testMakeMatchedStylesPayloadForFailures(
+            nodeId: 42,
+            maxRules: 0,
+            inlineError: inlineError,
+            matchedError: matchedError
+        )
+
+        #expect(payload.nodeId == 42)
+        #expect(payload.rules.isEmpty)
+        #expect(payload.truncated == false)
+    }
 }
 
 @MainActor

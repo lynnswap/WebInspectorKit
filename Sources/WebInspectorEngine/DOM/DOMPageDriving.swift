@@ -14,7 +14,7 @@ protocol DOMPageDriving: AnyObject {
 
     func captureSnapshot(maxDepth: Int) async throws -> String
     func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String
-    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload
+    func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload
     func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any
     func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any
 

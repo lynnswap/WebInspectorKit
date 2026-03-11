@@ -176,30 +176,7 @@ final class NetworkTransportDriver: NetworkPageDriving, InspectorTransportCapabi
             return
         }
 
-        let lease = registry.acquireLease(for: newWebView)
-        self.lease = lease
-        lease.addNetworkConsumer(eventConsumerIdentifier) { [weak self] event in
-            self?.handle(event)
-        }
-
-        attachTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            do {
-                try await lease.ensureAttached()
-                try await lease.ensureNetworkEventIngress()
-            } catch {
-                guard self.shouldLogAttachFailure(error, lease: lease) else {
-                    self.attachTask = nil
-                    return
-                }
-                self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
-            }
-
-            self.attachTask = nil
-        }
+        startLeaseAttachment(for: newWebView)
     }
 
     func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
@@ -287,11 +264,61 @@ final class NetworkTransportDriver: NetworkPageDriving, InspectorTransportCapabi
     }
 }
 
+extension NetworkTransportDriver: NetworkTransportRebindDriving {
+    func prepareForTransportRebind() {
+        attachTask?.cancel()
+        attachTask = nil
+        releaseLease()
+    }
+
+    func resumeAfterTransportRebind() {
+        guard let webView else {
+            return
+        }
+        guard lease == nil else {
+            return
+        }
+
+        startLeaseAttachment(for: webView)
+    }
+}
+
 private extension NetworkTransportDriver {
     func tearDownLifecycle() {
         attachTask?.cancel()
         attachTask = nil
         releaseLease()
+    }
+
+    func startLeaseAttachment(for webView: WKWebView) {
+        attachTask?.cancel()
+        attachTask = nil
+        releaseLease()
+
+        let lease = registry.acquireLease(for: webView)
+        self.lease = lease
+        lease.addNetworkConsumer(eventConsumerIdentifier) { [weak self] event in
+            self?.handle(event)
+        }
+
+        attachTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await lease.ensureAttached()
+                try await lease.ensureNetworkEventIngress()
+            } catch {
+                guard self.shouldLogAttachFailure(error, lease: lease) else {
+                    self.attachTask = nil
+                    return
+                }
+                self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
+            }
+
+            self.attachTask = nil
+        }
     }
 
     private func releaseLease() {

@@ -464,6 +464,52 @@ struct WIDOMModelTests {
     }
 
     @Test
+    func frontendSelectionMissReloadsDocumentAndRestoresSelectedEntry() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            reloadSnapshots: [
+                .init(root: makeDocumentTree()),
+                .init(root: makeRecoveryDocumentTree())
+            ]
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+
+        inspector.attach(to: webView)
+        let initialLoad = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil && graphStore.entry(forNodeID: 6) == nil
+        }
+        #expect(initialLoad == true)
+
+        inspector.withFrontendStore { store in
+            store.testHandleDOMSelectionMessage([
+                "nodeId": 6,
+                "preview": "<div id=\"target\">",
+                "attributes": [
+                    ["name": "id", "value": "target"],
+                ],
+                "path": ["html", "body", "main", "div"],
+                "selectorPath": "#target",
+                "styleRevision": 1
+            ])
+        }
+
+        let recovered = await waitUntil {
+            inspector.selectedEntry?.id.nodeID == 6
+        }
+        #expect(recovered == true)
+        #expect(driver.reloadRequestedDepths == [4, 8])
+        #expect(inspector.selectedEntry?.selectorPath == "#target")
+    }
+
+    @Test
     func repeatedProgrammaticSelectionDoesNotBlockSubsequentObservedSelectionRefresh() async {
         let graphStore = DOMGraphStore()
         let driver = StubDOMPageDriver(
@@ -551,6 +597,63 @@ struct WIDOMModelTests {
         }
         #expect(refreshed == true)
     }
+
+    @Test
+    func rapidFrontendSelectionMissesRecoverLatestRequestedNode() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            reloadSnapshots: [
+                .init(root: makeDocumentTree()),
+                .init(root: makeRecoveryDocumentTree(nodeID: 6, idValue: "first-target")),
+                .init(root: makeRecoveryDocumentTree(nodeID: 7, idValue: "second-target"))
+            ],
+            reloadDelayNanoseconds: 50_000_000
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMModel(session: session)
+        let webView = WKWebView(frame: .zero)
+
+        inspector.attach(to: webView)
+        let loaded = await waitUntil {
+            graphStore.entry(forNodeID: 3) != nil
+        }
+        #expect(loaded == true)
+
+        inspector.withFrontendStore { store in
+            store.testHandleDOMSelectionMessage([
+                "nodeId": 6,
+                "preview": "<div id=\"first-target\">",
+                "attributes": [
+                    ["name": "id", "value": "first-target"],
+                ],
+                "path": ["html", "body", "main", "div"],
+                "selectorPath": "#first-target",
+                "styleRevision": 1
+            ])
+            store.testHandleDOMSelectionMessage([
+                "nodeId": 7,
+                "preview": "<div id=\"second-target\">",
+                "attributes": [
+                    ["name": "id", "value": "second-target"],
+                ],
+                "path": ["html", "body", "main", "div"],
+                "selectorPath": "#second-target",
+                "styleRevision": 2
+            ])
+        }
+
+        let recovered = await waitUntil(timeoutNanoseconds: 2_000_000_000) {
+            inspector.selectedEntry?.id.nodeID == 7
+                && inspector.selectedEntry?.selectorPath == "#second-target"
+        }
+        #expect(recovered == true)
+    }
 }
 
 @MainActor
@@ -559,10 +662,12 @@ private final class StubDOMPageDriver: DOMPageDriving {
     private(set) weak var webView: WKWebView?
 
     private let graphStore: DOMGraphStore
-    private let rootSnapshot: DOMGraphSnapshot
+    private let reloadSnapshots: [DOMGraphSnapshot]
     private let requestedChildren: [Int: [DOMGraphNodeDescriptor]]
     private let selectionModeResult: DOMSelectionModeResult
     private let matchedStylesError: (any Error)?
+    private var pendingSelectedNodeID: Int?
+    private let reloadDelayNanoseconds: UInt64
 
     private(set) var requestedParentNodeIDs: [Int] = []
     private(set) var highlightedNodeIDs: [Int] = []
@@ -574,15 +679,18 @@ private final class StubDOMPageDriver: DOMPageDriving {
     init(
         graphStore: DOMGraphStore,
         rootSnapshot: DOMGraphSnapshot,
+        reloadSnapshots: [DOMGraphSnapshot]? = nil,
         requestedChildren: [Int: [DOMGraphNodeDescriptor]] = [:],
         selectionModeResult: DOMSelectionModeResult = .init(cancelled: true, requiredDepth: 0),
-        matchedStylesError: (any Error)? = nil
+        matchedStylesError: (any Error)? = nil,
+        reloadDelayNanoseconds: UInt64 = 0
     ) {
         self.graphStore = graphStore
-        self.rootSnapshot = rootSnapshot
+        self.reloadSnapshots = reloadSnapshots ?? [rootSnapshot]
         self.requestedChildren = requestedChildren
         self.selectionModeResult = selectionModeResult
         self.matchedStylesError = matchedStylesError
+        self.reloadDelayNanoseconds = reloadDelayNanoseconds
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
@@ -604,10 +712,25 @@ private final class StubDOMPageDriver: DOMPageDriving {
     func reloadDocument(preserveState: Bool, requestedDepth: Int?) async throws {
         reloadRequestedDepths.append(requestedDepth ?? 0)
         _ = requestedDepth
+        if reloadDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: reloadDelayNanoseconds)
+        }
+        let snapshot = reloadSnapshots[min(reloadRequestedDepths.count - 1, reloadSnapshots.count - 1)]
         if preserveState == false {
             graphStore.resetForDocumentUpdate()
         }
-        graphStore.applySnapshot(rootSnapshot)
+        let resolvedSnapshot: DOMGraphSnapshot
+        if preserveState,
+           let pendingSelectedNodeID,
+           snapshot.selectedNodeID == nil {
+            resolvedSnapshot = .init(root: snapshot.root, selectedNodeID: pendingSelectedNodeID)
+        } else {
+            resolvedSnapshot = snapshot
+        }
+        graphStore.applySnapshot(resolvedSnapshot)
+        if graphStore.selectedEntry?.id.nodeID == pendingSelectedNodeID {
+            self.pendingSelectedNodeID = nil
+        }
     }
 
     func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor] {
@@ -634,14 +757,14 @@ private final class StubDOMPageDriver: DOMPageDriving {
         return "{}"
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int) async throws -> DOMMatchedStylesPayload {
-        _ = maxRules
+    func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
+        _ = maxMatchedRules
         matchedStylesRequests.append(nodeId)
-        matchedStylesRequestRevisions.append(graphStore.selectedEntry?.styleRevision ?? -1)
+        matchedStylesRequestRevisions.append(graphStore.selectedEntry?.style.sourceRevision ?? -1)
         if let matchedStylesError {
             throw matchedStylesError
         }
-        return DOMMatchedStylesPayload(nodeId: nodeId, rules: [], truncated: false, blockedStylesheetCount: 0)
+        return DOMNodeStylePayload(nodeId: nodeId, matched: .empty, computed: .empty)
     }
 
     func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
@@ -671,7 +794,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     }
 
     func rememberPendingSelection(nodeId: Int?) {
-        _ = nodeId
+        pendingSelectedNodeID = nodeId
     }
 
     func removeNode(nodeId: Int) async {
@@ -802,6 +925,76 @@ private func makeExpandableDocumentTree() -> DOMGraphNodeDescriptor {
                                 layoutFlags: [],
                                 isRendered: true,
                                 children: []
+                            )
+                        ]
+                    )
+                ]
+            )
+        ]
+    )
+}
+
+private func makeRecoveryDocumentTree(
+    nodeID: Int = 6,
+    idValue: String = "target"
+) -> DOMGraphNodeDescriptor {
+    DOMGraphNodeDescriptor(
+        nodeID: 1,
+        nodeType: 9,
+        nodeName: "#document",
+        localName: "",
+        nodeValue: "",
+        attributes: [],
+        childCount: 1,
+        layoutFlags: [],
+        isRendered: true,
+        children: [
+            DOMGraphNodeDescriptor(
+                nodeID: 2,
+                nodeType: 1,
+                nodeName: "HTML",
+                localName: "html",
+                nodeValue: "",
+                attributes: [],
+                childCount: 1,
+                layoutFlags: [],
+                isRendered: true,
+                children: [
+                    DOMGraphNodeDescriptor(
+                        nodeID: 3,
+                        nodeType: 1,
+                        nodeName: "BODY",
+                        localName: "body",
+                        nodeValue: "",
+                        attributes: [],
+                        childCount: 1,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: [
+                            DOMGraphNodeDescriptor(
+                                nodeID: 5,
+                                nodeType: 1,
+                                nodeName: "MAIN",
+                                localName: "main",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 1,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    DOMGraphNodeDescriptor(
+                                        nodeID: nodeID,
+                                        nodeType: 1,
+                                        nodeName: "DIV",
+                                        localName: "div",
+                                        nodeValue: "",
+                                        attributes: [DOMAttribute(nodeId: nodeID, name: "id", value: idValue)],
+                                        childCount: 0,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
                             )
                         ]
                     )

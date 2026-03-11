@@ -31,6 +31,68 @@ type MatchedStylesPayload = {
     rules: MatchedStyleRule[];
     truncated: boolean;
     blockedStylesheetCount: number;
+    matchedPropertyNames: string[];
+};
+
+type StyleSectionKind = "element" | "pseudoElement" | "inherited";
+type StyleOrigin = "inline" | "attribute" | "author" | "user" | "userAgent" | "inspector";
+
+type StyleDeclaration = {
+    name: string;
+    value: string;
+    important: boolean;
+    isImplicit: boolean;
+    isOverridden: boolean;
+};
+
+type StyleSource = {
+    label: string;
+    url: string | null;
+    line: number | null;
+    column: number | null;
+};
+
+type StyleGrouping = {
+    kind: string | null;
+    text: string;
+};
+
+type StyleRule = {
+    origin: StyleOrigin;
+    selectorText: string;
+    matchedSelectorTexts: string[];
+    declarations: StyleDeclaration[];
+    source: StyleSource;
+    groupings: StyleGrouping[];
+};
+
+type StyleSection = {
+    kind: StyleSectionKind;
+    title: string | null;
+    relatedNodeId: number | null;
+    rules: StyleRule[];
+};
+
+type MatchedStyleState = {
+    sections: StyleSection[];
+    isTruncated: boolean;
+    blockedStylesheetCount: number;
+};
+
+type ComputedStyleProperty = {
+    name: string;
+    value: string;
+    isImplicit: boolean;
+};
+
+type ComputedStyleState = {
+    properties: ComputedStyleProperty[];
+};
+
+type NodeStylePayload = {
+    nodeId: number;
+    matched: MatchedStyleState;
+    computed: ComputedStyleState;
 };
 
 type ScopedStyleSheet = {
@@ -1464,7 +1526,8 @@ export function matchedStylesForNode(
         nodeId: identifier,
         rules: [],
         truncated: false,
-        blockedStylesheetCount: 0
+        blockedStylesheetCount: 0,
+        matchedPropertyNames: []
     };
 
     const element = resolveElement(identifier);
@@ -1475,6 +1538,9 @@ export function matchedStylesForNode(
     const inlineRule = makeInlineRule(element);
     if (inlineRule) {
         payload.rules.push(inlineRule);
+        for (const declaration of inlineRule.declarations) {
+            payload.matchedPropertyNames.push(declaration.name);
+        }
     }
     if (payload.rules.length >= maxRules) {
         payload.truncated = true;
@@ -1547,6 +1613,10 @@ export function matchedStylesForNode(
                 return true;
             }
 
+            for (const declaration of declarations) {
+                payload.matchedPropertyNames.push(declaration.name);
+            }
+
             if (payload.rules.length >= maxRules) {
                 payload.truncated = true;
                 return false;
@@ -1574,4 +1644,88 @@ export function matchedStylesForNode(
     }
 
     return payload;
+}
+
+function matchedStateFromPayload(nodeId: number, payload: MatchedStylesPayload): MatchedStyleState {
+    const rules: StyleRule[] = payload.rules.map((rule) => ({
+        origin: rule.origin === "inline" ? "inline" : "author",
+        selectorText: rule.selectorText,
+        matchedSelectorTexts: rule.origin === "author" ? [rule.selectorText] : [],
+        declarations: rule.declarations.map((declaration) => ({
+            name: declaration.name,
+            value: declaration.value,
+            important: declaration.important,
+            isImplicit: false,
+            isOverridden: false
+        })),
+        source: {
+            label: rule.sourceLabel,
+            url: null,
+            line: null,
+            column: null
+        },
+        groupings: rule.atRuleContext.map((text) => ({
+            kind: null,
+            text
+        }))
+    }));
+
+    const sections: StyleSection[] = rules.length
+        ? [{
+            kind: "element",
+            title: null,
+            relatedNodeId: nodeId,
+            rules
+        }]
+        : [];
+
+    return {
+        sections,
+        isTruncated: payload.truncated,
+        blockedStylesheetCount: payload.blockedStylesheetCount
+    };
+}
+
+function computedStyleForNode(identifier: number, matchedPayload: MatchedStylesPayload): ComputedStyleState {
+    const element = resolveElement(identifier);
+    if (!element) {
+        return {properties: []};
+    }
+
+    const computedStyle = element.ownerDocument?.defaultView?.getComputedStyle(element);
+    if (!computedStyle) {
+        return {properties: []};
+    }
+
+    const matchedPropertyNames = new Set<string>();
+    for (const name of matchedPayload.matchedPropertyNames) {
+        matchedPropertyNames.add(name);
+    }
+
+    const properties: ComputedStyleProperty[] = [];
+    for (let index = 0; index < computedStyle.length; index += 1) {
+        const name = computedStyle[index];
+        if (!name) {
+            continue;
+        }
+        properties.push({
+            name,
+            value: trimValue(computedStyle.getPropertyValue(name)),
+            isImplicit: !matchedPropertyNames.has(name)
+        });
+    }
+
+    return {properties};
+}
+
+export function stylesForNode(
+    identifier: number,
+    options: MatchedStylesOptions = {}
+): NodeStylePayload {
+    const matchedPayload = matchedStylesForNode(identifier, options);
+    return {
+        nodeId: identifier,
+        matched: matchedStateFromPayload(identifier, matchedPayload),
+        computed: computedStyleForNode(identifier, matchedPayload)
+    };
 }

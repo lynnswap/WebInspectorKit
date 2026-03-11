@@ -179,10 +179,22 @@ public final class WIDOMTreeViewController: NSViewController {
     }
 
     private func updateErrorPresentation() {
-        let shouldShowError = !(inspector.errorMessage?.isEmpty ?? true)
-        errorLabel.stringValue = shouldShowError ? (inspector.errorMessage ?? "") : ""
-        errorLabel.isHidden = !shouldShowError
-        inspectorWebView?.isHidden = false
+        guard let errorMessage = inspector.errorMessage,
+              errorMessage.isEmpty == false,
+              inspector.session.graphStore.rootID == nil else {
+            errorLabel.stringValue = ""
+            errorLabel.isHidden = true
+            inspectorWebView?.isHidden = false
+            return
+        }
+
+        errorLabel.stringValue = errorMessage
+        errorLabel.isHidden = false
+        inspectorWebView?.isHidden = true
+    }
+
+    var testShowsErrorLabel: Bool {
+        errorLabel.isHidden == false
     }
 }
 

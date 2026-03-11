@@ -55,6 +55,11 @@ final class DOMFrontendStore: NSObject {
     private let payloadNormalizer = DOMPayloadNormalizer()
 
     var onRecoverableError: (@MainActor (String) -> Void)?
+    var onSelectionSnapshotMiss: (@MainActor (DOMSelectionSnapshotPayload) -> Void)?
+    var onSelectionDidClear: (@MainActor () -> Void)?
+#if DEBUG
+    @ObservationIgnored private var requestedDocumentsForTesting: [(depth: Int, preserveState: Bool)] = []
+#endif
 
     init(session: DOMSession) {
         self.session = session
@@ -214,6 +219,9 @@ final class DOMFrontendStore: NSObject {
             return
         }
 
+#if DEBUG
+        requestedDocumentsForTesting.append((depth: depth, preserveState: preserveState))
+#endif
         inspectorLogger.notice(
             "requesting frontend document depth=\(depth, privacy: .public) preserveState=\(preserveState, privacy: .public)"
         )
@@ -260,7 +268,9 @@ private extension DOMFrontendStore {
         Task {
             await applyConfigurationToInspector()
             let didRequestDocument = await flushPendingWork()
-            if didRequestDocument == false, session.hasPageWebView {
+            if didRequestDocument == false,
+               session.hasPageWebView,
+               session.graphStore.rootID != nil {
                 let preserveState = session.graphStore.rootID != nil
                 await requestDocumentNow(
                     depth: preserveState ? configuration.fullReloadDepth : configuration.rootBootstrapDepth,
@@ -280,6 +290,7 @@ private extension DOMFrontendStore {
     }
 
     func handleDOMSelectionMessage(_ payload: Any) {
+        let selectionPayload = payloadNormalizer.selectionPayload(from: payload)
         let previousSelectedSnapshot: (
             id: DOMEntryID,
             preview: String,
@@ -292,10 +303,21 @@ private extension DOMFrontendStore {
                 preview: $0.preview,
                 path: $0.path,
                 attributes: $0.attributes,
-                styleRevision: $0.styleRevision
+                styleRevision: $0.style.sourceRevision
             )
         }
-        applyFrontendSelectionPayload(payloadNormalizer.selectionPayload(from: payload))
+        let didApplySelection = applyFrontendSelectionPayload(selectionPayload)
+        if didApplySelection {
+            session.rememberPendingSelection(nodeId: nil)
+        } else if let selectionPayload, let nodeID = selectionPayload.nodeID {
+            inspectorLogger.notice(
+                "frontend selection could not resolve authoritative nodeId=\(nodeID, privacy: .public); scheduling recovery"
+            )
+            onSelectionSnapshotMiss?(selectionPayload)
+        } else {
+            session.rememberPendingSelection(nodeId: nil)
+            onSelectionDidClear?()
+        }
         guard let selected = session.graphStore.selectedEntry else {
             return
         }
@@ -307,7 +329,7 @@ private extension DOMFrontendStore {
             previousSelectedSnapshot?.preview != selected.preview
                 || previousSelectedSnapshot?.path != selected.path
                 || previousSelectedSnapshot?.attributes != selected.attributes
-                || previousSelectedSnapshot?.styleRevision != selected.styleRevision
+                || previousSelectedSnapshot?.styleRevision != selected.style.sourceRevision
         )
         if didSelectNewNode || didStyleRelevantSnapshotChange {
             inspectorLogger.notice(
@@ -363,6 +385,11 @@ private extension DOMFrontendStore {
             if let method {
                 inspectorLogger.notice("routing DOM protocol method \(method, privacy: .public)")
             }
+            if let currentDocumentResponse = immediateFrontendResponseIfPossible(for: requestContext) {
+                inspectorLogger.notice("serving DOM.getDocument from authoritative graph state")
+                _ = await dispatchToFrontend(message: currentDocumentResponse)
+                return
+            }
             let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
             if let recoverableError = outcome.recoverableError {
                 onRecoverableError?(recoverableError)
@@ -406,7 +433,8 @@ private extension DOMFrontendStore {
         }
     }
 
-    func applyFrontendSelectionPayload(_ selectionPayload: DOMSelectionSnapshotPayload?) {
+    @discardableResult
+    func applyFrontendSelectionPayload(_ selectionPayload: DOMSelectionSnapshotPayload?) -> Bool {
         session.graphStore.applySelectionSnapshot(selectionPayload)
     }
 
@@ -702,6 +730,21 @@ private extension DOMFrontendStore {
         }
     }
 
+    private func immediateFrontendResponseIfPossible(
+        for context: ProtocolRequestContext?
+    ) -> [String: Any]? {
+        guard let context else {
+            return nil
+        }
+        guard context.method == "DOM.getDocument", session.graphStore.rootID != nil else {
+            return nil
+        }
+        guard context.documentGeneration == session.graphStore.documentGeneration else {
+            return nil
+        }
+        return makeCurrentDocumentResponse(id: context.id)
+    }
+
     private func shouldRequestFreshDocumentAfterStaleResponse(
         for context: ProtocolRequestContext
     ) -> Bool {
@@ -884,6 +927,10 @@ extension DOMFrontendStore {
         handleDOMSelectionMessage(payload)
     }
 
+    func testHandleReadyMessage() {
+        handleReadyMessage()
+    }
+
     func testPrepareForFrontendReloadIfNeeded() {
         prepareForFrontendReloadIfNeeded()
     }
@@ -910,8 +957,28 @@ extension DOMFrontendStore {
         await requestFreshDocumentAfterStaleNodeResponse()
     }
 
+    var testRequestedDocuments: [(depth: Int, preserveState: Bool)] {
+        requestedDocumentsForTesting
+    }
+
     func testParseProtocolIdentifier(_ value: Any?) -> Int? {
         parseProtocolIdentifier(value)
+    }
+
+    func testImmediateFrontendResponseIfPossible(
+        id: Int,
+        method: String,
+        nodeID: Int?,
+        documentGeneration: UInt64
+    ) -> [String: Any]? {
+        immediateFrontendResponseIfPossible(
+            for: .init(
+                id: id,
+                method: method,
+                nodeID: nodeID,
+                documentGeneration: documentGeneration
+            )
+        )
     }
 
     func testMakeCurrentDocumentResponse(id: Int) -> [String: Any]? {
