@@ -268,26 +268,6 @@ public final class DOMGraphStore {
         invalidateStyle(for: resolvedID, reason: reason)
     }
 
-    @available(*, deprecated, message: "Use beginStyleLoading(for:) instead.")
-    public func beginMatchedStylesLoading(for nodeID: Int) {
-        beginStyleLoading(for: nodeID)
-    }
-
-    @available(*, deprecated, message: "Use applyStyle(_:for:) instead.")
-    public func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for nodeID: Int) {
-        applyStyle(payload.stylePayload, for: nodeID)
-    }
-
-    @available(*, deprecated, message: "Use resetStyle(for:) instead.")
-    public func clearMatchedStyles(for nodeID: Int?) {
-        resetStyle(for: nodeID)
-    }
-
-    @available(*, deprecated, message: "Use invalidateStyle(for:reason:) instead.")
-    public func invalidateMatchedStyles(for nodeID: Int?) {
-        invalidateStyle(for: nodeID, reason: .manualRefresh)
-    }
-
     public func updateSelectedAttribute(name: String, value: String) {
         guard let selectedID, let entry = entriesByID[selectedID] else {
             return

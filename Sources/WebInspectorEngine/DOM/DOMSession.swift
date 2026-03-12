@@ -211,11 +211,6 @@ public extension DOMSession {
     func styles(nodeId: Int, maxMatchedRules: Int = 0) async throws -> DOMNodeStylePayload {
         try await pageAgent.styles(nodeId: nodeId, maxMatchedRules: maxMatchedRules)
     }
-
-    @available(*, deprecated, message: "Use styles(nodeId:maxMatchedRules:) instead.")
-    func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
-        try await styles(nodeId: nodeId, maxMatchedRules: maxRules).legacyMatchedStylesPayload
-    }
 }
 
 // MARK: - Document API

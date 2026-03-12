@@ -28,8 +28,8 @@ struct DOMFrontendStoreTests {
         ])
 
         #expect(graphStore.selectedEntry?.id.nodeID == 3)
-        #expect(graphStore.selectedEntry?.isLoadingMatchedStyles == false)
-        #expect(graphStore.selectedEntry?.matchedStyles.isEmpty == true)
+        #expect(graphStore.selectedEntry?.style.isLoading == false)
+        #expect(graphStore.selectedEntry?.style.matched.isEmpty == true)
     }
 
     @Test

@@ -2620,20 +2620,5 @@ extension DOMTransportDriver {
         )
     }
 
-    @available(*, deprecated, message: "Use testMakeStylePayloadForFailures instead.")
-    func testMakeMatchedStylesPayloadForFailures(
-        nodeId: Int,
-        maxRules: Int,
-        inlineError: any Error,
-        matchedError: any Error
-    ) throws -> DOMMatchedStylesPayload {
-        try testMakeStylePayloadForFailures(
-            nodeId: nodeId,
-            maxMatchedRules: maxRules,
-            inlineError: inlineError,
-            matchedError: matchedError,
-            computedError: matchedError
-        ).legacyMatchedStylesPayload
-    }
 }
 #endif

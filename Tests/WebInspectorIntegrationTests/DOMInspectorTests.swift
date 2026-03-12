@@ -120,23 +120,37 @@ struct DOMInspectorTests {
                     styleRevision: 0
                 )
             )
-            inspector.session.graphStore.applyMatchedStyles(
+            inspector.session.graphStore.applyStyle(
                 .init(
                     nodeId: selectedNodeID,
-                    rules: [
-                        DOMMatchedStyleRule(
-                            origin: .author,
-                            selectorText: ".target",
-                            declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                            sourceLabel: "inline"
-                        ),
-                    ],
-                    truncated: true,
-                    blockedStylesheetCount: 3
+                    matched: .init(
+                        sections: [
+                            .init(
+                                kind: .element,
+                                rules: [
+                                    DOMStyleRule(
+                                        origin: .author,
+                                        selectorText: ".target",
+                                        declarations: [
+                                            DOMStyleDeclaration(
+                                                name: "color",
+                                                value: "red",
+                                                important: false
+                                            )
+                                        ],
+                                        source: .init(label: "inline")
+                                    )
+                                ]
+                            )
+                        ],
+                        isTruncated: true,
+                        blockedStylesheetCount: 3
+                    ),
+                    computed: .empty
                 ),
                 for: selectedNodeID
             )
-            inspector.session.graphStore.beginMatchedStylesLoading(for: selectedNodeID)
+            inspector.session.graphStore.beginStyleLoading(for: selectedNodeID)
 
             inspector.detach()
 
@@ -253,8 +267,8 @@ struct DOMInspectorTests {
             }
 
             do {
-                let payload = try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
-                #expect(payload.rules.contains(where: { $0.selectorText.contains("#content") }))
+                let payload = try await inspector.session.styles(nodeId: contentNodeID, maxMatchedRules: 0)
+                #expect(payload.matched.allRules.contains(where: { $0.selectorText.contains("#content") }))
                 #expect(inspector.errorMessage == nil)
             } catch {
                 Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")

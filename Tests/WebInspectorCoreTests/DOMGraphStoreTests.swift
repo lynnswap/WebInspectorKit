@@ -86,19 +86,27 @@ struct DOMGraphStoreTests {
                 styleRevision: 1
             )
         )
-        store.applyMatchedStyles(
+        store.applyStyle(
             .init(
                 nodeId: 42,
-                rules: [
-                    .init(
-                        origin: .author,
-                        selectorText: ".target",
-                        declarations: [.init(name: "color", value: "red", important: false)],
-                        sourceLabel: "<style>"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 2
+                matched: .init(
+                    sections: [
+                        .init(
+                            kind: .element,
+                            rules: [
+                                .init(
+                                    origin: .author,
+                                    selectorText: ".target",
+                                    declarations: [.init(name: "color", value: "red", important: false)],
+                                    source: .init(label: "<style>")
+                                )
+                            ]
+                        )
+                    ],
+                    isTruncated: true,
+                    blockedStylesheetCount: 2
+                ),
+                computed: .empty
             ),
             for: 42
         )
@@ -106,10 +114,10 @@ struct DOMGraphStoreTests {
         store.applySelectionSnapshot(nil)
 
         #expect(store.selectedID == nil)
-        #expect(store.entry(forNodeID: 42)?.matchedStyles.isEmpty == false)
-        #expect(store.entry(forNodeID: 42)?.matchedStylesTruncated == true)
-        #expect(store.entry(forNodeID: 42)?.blockedStylesheetCount == 2)
-        #expect(store.entry(forNodeID: 42)?.isLoadingMatchedStyles == false)
+        #expect(store.entry(forNodeID: 42)?.style.matched.isEmpty == false)
+        #expect(store.entry(forNodeID: 42)?.style.matched.isTruncated == true)
+        #expect(store.entry(forNodeID: 42)?.style.matched.blockedStylesheetCount == 2)
+        #expect(store.entry(forNodeID: 42)?.style.isLoading == false)
     }
 
     @Test

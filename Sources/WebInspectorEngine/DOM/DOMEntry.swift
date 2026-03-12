@@ -88,11 +88,6 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         path: [String] = [],
         selectorPath: String = "",
         styleRevision: Int? = nil,
-        matchedStyles: [DOMMatchedStyleRule]? = nil,
-        isLoadingMatchedStyles: Bool? = nil,
-        needsMatchedStylesRefresh: Bool? = nil,
-        matchedStylesTruncated: Bool? = nil,
-        blockedStylesheetCount: Int? = nil,
         style: DOMStyleState = DOMStyleState()
     ) {
         self.id = id
@@ -113,25 +108,6 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         if let styleRevision {
             style.recordSourceRevision(styleRevision)
         }
-        if let matchedStyles {
-            style.setMatchedForCompatibility(
-                rules: matchedStyles.map(\.styleRule),
-                isTruncated: matchedStylesTruncated ?? false,
-                blockedStylesheetCount: blockedStylesheetCount ?? 0
-            )
-        } else if matchedStylesTruncated != nil || blockedStylesheetCount != nil {
-            style.setMatchedForCompatibility(
-                rules: style.matched.allRules,
-                isTruncated: matchedStylesTruncated ?? style.matched.isTruncated,
-                blockedStylesheetCount: blockedStylesheetCount ?? style.matched.blockedStylesheetCount
-            )
-        }
-        if let isLoadingMatchedStyles {
-            style.setLoadStateForCompatibility(isLoading: isLoadingMatchedStyles)
-        }
-        if let needsMatchedStylesRefresh {
-            style.setNeedsRefreshForCompatibility(needsMatchedStylesRefresh)
-        }
     }
 
     public nonisolated static func == (lhs: DOMEntry, rhs: DOMEntry) -> Bool {
@@ -142,77 +118,6 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         hasher.combine(id)
     }
 
-    @available(*, deprecated, message: "Use style.sourceRevision instead.")
-    public var styleRevision: Int {
-        get {
-            style.sourceRevision
-        }
-        set {
-            style.recordSourceRevision(newValue)
-        }
-    }
-
-    @available(*, deprecated, message: "Use style.matched.allRules instead.")
-    public var matchedStyles: [DOMMatchedStyleRule] {
-        get {
-            style.matched.allRules.map(DOMMatchedStyleRule.init)
-        }
-        set {
-            style.setMatchedForCompatibility(
-                rules: newValue.map(\.styleRule),
-                isTruncated: style.matched.isTruncated,
-                blockedStylesheetCount: style.matched.blockedStylesheetCount
-            )
-        }
-    }
-
-    @available(*, deprecated, message: "Use style.isLoading instead.")
-    public var isLoadingMatchedStyles: Bool {
-        get {
-            style.isLoading
-        }
-        set {
-            style.setLoadStateForCompatibility(isLoading: newValue)
-        }
-    }
-
-    @available(*, deprecated, message: "Use style.needsRefresh instead.")
-    public var needsMatchedStylesRefresh: Bool {
-        get {
-            style.needsRefresh
-        }
-        set {
-            style.setNeedsRefreshForCompatibility(newValue)
-        }
-    }
-
-    @available(*, deprecated, message: "Use style.matched.isTruncated instead.")
-    public var matchedStylesTruncated: Bool {
-        get {
-            style.matched.isTruncated
-        }
-        set {
-            style.setMatchedForCompatibility(
-                rules: style.matched.allRules,
-                isTruncated: newValue,
-                blockedStylesheetCount: style.matched.blockedStylesheetCount
-            )
-        }
-    }
-
-    @available(*, deprecated, message: "Use style.matched.blockedStylesheetCount instead.")
-    public var blockedStylesheetCount: Int {
-        get {
-            style.matched.blockedStylesheetCount
-        }
-        set {
-            style.setMatchedForCompatibility(
-                rules: style.matched.allRules,
-                isTruncated: style.matched.isTruncated,
-                blockedStylesheetCount: newValue
-            )
-        }
-    }
 }
 
 public struct DOMGraphNodeDescriptor: Sendable {

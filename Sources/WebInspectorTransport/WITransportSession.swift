@@ -183,7 +183,7 @@ package extension WITransportSession {
         return await router.events(scope: scope, methods: methods, bufferingLimit: bufferingLimit)
     }
 
-    package func pageTargetChangeStream(
+    func pageTargetChangeStream(
         bufferingLimit: Int? = nil
     ) async -> AsyncStream<WITransportPageTargetChange> {
         guard let router else {

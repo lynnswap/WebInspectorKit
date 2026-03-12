@@ -7,7 +7,7 @@ package protocol InspectorTransportCapabilityProviding: AnyObject {
 }
 
 package extension InspectorTransportCapabilityProviding {
-    package var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
+    var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
         nil
     }
 }
