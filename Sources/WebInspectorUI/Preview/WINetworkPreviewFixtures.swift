@@ -1,7 +1,7 @@
 #if DEBUG
 import Foundation
-@_spi(PreviewSupport) import WebInspectorEngine
-@_spi(PreviewSupport) import WebInspectorRuntime
+@_spi(PreviewSupport) import WebInspectorCore
+@_spi(PreviewSupport) import WebInspectorNetwork
 
 @MainActor
 enum WINetworkPreviewFixtures {
@@ -13,14 +13,15 @@ enum WINetworkPreviewFixtures {
         case bodyPreviewText
     }
 
-    static func makeInspector(mode: Mode) -> WINetworkModel {
+    static func makeInspector(mode: Mode) -> WINetworkInspectorStore {
         let session = NetworkSession()
-        let inspector = WINetworkModel(session: session)
+        let inspector = WINetworkInspectorStore(session: session)
         applySampleData(to: inspector, mode: mode)
         return inspector
     }
 
-    static func applySampleData(to inspector: WINetworkModel, mode: Mode) {
+    static func applySampleData(to inspector: WINetworkInspectorStore, mode: Mode) {
+        let queryState = WINetworkQueryState(inspector: inspector)
         let payload: NSDictionary
         switch mode {
         case .root:
@@ -38,25 +39,27 @@ enum WINetworkPreviewFixtures {
         inspector.wiApplyPreviewBatch(payload)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
-            inspector.selectEntry(inspector.displayEntries.first)
+            inspector.selectEntry(queryState.displayEntries.first)
         case .root, .rootLongTitle:
             inspector.selectEntry(nil)
         }
     }
 
-    static func makeDetailContext() -> (inspector: WINetworkModel, entry: NetworkEntry)? {
+    static func makeDetailContext() -> (inspector: WINetworkInspectorStore, entry: NetworkEntry)? {
         let inspector = makeInspector(mode: .detail)
-        guard let entry = inspector.displayEntries.first else {
+        let queryState = WINetworkQueryState(inspector: inspector)
+        guard let entry = queryState.displayEntries.first else {
             return nil
         }
         inspector.selectEntry(entry)
         return (inspector, entry)
     }
 
-    static func makeBodyPreviewContext(textMode: Bool = false) -> (inspector: WINetworkModel, entry: NetworkEntry, body: NetworkBody)? {
+    static func makeBodyPreviewContext(textMode: Bool = false) -> (inspector: WINetworkInspectorStore, entry: NetworkEntry, body: NetworkBody)? {
         let inspector = makeInspector(mode: textMode ? .bodyPreviewText : .bodyPreviewObjectTree)
+        let queryState = WINetworkQueryState(inspector: inspector)
         guard
-            let entry = inspector.displayEntries.first,
+            let entry = queryState.displayEntries.first,
             let body = entry.responseBody ?? entry.requestBody
         else {
             return nil

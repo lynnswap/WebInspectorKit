@@ -1,6 +1,6 @@
 import Observation
 import OSLog
-import WebInspectorEngine
+import WebInspectorCore
 import WebInspectorScripts
 import WebKit
 
@@ -333,7 +333,7 @@ private extension DOMFrontendStore {
         )
         if didSelectNewNode || didStyleRelevantSnapshotChange {
             inspectorLogger.notice(
-                "frontend selection updated nodeId=\(nodeID, privacy: .public); matched styles refresh is delegated to WIDOMModel"
+                "frontend selection updated nodeId=\(nodeID, privacy: .public); matched styles refresh is delegated to WIDOMInspectorStore"
             )
         }
     }

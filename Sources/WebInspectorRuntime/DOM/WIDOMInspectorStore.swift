@@ -2,18 +2,15 @@ import OSLog
 import Observation
 import ObservationBridge
 import WebKit
-import WebInspectorEngine
+import WebInspectorCore
 import WebInspectorTransport
-
-#if canImport(AppKit)
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
 import AppKit
 #endif
 
-#if canImport(UIKit)
-import UIKit
-#endif
-
-private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMModel")
+private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspectorStore")
 private let domDeleteUndoHistoryLimit = 128
 private let domGraphObservationThrottle = ObservationThrottle(
     interval: .milliseconds(80),
@@ -45,7 +42,7 @@ public struct WIDOMTreeRow: Identifiable, Hashable, Sendable {
 
 @MainActor
 @Observable
-public final class WIDOMModel {
+public final class WIDOMInspectorStore {
     private struct StyleRefreshKey: Hashable {
         let entryID: DOMEntryID
         let nodeID: Int
@@ -56,7 +53,7 @@ public final class WIDOMModel {
         let nodeID: Int
     }
 
-    public let session: DOMSession
+    package let session: DOMSession
 
     public private(set) var errorMessage: String?
     public private(set) var isSelectingElement = false
@@ -77,9 +74,7 @@ public final class WIDOMModel {
     @ObservationIgnored private var frontendSelectionRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private var frontendSelectionRecoveryKey: FrontendSelectionRecoveryKey?
     @ObservationIgnored private let frontendStore: DOMFrontendStore
-#if canImport(UIKit)
-    @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
-#endif
+    @ObservationIgnored private var uiBridge: (any WIDOMUIBridge)?
 
     package init(
         session: DOMSession,
@@ -99,14 +94,14 @@ public final class WIDOMModel {
     }
 
     isolated deinit {
+        if isSelectingElement || selectionTask != nil {
+            finishSelectionUIIfNeeded()
+        }
         selectionTask?.cancel()
         pendingDeleteTask?.cancel()
         styleRefreshTask?.cancel()
         frontendSelectionRecoveryTask?.cancel()
         clearDeleteUndoHistory()
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
     }
 
     public var hasPageWebView: Bool {
@@ -130,6 +125,10 @@ public final class WIDOMModel {
     package func setRecoverableErrorHandler(_ handler: (@MainActor (String) -> Void)?) {
         recoverableErrorHandler = handler
         frontendStore.onRecoverableError = handler
+    }
+
+    package func setUIBridge(_ bridge: (any WIDOMUIBridge)?) {
+        uiBridge = bridge
     }
 
     package func makeInspectorWebView() -> WKWebView {
@@ -242,7 +241,7 @@ public final class WIDOMModel {
         return renderedAttributes.isEmpty ? nil : renderedAttributes
     }
 
-    func attach(to webView: WKWebView) {
+    package func attach(to webView: WKWebView) {
         resetInteractionState()
         if let previousPageWebView = session.lastPageWebView, previousPageWebView !== webView {
             clearTreeState()
@@ -257,12 +256,12 @@ public final class WIDOMModel {
         }
     }
 
-    func suspend() {
+    package func suspend() {
         resetInteractionState()
         session.suspend()
     }
 
-    func detach() {
+    package func detach() {
         resetInteractionState()
         session.detach()
         frontendStore.detachInspectorWebView()
@@ -270,7 +269,7 @@ public final class WIDOMModel {
         errorMessage = nil
     }
 
-    func setAutoSnapshotEnabled(_ enabled: Bool) {
+    package func setAutoSnapshotEnabled(_ enabled: Bool) {
         guard session.hasPageWebView else {
             return
         }
@@ -323,7 +322,7 @@ public final class WIDOMModel {
     }
 }
 
-private extension WIDOMModel {
+private extension WIDOMInspectorStore {
     func startObservingGraphStore() {
         let graphStore = session.graphStore
 
@@ -436,9 +435,7 @@ private extension WIDOMModel {
         guard isSelectingElement || selectionTask != nil else { return }
         selectionTask?.cancel()
         selectionTask = nil
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
+        finishSelectionUIIfNeeded()
         Task {
             await session.cancelSelectionMode()
         }
@@ -451,7 +448,7 @@ private extension WIDOMModel {
             do {
                 let text = try await session.selectionCopyText(nodeId: nodeId, kind: kind)
                 guard !text.isEmpty else { return }
-                copyToPasteboard(text)
+                copyTextToPasteboard(text)
             } catch {
                 domViewLogger.error("copy \(kind.rawValue, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -485,12 +482,7 @@ private extension WIDOMModel {
 
     func startSelectionMode() {
         guard session.hasPageWebView else { return }
-#if canImport(AppKit)
-        focusPageWindowForSelectionIfNeeded()
-#endif
-#if canImport(UIKit)
-        disablePageScrollingForSelection()
-#endif
+        prepareSelectionUIIfNeeded()
         isSelectingElement = true
         Task { await session.hideHighlight() }
         selectionTask?.cancel()
@@ -499,9 +491,7 @@ private extension WIDOMModel {
             defer {
                 self.isSelectingElement = false
                 self.selectionTask = nil
-#if canImport(UIKit)
-                self.restorePageScrollingState()
-#endif
+                self.finishSelectionUIIfNeeded()
             }
             do {
                 let result = try await self.session.beginSelectionMode()
@@ -534,31 +524,7 @@ private extension WIDOMModel {
         pendingDeleteTask?.cancel()
         pendingDeleteTask = nil
         clearDeleteUndoHistory()
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
     }
-
-#if canImport(AppKit)
-    func focusPageWindowForSelectionIfNeeded() {
-        guard let pageWebView = session.lastPageWebView else {
-            return
-        }
-
-        let pageWindow = unsafe pageWebView.window
-        guard let pageWindow else {
-            return
-        }
-
-        if NSApp.isActive == false {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        pageWindow.makeKeyAndOrderFront(nil)
-        if pageWindow.firstResponder !== pageWebView {
-            pageWindow.makeFirstResponder(pageWebView)
-        }
-    }
-#endif
 
     func clearTreeState() {
         expandedEntryIDs.removeAll(keepingCapacity: false)
@@ -607,10 +573,6 @@ private extension WIDOMModel {
             }
             await operation()
         }
-    }
-
-    func copyToPasteboard(_ text: String) {
-        copyToSystemPasteboard(text)
     }
 
     func registerUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
@@ -1013,31 +975,55 @@ private extension WIDOMModel {
         errorMessage = message
         recoverableErrorHandler?(message)
     }
+}
 
-#if canImport(UIKit)
-    func copyToSystemPasteboard(_ text: String) {
-        UIPasteboard.general.string = text
-    }
-
-    func disablePageScrollingForSelection() {
-        guard let scrollView = session.pageWebView?.scrollView else { return }
-        if scrollBackup == nil {
-            scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
-        }
-        scrollView.isScrollEnabled = false
-        scrollView.panGestureRecognizer.isEnabled = false
-    }
-
-    func restorePageScrollingState() {
-        guard let scrollView = session.pageWebView?.scrollView else {
-            scrollBackup = nil
+private extension WIDOMInspectorStore {
+    func prepareSelectionUIIfNeeded() {
+        if let uiBridge {
+            uiBridge.prepareForSelection(using: session)
             return
         }
-        if let backup = scrollBackup {
-            scrollView.isScrollEnabled = backup.isScrollEnabled
-            scrollView.panGestureRecognizer.isEnabled = backup.isPanEnabled
+#if canImport(UIKit)
+        session.pageWebView?.scrollView.isScrollEnabled = false
+        session.pageWebView?.scrollView.panGestureRecognizer.isEnabled = false
+#elseif canImport(AppKit)
+        if let pageWebView = session.pageWebView ?? session.lastPageWebView,
+           let pageWindow = unsafe pageWebView.window {
+            if NSApp.isActive == false {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            pageWindow.makeKeyAndOrderFront(nil)
+            if pageWindow.firstResponder !== pageWebView {
+                pageWindow.makeFirstResponder(pageWebView)
+            }
         }
-        scrollBackup = nil
-    }
 #endif
+    }
+
+    func finishSelectionUIIfNeeded() {
+        if let uiBridge {
+            uiBridge.finishSelection(using: session)
+            return
+        }
+#if canImport(UIKit)
+        session.pageWebView?.scrollView.isScrollEnabled = true
+        session.pageWebView?.scrollView.panGestureRecognizer.isEnabled = true
+#endif
+    }
+
+    func copyTextToPasteboard(_ text: String) {
+        if let uiBridge {
+            uiBridge.copyToPasteboard(text)
+            return
+        }
+#if canImport(UIKit)
+        UIPasteboard.general.string = text
+#elseif canImport(AppKit)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+#else
+        _ = text
+#endif
+    }
 }

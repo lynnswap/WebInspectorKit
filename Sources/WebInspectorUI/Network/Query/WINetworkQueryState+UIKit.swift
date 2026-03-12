@@ -4,9 +4,9 @@ import UIKit
 @MainActor
 final class WINetworkSearchControllerCoordinator: NSObject, UISearchResultsUpdating {
     let searchController: UISearchController
-    private unowned let queryModel: WINetworkQueryModel
+    private unowned let queryModel: WINetworkQueryState
 
-    init(queryModel: WINetworkQueryModel) {
+    init(queryModel: WINetworkQueryState) {
         self.queryModel = queryModel
         let searchController = UISearchController(searchResultsController: nil)
         searchController.obscuresBackgroundDuringPresentation = false

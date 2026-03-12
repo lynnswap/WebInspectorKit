@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class BrowserViewModelInspectorRegressionTests: XCTestCase {
     private var retainedWindows: [NSWindow] = []
-    private var retainedInspectors: [WIModel] = []
+    private var retainedInspectors: [WIInspectorController] = []
     private var temporaryDirectories: [URL] = []
 
     override func tearDown() {
@@ -62,7 +62,7 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         )
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIModel()
+        let inspectorController = WIInspectorController()
         retainedInspectors.append(inspectorController)
         let browserWindow = makeBrowserWindow(model: model)
 
@@ -122,7 +122,7 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIModel()
+        let inspectorController = WIInspectorController()
         retainedInspectors.append(inspectorController)
         let browserWindow = makeBrowserWindow(model: model)
 
@@ -203,14 +203,14 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 @MainActor
 private extension BrowserViewModelInspectorRegressionTests {
     func assertInspectorAttachBehaviorAcrossHTTPSNavigation(
-        tabs: [WITab]
+        tabs: [WIInspectorTab]
     ) async throws {
         let tabIdentifiers = tabs.map { $0.identifier }.joined(separator: ",")
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIModel()
+        let inspectorController = WIInspectorController()
         retainedInspectors.append(inspectorController)
         let browserWindow = makeBrowserWindow(model: model)
 
@@ -288,11 +288,11 @@ private extension BrowserViewModelInspectorRegressionTests {
 
     func presentInspectorWindow(
         model: BrowserViewModel,
-        inspectorController: WIModel,
-        tabs: [WITab],
+        inspectorController: WIInspectorController,
+        tabs: [WIInspectorTab],
         parentWindow: NSWindow
     ) {
-        let container = WITabViewController(
+        let container = WIInspectorViewController(
             inspectorController,
             webView: model.webView,
             tabs: tabs

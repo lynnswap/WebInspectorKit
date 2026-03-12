@@ -1,6 +1,6 @@
 import Foundation
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 #if canImport(AppKit)
 import AppKit
@@ -10,19 +10,19 @@ import SwiftUI
 public final class WINetworkViewController: NSSplitViewController {
     private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.NetworkSplitView")
 
-    private let inspector: WINetworkModel
-    private let queryModel: WINetworkQueryModel
+    private let inspector: WINetworkInspectorStore
+    private let queryModel: WINetworkQueryState
     private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
-    public convenience init(inspector: WINetworkModel) {
+    public convenience init(inspector: WINetworkInspectorStore) {
         self.init(
             inspector: inspector,
-            queryModel: WINetworkQueryModel(inspector: inspector)
+            queryModel: WINetworkQueryState(inspector: inspector)
         )
     }
 
-    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
         self.inspector = inspector
         self.queryModel = queryModel
         super.init(nibName: nil, bundle: nil)
@@ -61,10 +61,10 @@ public final class WINetworkViewController: NSSplitViewController {
 
 @MainActor
 private final class NetworkMacDetailViewController: NSViewController {
-    private let inspector: WINetworkModel
+    private let inspector: WINetworkInspectorStore
     private var hostingController: NSHostingController<NetworkMacDetailTab>?
 
-    init(inspector: WINetworkModel) {
+    init(inspector: WINetworkInspectorStore) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -101,15 +101,15 @@ private final class NetworkMacDetailViewController: NSViewController {
 
 @MainActor
 private struct NetworkMacListTab: View {
-    @Bindable var inspector: WINetworkModel
-    @Bindable var queryModel: WINetworkQueryModel
+    @Bindable var inspector: WINetworkInspectorStore
+    @Bindable var queryModel: WINetworkQueryState
 
     var body: some View {
         Group {
-            if inspector.displayEntries.isEmpty {
+            if queryModel.displayEntries.isEmpty {
                 emptyState
             } else {
-                Table(inspector.displayEntries, selection: tableSelection) {
+                Table(queryModel.displayEntries, selection: tableSelection) {
                     TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
                         Text(entry.displayName)
                             .lineLimit(1)
@@ -185,7 +185,7 @@ private struct NetworkMacListTab: View {
             },
             set: { newSelection in
                 let selected = newSelection.first
-                let selectedEntry = inspector.displayEntries.first(where: { $0.id == selected })
+                let selectedEntry = queryModel.displayEntries.first(where: { $0.id == selected })
                 inspector.selectEntry(selectedEntry)
             }
         )
@@ -194,7 +194,7 @@ private struct NetworkMacListTab: View {
 
 @MainActor
 private struct NetworkMacDetailTab: View {
-    @Bindable var inspector: WINetworkModel
+    @Bindable var inspector: WINetworkInspectorStore
 
     private var entry: NetworkEntry? {
         inspector.selectedEntry

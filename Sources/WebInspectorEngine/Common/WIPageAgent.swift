@@ -1,7 +1,7 @@
 import WebKit
 
 @MainActor
-protocol PageAgent: AnyObject {
+package protocol PageAgent: AnyObject {
     var webView: WKWebView? { get set }
 
     func willDetachPageWebView(_ webView: WKWebView)
@@ -10,7 +10,7 @@ protocol PageAgent: AnyObject {
 }
 
 @MainActor
-extension PageAgent {
+package extension PageAgent {
     func attachPageWebView(_ newWebView: WKWebView?) {
         replacePageWebView(with: newWebView)
     }

@@ -2,8 +2,8 @@
 import Foundation
 import ObservationBridge
 import UIKit
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 @MainActor
 public final class WINetworkBodyPreviewViewController: UIViewController, UICollectionViewDelegate {
@@ -35,7 +35,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private let entry: NetworkEntry
-    private let inspector: WINetworkModel
+    private let inspector: WINetworkInspectorStore
     private let bodyState: NetworkBody
 
     private var mode: NetworkBodyPreviewRenderModel.Mode = .text
@@ -71,7 +71,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         return view
     }()
 
-    public init(entry: NetworkEntry, inspector: WINetworkModel, bodyState: NetworkBody) {
+    public init(entry: NetworkEntry, inspector: WINetworkInspectorStore, bodyState: NetworkBody) {
         self.entry = entry
         self.inspector = inspector
         self.bodyState = bodyState

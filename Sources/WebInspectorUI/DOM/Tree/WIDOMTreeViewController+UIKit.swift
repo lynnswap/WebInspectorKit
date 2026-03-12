@@ -1,6 +1,6 @@
 import WebKit
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorDOM
 import ObservationBridge
 
 #if canImport(UIKit)
@@ -8,7 +8,7 @@ import UIKit
 
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private let showsNavigationControls: Bool
     private var observationHandles: Set<ObservationHandle> = []
     // Keep coalescing here because navigation controls are driven by multiple observed states.
@@ -23,11 +23,11 @@ public final class WIDOMTreeViewController: UIViewController {
         )
     }()
 
-    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+    public init(inspector: WIDOMInspectorStore, showsNavigationControls: Bool = true) {
         self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
-        
     }
 
     @available(*, unavailable)

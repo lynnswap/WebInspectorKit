@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorBridgeObjCShim
+import WebInspectorSPIObjCShim
 import WebKit
 
 @MainActor

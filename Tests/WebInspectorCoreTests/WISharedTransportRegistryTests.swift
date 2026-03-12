@@ -1,6 +1,8 @@
 import Testing
 import WebKit
-@testable import WebInspectorEngine
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
+@testable import WebInspectorNetwork
 @testable import WebInspectorTransport
 
 @MainActor

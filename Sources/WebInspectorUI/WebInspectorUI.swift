@@ -1,2 +1,1 @@
-@_exported import WebInspectorRuntime
-@_exported import WebInspectorEngine
+public enum WebInspectorUIModule {}

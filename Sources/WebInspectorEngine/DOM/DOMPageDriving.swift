@@ -1,3 +1,4 @@
+import WebInspectorCore
 import WebKit
 
 @MainActor

@@ -1,8 +1,10 @@
 import Testing
 import WebKit
 @testable import WebInspectorUI
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
+@testable import WebInspectorNetwork
+@testable import WebInspectorShell
 
 @MainActor
 struct ControllerActivationTests {
@@ -20,7 +22,7 @@ struct ControllerActivationTests {
 
     @Test
     func customTabWithoutBuiltInIdentifiersDoesNotAttachNetworkSession() {
-        let customTab = WITab(
+        let customTab = WIInspectorTab(
             id: "custom_network",
             title: "Custom Network",
             systemImage: "network"
@@ -36,7 +38,7 @@ struct ControllerActivationTests {
 
     @Test
     func customTabWithoutBuiltInIdentifiersDoesNotAttachDOMSession() {
-        let customTab = WITab(
+        let customTab = WIInspectorTab(
             id: "custom_dom",
             title: "Custom DOM",
             systemImage: "doc"
@@ -53,7 +55,7 @@ struct ControllerActivationTests {
 
     @Test
     func connectWithoutPanelDefaultsNetworkSessionToActiveLogging() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -141,7 +143,7 @@ struct ControllerActivationTests {
         #expect(controller.dom.session.hasPageWebView == false)
         #expect(controller.network.session.hasAttachedPageWebView == false)
 
-        store.setTabs([.dom(), .network()])
+        store.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
         #expect(controller.lifecycle == .suspended)
         #expect(controller.dom.session.hasPageWebView == false)
         #expect(controller.network.session.hasAttachedPageWebView == false)
@@ -160,7 +162,7 @@ struct ControllerActivationTests {
         controller.connect(to: webView)
         #expect(controller.network.session.lastPageWebView == nil)
 
-        store.setTabs([.dom(), .network()])
+        store.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
         #expect(controller.network.session.lastPageWebView === webView)
     }
 
@@ -197,7 +199,7 @@ struct ControllerActivationTests {
             )
         )
 
-        store.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
+        store.configurePanels([WIInspectorTab.dom(title: "DOM").configuration, domSecondaryTab(title: "Elements").configuration])
 
         #expect(controller.dom.selectedEntry?.id.nodeID == 42)
         #expect(controller.dom.selectedEntry?.preview == "<div id='selected'>")
@@ -205,7 +207,7 @@ struct ControllerActivationTests {
 
     @Test
     func disconnectKeepsNetworkStoppedForControllerOnlyUsage() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
@@ -228,7 +230,7 @@ struct ControllerActivationTests {
         controller.disconnect()
         selectTab("wi_network", in: store)
 
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
         #expect(controller.network.session.mode == .stopped)
         #expect(controller.network.session.lastPageWebView == nil)
     }
@@ -239,11 +241,11 @@ struct ControllerActivationTests {
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
-        #expect(store.selectedTab?.id == "wi_dom")
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_dom")
 
         selectTab("wi_network", in: store)
 
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
         #expect(controller.network.session.mode == .active)
     }
 
@@ -260,7 +262,7 @@ struct ControllerActivationTests {
 
             selectTab(expectedTabID, in: store)
 
-            #expect(store.selectedTab?.id == expectedTabID)
+            #expect(store.selectedPanelConfiguration?.identifier == expectedTabID)
             #expect(controller.network.session.mode == expectedMode)
         }
     }
@@ -273,11 +275,11 @@ struct ControllerActivationTests {
         for _ in 0..<3 {
             controller.connect(to: webView)
             #expect(controller.dom.session.hasPageWebView == true)
-            let expectedModeOnConnect: NetworkLoggingMode = store.selectedTab?.id == "wi_network" ? .active : .buffering
+            let expectedModeOnConnect: NetworkLoggingMode = store.selectedPanelConfiguration?.identifier == "wi_network" ? .active : .buffering
             #expect(controller.network.session.mode == expectedModeOnConnect)
 
             selectTab("wi_network", in: store)
-            #expect(store.selectedTab?.id == "wi_network")
+            #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
             #expect(controller.network.session.mode == .active)
 
             controller.connect(to: nil)
@@ -332,11 +334,11 @@ struct ControllerActivationTests {
     }
 
     private func makeBoundSession(
-        tabs: [WITab],
+        tabs: [WIInspectorTab],
         selectedTabID: String? = nil
-    ) -> (WIModel, WIModel) {
-        let controller = WIModel()
-        controller.setTabs(tabs)
+    ) -> (WIInspectorController, WIInspectorController) {
+        let controller = WIInspectorController()
+        controller.configurePanels(tabs.map(\.configuration))
         if let selectedTabID {
             selectTab(selectedTabID, in: controller)
         }
@@ -350,8 +352,8 @@ struct ControllerActivationTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func domSecondaryTab(title: String = "Element") -> WITab {
-        WITab(
+    private func domSecondaryTab(title: String = "Element") -> WIInspectorTab {
+        WIInspectorTab(
             id: "wi_element",
             title: title,
             systemImage: "info.circle",
@@ -359,14 +361,15 @@ struct ControllerActivationTests {
         )
     }
 
-    private func selectTab(_ identifier: String, in store: WIModel) {
-        let tab = store.tabs.first(where: { $0.identifier == identifier })
-        store.setSelectedTabFromUI(tab)
+    private func selectTab(_ identifier: String, in store: WIInspectorController) {
+        let panel = store.panelConfigurations.first(where: { $0.identifier == identifier })
+            ?? WIInspectorPanelConfiguration(kind: .custom(identifier))
+        store.setSelectedPanelFromUI(panel)
     }
 
     private func waitForControllerState(
-        _ controller: WIModel,
-        store: WIModel,
+        _ controller: WIInspectorController,
+        store: WIInspectorController,
         lifecycle: WISessionLifecycle,
         selectedTabID: String?,
         hasAttachedPage: Bool,
@@ -374,7 +377,7 @@ struct ControllerActivationTests {
     ) async {
         for _ in 0..<80 {
             if controller.lifecycle == lifecycle,
-               store.selectedTab?.id == selectedTabID,
+               store.selectedPanelConfiguration?.identifier == selectedTabID,
                controller.dom.session.hasPageWebView == hasAttachedPage,
                controller.network.session.hasAttachedPageWebView == hasAttachedPage,
                controller.network.session.mode == networkMode {

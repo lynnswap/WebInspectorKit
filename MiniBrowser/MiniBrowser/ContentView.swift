@@ -10,7 +10,7 @@ struct ContentView: View {
 
     @Environment(\.windowScene) private var windowScene
     @State private var model: BrowserViewModel?
-    @State private var inspectorController: WIModel?
+    @State private var inspectorController: WIInspectorController?
     @State private var didAutoPresentInspector = false
     @State private var didAutoStartSelection = false
 
@@ -25,13 +25,13 @@ struct ContentView: View {
             Color.clear
                 .onAppear {
                     model = BrowserViewModel(url: initialBrowserURL())
-                    inspectorController = WIModel()
+                    inspectorController = WIInspectorController()
                 }
         }
     }
 
     @ViewBuilder
-    private func inspectorContent(model: BrowserViewModel, inspectorController: WIModel) -> some View {
+    private func inspectorContent(model: BrowserViewModel, inspectorController: WIInspectorController) -> some View {
         ContentWebView(model: model)
             .task(
                 id: AutoInspectorPresentationTrigger(
@@ -87,7 +87,7 @@ struct ContentView: View {
     private func maybeAutoPresentInspector(
         windowScene: WindowScene?,
         model: BrowserViewModel,
-        inspectorController: WIModel
+        inspectorController: WIInspectorController
     ) {
         guard !didAutoPresentInspector else {
             return
@@ -115,7 +115,7 @@ struct ContentView: View {
         )
     }
 
-    private func autoInspectorTabs(from environment: [String: String]) -> [WITab] {
+    private func autoInspectorTabs(from environment: [String: String]) -> [WIInspectorTab] {
         guard let rawValue = environment["MINIBROWSER_AUTO_OPEN_INSPECTOR_TABS"] else {
             return [.dom(), .network()]
         }
@@ -124,7 +124,7 @@ struct ContentView: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        var tabs: [WITab] = []
+        var tabs: [WIInspectorTab] = []
         for entry in requested {
             switch entry {
             case "dom":
@@ -142,7 +142,7 @@ struct ContentView: View {
     @MainActor
     private func maybeAutoStartSelectionIfNeeded(
         didPresent: Bool,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         environment: [String: String]
     ) {
         guard didPresent else {

@@ -1,17 +1,19 @@
 #if canImport(UIKit)
 import UIKit
 import ObservationBridge
-import WebInspectorRuntime
+import WebInspectorShell
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
-    private let model: WIModel
+    private let model: WIInspectorController
+    private let requestedTabs: [WIInspectorTab]
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
-    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+    init(model: WIInspectorController, tabs: [WIInspectorTab], renderCache: WIUIKitTabRenderCache) {
         self.model = model
+        requestedTabs = tabs
         self.renderCache = renderCache
         super.init(nibName: nil, bundle: nil)
     }
@@ -50,15 +52,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         tabObservationHandles.removeAll()
 
         model.observe(
-            \.tabs,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.rebuildNativeTabsIfPossible()
-        }
-        .store(in: &tabObservationHandles)
-
-        model.observe(
-            \.selectedTab,
+            \.selectedPanelConfiguration,
             options: [.removeDuplicates]
         ) { [weak self] newValue in
             guard let self else {
@@ -70,12 +64,10 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func rebuildNativeTabsIfPossible() {
-        renderCache.prune(activeTabs: model.tabs)
-        // Intentionally project `model.tabs` as-is in compact mode.
-        // We do not synthesize `.element` here; `WIModel.tabs` is the SSOT across layout changes.
-        let desiredTabs = model.tabs.map { makeNativeTab(for: $0) }
+        renderCache.prune(activeTabs: requestedTabs)
+        let desiredTabs = requestedTabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
-        syncNativeSelection(with: model.selectedTab)
+        syncNativeSelection(with: model.selectedPanelConfiguration)
     }
 
     private func applyNativeTabsIfNeeded(_ desiredTabs: [UITab]) {
@@ -97,7 +89,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return true
     }
 
-    private func makeNativeTab(for tab: WITab) -> UITab {
+    private func makeNativeTab(for tab: WIInspectorTab) -> UITab {
         if let cached = renderCache.compactTab(for: tab) {
             return cached
         }
@@ -115,13 +107,13 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return nativeTab
     }
 
-    private func syncNativeSelection(with tab: WITab?) {
+    private func syncNativeSelection(with panelConfiguration: WIInspectorPanelConfiguration?) {
         guard tabs.isEmpty == false else {
             return
         }
 
         guard
-            let targetModelTab = resolveDisplayedModelTab(from: tab),
+            let targetModelTab = resolveDisplayedModelTab(from: panelConfiguration),
             let targetTab = resolveNativeTab(for: targetModelTab)
         else {
             return
@@ -159,39 +151,52 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         applyUserSelection(selectedTab: selectedModelTab)
     }
 
-    private func applyUserSelection(selectedTab: WITab) {
-        model.setSelectedTabFromUI(selectedTab)
+    private func applyUserSelection(selectedTab: WIInspectorTab) {
+        model.setSelectedPanelFromUI(selectedTab.configuration)
     }
 
-    private func resolveDisplayedModelTab(from requestedTab: WITab?) -> WITab? {
-        guard let requestedTab else {
-            return model.tabs.first
+    private func resolveDisplayedModelTab(
+        from requestedPanelConfiguration: WIInspectorPanelConfiguration?
+    ) -> WIInspectorTab? {
+        guard let requestedPanelConfiguration else {
+            return requestedTabs.first
         }
-        if let exactMatch = model.tabs.first(where: { $0 === requestedTab }) {
+        if let exactMatch = requestedTabs.first(where: { $0.configuration == requestedPanelConfiguration }) {
             return exactMatch
         }
-        if let identifierMatch = model.tabs.first(where: { $0.identifier == requestedTab.identifier }) {
+        let identifierMatches = requestedTabs.filter {
+            $0.configuration.identifier == requestedPanelConfiguration.identifier
+        }
+        if identifierMatches.count == 1, let identifierMatch = identifierMatches.first {
             return identifierMatch
         }
-        return model.tabs.first
+        return requestedTabs.first
     }
 
-    private func resolveModelTab(for nativeTab: UITab) -> WITab? {
-        if let exactMatch = renderCache.modelTab(for: nativeTab, among: model.tabs) {
+    private func resolveModelTab(for nativeTab: UITab) -> WIInspectorTab? {
+        if let exactMatch = renderCache.modelTab(for: nativeTab, among: requestedTabs) {
             return exactMatch
         }
-        return model.tabs.first(where: { $0.identifier == nativeTab.identifier })
+        let identifierMatches = requestedTabs.filter { $0.identifier == nativeTab.identifier }
+        if identifierMatches.count == 1 {
+            return identifierMatches.first
+        }
+        return nil
     }
 
-    private func resolveNativeTab(for modelTab: WITab) -> UITab? {
+    private func resolveNativeTab(for modelTab: WIInspectorTab) -> UITab? {
         if let cachedTab = renderCache.compactTab(for: modelTab),
            tabs.contains(where: { $0 === cachedTab }) {
             return cachedTab
         }
-        return tabs.first(where: { $0.identifier == modelTab.identifier })
+        let identifierMatches = tabs.filter { $0.identifier == modelTab.identifier }
+        if identifierMatches.count == 1 {
+            return identifierMatches.first
+        }
+        return nil
     }
 
-    private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
+    private func makeTabRootViewController(for tab: WIInspectorTab) -> UIViewController? {
         if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
@@ -201,14 +206,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         if let customViewController = tab.viewControllerProvider?(tab) {
             viewController = customViewController
         } else {
-            switch tab.identifier {
-            case WITab.domTabID:
+            switch tab.panelKind {
+            case .domTree:
                 viewController = WIDOMViewController(inspector: model.dom)
-            case WITab.elementTabID:
+            case .domDetail:
                 viewController = WIDOMDetailViewController(inspector: model.dom)
-            case WITab.networkTabID:
+            case .network:
                 viewController = WINetworkViewController(inspector: model.network)
-            default:
+            case .custom:
                 viewController = nil
             }
         }
@@ -250,10 +255,11 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 import SwiftUI
 #Preview("Compact Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIModel()
-        session.setTabs([.dom(), .element(), .network()])
-        let host = WICompactTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedTabFromUI(.dom())
+        let session = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .element(), .network()]
+        session.configurePanels(tabs.map(\.configuration))
+        let host = WICompactTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
+        session.setSelectedPanelFromUI(tabs.first?.configuration)
         return host
     }
 }

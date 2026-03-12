@@ -2,8 +2,9 @@ import Foundation
 import Testing
 import ObservationBridge
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorNetwork
+@testable import WebInspectorShell
 @testable import WebInspectorUI
 
 @MainActor
@@ -118,7 +119,7 @@ struct NetworkInspectorTests {
                 return nil
             }
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -142,7 +143,7 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
@@ -172,7 +173,7 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -205,7 +206,7 @@ struct NetworkInspectorTests {
             }
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
 
@@ -243,7 +244,7 @@ struct NetworkInspectorTests {
             Issue.record("reattach should not fetch cleared selection")
             return nil
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "stale-ref", role: .response)
         entry.responseBody = body
@@ -263,7 +264,8 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesAppliesSearchResourceFilterAndSortTogether() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
 
         try applyRequestStart(
             to: inspector,
@@ -287,34 +289,36 @@ struct NetworkInspectorTests {
             monotonicMs: 1_020
         )
 
-        inspector.searchText = "cdn"
-        inspector.activeResourceFilters = [.image, .script]
-        inspector.sortDescriptors = [
+        queryModel.searchText = "cdn"
+        queryModel.activeFilters = [.image, .script]
+        queryModel.sortDescriptors = [
             SortDescriptor(\.requestID, order: .reverse)
         ]
 
-        #expect(inspector.displayEntries.map(\.requestID) == [3, 2])
+        #expect(queryModel.displayEntries.map(\.requestID) == [3, 2])
 
-        inspector.activeResourceFilters = [.all]
-        #expect(inspector.effectiveResourceFilters.isEmpty)
-        #expect(inspector.displayEntries.map(\.requestID) == [3, 2])
+        queryModel.activeFilters = [.all]
+        #expect(queryModel.effectiveFilters.isEmpty)
+        #expect(queryModel.displayEntries.map(\.requestID) == [3, 2])
     }
 
     @Test
     func assigningEmptyActiveFiltersClearsEffectiveFilters() {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
 
-        inspector.activeResourceFilters = [.image, .script]
-        #expect(inspector.effectiveResourceFilters == [.image, .script])
+        queryModel.activeFilters = [.image, .script]
+        #expect(queryModel.effectiveFilters == [.image, .script])
 
-        inspector.activeResourceFilters = []
-        #expect(inspector.activeResourceFilters.isEmpty)
-        #expect(inspector.effectiveResourceFilters.isEmpty)
+        queryModel.activeFilters = []
+        #expect(queryModel.activeFilters.isEmpty)
+        #expect(queryModel.effectiveFilters.isEmpty)
     }
 
     @Test
     func clearResetsSelectedEntry() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
             requestID: 11,
@@ -330,12 +334,13 @@ struct NetworkInspectorTests {
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
-        #expect(inspector.displayEntries.isEmpty)
+        #expect(queryModel.displayEntries.isEmpty)
     }
 
     @Test
     func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
             requestID: 31,
@@ -345,22 +350,23 @@ struct NetworkInspectorTests {
         )
         let selectedEntry = try #require(inspector.store.entries.first)
         inspector.selectEntry(selectedEntry)
-        inspector.searchText = "filter-target"
-        inspector.activeResourceFilters = [.script]
+        queryModel.searchText = "filter-target"
+        queryModel.activeFilters = [.script]
 
         inspector.clear()
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
-        #expect(inspector.displayEntries.isEmpty)
-        #expect(inspector.searchText == "filter-target")
-        #expect(inspector.activeResourceFilters == [.script])
-        #expect(inspector.effectiveResourceFilters == [.script])
+        #expect(queryModel.displayEntries.isEmpty)
+        #expect(queryModel.searchText == "filter-target")
+        #expect(queryModel.activeFilters == [.script])
+        #expect(queryModel.effectiveFilters == [.script])
     }
 
     @Test
     func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
             requestID: 21,
@@ -379,10 +385,10 @@ struct NetworkInspectorTests {
         ])
         inspector.store.applyEvent(finish)
 
-        inspector.searchText = "buffered-endpoint"
-        inspector.activeResourceFilters = [.xhrFetch]
+        queryModel.searchText = "buffered-endpoint"
+        queryModel.activeFilters = [.xhrFetch]
 
-        let displayed = inspector.displayEntries
+        let displayed = queryModel.displayEntries
         #expect(displayed.count == 1)
         let entry = try #require(displayed.first)
         #expect(entry.requestID == 21)
@@ -392,7 +398,8 @@ struct NetworkInspectorTests {
 
     @Test
     func selectedEntryRemainsWhenFilterExcludesDisplayedEntries() throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
             requestID: 61,
@@ -412,15 +419,15 @@ struct NetworkInspectorTests {
             inspector.store.entries.first(where: { $0.requestID == 61 })
         )
         inspector.selectEntry(selectedEntry)
-        inspector.activeResourceFilters = [.stylesheet]
+        queryModel.activeFilters = [.stylesheet]
 
-        #expect(inspector.displayEntries.map(\.requestID) == [62])
+        #expect(queryModel.displayEntries.map(\.requestID) == [62])
         #expect(inspector.selectedEntry?.id == selectedEntry.id)
     }
 
     @Test
     func selectedEntryClearsWhenPrunedFromStoreByRetentionLimit() async throws {
-        let inspector = WINetworkModel(
+        let inspector = WINetworkInspectorStore(
             session: NetworkSession(configuration: .init(maxEntries: 1))
         )
         try applyRequestStart(
@@ -453,7 +460,8 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
             requestID: 81,
@@ -475,20 +483,20 @@ struct NetworkInspectorTests {
         inspector.store.applyEvent(responseReceived)
 
         let updated = await waitUntil {
-            inspector.displayEntries.first?.statusLabel == "404"
+            queryModel.displayEntries.first?.statusLabel == "404"
         }
         #expect(updated)
-        #expect(inspector.displayEntries.first?.statusSeverity == .warning)
-        #expect(inspector.displayEntries.first?.fileTypeLabel == "json")
+        #expect(queryModel.displayEntries.first?.statusSeverity == .warning)
+        #expect(queryModel.displayEntries.first?.fileTypeLabel == "json")
     }
 
     @Test
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
         var emittedValues: [String] = []
         var observationHandles = Set<ObservationHandle>()
 
-        inspector.observeTask(
+        queryModel.observeTask(
             \.searchText,
             options: [.removeDuplicates]
         ) { value in
@@ -499,11 +507,11 @@ struct NetworkInspectorTests {
         let receivedInitial = await waitUntil { emittedValues.count >= 1 }
         #expect(receivedInitial)
 
-        inspector.searchText = "dup-keyword"
+        queryModel.searchText = "dup-keyword"
         let receivedUpdated = await waitUntil { emittedValues.count >= 2 }
         #expect(receivedUpdated)
 
-        inspector.searchText = "dup-keyword"
+        queryModel.searchText = "dup-keyword"
         for _ in 0..<64 {
             await Task.yield()
         }
@@ -514,10 +522,10 @@ struct NetworkInspectorTests {
 
     @Test
     func observeSearchTextStopsEmittingAfterCancel() async {
-        let inspector = WINetworkModel(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
         var callbackCount = 0
 
-        let handle = inspector.observeTask(
+        let handle = queryModel.observeTask(
             \.searchText,
             options: [.removeDuplicates]
         ) { _ in
@@ -531,7 +539,7 @@ struct NetworkInspectorTests {
         await Task.yield()
         let countAfterCancel = callbackCount
 
-        inspector.searchText = "after-cancel"
+        queryModel.searchText = "after-cancel"
         for _ in 0..<64 {
             await Task.yield()
         }
@@ -591,7 +599,7 @@ struct NetworkInspectorTests {
     }
 
     private func applyRequestStart(
-        to inspector: WINetworkModel,
+        to inspector: WINetworkInspectorStore,
         requestID: Int,
         url: String,
         initiator: String,

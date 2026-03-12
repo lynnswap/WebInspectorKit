@@ -1,7 +1,9 @@
 import Foundation
+import WebInspectorCore
 import OSLog
-import WebInspectorBridge
+import WebInspectorSPI
 import WebKit
+import WebInspectorCore
 
 private let networkLegacyResourceObserverLogger = Logger(
     subsystem: "WebInspectorKit",

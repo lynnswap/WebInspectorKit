@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-struct NetworkBodyFormEntryPayload: Decodable {
+package struct NetworkBodyFormEntryPayload: Decodable {
     let name: String
     let value: String
     let isFile: Bool?
@@ -9,7 +9,7 @@ struct NetworkBodyFormEntryPayload: Decodable {
     let size: Int?
 }
 
-struct NetworkBodyPayload: Decodable {
+package struct NetworkBodyPayload: Decodable {
     let kind: String
     let encoding: String?
     let size: Int?
@@ -34,7 +34,7 @@ struct NetworkBodyPayload: Decodable {
         case handle
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "other"
         encoding = try container.decodeIfPresent(String.self, forKey: .encoding)
@@ -48,7 +48,7 @@ struct NetworkBodyPayload: Decodable {
         handle = nil
     }
 
-    init(dictionary: NSDictionary) {
+    package init(dictionary: NSDictionary) {
         kind = (dictionary["kind"] as? String) ?? "other"
         encoding = dictionary["encoding"] as? String
         if let size = dictionary["size"] as? Int {
@@ -117,7 +117,7 @@ public final class NetworkBody {
         public let isFile: Bool
         public let fileName: String?
 
-        init(name: String, value: String, isFile: Bool, fileName: String?) {
+        package init(name: String, value: String, isFile: Bool, fileName: String?) {
             self.name = name
             self.value = value
             self.isFile = isFile
@@ -135,7 +135,7 @@ public final class NetworkBody {
             self.init(name: name, value: value, isFile: isFile, fileName: fileName)
         }
 
-        init(payload: NetworkBodyFormEntryPayload) {
+        package init(payload: NetworkBodyFormEntryPayload) {
             self.init(
                 name: payload.name,
                 value: payload.value,
@@ -252,7 +252,7 @@ public final class NetworkBody {
         return nil
     }
 
-    static func from(payload: NetworkBodyPayload, role: Role) -> NetworkBody {
+    package static func from(payload: NetworkBodyPayload, role: Role) -> NetworkBody {
         let kind = Kind(rawValue: payload.kind.lowercased()) ?? .other
         let encoding = (payload.encoding ?? "").lowercased()
         let isBase64 = encoding == "base64"

@@ -2,16 +2,20 @@
 import Foundation
 import Testing
 import UIKit
-@testable import WebInspectorEngine
-@_spi(PreviewSupport) @testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@_spi(PreviewSupport) @testable import WebInspectorNetwork
 @testable import WebInspectorUI
 
 @MainActor
 struct NetworkListViewControllerTests {
     @Test
     func listViewAppliesLatestSnapshotAfterRapidNetworkBursts() async {
-        let inspector = WINetworkModel(session: NetworkSession())
-        let viewController = WINetworkListViewController(inspector: inspector)
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
+        let viewController = WINetworkListViewController(
+            inspector: inspector,
+            queryModel: queryModel
+        )
         let host = UINavigationController(rootViewController: viewController)
         let window = makeWindow(rootViewController: host)
         defer {
@@ -38,7 +42,7 @@ struct NetworkListViewControllerTests {
                 && viewController.collectionView.numberOfItems(inSection: 0) == 3
         }
         #expect(updated)
-        #expect(inspector.displayEntries.map(\.requestID) == [1003, 1002, 1001])
+        #expect(queryModel.displayEntries.map(\.requestID) == [1003, 1002, 1001])
         #expect(
             listCellText(
                 in: viewController.collectionView,
@@ -49,8 +53,8 @@ struct NetworkListViewControllerTests {
 
     @Test
     func filterMenuReflectsEffectiveFiltersAfterObservationUpdate() async {
-        let inspector = WINetworkModel(session: NetworkSession())
-        let queryModel = WINetworkQueryModel(inspector: inspector)
+        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let queryModel = WINetworkQueryState(inspector: inspector)
         let coordinator = WINetworkFilterMenuCoordinator(queryModel: queryModel)
 
         #expect(coordinator.item.isSelected == false)

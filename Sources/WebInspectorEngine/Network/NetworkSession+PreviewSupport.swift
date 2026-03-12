@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import WebInspectorCore
 
 @_spi(PreviewSupport)
 public extension NetworkSession {

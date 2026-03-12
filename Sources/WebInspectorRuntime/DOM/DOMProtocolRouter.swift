@@ -1,6 +1,6 @@
 import Foundation
 import OSLog
-import WebInspectorEngine
+import WebInspectorCore
 
 @MainActor
 final class DOMProtocolRouter {

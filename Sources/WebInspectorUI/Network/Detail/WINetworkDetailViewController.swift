@@ -1,7 +1,7 @@
 import Foundation
 import ObservationBridge
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 #if canImport(UIKit)
 import UIKit
@@ -29,7 +29,7 @@ import UIKit
         let itemIDs: [DetailItemID]
     }
 
-    private let inspector: WINetworkModel
+    private let inspector: WINetworkInspectorStore
     private let showsNavigationControls: Bool
     @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
@@ -47,7 +47,7 @@ import UIKit
     }
 
     public init(
-        inspector: WINetworkModel,
+        inspector: WINetworkInspectorStore,
         showsNavigationControls: Bool = true
     ) {
         self.inspector = inspector

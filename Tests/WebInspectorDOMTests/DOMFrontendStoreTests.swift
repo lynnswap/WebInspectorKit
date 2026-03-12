@@ -1,7 +1,7 @@
 import Testing
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
 
 @MainActor
 struct DOMFrontendStoreTests {

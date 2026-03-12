@@ -1,4 +1,5 @@
 import WebKit
+import WebInspectorCore
 
 @MainActor
 protocol NetworkPageDriving: AnyObject, NetworkBodyFetching {

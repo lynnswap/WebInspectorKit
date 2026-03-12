@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import ObservationBridge
-import WebInspectorRuntime
+import WebInspectorDOM
 
 @MainActor
 public final class WIDOMViewController: UIViewController, WICompactNavigationHosting {
@@ -10,7 +10,7 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
         case regular
     }
 
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private let compactRootViewController: WIDOMTreeViewController
     private let compactNavigationController: UINavigationController
     private let regularHostViewController: WIDOMRegularSplitViewController
@@ -42,8 +42,9 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
         true
     }
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         self.compactRootViewController = WIDOMTreeViewController(
             inspector: inspector,
             showsNavigationControls: true
@@ -121,7 +122,7 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
 
 @MainActor
 private final class WIDOMRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private let domTreeViewController: WIDOMTreeViewController
     private let domTreeNavigationController: UINavigationController
     private let elementDetailsViewController: WIDOMDetailViewController
@@ -152,8 +153,9 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         return item
     }()
 
-    init(inspector: WIDOMModel) {
+    init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         let domTreeViewController = WIDOMTreeViewController(
             inspector: inspector,
             showsNavigationControls: false

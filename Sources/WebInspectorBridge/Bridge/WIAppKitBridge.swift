@@ -1,6 +1,6 @@
 #if canImport(AppKit)
 import AppKit
-import WebInspectorBridgeObjCShim
+import WebInspectorSPIObjCShim
 
 @MainActor
 public enum WIAppKitBridge {

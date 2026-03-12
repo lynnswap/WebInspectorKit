@@ -1,13 +1,13 @@
 import Foundation
-import WebInspectorRuntime
+import WebInspectorShell
 
-extension WITab {
+extension WIInspectorTab {
     public static func dom(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WITab {
-        WITab(
-            id: domTabID,
+    ) -> WIInspectorTab {
+        WIInspectorTab(
+            panelKind: .domTree,
             title: title ?? wiLocalized("inspector.tab.dom"),
             systemImage: systemImage ?? "chevron.left.forwardslash.chevron.right",
             role: .inspector
@@ -18,9 +18,9 @@ extension WITab {
     public static func element(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WITab {
-        WITab(
-            id: elementTabID,
+    ) -> WIInspectorTab {
+        WIInspectorTab(
+            panelKind: .domDetail,
             title: title ?? wiLocalized("inspector.tab.element"),
             systemImage: systemImage ?? "info.circle",
             role: .inspector
@@ -31,9 +31,9 @@ extension WITab {
     public static func network(
         title: String? = nil,
         systemImage: String? = nil
-    ) -> WITab {
-        WITab(
-            id: networkTabID,
+    ) -> WIInspectorTab {
+        WIInspectorTab(
+            panelKind: .network,
             title: title ?? wiLocalized("inspector.tab.network"),
             systemImage: systemImage ?? "waveform.path.ecg.rectangle",
             role: .inspector

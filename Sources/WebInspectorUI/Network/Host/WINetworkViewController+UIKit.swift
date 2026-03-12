@@ -1,6 +1,6 @@
 import Foundation
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 #if canImport(UIKit)
 import UIKit
@@ -12,8 +12,8 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
         case regular
     }
 
-    private let inspector: WINetworkModel
-    private let queryModel: WINetworkQueryModel
+    private let inspector: WINetworkInspectorStore
+    private let queryModel: WINetworkQueryState
     private let compactHostViewController: WINetworkCompactViewController
     private let regularHostViewController: WINetworkRegularSplitViewController
 
@@ -44,14 +44,14 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
         true
     }
 
-    public convenience init(inspector: WINetworkModel) {
+    public convenience init(inspector: WINetworkInspectorStore) {
         self.init(
             inspector: inspector,
-            queryModel: WINetworkQueryModel(inspector: inspector)
+            queryModel: WINetworkQueryState(inspector: inspector)
         )
     }
 
-    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
         self.inspector = inspector
         self.queryModel = queryModel
         self.compactHostViewController = WINetworkCompactViewController(

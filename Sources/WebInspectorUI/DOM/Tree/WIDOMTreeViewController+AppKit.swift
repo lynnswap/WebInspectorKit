@@ -1,21 +1,22 @@
 import WebKit
 import ObservationBridge
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorDOM
 
 #if canImport(AppKit)
 import AppKit
 
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private var contextMenuNodeID: Int?
     private weak var inspectorWebView: WKWebView?
     private let errorLabel = NSTextField(labelWithString: "")
     private var observationHandles: Set<ObservationHandle> = []
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
     }
 

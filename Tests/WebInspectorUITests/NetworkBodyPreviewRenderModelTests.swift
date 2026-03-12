@@ -1,8 +1,7 @@
 import Foundation
 import Testing
 @testable import WebInspectorUI
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
 
 @MainActor
 struct NetworkBodyPreviewRenderModelTests {

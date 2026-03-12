@@ -1,6 +1,6 @@
 import OSLog
 import WebKit
-import WebInspectorEngine
+import WebInspectorCore
 import WebInspectorScripts
 #if canImport(AppKit)
 import AppKit

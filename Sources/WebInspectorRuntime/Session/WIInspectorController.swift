@@ -1,28 +1,32 @@
 import Observation
 import Combine
 import WebKit
-import WebInspectorEngine
+import WebInspectorCore
+import WebInspectorDOM
+import WebInspectorNetwork
 import WebInspectorTransport
 
 @MainActor
 @Observable
-public final class WIModel {
+public final class WIInspectorController {
     public private(set) var lifecycle: WISessionLifecycle = .disconnected
     public private(set) var lastRecoverableError: String?
-    public private(set) var tabs: [WITab] = []
-    public private(set) var selectedTab: WITab?
+    public private(set) var panelConfigurations: [WIInspectorPanelConfiguration] = []
+    public private(set) var selectedPanelConfiguration: WIInspectorPanelConfiguration?
+    package private(set) var panelConfigurationRevision: UInt64 = 0
 
-    public let dom: WIDOMModel
-    public let network: WINetworkModel
+    public let dom: WIDOMInspectorStore
+    public let network: WINetworkInspectorStore
 
     private weak var connectedPageWebView: WKWebView?
-    private var hasConfiguredTabsFromUI = false
+    private var hasConfiguredPanelsFromUI = false
     @ObservationIgnored private var pageLoadingObservation: AnyCancellable?
     @ObservationIgnored private var lastObservedPageLoading: Bool?
     @ObservationIgnored private var navigationRebindPrepared = false
     @ObservationIgnored private var navigationRebindTask: Task<Void, Never>?
+    @ObservationIgnored private var panelConfigurationObservers: [UUID: @MainActor () -> Void] = [:]
 
-    public convenience init(configuration: WIModelConfiguration = .init()) {
+    public convenience init(configuration: WIInspectorConfiguration = .init()) {
         self.init(
             domSession: DOMSession(configuration: configuration.dom),
             networkSession: NetworkSession(configuration: configuration.network)
@@ -33,8 +37,8 @@ public final class WIModel {
         domSession: DOMSession,
         networkSession: NetworkSession
     ) {
-        self.dom = WIDOMModel(session: domSession)
-        self.network = WINetworkModel(session: networkSession)
+        self.dom = WIDOMInspectorStore(session: domSession)
+        self.network = WINetworkInspectorStore(session: networkSession)
         self.dom.setRecoverableErrorHandler { [weak self] message in
             self?.lastRecoverableError = message
         }
@@ -66,11 +70,20 @@ public final class WIModel {
         lifecycle = .disconnected
     }
 
-    public func setTabs(_ tabs: [WITab]) {
-        hasConfiguredTabsFromUI = true
-        self.tabs = tabs
-        applyNormalizedSelection(preferredTab: selectedTab)
+    public func configurePanels(_ panelConfigurations: [WIInspectorPanelConfiguration]) {
+        hasConfiguredPanelsFromUI = true
+        let didChange = self.panelConfigurations != panelConfigurations
+        self.panelConfigurations = panelConfigurations
+        applyNormalizedSelection(preferredPanel: selectedPanelConfiguration)
         syncRuntimeStateFromTabs()
+        guard didChange else {
+            return
+        }
+        panelConfigurationRevision &+= 1
+        if panelConfigurationRevision == 0 {
+            panelConfigurationRevision = 1
+        }
+        notifyPanelConfigurationObservers()
     }
 
     public var domTransportSupportSnapshot: WITransportSupportSnapshot? {
@@ -81,12 +94,12 @@ public final class WIModel {
         network.transportSupportSnapshot
     }
 
-    package func setSelectedTabFromUI(_ tab: WITab?) {
-        let resolvedTab = resolveSelectionCandidate(tab)
-        if tab != nil, resolvedTab == nil {
+    package func setSelectedPanelFromUI(_ panelConfiguration: WIInspectorPanelConfiguration?) {
+        let resolvedPanel = resolveSelectionCandidate(panelConfiguration)
+        if panelConfiguration != nil, resolvedPanel == nil {
             return
         }
-        applyNormalizedSelection(preferredTab: resolvedTab)
+        applyNormalizedSelection(preferredPanel: resolvedPanel)
         syncRuntimeStateFromTabs()
     }
 
@@ -118,9 +131,21 @@ public final class WIModel {
         }
         syncRuntimeStateFromTabs()
     }
+
+    package func addPanelConfigurationObserver(
+        _ observer: @escaping @MainActor () -> Void
+    ) -> UUID {
+        let id = UUID()
+        panelConfigurationObservers[id] = observer
+        return id
+    }
+
+    package func removePanelConfigurationObserver(_ id: UUID) {
+        panelConfigurationObservers.removeValue(forKey: id)
+    }
 }
 
-private extension WIModel {
+private extension WIInspectorController {
     struct RuntimeAttachmentState {
         let domEnabled: Bool
         let networkEnabled: Bool
@@ -138,6 +163,12 @@ private extension WIModel {
 #else
         false
 #endif
+    }
+
+    func notifyPanelConfigurationObservers() {
+        for observer in panelConfigurationObservers.values {
+            observer()
+        }
     }
 
     func startObservingPageLoading(on webView: WKWebView) {
@@ -279,33 +310,38 @@ private extension WIModel {
         }
     }
 
-    func applyNormalizedSelection(preferredTab: WITab?) {
-        let normalizedTab: WITab?
-        if tabs.isEmpty {
-            normalizedTab = nil
-        } else if let preferredTab,
-                  let resolvedTab = resolveSelectionCandidate(preferredTab) {
-            normalizedTab = resolvedTab
-        } else if let currentSelection = selectedTab,
+    func applyNormalizedSelection(preferredPanel: WIInspectorPanelConfiguration?) {
+        let normalizedPanel: WIInspectorPanelConfiguration?
+        if panelConfigurations.isEmpty {
+            normalizedPanel = nil
+        } else if let preferredPanel,
+                  let resolvedPanel = resolveSelectionCandidate(preferredPanel) {
+            normalizedPanel = resolvedPanel
+        } else if let currentSelection = selectedPanelConfiguration,
                   let resolvedCurrent = resolveSelectionCandidate(currentSelection) {
-            normalizedTab = resolvedCurrent
+            normalizedPanel = resolvedCurrent
         } else {
-            normalizedTab = tabs.first
+            normalizedPanel = panelConfigurations.first
         }
 
-        if normalizedTab !== selectedTab {
-            selectedTab = normalizedTab
+        if normalizedPanel != selectedPanelConfiguration {
+            selectedPanelConfiguration = normalizedPanel
         }
     }
 
-    func resolveSelectionCandidate(_ requestedTab: WITab?) -> WITab? {
-        guard let requestedTab else {
+    func resolveSelectionCandidate(
+        _ requestedPanelConfiguration: WIInspectorPanelConfiguration?
+    ) -> WIInspectorPanelConfiguration? {
+        guard let requestedPanelConfiguration else {
             return nil
         }
-        if let exactMatch = tabs.first(where: { $0 === requestedTab }) {
+        if let exactMatch = panelConfigurations.first(where: { $0 == requestedPanelConfiguration }) {
             return exactMatch
         }
-        if let identifierMatch = tabs.first(where: { $0.identifier == requestedTab.identifier }) {
+        let identifierMatches = panelConfigurations.filter {
+            $0.identifier == requestedPanelConfiguration.identifier
+        }
+        if identifierMatches.count == 1, let identifierMatch = identifierMatches.first {
             return identifierMatch
         }
         return nil
@@ -357,14 +393,16 @@ private extension WIModel {
     }
 
     func currentRuntimeAttachmentState() -> RuntimeAttachmentState {
-        if hasConfiguredTabsFromUI {
-            let hasDOMTab = tabs.contains { $0.identifier == WITab.domTabID }
+        if hasConfiguredPanelsFromUI {
+            let hasDOMTreePanel = panelConfigurations.contains { $0.kind == .domTree }
             return RuntimeAttachmentState(
-                domEnabled: tabs.contains { $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID },
-                networkEnabled: tabs.contains { $0.identifier == WITab.networkTabID },
-                domAutoSnapshotEnabled: selectedTab?.identifier == WITab.domTabID
-                    || (selectedTab?.identifier == WITab.elementTabID && hasDOMTab == false),
-                networkMode: selectedTab?.identifier == WITab.networkTabID ? .active : .buffering
+                domEnabled: panelConfigurations.contains {
+                    $0.kind == .domTree || $0.kind == .domDetail
+                },
+                networkEnabled: panelConfigurations.contains { $0.kind == .network },
+                domAutoSnapshotEnabled: selectedPanelConfiguration?.kind == .domTree
+                    || (selectedPanelConfiguration?.kind == .domDetail && hasDOMTreePanel == false),
+                networkMode: selectedPanelConfiguration?.kind == .network ? .active : .buffering
             )
         }
 

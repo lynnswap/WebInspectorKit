@@ -2,7 +2,7 @@
 import WebKit
 
 @_spi(PreviewSupport)
-public extension WIDOMModel {
+public extension WIDOMInspectorStore {
     func wiAttachPreviewPageWebView(_ webView: WKWebView) {
         attach(to: webView)
     }

@@ -1,8 +1,8 @@
 #if DEBUG
 import Foundation
 import WebKit
-import WebInspectorEngine
-@_spi(PreviewSupport) import WebInspectorRuntime
+import WebInspectorCore
+@_spi(PreviewSupport) import WebInspectorDOM
 
 @MainActor
 enum WIDOMPreviewFixtures {
@@ -12,14 +12,14 @@ enum WIDOMPreviewFixtures {
         case selectedEditableAttributes
     }
 
-    static func makeInspector(mode: Mode) -> WIDOMModel {
-        let inspector = WIDOMModel(session: DOMSession())
+    static func makeInspector(mode: Mode) -> WIDOMInspectorStore {
+        let inspector = WIDOMInspectorStore(session: DOMSession())
         applySampleTree(to: inspector)
         applySampleSelection(to: inspector, mode: mode)
         return inspector
     }
 
-    static func applySampleSelection(to inspector: WIDOMModel, mode: Mode) {
+    static func applySampleSelection(to inspector: WIDOMInspectorStore, mode: Mode) {
         let graphStore = inspector.session.graphStore
         graphStore.applySelectionSnapshot(nil)
 
@@ -136,7 +136,7 @@ enum WIDOMPreviewFixtures {
     }
 
     @discardableResult
-    static func bootstrapDOMTreeForPreview(_ inspector: WIDOMModel) -> WKWebView {
+    static func bootstrapDOMTreeForPreview(_ inspector: WIDOMInspectorStore) -> WKWebView {
         let key = ObjectIdentifier(inspector)
         if let existingLoader = pageLoaderByInspector[key] {
             applySampleTree(to: inspector)
@@ -149,7 +149,7 @@ enum WIDOMPreviewFixtures {
         return loader.pageWebView
     }
 
-    static func applySampleTree(to inspector: WIDOMModel) {
+    static func applySampleTree(to inspector: WIDOMInspectorStore) {
         let snapshot = DOMGraphSnapshot(
             root: DOMGraphNodeDescriptor(
                 nodeID: 1,
@@ -305,14 +305,14 @@ enum WIDOMPreviewFixtures {
 
 @MainActor
 private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private let webView: WKWebView
 
     var pageWebView: WKWebView {
         webView
     }
 
-    init(inspector: WIDOMModel) {
+    init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

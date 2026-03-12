@@ -1,5 +1,5 @@
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorDOM
 import ObservationBridge
 
 #if canImport(UIKit)
@@ -132,7 +132,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         let stableIDs: [ItemStableID]
     }
 
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
     private var stateObservationHandles: Set<ObservationHandle> = []
@@ -162,9 +162,10 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
     }()
 
-    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+    public init(inspector: WIDOMInspectorStore, showsNavigationControls: Bool = true) {
         self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(collectionViewLayout: UICollectionViewLayout())
     }
 

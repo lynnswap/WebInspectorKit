@@ -4,12 +4,14 @@ import Observation
 @MainActor
 @Observable
 public final class NetworkStore {
+    public init() {}
+
     public private(set) var isRecording = true
     public private(set) var entries: [NetworkEntry] = []
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
     @ObservationIgnored private var maxEntriesStorage: Int?
 
-    var maxEntries: Int? {
+    package var maxEntries: Int? {
         get {
             maxEntriesStorage
         }
@@ -20,15 +22,15 @@ public final class NetworkStore {
         }
     }
 
-    func applyEvent(_ event: HTTPNetworkEvent) {
+    package func applyEvent(_ event: HTTPNetworkEvent) {
         applyHTTPEvent(event)
     }
 
-    func applyEvent(_ event: WSNetworkEvent) {
+    package func applyEvent(_ event: WSNetworkEvent) {
         applyWSEvent(event)
     }
 
-    func applyNetworkBatch(_ batch: NetworkEventBatch) {
+    package func applyNetworkBatch(_ batch: NetworkEventBatch) {
         guard isRecording else { return }
         guard !batch.events.isEmpty else { return }
 
@@ -154,16 +156,16 @@ public final class NetworkStore {
         }
     }
 
-    func reset() {
+    package func reset() {
         sessionBuckets.removeAll()
         entries.removeAll()
     }
 
-    func clear() {
+    package func clear() {
         reset()
     }
 
-    func setRecording(_ enabled: Bool) {
+    package func setRecording(_ enabled: Bool) {
         isRecording = enabled
     }
 

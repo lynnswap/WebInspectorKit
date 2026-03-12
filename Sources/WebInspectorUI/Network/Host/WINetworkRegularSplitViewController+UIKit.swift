@@ -1,19 +1,19 @@
 import Foundation
-import WebInspectorRuntime
+import WebInspectorNetwork
 
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
 final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WINetworkModel
+    private let inspector: WINetworkInspectorStore
 
     private let listPaneViewController: WINetworkListViewController
     private let listNavigationController: UINavigationController
     private let detailViewController: WINetworkDetailViewController
     private let detailNavigationController: UINavigationController
 
-    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
         self.inspector = inspector
         let listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
         self.listPaneViewController = listPaneViewController

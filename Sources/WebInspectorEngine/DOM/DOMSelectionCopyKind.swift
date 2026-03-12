@@ -8,7 +8,7 @@ public enum DOMSelectionCopyKind: String, CaseIterable, Sendable {
 
     var logLabel: String { rawValue }
 
-    var jsFunction: String {
+    package var jsFunction: String {
         switch self {
         case .html:
             return "outerHTMLForNode"

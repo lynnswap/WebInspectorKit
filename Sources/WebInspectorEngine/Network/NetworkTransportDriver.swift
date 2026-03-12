@@ -1,6 +1,8 @@
 import Foundation
+import WebInspectorCore
 import OSLog
 import WebKit
+import WebInspectorCore
 import WebInspectorTransport
 
 @MainActor

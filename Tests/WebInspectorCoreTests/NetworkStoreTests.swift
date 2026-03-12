@@ -1,6 +1,6 @@
 import Testing
 import WebInspectorTestSupport
-@testable import WebInspectorEngine
+@testable import WebInspectorCore
 
 @MainActor
 struct NetworkStoreTests {

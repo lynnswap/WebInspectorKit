@@ -1,19 +1,20 @@
 #if canImport(UIKit)
 import UIKit
 import ObservationBridge
-import WebInspectorRuntime
+import WebInspectorShell
 
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
-    private let model: WIModel
+    private let model: WIInspectorController
+    private let requestedTabs: [WIInspectorTab]
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
 
     private let placeholderViewController: UIViewController
 
-    private var tabs: [WITab] {
-        model.tabs.filter { $0.identifier != WITab.elementTabID }
+    private var tabs: [WIInspectorTab] {
+        requestedTabs.filter { $0.panelKind != .domDetail }
     }
 
     private lazy var segmentedControl: UISegmentedControl = {
@@ -23,8 +24,9 @@ final class WIRegularTabHostViewController: UINavigationController {
         return control
     }()
 
-    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+    init(model: WIInspectorController, tabs: [WIInspectorTab], renderCache: WIUIKitTabRenderCache) {
         self.model = model
+        requestedTabs = tabs
         self.renderCache = renderCache
         let placeholder = UIViewController()
         placeholder.navigationItem.title = ""
@@ -75,7 +77,7 @@ final class WIRegularTabHostViewController: UINavigationController {
             return
         }
 
-        model.setSelectedTabFromUI(visibleTabs[selectedIndex])
+        model.setSelectedPanelFromUI(visibleTabs[selectedIndex].configuration)
     }
 
     func handleSegmentSelectionChangedForTesting(_ sender: UISegmentedControl) {
@@ -86,15 +88,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         tabObservationHandles.removeAll()
 
         model.observe(
-            \.tabs,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.rebuildLayout()
-        }
-        .store(in: &tabObservationHandles)
-
-        model.observe(
-            \.selectedTab,
+            \.selectedPanelConfiguration,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.applySelectedTabProjection()
@@ -120,7 +114,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         updateNavigationUI()
     }
 
-    private func rebuildSegmentedControl(selectedTab: WITab?) {
+    private func rebuildSegmentedControl(selectedTab: WIInspectorTab?) {
         let visibleTabs = tabs
         segmentedControl.removeAllSegments()
         for (index, tab) in visibleTabs.enumerated() {
@@ -130,7 +124,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         selectSegment(for: selectedTab)
     }
 
-    private func selectSegment(for selectedTab: WITab?) {
+    private func selectSegment(for selectedTab: WIInspectorTab?) {
         guard let selectedTab else {
             isApplyingSegmentSelection = true
             segmentedControl.selectedSegmentIndex = UISegmentedControl.noSegment
@@ -140,14 +134,22 @@ final class WIRegularTabHostViewController: UINavigationController {
 
         let visibleTabs = tabs
         let selectedIndex = visibleTabs.firstIndex(where: { $0 === selectedTab })
-            ?? visibleTabs.firstIndex(where: { $0.identifier == selectedTab.identifier })
+            ?? {
+                let identifierMatches = visibleTabs.enumerated().filter {
+                    $0.element.identifier == selectedTab.identifier
+                }
+                guard identifierMatches.count == 1 else {
+                    return nil
+                }
+                return identifierMatches.first?.offset
+            }()
             ?? UISegmentedControl.noSegment
         isApplyingSegmentSelection = true
         segmentedControl.selectedSegmentIndex = selectedIndex
         isApplyingSegmentSelection = false
     }
 
-    private func displaySelectionIfNeeded(selectedTab: WITab?) {
+    private func displaySelectionIfNeeded(selectedTab: WIInspectorTab?) {
         guard let selectedTab else {
             if viewControllers.first !== placeholderViewController {
                 setViewControllers([placeholderViewController], animated: false)
@@ -162,7 +164,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         }
     }
 
-    private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
+    private func makeTabRootViewController(for tab: WIInspectorTab) -> UIViewController? {
         if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
@@ -172,14 +174,14 @@ final class WIRegularTabHostViewController: UINavigationController {
         if let customViewController = tab.viewControllerProvider?(tab) {
             viewController = customViewController
         } else {
-            switch tab.identifier {
-            case WITab.domTabID:
+            switch tab.panelKind {
+            case .domTree:
                 viewController = WIDOMViewController(inspector: model.dom)
-            case WITab.elementTabID:
+            case .domDetail:
                 viewController = WIDOMDetailViewController(inspector: model.dom)
-            case WITab.networkTabID:
+            case .network:
                 viewController = WINetworkViewController(inspector: model.network)
-            default:
+            case .custom:
                 viewController = nil
             }
         }
@@ -214,28 +216,31 @@ final class WIRegularTabHostViewController: UINavigationController {
         guard let displayedTab = selectedTabForDisplay() else {
             return
         }
-        guard model.selectedTab !== displayedTab else {
+        guard model.selectedPanelConfiguration != displayedTab.configuration else {
             return
         }
-        model.setSelectedTabFromUI(displayedTab)
+        model.setSelectedPanelFromUI(displayedTab.configuration)
     }
 
-    private func selectedTabForDisplay() -> WITab? {
+    private func selectedTabForDisplay() -> WIInspectorTab? {
         let visibleTabs = tabs
         guard visibleTabs.isEmpty == false else {
             return nil
         }
-        guard let selectedTab = model.selectedTab else {
+        guard let selectedPanelConfiguration = model.selectedPanelConfiguration else {
             return visibleTabs.first
         }
-        if let exactMatch = visibleTabs.first(where: { $0 === selectedTab }) {
+        if let exactMatch = visibleTabs.first(where: { $0.configuration == selectedPanelConfiguration }) {
             return exactMatch
         }
-        if let identifierMatch = visibleTabs.first(where: { $0.identifier == selectedTab.identifier }) {
+        let identifierMatches = visibleTabs.filter {
+            $0.configuration.identifier == selectedPanelConfiguration.identifier
+        }
+        if identifierMatches.count == 1, let identifierMatch = identifierMatches.first {
             return identifierMatch
         }
-        if selectedTab.identifier == WITab.elementTabID,
-           let domTab = visibleTabs.first(where: { $0.identifier == WITab.domTabID }) {
+        if selectedPanelConfiguration.kind == .domDetail,
+           let domTab = visibleTabs.first(where: { $0.panelKind == .domTree }) {
             return domTab
         }
         return visibleTabs.first
@@ -246,10 +251,11 @@ final class WIRegularTabHostViewController: UINavigationController {
 import SwiftUI
 #Preview("Regular Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIModel()
-        session.setTabs([.dom(), .network()])
-        let host = WIRegularTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedTabFromUI(.dom())
+        let session = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .network()]
+        session.configurePanels(tabs.map(\.configuration))
+        let host = WIRegularTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
+        session.setSelectedPanelFromUI(tabs.first?.configuration)
         return host
     }
 }

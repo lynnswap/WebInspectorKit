@@ -1,5 +1,5 @@
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorDOM
 
 #if canImport(AppKit)
 import AppKit
@@ -8,7 +8,7 @@ import SwiftUI
 
 @MainActor
 public final class WIDOMDetailViewController: NSViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspectorStore
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
     private var observationHandles: Set<ObservationHandle> = []
     private var selectedObservationHandles: Set<ObservationHandle> = []
@@ -16,8 +16,9 @@ public final class WIDOMDetailViewController: NSViewController {
     private weak var observedSelectedStyle: DOMStyleState?
     private var renderRefreshCount = 0
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
+        inspector.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -130,7 +131,7 @@ private struct ElementDetailsMacRootView: View {
         }
     }
 
-    @Bindable var inspector: WIDOMModel
+    @Bindable var inspector: WIDOMInspectorStore
     @State private var attributeEditorState: AttributeEditorState?
     @State private var attributeEditorDraft = ""
 

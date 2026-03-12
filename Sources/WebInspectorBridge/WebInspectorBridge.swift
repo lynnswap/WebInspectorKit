@@ -1,1 +1,1 @@
-public enum WebInspectorBridgeModule {}
+public enum WebInspectorSPIModule {}

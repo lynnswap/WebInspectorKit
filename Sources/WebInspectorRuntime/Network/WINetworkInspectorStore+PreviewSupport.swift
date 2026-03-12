@@ -1,9 +1,9 @@
 #if DEBUG
 import Foundation
-@_spi(PreviewSupport) import WebInspectorEngine
+@_spi(PreviewSupport) import WebInspectorCore
 
 @_spi(PreviewSupport)
-public extension WINetworkModel {
+public extension WINetworkInspectorStore {
     func wiApplyPreviewBatch(_ payload: NSDictionary) {
         session.wiApplyPreviewBatch(payload)
     }

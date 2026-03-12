@@ -1,7 +1,7 @@
 import Foundation
 import ObservationBridge
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 #if canImport(UIKit)
 import UIKit
@@ -12,8 +12,8 @@ public final class WINetworkListViewController: UICollectionViewController {
         case main
     }
 
-    private let inspector: WINetworkModel
-    private let queryModel: WINetworkQueryModel
+    private let inspector: WINetworkInspectorStore
+    private let queryModel: WINetworkQueryState
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
@@ -30,18 +30,18 @@ public final class WINetworkListViewController: UICollectionViewController {
         makeOverflowMenuElement()
     }
 
-    public init(inspector: WINetworkModel) {
+    public init(inspector: WINetworkInspectorStore) {
         self.inspector = inspector
-        self.queryModel = WINetworkQueryModel(inspector: inspector)
+        self.queryModel = WINetworkQueryState(inspector: inspector)
         super.init(collectionViewLayout: Self.makeListLayout())
-        startObservingInspector()
+        startObservingQueryState()
     }
 
-    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
         self.inspector = inspector
         self.queryModel = queryModel
         super.init(collectionViewLayout: Self.makeListLayout())
-        startObservingInspector()
+        startObservingQueryState()
     }
 
     @available(*, unavailable)
@@ -114,8 +114,8 @@ public final class WINetworkListViewController: UICollectionViewController {
         return UICollectionViewCompositionalLayout.list(using: configuration)
     }
 
-    private func startObservingInspector() {
-        inspector.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
+    private func startObservingQueryState() {
+        queryModel.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
         .store(in: &observationHandles)
@@ -173,13 +173,13 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot(displayEntries: self.inspector.displayEntries)
+            let snapshot = self.makeSnapshot(displayEntries: self.queryModel.displayEntries)
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
         }
     }
 
     private func reloadDataFromInspector(displayEntries: [NetworkEntry]? = nil) {
-        let resolvedDisplayEntries = displayEntries ?? inspector.displayEntries
+        let resolvedDisplayEntries = displayEntries ?? queryModel.displayEntries
         queryModel.syncSearchControllerText()
         requestSnapshotUpdate(displayEntries: resolvedDisplayEntries)
         let shouldShowEmptyState = resolvedDisplayEntries.isEmpty

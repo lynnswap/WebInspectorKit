@@ -1,8 +1,10 @@
 import Testing
 import WebKit
 @testable import WebInspectorUI
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
+@testable import WebInspectorNetwork
+@testable import WebInspectorShell
 
 #if canImport(UIKit)
 import UIKit
@@ -11,8 +13,8 @@ import UIKit
 struct TabViewControllerUITabTests {
     @Test
     func containerUsesCompactHostWhenSizeClassIsCompact() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -28,8 +30,8 @@ struct TabViewControllerUITabTests {
 
     @Test
     func containerSwitchesHostWhenSizeClassChanges() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -47,9 +49,9 @@ struct TabViewControllerUITabTests {
 
     @Test
     func containerSwitchesHostWhenChangingFromRegularToCompact() {
-        let controller = WIModel()
-        let tabs: [WITab] = [.dom(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: tabs
@@ -68,9 +70,9 @@ struct TabViewControllerUITabTests {
 
     @Test
     func regularHostFiltersElementTabWhenRequested() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let custom = makeTab(id: "custom", title: "Custom")
-        let container = WITabViewController(
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .element(), custom, .network()]
@@ -91,9 +93,9 @@ struct TabViewControllerUITabTests {
 
     @Test
     func regularHostRoutesUserSelectionIntoModel() {
-        let controller = WIModel()
-        let tabs: [WITab] = [.dom(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: tabs
@@ -112,14 +114,14 @@ struct TabViewControllerUITabTests {
         segmentedControl.selectedSegmentIndex = 1
         host.handleSegmentSelectionChangedForTesting(segmentedControl)
 
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
     }
 
     @Test
     func compactToRegularMapsElementSelectionToDOM() {
-        let controller = WIModel()
-        let tabs: [WITab] = [.dom(), .element(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .element(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: tabs
@@ -128,40 +130,40 @@ struct TabViewControllerUITabTests {
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: tabs)
 
-        let elementTab = controller.tabs.first(where: { $0.identifier == WITab.elementTabID })
-        controller.setSelectedTabFromUI(elementTab)
-        #expect(controller.selectedTab?.id == WITab.elementTabID)
+        let elementPanel = controller.panelConfigurations.first(where: { $0.identifier == WIInspectorTab.elementTabID })
+        controller.setSelectedPanelFromUI(elementPanel)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.elementTabID)
 
         configureSizeClass(.regular, for: container, requestedTabs: tabs)
 
-        #expect(controller.selectedTab?.id == WITab.domTabID)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.domTabID)
     }
 
     @Test
     func sizeClassChangeKeepsSelectedTabWhenTabStillExists() {
-        let controller = WIModel()
-        let requestedTabs: [WITab] = [.dom(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let requestedTabs: [WIInspectorTab] = [.dom(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: requestedTabs
         )
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
-        let selectedNetworkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
-        controller.setSelectedTabFromUI(selectedNetworkTab)
-        #expect(controller.selectedTab?.id == WITab.networkTabID)
+        let selectedNetworkPanel = controller.panelConfigurations.first(where: { $0.identifier == WIInspectorTab.networkTabID })
+        controller.setSelectedPanelFromUI(selectedNetworkPanel)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.networkTabID)
 
         configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
 
-        #expect(controller.selectedTab?.id == WITab.networkTabID)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.networkTabID)
         #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
     }
 
     @Test
     func compactHostSelectionUpdatesControllerSelectionWhenConnected() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: makeTestWebView(),
             tabs: [.dom(), .network()]
@@ -177,8 +179,8 @@ struct TabViewControllerUITabTests {
         }
 
         guard
-            let domTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.domTabID }),
-            let networkTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.networkTabID })
+            let domTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WIInspectorTab.domTabID }),
+            let networkTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WIInspectorTab.networkTabID })
         else {
             Issue.record("Expected DOM and Network tabs")
             return
@@ -188,16 +190,16 @@ struct TabViewControllerUITabTests {
         compactHost.selectedTab = networkTab
         compactHost.tabBarController(compactHost, didSelectTab: networkTab, previousTab: domTab)
 
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
     }
 
     @Test
     func compactHostPreservesSelectionWhenTabIdentifiersDuplicate() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let firstCustom = makeTab(id: "custom", title: "First")
         let secondCustom = makeTab(id: "custom", title: "Second")
-        let requestedTabs: [WITab] = [firstCustom, secondCustom, .network()]
-        let container = WITabViewController(
+        let requestedTabs: [WIInspectorTab] = [firstCustom, secondCustom, .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: requestedTabs
@@ -223,13 +225,13 @@ struct TabViewControllerUITabTests {
         compactHost.selectedTab = secondUITab
         compactHost.tabBarController(compactHost, didSelectTab: secondUITab, previousTab: firstUITab)
 
-        #expect(controller.selectedTab === secondCustom)
+        #expect(controller.selectedPanelConfiguration?.identifier == secondCustom.identifier)
     }
 
     @Test
     func compactHostUsesTabIdentifiersDirectly() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -243,7 +245,29 @@ struct TabViewControllerUITabTests {
             return
         }
 
-        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(compactHost.displayedTabIdentifiersForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
+    }
+
+    @Test
+    func externalPanelUpdatesRefreshVisibleTabs() async {
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .network()])
+        #expect(container.resolvedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
+
+        controller.configurePanels([WIInspectorTab.dom().configuration])
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        #expect(container.resolvedTabIDsForTesting == [WIInspectorTab.domTabID])
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.domTabID)
     }
 
     @Test
@@ -254,16 +278,16 @@ struct TabViewControllerUITabTests {
             createdControllers.append(viewController)
             return viewController
         }
-        let sharedTabs: [WITab] = [sharedTab]
+        let sharedTabs: [WIInspectorTab] = [sharedTab]
 
-        let firstController = WIModel()
-        let secondController = WIModel()
-        let firstContainer = WITabViewController(
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let firstContainer = WIInspectorViewController(
             firstController,
             webView: nil,
             tabs: sharedTabs
         )
-        let secondContainer = WITabViewController(
+        let secondContainer = WIInspectorViewController(
             secondController,
             webView: nil,
             tabs: sharedTabs
@@ -281,15 +305,15 @@ struct TabViewControllerUITabTests {
     @Test
     func setInspectorControllerResetsContainerRenderCacheAcrossRegularSwap() {
         var createdCount = 0
-        let requestedTabs: [WITab] = [
+        let requestedTabs: [WIInspectorTab] = [
             makeProviderTab(id: "custom", title: "Custom") {
                 createdCount += 1
                 return UIViewController()
             }
         ]
-        let firstController = WIModel()
-        let secondController = WIModel()
-        let container = WITabViewController(
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WIInspectorViewController(
             firstController,
             webView: nil,
             tabs: requestedTabs
@@ -308,15 +332,15 @@ struct TabViewControllerUITabTests {
     @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
-        let requestedTabs: [WITab] = [
+        let requestedTabs: [WIInspectorTab] = [
             makeProviderTab(id: "custom", title: "Custom") {
                 createdCount += 1
                 return UIViewController()
             }
         ]
 
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: requestedTabs
@@ -349,54 +373,54 @@ struct TabViewControllerUITabTests {
 
     @Test
     func initialRegularLayoutMapsElementSelectionToDOM() {
-        let controller = WIModel()
-        let tabs: [WITab] = [.dom(), .element(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let tabs: [WIInspectorTab] = [.dom(), .element(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: tabs
         )
         container.horizontalSizeClassOverrideForTesting = .regular
 
-        let elementTab = tabs.first(where: { $0.identifier == WITab.elementTabID })
-        controller.setSelectedTabFromUI(elementTab)
-        #expect(controller.selectedTab?.id == WITab.elementTabID)
+        let elementPanel = tabs.first(where: { $0.identifier == WIInspectorTab.elementTabID })?.configuration
+        controller.setSelectedPanelFromUI(elementPanel)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.elementTabID)
 
         container.loadViewIfNeeded()
 
         #expect(container.activeHostKindForTesting == "regular")
-        #expect(controller.selectedTab?.id == WITab.domTabID)
+        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.domTabID)
     }
 
     @Test
     func sizeClassSwitchDoesNotRewriteModelTabs() {
-        let controller = WIModel()
-        let requestedTabs: [WITab] = [.dom(), .network()]
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let requestedTabs: [WIInspectorTab] = [.dom(), .network()]
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: requestedTabs
         )
         container.loadViewIfNeeded()
-        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
 
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
-        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
 
         configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
-        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
     }
 
     @Test
     func domTabProviderReturnsDOMHostControllerInCompactSizeClass() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
         )
         container.horizontalSizeClassOverrideForTesting = .compact
-        let tab = WITab.dom()
+        let tab = WIInspectorTab.dom()
         let viewController = container.makeTabRootViewController(for: tab)
 
         guard let domViewController = viewController as? WIDOMViewController else {
@@ -410,8 +434,8 @@ struct TabViewControllerUITabTests {
 
     @Test
     func domTabProviderReturnsSplitControllerInRegularSizeClass() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -424,8 +448,8 @@ struct TabViewControllerUITabTests {
 
     @Test
     func domTabProviderReturnsSplitControllerWhenSizeClassIsUnspecified() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -437,8 +461,8 @@ struct TabViewControllerUITabTests {
 
     @Test
     func networkTabProviderReturnsHostControllerInCompactSizeClass() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -457,8 +481,8 @@ struct TabViewControllerUITabTests {
 
     @Test
     func networkTabProviderReturnsSplitControllerInRegularSizeClass() {
-        let controller = WIModel()
-        let container = WITabViewController(
+        let controller = WIInspectorController()
+        let container = WIInspectorViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -469,8 +493,8 @@ struct TabViewControllerUITabTests {
         #expect(viewController is WINetworkViewController)
     }
 
-    private func makeTab(id: String, title: String) -> WITab {
-        WITab(
+    private func makeTab(id: String, title: String) -> WIInspectorTab {
+        WIInspectorTab(
             id: id,
             title: title,
             systemImage: "circle"
@@ -481,8 +505,8 @@ struct TabViewControllerUITabTests {
         id: String,
         title: String,
         viewControllerBuilder: @escaping @MainActor () -> UIViewController
-    ) -> WITab {
-        WITab(
+    ) -> WIInspectorTab {
+        WIInspectorTab(
             id: id,
             title: title,
             systemImage: "circle",
@@ -501,8 +525,8 @@ struct TabViewControllerUITabTests {
 
     private func configureSizeClass(
         _ sizeClass: UIUserInterfaceSizeClass,
-        for container: WITabViewController,
-        requestedTabs: [WITab]
+        for container: WIInspectorViewController,
+        requestedTabs: [WIInspectorTab]
     ) {
         container.horizontalSizeClassOverrideForTesting = sizeClass
         container.setTabs(requestedTabs)

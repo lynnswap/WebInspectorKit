@@ -1,6 +1,5 @@
 import Testing
 @testable import WebInspectorUI
-@testable import WebInspectorRuntime
 
 struct AttributeEditorRelayoutCoordinatorTests {
     @Test

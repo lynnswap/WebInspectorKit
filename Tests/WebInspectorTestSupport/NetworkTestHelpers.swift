@@ -1,5 +1,5 @@
 import Foundation
-@testable import WebInspectorEngine
+@testable import WebInspectorCore
 
 public enum NetworkTestHelpers {
     public static func timePayload(monotonicMs: Double, wallMs: Double) -> [String: Any] {

@@ -1,14 +1,16 @@
 import Testing
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
+@testable import WebInspectorNetwork
+@testable import WebInspectorShell
 @testable import WebInspectorTransport
 
 @MainActor
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.session.graphStore.selectedEntry == nil)
@@ -16,7 +18,7 @@ struct DOMInspectorTests {
 
     @Test
     func hasPageWebViewReflectsAttachAndDetach() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         let webView = makeTestWebView()
 
@@ -34,7 +36,7 @@ struct DOMInspectorTests {
 
     @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         #expect(inspector.errorMessage == nil)
 
@@ -45,7 +47,7 @@ struct DOMInspectorTests {
 
     @Test
     func updateAndRemoveAttributeMutateSelectionState() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         inspector.session.graphStore.applySnapshot(
             .init(
@@ -86,7 +88,7 @@ struct DOMInspectorTests {
 
     @Test
     func detachClearsErrorMessageAndGraphState() async {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         let webView = makeTestWebView()
 
@@ -176,7 +178,7 @@ struct DOMInspectorTests {
 
     @Test
     func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
-        let controller = WIModel(
+        let controller = WIInspectorController(
             domSession: DOMSession(
                 configuration: .init(),
                 defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
@@ -322,8 +324,8 @@ struct DOMInspectorTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func makeTransportController() -> WIModel {
-        WIModel(
+    private func makeTransportController() -> WIInspectorController {
+        WIInspectorController(
             domSession: DOMSession(configuration: .init()),
             networkSession: NetworkSession(bodyFetcher: NoopBodyFetcher())
         )

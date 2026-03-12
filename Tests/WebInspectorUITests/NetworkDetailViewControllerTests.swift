@@ -3,8 +3,8 @@ import Foundation
 import Testing
 import UIKit
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorNetwork
 @testable import WebInspectorUI
 
 @MainActor
@@ -26,7 +26,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -60,7 +60,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         inspector.selectEntry(entry)
@@ -100,7 +100,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -160,7 +160,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
@@ -206,7 +206,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()

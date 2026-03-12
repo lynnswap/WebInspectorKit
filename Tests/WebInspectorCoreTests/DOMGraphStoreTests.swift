@@ -1,5 +1,5 @@
 import Testing
-@testable import WebInspectorEngine
+@testable import WebInspectorCore
 
 @MainActor
 struct DOMGraphStoreTests {

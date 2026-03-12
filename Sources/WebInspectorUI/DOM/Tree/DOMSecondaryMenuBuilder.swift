@@ -1,4 +1,4 @@
-import WebInspectorEngine
+import WebInspectorCore
 
 #if canImport(UIKit)
 import UIKit

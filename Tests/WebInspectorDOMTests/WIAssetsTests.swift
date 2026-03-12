@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WebInspectorRuntime
+@testable import WebInspectorDOM
 
 struct WIAssetsTests {
     @Test

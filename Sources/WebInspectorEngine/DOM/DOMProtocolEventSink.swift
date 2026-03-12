@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorCore
 
 @MainActor
 package protocol DOMProtocolEventSink: AnyObject {

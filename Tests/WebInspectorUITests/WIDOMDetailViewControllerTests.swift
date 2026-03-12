@@ -2,8 +2,8 @@
 import Testing
 import AppKit
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
 @testable import WebInspectorUI
 
 @MainActor
@@ -57,7 +57,7 @@ struct WIDOMDetailViewControllerAppKitTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
 
@@ -375,8 +375,8 @@ private func makeDetailRecoveryResolvedTree() -> DOMGraphNodeDescriptor {
 import Testing
 import UIKit
 import WebKit
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
 @testable import WebInspectorUI
 
 @MainActor
@@ -442,7 +442,7 @@ struct WIDOMDetailViewControllerTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
 

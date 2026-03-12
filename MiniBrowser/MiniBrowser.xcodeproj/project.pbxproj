@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		77B94B4A0F2A4D0A8B64C01A /* WebInspectorTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 77B94B4C0F2A4D0A8B64C01A /* WebInspectorTransport */; };
 		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
 /* End PBXBuildFile section */
 
@@ -44,7 +43,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				77B94B4A0F2A4D0A8B64C01A /* WebInspectorTransport in Frameworks */,
 				ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -97,7 +95,6 @@
 			);
 			name = MiniBrowser;
 			packageProductDependencies = (
-				77B94B4C0F2A4D0A8B64C01A /* WebInspectorTransport */,
 				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
 			);
 			productName = MiniBrowser;
@@ -542,10 +539,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		77B94B4C0F2A4D0A8B64C01A /* WebInspectorTransport */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = WebInspectorTransport;
-		};
 		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WebInspectorKit;

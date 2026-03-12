@@ -2,9 +2,9 @@ import WebKit
 import WebInspectorTransport
 
 @MainActor
-final class WISharedTransportRegistry {
-    static let shared = WISharedTransportRegistry()
-    typealias SessionFactory = @MainActor (WKWebView) -> WITransportSession
+package final class WISharedTransportRegistry {
+    package static let shared = WISharedTransportRegistry()
+    package typealias SessionFactory = @MainActor (WKWebView) -> WITransportSession
 
     private static let networkEventMethods: Set<String> = [
         "Network.requestWillBeSent",
@@ -35,7 +35,7 @@ final class WISharedTransportRegistry {
     ]
 
     @MainActor
-    final class Lease: InspectorTransportCapabilityProviding {
+    package final class Lease: InspectorTransportCapabilityProviding {
         private weak var registry: WISharedTransportRegistry?
         fileprivate let entry: Entry
         private var released = false
@@ -49,57 +49,61 @@ final class WISharedTransportRegistry {
             entry.inspectorTransportCapabilities
         }
 
-        var supportSnapshot: WITransportSupportSnapshot {
+        package var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
+            supportSnapshot
+        }
+
+        package var supportSnapshot: WITransportSupportSnapshot {
             entry.supportSnapshot
         }
 
-        func ensureAttached() async throws {
+        package func ensureAttached() async throws {
             try await entry.ensureAttached()
         }
 
-        func sendPage<C: WITransportPageCommand>(_ command: C) async throws -> C.Response {
+        package func sendPage<C: WITransportPageCommand>(_ command: C) async throws -> C.Response {
             try await entry.sendPage(command)
         }
 
-        func sendRoot<C: WITransportRootCommand>(_ command: C) async throws -> C.Response {
+        package func sendRoot<C: WITransportRootCommand>(_ command: C) async throws -> C.Response {
             try await entry.sendRoot(command)
         }
 
-        func addNetworkConsumer(
+        package func addNetworkConsumer(
             _ identifier: UUID,
             handler: @escaping @MainActor (WITransportEventEnvelope) -> Void
         ) {
             entry.addNetworkConsumer(identifier, handler: handler)
         }
 
-        func removeNetworkConsumer(_ identifier: UUID) {
+        package func removeNetworkConsumer(_ identifier: UUID) {
             entry.removeNetworkConsumer(identifier)
         }
 
-        func addDOMConsumer(
+        package func addDOMConsumer(
             _ identifier: UUID,
             handler: @escaping @MainActor (WITransportEventEnvelope) -> Void
         ) {
             entry.addDOMConsumer(identifier, handler: handler)
         }
 
-        func ensureNetworkEventIngress() async throws {
+        package func ensureNetworkEventIngress() async throws {
             try await entry.ensureNetworkEventIngress()
         }
 
-        func removeDOMConsumer(_ identifier: UUID) {
+        package func removeDOMConsumer(_ identifier: UUID) {
             entry.removeDOMConsumer(identifier)
         }
 
-        func ensureDOMEventIngress() async throws {
+        package func ensureDOMEventIngress() async throws {
             try await entry.ensureDOMEventIngress()
         }
 
-        func ensureCSSDomainReady() async throws {
+        package func ensureCSSDomainReady() async throws {
             try await entry.ensureCSSDomainReady()
         }
 
-        func release() {
+        package func release() {
             guard !released else {
                 return
             }
@@ -529,7 +533,7 @@ final class WISharedTransportRegistry {
         self.sessionFactory = sessionFactory
     }
 
-    func acquireLease(for webView: WKWebView) -> Lease {
+    package func acquireLease(for webView: WKWebView) -> Lease {
         purgeStaleEntries()
 
         let key = ObjectIdentifier(webView)

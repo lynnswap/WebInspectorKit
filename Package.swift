@@ -9,6 +9,79 @@ let strictSwiftSettings: [SwiftSetting] = [
     .strictMemorySafety(),
 ]
 
+let webInspectorCoreExcludes: [String] = [
+    "WebInspectorBridge",
+    "WebInspectorEngine/DOM/DOMLegacyBundleNormalizer.swift",
+    "WebInspectorEngine/DOM/DOMLegacyPageDriver.swift",
+    "WebInspectorEngine/DOM/DOMPageDriving.swift",
+    "WebInspectorEngine/DOM/DOMProtocolEventSink.swift",
+    "WebInspectorEngine/DOM/DOMSelectionBridge.swift",
+    "WebInspectorEngine/DOM/DOMSession.swift",
+    "WebInspectorEngine/DOM/DOMTransportDriver.swift",
+    "WebInspectorEngine/Network/NetworkLegacyPageDriver.swift",
+    "WebInspectorEngine/Network/NetworkLegacyResourceLoadObserver.swift",
+    "WebInspectorEngine/Network/NetworkPageDriving.swift",
+    "WebInspectorEngine/Network/NetworkSession+PreviewSupport.swift",
+    "WebInspectorEngine/Network/NetworkSession.swift",
+    "WebInspectorEngine/Network/NetworkTransportDriver.swift",
+    "WebInspectorKit",
+    "WebInspectorRuntime/DOM",
+    "WebInspectorRuntime/Network",
+    "WebInspectorRuntime/Session/WIInspectorConfiguration.swift",
+    "WebInspectorRuntime/Session/WIInspectorController.swift",
+    "WebInspectorRuntime/Session/WIInspectorPanel.swift",
+    "WebInspectorRuntime/Support",
+    "WebInspectorScripts",
+    "WebInspectorTransport",
+    "WebInspectorTransportObjCShim",
+    "WebInspectorUI",
+]
+
+let webInspectorDOMExcludes: [String] = [
+    "WebInspectorBridge",
+    "WebInspectorEngine/Common",
+    "WebInspectorEngine/DOM/DOMConfiguration.swift",
+    "WebInspectorEngine/DOM/DOMEntry.swift",
+    "WebInspectorEngine/DOM/DOMGraphStore.swift",
+    "WebInspectorEngine/DOM/DOMMatchedStyles.swift",
+    "WebInspectorEngine/DOM/DOMSelectionCopyKind.swift",
+    "WebInspectorEngine/DOM/DOMSelectionModeResult.swift",
+    "WebInspectorEngine/Network",
+    "WebInspectorEngine/Transport",
+    "WebInspectorKit",
+    "WebInspectorRuntime/Network",
+    "WebInspectorRuntime/Session",
+    "WebInspectorScripts",
+    "WebInspectorTransport",
+    "WebInspectorTransportObjCShim",
+    "WebInspectorUI",
+]
+
+let webInspectorNetworkExcludes: [String] = [
+    "WebInspectorBridge",
+    "WebInspectorEngine/Common",
+    "WebInspectorEngine/DOM",
+    "WebInspectorEngine/Network/NetworkBody.swift",
+    "WebInspectorEngine/Network/NetworkBodyPreviewData.swift",
+    "WebInspectorEngine/Network/NetworkConfiguration.swift",
+    "WebInspectorEngine/Network/NetworkEntry.swift",
+    "WebInspectorEngine/Network/NetworkEventBatch.swift",
+    "WebInspectorEngine/Network/NetworkHeaders.swift",
+    "WebInspectorEngine/Network/NetworkJSONNode.swift",
+    "WebInspectorEngine/Network/NetworkLoggingMode.swift",
+    "WebInspectorEngine/Network/NetworkResourceFilter.swift",
+    "WebInspectorEngine/Network/NetworkStore.swift",
+    "WebInspectorEngine/Transport",
+    "WebInspectorKit",
+    "WebInspectorRuntime/DOM",
+    "WebInspectorRuntime/Session",
+    "WebInspectorRuntime/Support",
+    "WebInspectorScripts",
+    "WebInspectorTransport",
+    "WebInspectorTransportObjCShim",
+    "WebInspectorUI",
+]
+
 let package = Package(
     name: "WebInspectorKit",
     defaultLocalization: "en",
@@ -16,30 +89,6 @@ let package = Package(
         .iOS(.v18), .macOS(.v15)
     ],
     products: [
-        .library(
-            name: "WebInspectorEngine",
-            targets: ["WebInspectorEngine"]
-        ),
-        .library(
-            name: "WebInspectorTransport",
-            targets: ["WebInspectorTransport"]
-        ),
-        .library(
-            name: "WebInspectorBridge",
-            targets: ["WebInspectorBridge"]
-        ),
-        .library(
-            name: "WebInspectorScripts",
-            targets: ["WebInspectorScripts"]
-        ),
-        .library(
-            name: "WebInspectorRuntime",
-            targets: ["WebInspectorRuntime"]
-        ),
-        .library(
-            name: "WebInspectorUI",
-            targets: ["WebInspectorUI"]
-        ),
         .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
@@ -76,30 +125,66 @@ let package = Package(
             ]
         ),
         .target(
-            name: "WebInspectorEngine",
+            name: "WebInspectorSPI",
             dependencies: [
-                "WebInspectorBridge",
-                "WebInspectorScripts",
-                "WebInspectorTransport",
+                "WebInspectorSPIObjCShim"
+            ],
+            path: "Sources/WebInspectorBridge",
+            exclude: ["ObjCShim"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorCore",
+            dependencies: [
+                "WebInspectorTransport"
+            ],
+            path: "Sources",
+            exclude: webInspectorCoreExcludes,
+            sources: [
+                "WebInspectorEngine/Common",
+                "WebInspectorEngine/Transport",
+                "WebInspectorEngine/DOM/DOMConfiguration.swift",
+                "WebInspectorEngine/DOM/DOMEntry.swift",
+                "WebInspectorEngine/DOM/DOMGraphStore.swift",
+                "WebInspectorEngine/DOM/DOMMatchedStyles.swift",
+                "WebInspectorEngine/DOM/DOMSelectionCopyKind.swift",
+                "WebInspectorEngine/DOM/DOMSelectionModeResult.swift",
+                "WebInspectorEngine/Network/NetworkBody.swift",
+                "WebInspectorEngine/Network/NetworkBodyPreviewData.swift",
+                "WebInspectorEngine/Network/NetworkConfiguration.swift",
+                "WebInspectorEngine/Network/NetworkEntry.swift",
+                "WebInspectorEngine/Network/NetworkEventBatch.swift",
+                "WebInspectorEngine/Network/NetworkHeaders.swift",
+                "WebInspectorEngine/Network/NetworkJSONNode.swift",
+                "WebInspectorEngine/Network/NetworkLoggingMode.swift",
+                "WebInspectorEngine/Network/NetworkResourceFilter.swift",
+                "WebInspectorEngine/Network/NetworkStore.swift",
+                "WebInspectorRuntime/Session/WISessionLifecycle.swift",
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "WebInspectorRuntime",
+            name: "WebInspectorDOM",
             dependencies: [
-                "WebInspectorEngine",
-                "WebInspectorTransport",
+                "WebInspectorCore",
+                "WebInspectorSPI",
                 "WebInspectorScripts",
+                "WebInspectorTransport",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorBridge",
-            dependencies: [
-                "WebInspectorBridgeObjCShim"
+            path: "Sources",
+            exclude: webInspectorDOMExcludes,
+            sources: [
+                "WebInspectorEngine/DOM/DOMLegacyBundleNormalizer.swift",
+                "WebInspectorEngine/DOM/DOMLegacyPageDriver.swift",
+                "WebInspectorEngine/DOM/DOMPageDriving.swift",
+                "WebInspectorEngine/DOM/DOMProtocolEventSink.swift",
+                "WebInspectorEngine/DOM/DOMSelectionBridge.swift",
+                "WebInspectorEngine/DOM/DOMSession.swift",
+                "WebInspectorEngine/DOM/DOMTransportDriver.swift",
+                "WebInspectorRuntime/DOM",
+                "WebInspectorRuntime/Support/WIAssets.swift",
             ],
-            exclude: ["ObjCShim"],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -116,7 +201,7 @@ let package = Package(
             ]
         ),
         .target(
-            name: "WebInspectorBridgeObjCShim",
+            name: "WebInspectorSPIObjCShim",
             path: "Sources/WebInspectorBridge/ObjCShim",
             publicHeadersPath: "include",
             linkerSettings: [
@@ -126,11 +211,54 @@ let package = Package(
             ]
         ),
         .target(
+            name: "WebInspectorNetwork",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorSPI",
+                "WebInspectorScripts",
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            path: "Sources",
+            exclude: webInspectorNetworkExcludes,
+            sources: [
+                "WebInspectorEngine/Network/NetworkLegacyPageDriver.swift",
+                "WebInspectorEngine/Network/NetworkLegacyResourceLoadObserver.swift",
+                "WebInspectorEngine/Network/NetworkPageDriving.swift",
+                "WebInspectorEngine/Network/NetworkSession.swift",
+                "WebInspectorEngine/Network/NetworkSession+PreviewSupport.swift",
+                "WebInspectorEngine/Network/NetworkTransportDriver.swift",
+                "WebInspectorRuntime/Network",
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorShell",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorTransport"
+            ],
+            path: "Sources/WebInspectorRuntime/Session",
+            exclude: [
+                "WISessionLifecycle.swift"
+            ],
+            sources: [
+                "WIInspectorPanel.swift",
+                "WIInspectorConfiguration.swift",
+                "WIInspectorController.swift",
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorUI",
             dependencies: [
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorBridgeObjCShim",
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
+                "WebInspectorSPI",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             resources: [
@@ -142,17 +270,20 @@ let package = Package(
             name: "WebInspectorKit",
             dependencies: [
                 "WebInspectorUI",
-                "WebInspectorEngine",
-                "WebInspectorRuntime",
-                "WebInspectorBridge",
-                "WebInspectorScripts"
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
+                "WebInspectorSPI",
+                "WebInspectorScripts",
+                "WebInspectorTransport"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorEngine"
+                "WebInspectorCore"
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
@@ -166,32 +297,61 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorEngineTests",
+            name: "WebInspectorCoreTests",
             dependencies: [
-                "WebInspectorEngine",
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
                 "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
-            path: "Tests/WebInspectorEngineTests",
+            path: "Tests/WebInspectorCoreTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WebInspectorRuntimeTests",
+            name: "WebInspectorDOMTests",
             dependencies: [
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorUI",
-                "WebInspectorTestSupport"
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorTransport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
-            path: "Tests/WebInspectorRuntimeTests",
+            path: "Tests/WebInspectorDOMTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorNetworkTests",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorNetwork",
+                "WebInspectorTransport"
+            ],
+            path: "Tests/WebInspectorNetworkTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorShellTests",
+            dependencies: [
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
+                "WebInspectorUI",
+                "WebInspectorTransport",
+                "WebInspectorTestSupport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            path: "Tests/WebInspectorShellTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
                 "WebInspectorUI",
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorUITests",
@@ -202,9 +362,13 @@ let package = Package(
             dependencies: [
                 "WebInspectorKit",
                 "WebInspectorUI",
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
-                "WebInspectorTestSupport"
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
+                "WebInspectorTransport",
+                "WebInspectorTestSupport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorIntegrationTests",
             swiftSettings: strictSwiftSettings
@@ -214,8 +378,11 @@ let package = Package(
             dependencies: [
                 "WebInspectorKit",
                 "WebInspectorUI",
-                "WebInspectorRuntime",
-                "WebInspectorEngine",
+                "WebInspectorCore",
+                "WebInspectorDOM",
+                "WebInspectorNetwork",
+                "WebInspectorShell",
+                "WebInspectorTransport",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorIntegrationLongTests",

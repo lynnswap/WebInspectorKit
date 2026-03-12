@@ -1,6 +1,7 @@
 import Foundation
+import WebInspectorCore
 import OSLog
-import WebInspectorBridge
+import WebInspectorSPI
 import WebInspectorScripts
 import WebKit
 

@@ -1,7 +1,7 @@
 import WebKit
 
 @MainActor
-protocol PageSession: AnyObject {
+package protocol PageSession: AnyObject {
     associatedtype AttachmentResult = Void
 
     var lastPageWebView: WKWebView? { get }

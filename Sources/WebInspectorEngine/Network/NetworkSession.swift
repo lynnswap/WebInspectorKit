@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorCore
 import WebKit
 import WebInspectorTransport
 

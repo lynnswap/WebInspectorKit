@@ -1,37 +1,32 @@
-# MIGRATION (Next Release)
+# MIGRATION (Current Release)
 
-This release includes **breaking API changes** around tab modeling and ownership.
+This release includes **breaking API changes** around product exposure, typed panel modeling, and controller/store naming.
 
 ## Breaking Changes
 
 | Old | New |
 | --- | --- |
-| `WITabDescriptor` | `WITab` |
-| `WITab` (value type-like usage) | `WITab: NSObject` |
-| `WIModel.setTabsFromUI(_:)` | `WIModel.setTabs(_:)` |
-| Host-side tab cache (`RenderEntry` / `TabEntry` / `stableKey`) | `WITab` internal content VC cache |
-| `WISessionLifecycle` in `WebInspectorEngine` | `WISessionLifecycle` in `WebInspectorRuntime` |
+| public products `WebInspectorEngine` / `WebInspectorRuntime` / `WebInspectorUI` / `WebInspectorBridge` / `WebInspectorScripts` | single public product `WebInspectorKit` |
+| `WIModel` | `WIInspectorController` |
+| `WITab` | `WIInspectorTab` |
+| `WITabViewController` | `WIInspectorViewController` |
+| `WIDOMModel` | `WIDOMInspectorStore` |
+| `WINetworkModel` | `WINetworkInspectorStore` |
 
 ## New Architecture
 
-- SSOT remains `WIModel` (`tabs` / `selectedTab`).
-- Observation compatibility layer has been renamed to `ObservationBridge` and package resolution now targets `ObservationBridge` `0.4.0`.
-- `WITab` owns:
-  - tab definition (`identifier`, `title`, `image`, `role`)
-  - optional `viewControllerProvider`
-  - optional `userInfo`
-  - internal cached content view controller
-- UIKit/AppKit hosts project `WIModel` directly using Observation.
-- Observation handles are retained explicitly via `.store(in:)` with lifecycle-scoped `Set<ObservationHandle>` stores in UI hosts/cells.
-- `ObservationsCompat` remains only as a temporary shim in upstream package and is no longer imported in this repository.
-- Compact Element synthetic tab handling stays in UIKit host layer only.
+- `WebInspectorKit` is the only supported public entry point.
+- Internal targets are split into `WebInspectorCore`, `WebInspectorDOM`, `WebInspectorNetwork`, `WebInspectorShell`, `WebInspectorUI`, `WebInspectorSPI`, `WebInspectorTransport`, and `WebInspectorScripts`.
+- `WIInspectorController` owns lifecycle, page binding, selected panel, and DOM/Network activation policy.
+- `WIDOMInspectorStore` owns DOM inspector state.
+- `WINetworkInspectorStore` owns network inspector state.
+- `WIInspectorTab` now carries a typed `WIInspectorPanelConfiguration` instead of relying on string-only built-in tab checks.
+- Only `WebInspectorKit` re-exports internal modules; non-umbrella targets no longer chain `@_exported import`.
 
 ## Migration Steps
 
-1. Replace `WITabDescriptor` with `WITab`.
-2. Replace `setTabsFromUI(_:)` calls with `setTabs(_:)`.
-3. Remove app-side dependencies on host `stableKey` behavior.
-4. Keep custom tabs through `WITab(..., viewControllerProvider:)` and use `userInfo` for per-tab metadata when needed.
-5. Migrate imports from `ObservationsCompat` to `ObservationBridge`.
-6. For all `observe/observeTask` usage, keep returned handles in lifecycle-owned sets using `.store(in:)`.
-7. Rebuild and run tests to confirm there are no references to removed types/APIs.
+1. Replace direct imports of legacy internal products with `import WebInspectorKit`.
+2. Rename controller/store/container types to the new `WIInspector*` names.
+3. Update custom tab construction to `WIInspectorTab`.
+4. Treat panel selection/state through `WIInspectorPanelConfiguration` / `WIInspectorPanelKind`.
+5. Rebuild and run the current simulator + SwiftPM + TypeScript gates before shipping.

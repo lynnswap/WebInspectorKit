@@ -1,16 +1,18 @@
 import Testing
 import WebKit
 import ObservationBridge
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
+@testable import WebInspectorNetwork
+@testable import WebInspectorShell
 @testable import WebInspectorUI
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
 @testable import WebInspectorTransport
 
 @MainActor
 struct WISessionStateTests {
     @Test
     func tabUserInfoKeepsAssignedValue() {
-        let tab = WITab(
+        let tab = WIInspectorTab(
             id: "custom",
             title: "Custom",
             systemImage: "circle",
@@ -26,9 +28,9 @@ struct WISessionStateTests {
 
     @Test
     func tabEqualityUsesIdentity() {
-        let first = WITab.dom()
+        let first = WIInspectorTab.dom()
         let sameReference = first
-        let second = WITab.dom()
+        let second = WIInspectorTab.dom()
 
         #expect(first == sameReference)
         #expect(first != second)
@@ -36,68 +38,68 @@ struct WISessionStateTests {
 
     @Test
     func lifecycleTransitionsKeepSelectionOrdering() {
-        let controller = WIModel()
-        controller.setTabs([.dom(), .network()])
+        let controller = WIInspectorController()
+        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
         selectTab("wi_network", in: controller)
         let webView = makeTestWebView()
 
         controller.connect(to: webView)
 
         #expect(controller.lifecycle == .active)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
 
         controller.connect(to: nil)
         #expect(controller.lifecycle == .suspended)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
 
         controller.disconnect()
         #expect(controller.lifecycle == .disconnected)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
     }
 
     @Test
     func setTabsNormalizesInvalidSelectionToFirstTab() {
-        let customA = WITab(
+        let customA = WIInspectorTab(
             id: "a",
             title: "A",
             systemImage: "a.circle"
         )
-        let customB = WITab(
+        let customB = WIInspectorTab(
             id: "b",
             title: "B",
             systemImage: "b.circle"
         )
 
-        let controller = WIModel()
-        controller.setTabs([])
+        let controller = WIInspectorController()
+        controller.configurePanels([])
         selectTab("missing", in: controller)
-        controller.setTabs([customA, customB])
+        controller.configurePanels([customA.configuration, customB.configuration])
 
-        #expect(controller.selectedTab?.id == "a")
+        #expect(controller.selectedPanelConfiguration?.identifier == "a")
     }
 
     @Test
     func setTabsRebuildKeepsSelectedTabNormalized() {
-        let originalA = WITab(id: "a", title: "A", systemImage: "a.circle")
-        let originalB = WITab(id: "b", title: "B", systemImage: "b.circle")
-        let replacementA = WITab(id: "a", title: "A", systemImage: "a.circle")
-        let replacementC = WITab(id: "c", title: "C", systemImage: "c.circle")
+        let originalA = WIInspectorTab(id: "a", title: "A", systemImage: "a.circle")
+        let originalB = WIInspectorTab(id: "b", title: "B", systemImage: "b.circle")
+        let replacementA = WIInspectorTab(id: "a", title: "A", systemImage: "a.circle")
+        let replacementC = WIInspectorTab(id: "c", title: "C", systemImage: "c.circle")
 
-        let controller = WIModel()
-        controller.setTabs([originalA, originalB])
-        controller.setSelectedTabFromUI(originalB)
-        #expect(controller.selectedTab?.id == "b")
+        let controller = WIInspectorController()
+        controller.configurePanels([originalA.configuration, originalB.configuration])
+        controller.setSelectedPanelFromUI(originalB.configuration)
+        #expect(controller.selectedPanelConfiguration?.identifier == "b")
 
-        controller.setTabs([replacementA, replacementC])
+        controller.configurePanels([replacementA.configuration, replacementC.configuration])
 
-        #expect(controller.selectedTab?.id == "a")
+        #expect(controller.selectedPanelConfiguration?.identifier == "a")
 
-        controller.setTabs([])
-        #expect(controller.selectedTab == nil)
+        controller.configurePanels([])
+        #expect(controller.selectedPanelConfiguration == nil)
     }
 
     @Test
-    func selectedTabObservationEmitsOnSelectionChange() async {
+    func selectedPanelObservationEmitsOnSelectionChange() async {
         actor Recorder {
             var values: [String?] = []
             func append(_ value: String?) {
@@ -108,28 +110,28 @@ struct WISessionStateTests {
             }
         }
 
-        let controller = WIModel()
-        controller.setTabs([.dom(), .network()])
+        let controller = WIInspectorController()
+        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
 
         let recorder = Recorder()
         var observationHandles = Set<ObservationHandle>()
-        controller.observeTask([\.selectedTab]) {
-            await recorder.append(controller.selectedTab?.identifier)
+        controller.observeTask([\.selectedPanelConfiguration]) {
+            await recorder.append(controller.selectedPanelConfiguration?.identifier)
         }
         .store(in: &observationHandles)
 
-        let networkTab = controller.tabs.first { $0.identifier == WITab.networkTabID }
-        controller.setSelectedTabFromUI(networkTab)
+        let networkPanel = controller.panelConfigurations.first { $0.identifier == WIInspectorTab.networkTabID }
+        controller.setSelectedPanelFromUI(networkPanel)
 
         for _ in 0..<50 {
             let values = await recorder.snapshot()
-            if values.contains(WITab.networkTabID) {
+            if values.contains(WIInspectorTab.networkTabID) {
                 return
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        Issue.record("selectedTab observation did not emit network selection")
+        Issue.record("selectedPanel observation did not emit network selection")
     }
 
     @Test
@@ -142,7 +144,7 @@ struct WISessionStateTests {
         )
         let domDriver = RebindDOMPageDriver()
         let networkDriver = RebindNetworkPageDriver()
-        let controller = WIModel(
+        let controller = WIInspectorController(
             domSession: DOMSession(
                 configuration: .init(),
                 graphStore: DOMGraphStore(),
@@ -158,7 +160,7 @@ struct WISessionStateTests {
         )
         let webView = makeTestWebView()
 
-        controller.setTabs([.dom(), .network()])
+        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
         controller.connect(to: webView)
 
         await loadHTML("<html><body><p>initial</p></body></html>", in: webView)
@@ -217,9 +219,10 @@ struct WISessionStateTests {
         return condition()
     }
 
-    private func selectTab(_ identifier: String, in controller: WIModel) {
-        let tab = controller.tabs.first(where: { $0.identifier == identifier })
-        controller.setSelectedTabFromUI(tab)
+    private func selectTab(_ identifier: String, in controller: WIInspectorController) {
+        let panel = controller.panelConfigurations.first(where: { $0.identifier == identifier })
+            ?? WIInspectorPanelConfiguration(kind: .custom(identifier))
+        controller.setSelectedPanelFromUI(panel)
     }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-enum HTTPNetworkEventKind: String, Decodable {
+package enum HTTPNetworkEventKind: String, Decodable {
     case requestWillBeSent
     case responseReceived
     case loadingFinished
@@ -8,7 +8,7 @@ enum HTTPNetworkEventKind: String, Decodable {
     case resourceTiming
 }
 
-enum WSNetworkEventKind: String {
+package enum WSNetworkEventKind: String {
     case created = "wsCreated"
     case handshakeRequest = "wsHandshakeRequest"
     case handshake = "wsHandshake"
@@ -17,7 +17,7 @@ enum WSNetworkEventKind: String {
     case frameError = "wsFrameError"
 }
 
-protocol NetworkEventProtocol {
+package protocol NetworkEventProtocol {
     var sessionID: String { get }
     var requestID: Int { get }
     var startTimeSeconds: TimeInterval { get }
@@ -25,20 +25,33 @@ protocol NetworkEventProtocol {
     var wallTimeSeconds: TimeInterval? { get }
 }
 
-struct NetworkTimePayload: Decodable {
+package struct NetworkTimePayload: Decodable {
     let monotonicMs: Double
     let wallMs: Double
+
+    package init(monotonicMs: Double, wallMs: Double) {
+        self.monotonicMs = monotonicMs
+        self.wallMs = wallMs
+    }
 }
 
-struct NetworkErrorPayload: Decodable {
+package struct NetworkErrorPayload: Decodable {
     let domain: String
     let code: String?
     let message: String
     let isCanceled: Bool?
     let isTimeout: Bool?
+
+    package init(domain: String, code: String?, message: String, isCanceled: Bool?, isTimeout: Bool?) {
+        self.domain = domain
+        self.code = code
+        self.message = message
+        self.isCanceled = isCanceled
+        self.isTimeout = isTimeout
+    }
 }
 
-struct NetworkEventPayload: Decodable {
+package struct NetworkEventPayload: Decodable {
     let kind: String
     let requestId: Int
     let time: NetworkTimePayload?
@@ -56,6 +69,44 @@ struct NetworkEventPayload: Decodable {
     let encodedBodyLength: Int?
     let decodedBodySize: Int?
     let error: NetworkErrorPayload?
+
+    package init(
+        kind: String,
+        requestId: Int,
+        time: NetworkTimePayload?,
+        startTime: NetworkTimePayload?,
+        endTime: NetworkTimePayload?,
+        url: String?,
+        method: String?,
+        status: Int?,
+        statusText: String?,
+        mimeType: String?,
+        headers: [String: String]?,
+        initiator: String?,
+        body: NetworkBodyPayload?,
+        bodySize: Int?,
+        encodedBodyLength: Int?,
+        decodedBodySize: Int?,
+        error: NetworkErrorPayload?
+    ) {
+        self.kind = kind
+        self.requestId = requestId
+        self.time = time
+        self.startTime = startTime
+        self.endTime = endTime
+        self.url = url
+        self.method = method
+        self.status = status
+        self.statusText = statusText
+        self.mimeType = mimeType
+        self.headers = headers
+        self.initiator = initiator
+        self.body = body
+        self.bodySize = bodySize
+        self.encodedBodyLength = encodedBodyLength
+        self.decodedBodySize = decodedBodySize
+        self.error = error
+    }
 }
 
 private extension NetworkTimePayload {
@@ -189,10 +240,10 @@ private func networkIntegralInt(from value: Double) -> Int? {
     return Int(truncated)
 }
 
-struct HTTPNetworkEvent: NetworkEventProtocol {
+package struct HTTPNetworkEvent: NetworkEventProtocol {
     let kind: HTTPNetworkEventKind
-    let sessionID: String
-    let requestID: Int
+    package let sessionID: String
+    package let requestID: Int
     let url: String?
     let method: String?
     let statusCode: Int?
@@ -200,9 +251,9 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     let mimeType: String?
     let requestHeaders: NetworkHeaders
     let responseHeaders: NetworkHeaders
-    let startTimeSeconds: TimeInterval
-    let endTimeSeconds: TimeInterval?
-    let wallTimeSeconds: TimeInterval?
+    package let startTimeSeconds: TimeInterval
+    package let endTimeSeconds: TimeInterval?
+    package let wallTimeSeconds: TimeInterval?
     let encodedBodyLength: Int?
     let decodedBodySize: Int?
     let errorDescription: String?
@@ -212,7 +263,7 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
     let responseBody: NetworkBody?
     let blockedCookies: [String]
 
-    init?(payload: NetworkEventPayload, sessionID: String) {
+    package init?(payload: NetworkEventPayload, sessionID: String) {
         guard let kind = HTTPNetworkEventKind(rawValue: payload.kind) else {
             return nil
         }
@@ -338,7 +389,7 @@ struct HTTPNetworkEvent: NetworkEventProtocol {
 }
 
 extension HTTPNetworkEvent {
-    init(
+    package init(
         kind: HTTPNetworkEventKind,
         sessionID: String,
         requestID: Int,
@@ -385,14 +436,14 @@ extension HTTPNetworkEvent {
     }
 }
 
-struct WSNetworkEvent: NetworkEventProtocol {
+package struct WSNetworkEvent: NetworkEventProtocol {
     let kind: WSNetworkEventKind
-    let sessionID: String
-    let requestID: Int
+    package let sessionID: String
+    package let requestID: Int
     let url: String?
-    let startTimeSeconds: TimeInterval
-    let endTimeSeconds: TimeInterval?
-    let wallTimeSeconds: TimeInterval?
+    package let startTimeSeconds: TimeInterval
+    package let endTimeSeconds: TimeInterval?
+    package let wallTimeSeconds: TimeInterval?
     let framePayload: String?
     let framePayloadIsBase64: Bool
     let framePayloadSize: Int?
@@ -407,7 +458,7 @@ struct WSNetworkEvent: NetworkEventProtocol {
     let requestHeaders: NetworkHeaders
     let closeWasClean: Bool?
 
-    init(
+    package init(
         kind: WSNetworkEventKind,
         sessionID: String,
         requestID: Int,
@@ -512,12 +563,12 @@ struct WSNetworkEvent: NetworkEventProtocol {
     }
 }
 
-struct NetworkEventBatch: Decodable {
-    let version: Int
-    let sessionID: String
-    let seq: Int
-    let events: [HTTPNetworkEvent]
-    let dropped: Int?
+package struct NetworkEventBatch: Decodable {
+    package let version: Int
+    package let sessionID: String
+    package let seq: Int
+    package let events: [HTTPNetworkEvent]
+    package let dropped: Int?
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -528,7 +579,7 @@ struct NetworkEventBatch: Decodable {
         case dropped
     }
 
-    init(version: Int, sessionID: String, seq: Int, events: [HTTPNetworkEvent], dropped: Int?) {
+    package init(version: Int, sessionID: String, seq: Int, events: [HTTPNetworkEvent], dropped: Int?) {
         self.version = version
         self.sessionID = sessionID
         self.seq = seq
@@ -536,7 +587,7 @@ struct NetworkEventBatch: Decodable {
         self.dropped = dropped
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion)
         let legacyVersion = try container.decodeIfPresent(Int.self, forKey: .version)
@@ -553,7 +604,7 @@ struct NetworkEventBatch: Decodable {
         sessionID = decodedSessionID
     }
 
-    static func decode(from payload: Any?) -> NetworkEventBatch? {
+    package static func decode(from payload: Any?) -> NetworkEventBatch? {
         if let data = payload as? Data {
             return decode(fromData: data)
         }

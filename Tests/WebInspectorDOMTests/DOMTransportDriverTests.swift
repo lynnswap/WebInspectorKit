@@ -1,7 +1,8 @@
 import Testing
 import WebKit
 import WebInspectorTransport
-@testable import WebInspectorEngine
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
 
 @MainActor
 struct DOMTransportDriverTests {

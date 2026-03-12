@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorCore
 
 struct DOMLegacyProtocolEvent {
     let method: String

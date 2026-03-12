@@ -1,8 +1,11 @@
 import Testing
 import WebKit
 import ObservationBridge
-@testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+#if canImport(AppKit)
+import AppKit
+#endif
+@testable import WebInspectorCore
+@testable import WebInspectorDOM
 
 @MainActor
 @Suite(.serialized)
@@ -19,7 +22,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -59,7 +62,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -125,7 +128,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -149,7 +152,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -185,7 +188,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -212,7 +215,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -259,7 +262,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -294,7 +297,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -331,7 +334,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -383,7 +386,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
         var observationHandles = Set<ObservationHandle>()
         var observedNodeIDs: [Int?] = []
@@ -429,7 +432,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
         var observationHandles = Set<ObservationHandle>()
         var observedNodeIDs: [Int?] = []
@@ -479,7 +482,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -522,7 +525,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -570,7 +573,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -617,7 +620,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             pageAgent: driver
         )
-        let inspector = WIDOMModel(session: session)
+        let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
 
         inspector.attach(to: webView)
@@ -656,6 +659,44 @@ struct WIDOMModelTests {
         }
         #expect(recovered == true)
     }
+
+#if canImport(AppKit)
+    @Test
+    func copySelectionFallsBackToSystemPasteboardWithoutUIBridge() async {
+        let graphStore = DOMGraphStore()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            selectionCopyTextResult: "<body>Hello</body>"
+        )
+        let session = DOMSession(
+            configuration: .init(),
+            graphStore: graphStore,
+            pageAgent: driver
+        )
+        let inspector = WIDOMInspectorStore(session: session)
+
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+        graphStore.applySelectionSnapshot(
+            .init(
+                nodeID: 3,
+                preview: "<body>",
+                attributes: [],
+                path: ["html", "body"],
+                selectorPath: "html > body",
+                styleRevision: 0
+            )
+        )
+        NSPasteboard.general.clearContents()
+
+        inspector.copySelection(.html)
+
+        let copied = await waitUntil {
+            NSPasteboard.general.string(forType: .string) == "<body>Hello</body>"
+        }
+        #expect(copied == true)
+    }
+#endif
 }
 
 @MainActor
@@ -667,6 +708,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     private let reloadSnapshots: [DOMGraphSnapshot]
     private let requestedChildren: [Int: [DOMGraphNodeDescriptor]]
     private let selectionModeResult: DOMSelectionModeResult
+    private let selectionCopyTextResult: String
     private let matchedStylesError: (any Error)?
     private var pendingSelectedNodeID: Int?
     private let reloadDelayNanoseconds: UInt64
@@ -684,6 +726,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
         reloadSnapshots: [DOMGraphSnapshot]? = nil,
         requestedChildren: [Int: [DOMGraphNodeDescriptor]] = [:],
         selectionModeResult: DOMSelectionModeResult = .init(cancelled: true, requiredDepth: 0),
+        selectionCopyTextResult: String = "",
         matchedStylesError: (any Error)? = nil,
         reloadDelayNanoseconds: UInt64 = 0
     ) {
@@ -691,6 +734,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
         self.reloadSnapshots = reloadSnapshots ?? [rootSnapshot]
         self.requestedChildren = requestedChildren
         self.selectionModeResult = selectionModeResult
+        self.selectionCopyTextResult = selectionCopyTextResult
         self.matchedStylesError = matchedStylesError
         self.reloadDelayNanoseconds = reloadDelayNanoseconds
     }
@@ -833,7 +877,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         _ = nodeId
         _ = kind
-        return ""
+        return selectionCopyTextResult
     }
 }
 

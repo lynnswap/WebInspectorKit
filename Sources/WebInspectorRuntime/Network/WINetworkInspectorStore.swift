@@ -2,29 +2,15 @@ import Foundation
 import Observation
 import ObservationBridge
 import WebKit
-import WebInspectorEngine
+import WebInspectorCore
 import WebInspectorTransport
 
 @MainActor
 @Observable
-public final class WINetworkModel {
-    let session: NetworkSession
+public final class WINetworkInspectorStore {
+    package let session: NetworkSession
 
     public private(set) weak var selectedEntry: NetworkEntry?
-    public var searchText: String = ""
-    public var activeResourceFilters: Set<NetworkResourceFilter> = [] {
-        didSet {
-            let normalized = NetworkResourceFilter.normalizedSelection(activeResourceFilters)
-            if effectiveResourceFilters != normalized {
-                effectiveResourceFilters = normalized
-            }
-        }
-    }
-    public private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
-    public var sortDescriptors: [SortDescriptor<NetworkEntry>] = [
-        SortDescriptor<NetworkEntry>(\.createdAt, order: .reverse),
-        SortDescriptor<NetworkEntry>(\.requestID, order: .reverse)
-    ]
 
     @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
     @ObservationIgnored private var selectedEntryObservationHandles: Set<ObservationHandle> = []
@@ -46,28 +32,13 @@ public final class WINetworkModel {
         session.transportSupportSnapshot
     }
 
-    public var displayEntries: [NetworkEntry] {
-        let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filteredEntries = store.entries.filter { entry in
-            if !effectiveResourceFilters.isEmpty,
-               effectiveResourceFilters.contains(entry.resourceFilter) == false {
-                return false
-            }
-            if trimmedQuery.isEmpty {
-                return true
-            }
-            return entry.matchesSearchText(trimmedQuery)
-        }
-        return filteredEntries.sorted(using: sortDescriptors)
-    }
-
-    func attach(to webView: WKWebView) {
+    package func attach(to webView: WKWebView) {
         session.attach(pageWebView: webView)
         isAttachedToPage = true
         scheduleSelectedEntryBodyFetch()
     }
 
-    func suspend() {
+    package func suspend() {
         selectedEntryFetchTask?.cancel()
         if let selectedEntry {
             session.cancelBodyFetches(for: selectedEntry)
@@ -76,7 +47,7 @@ public final class WINetworkModel {
         isAttachedToPage = false
     }
 
-    func detach() {
+    package func detach() {
         selectedEntryFetchTask?.cancel()
         if let selectedEntry {
             session.cancelBodyFetches(for: selectedEntry)
@@ -87,7 +58,7 @@ public final class WINetworkModel {
         isAttachedToPage = false
     }
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    package func setMode(_ mode: NetworkLoggingMode) {
         guard isAttachedToPage else {
             return
         }
@@ -119,7 +90,7 @@ public final class WINetworkModel {
     }
 }
 
-private extension WINetworkModel {
+private extension WINetworkInspectorStore {
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
         selectedEntryObservationHandles.removeAll()
         guard let entry else {
@@ -170,22 +141,5 @@ private extension WINetworkModel {
                 self.requestBodyIfNeeded(for: currentSelection, role: .response)
             }
         }
-    }
-}
-
-private extension NetworkEntry {
-    func matchesSearchText(_ query: String) -> Bool {
-        if query.isEmpty {
-            return true
-        }
-        let statusCodeLabel = statusCode.map(String.init) ?? ""
-        let candidates = [
-            url,
-            method,
-            statusCodeLabel,
-            statusText,
-            fileTypeLabel
-        ]
-        return candidates.contains { $0.localizedStandardContains(query) }
     }
 }

@@ -1,18 +1,18 @@
 import Foundation
 import ObservationBridge
-import WebInspectorEngine
-import WebInspectorRuntime
+import WebInspectorCore
+import WebInspectorNetwork
 
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
 final class WINetworkCompactViewController: UINavigationController, UINavigationControllerDelegate {
-    private let inspector: WINetworkModel
+    private let inspector: WINetworkInspectorStore
     private let listPaneViewController: WINetworkListViewController
     private var observationHandles: Set<ObservationHandle> = []
 
-    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
         self.inspector = inspector
         self.listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
         super.init(rootViewController: listPaneViewController)
@@ -94,7 +94,7 @@ import SwiftUI
         let inspector = WINetworkPreviewFixtures.makeInspector(mode: .detail)
         return WINetworkCompactViewController(
             inspector: inspector,
-            queryModel: WINetworkQueryModel(inspector: inspector)
+            queryModel: WINetworkQueryState(inspector: inspector)
         )
     }
 }
