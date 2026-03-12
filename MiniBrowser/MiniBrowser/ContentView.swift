@@ -1,5 +1,6 @@
 import SwiftUI
 import WebInspectorKit
+import OSLog
 
 struct ContentView: View {
     private struct AutoInspectorPresentationTrigger: Equatable {
@@ -11,6 +12,9 @@ struct ContentView: View {
     @State private var model: BrowserViewModel?
     @State private var inspectorController: WIModel?
     @State private var didAutoPresentInspector = false
+    @State private var didAutoStartSelection = false
+
+    private let logger = Logger(subsystem: "MiniBrowser", category: "ContentView")
     
     var body: some View {
         if let model, let inspectorController {
@@ -104,6 +108,11 @@ struct ContentView: View {
             tabs: autoInspectorTabs(from: environment)
         )
         didAutoPresentInspector = didPresent
+        maybeAutoStartSelectionIfNeeded(
+            didPresent: didPresent,
+            inspectorController: inspectorController,
+            environment: environment
+        )
     }
 
     private func autoInspectorTabs(from environment: [String: String]) -> [WITab] {
@@ -128,6 +137,38 @@ struct ContentView: View {
         }
 
         return tabs.isEmpty ? [.dom(), .network()] : tabs
+    }
+
+    @MainActor
+    private func maybeAutoStartSelectionIfNeeded(
+        didPresent: Bool,
+        inspectorController: WIModel,
+        environment: [String: String]
+    ) {
+        guard didPresent else {
+            return
+        }
+        guard didAutoStartSelection == false else {
+            return
+        }
+        guard environment["MINIBROWSER_AUTO_START_DOM_SELECTION"] == "1" else {
+            return
+        }
+        didAutoStartSelection = true
+
+        Task { @MainActor in
+            logger.notice("auto-starting DOM selection mode for diagnostics")
+            for _ in 0..<100 {
+                if inspectorController.dom.hasPageWebView {
+                    inspectorController.dom.toggleSelectionMode()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            logger.error("auto-starting DOM selection mode timed out before page web view became available")
+            didAutoStartSelection = false
+        }
     }
 }
 

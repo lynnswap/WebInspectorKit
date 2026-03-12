@@ -507,7 +507,8 @@ struct WISharedTransportRegistryTests {
         let driver = DOMTransportDriver(
             configuration: .init(),
             graphStore: graphStore,
-            registry: registry
+            registry: registry,
+            selectionBridge: nil
         )
         let webView = WKWebView(frame: .zero)
 
@@ -543,6 +544,53 @@ struct WISharedTransportRegistryTests {
         #expect(graphStore.selectedEntry?.id.nodeID == targetNodeID)
     }
 
+#if os(iOS)
+    @Test
+    func selectionModeOmitsShowRulersInIOSInspectModeCommand() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: DOMGraphStore(),
+            registry: registry,
+            selectionBridge: nil
+        )
+        let webView = WKWebView(frame: .zero)
+
+        driver.attachPageWebView(webView)
+        #expect(await waitForCondition {
+            backend.attachCallCount == 1
+        })
+
+        let selectionTask = Task {
+            try await driver.beginSelectionMode()
+        }
+
+        let inspectModeRequested = await waitForCondition {
+            backend.sentPagePayloads.contains { payload in
+                guard let method = payload["method"] as? String else {
+                    return false
+                }
+                return method == "DOM.setInspectModeEnabled"
+            }
+        }
+        #expect(inspectModeRequested == true)
+
+        let payload = backend.sentPagePayloads.last {
+            guard let method = $0["method"] as? String else {
+                return false
+            }
+            return method == "DOM.setInspectModeEnabled"
+        }
+        let params = payload?["params"] as? [String: Any]
+        #expect(params?["showRulers"] == nil)
+
+        await driver.cancelSelectionMode()
+        let result = try await selectionTask.value
+        #expect(result.cancelled == true)
+    }
+#endif
+
     @Test
     func documentUpdateCancelsPendingSelectionMode() async throws {
         let backend = FakeRegistryBackend()
@@ -550,7 +598,8 @@ struct WISharedTransportRegistryTests {
         let driver = DOMTransportDriver(
             configuration: .init(),
             graphStore: DOMGraphStore(),
-            registry: registry
+            registry: registry,
+            selectionBridge: nil
         )
         let webView = WKWebView(frame: .zero)
 

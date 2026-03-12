@@ -495,7 +495,7 @@ extension DOMTransportDriver: DOMTransportRebindDriving {
 
 private extension DOMTransportDriver {
     static func defaultSelectionBridge() -> (any DOMSelectionBridging)? {
-#if canImport(AppKit)
+#if canImport(AppKit) || canImport(UIKit)
         DOMSelectionBridge()
 #else
         nil
@@ -2455,6 +2455,11 @@ private struct EngineDOMHighlightNode: WITransportPageCommand, Sendable {
     let parameters: Parameters
 
     init(nodeId: Int) {
+#if os(iOS) || os(tvOS) || os(visionOS) || targetEnvironment(macCatalyst)
+        let showRulers: Bool? = nil
+#else
+        let showRulers: Bool? = false
+#endif
         parameters = Parameters(
             nodeId: nodeId,
             highlightConfig: HighlightConfig(
@@ -2464,7 +2469,7 @@ private struct EngineDOMHighlightNode: WITransportPageCommand, Sendable {
                 borderColor: RGBAColor(r: 255, g: 229, b: 153, a: 0.66),
                 marginColor: RGBAColor(r: 246, g: 178, b: 107, a: 0.66)
             ),
-            showRulers: false
+            showRulers: showRulers
         )
     }
 
@@ -2493,10 +2498,15 @@ private struct EngineDOMSetInspectModeEnabled: WITransportPageCommand, Sendable 
     let parameters: Parameters
 
     init(enabled: Bool) {
+#if os(iOS) || os(tvOS) || os(visionOS) || targetEnvironment(macCatalyst)
+        let showRulers: Bool? = nil
+#else
+        let showRulers: Bool? = false
+#endif
         parameters = Parameters(
             enabled: enabled,
             highlightConfig: enabled ? HighlightConfig(showInfo: false) : nil,
-            showRulers: false
+            showRulers: showRulers
         )
     }
 
@@ -2587,6 +2597,10 @@ extension DOMTransportDriver {
 
     func testResolvedPendingSelectedNodeID(in root: WITransportDOMNode) -> Int? {
         resolvedPendingSelectedNodeID(in: root)
+    }
+
+    static var testDefaultSelectionBridgeAvailable: Bool {
+        defaultSelectionBridge() != nil
     }
 
     func testMakeStylePayloadForFailures(

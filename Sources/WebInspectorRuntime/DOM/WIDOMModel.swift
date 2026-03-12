@@ -900,7 +900,9 @@ private extension WIDOMModel {
                 }
             }
 
-            guard self.session.graphStore.selectedEntry?.id.nodeID == nodeID else {
+            let didRestoreSelection = self.session.graphStore.mergeRecoveredSelectionSnapshot(payload)
+            guard didRestoreSelection,
+                  self.session.graphStore.selectedEntry?.id.nodeID == nodeID else {
                 self.publishRecoverableError("Failed to resolve selected DOM node.")
                 return
             }

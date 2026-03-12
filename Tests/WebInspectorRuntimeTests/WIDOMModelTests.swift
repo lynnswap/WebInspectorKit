@@ -311,7 +311,7 @@ struct WIDOMModelTests {
         }
         #expect(initialRefresh == true)
 
-        graphStore.invalidateMatchedStyles(for: 3)
+        graphStore.invalidateStyle(for: 3, reason: .manualRefresh)
 
         let refreshed = await waitUntil {
             driver.matchedStylesRequests == [3, 3]
@@ -507,6 +507,7 @@ struct WIDOMModelTests {
         #expect(recovered == true)
         #expect(driver.reloadRequestedDepths == [4, 8])
         #expect(inspector.selectedEntry?.selectorPath == "#target")
+        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" && $0.value == "target" }) == true)
     }
 
     @Test
@@ -651,6 +652,7 @@ struct WIDOMModelTests {
         let recovered = await waitUntil(timeoutNanoseconds: 2_000_000_000) {
             inspector.selectedEntry?.id.nodeID == 7
                 && inspector.selectedEntry?.selectorPath == "#second-target"
+                && inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" && $0.value == "second-target" }) == true
         }
         #expect(recovered == true)
     }
@@ -779,7 +781,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     }
 
     func beginSelectionMode() async throws -> DOMSelectionModeResult {
-        selectionModeResult
+        return selectionModeResult
     }
 
     func cancelSelectionMode() async {

@@ -158,6 +158,38 @@ public final class DOMGraphStore {
         return true
     }
 
+    @discardableResult
+    package func mergeRecoveredSelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) -> Bool {
+        guard let payload, let nodeID = payload.nodeID else {
+            selectedID = nil
+            return false
+        }
+
+        guard let entry = entry(forNodeID: nodeID) else {
+            selectedID = nil
+            return false
+        }
+
+        let entryID = entry.id
+        if entry.preview.isEmpty, payload.preview.isEmpty == false {
+            entry.preview = payload.preview
+        }
+        if entry.path.isEmpty, payload.path.isEmpty == false {
+            entry.path = payload.path
+        }
+        if entry.selectorPath.isEmpty, payload.selectorPath.isEmpty == false {
+            entry.selectorPath = payload.selectorPath
+        }
+        if entry.attributes.isEmpty, payload.attributes.isEmpty == false {
+            entry.attributes = normalizeAttributes(payload.attributes, nodeID: entry.id.nodeID)
+        }
+
+        entriesByID[entryID] = entry
+        entriesByNodeID[nodeID] = entry
+        selectedID = entryID
+        return true
+    }
+
     public func applySelectorPath(_ payload: DOMSelectorPathPayload) {
         guard let nodeID = payload.nodeID else {
             return

@@ -183,7 +183,7 @@ struct DOMTransportDriverTests {
     }
 
     @Test
-    func selectionModeUsesBridgeHelperOnMacAndStoresPendingSelectedNode() async throws {
+    func selectionModeUsesBridgeHelperAndStoresPendingSelectedNode() async throws {
         let bridge = StubDOMSelectionBridge(
             result: .init(cancelled: false, requiredDepth: 5),
             selectedNodePath: [1, 0, 0]
@@ -205,6 +205,13 @@ struct DOMTransportDriverTests {
         #expect(bridge.resolvedDepths == [6])
         #expect(driver.testPendingSelectedNodeID == nil)
     }
+
+#if canImport(UIKit)
+    @Test
+    func defaultSelectionBridgeIsAvailableOnUIKit() {
+        #expect(DOMTransportDriver.testDefaultSelectionBridgeAvailable)
+    }
+#endif
 
     @Test
     func cancelSelectionModeUsesBridgeHelperAndClearsPendingSelectedNode() async {
