@@ -1,51 +1,54 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorNetwork
 
 @MainActor
 struct NetworkLegacyPageDriverTests {
     @Test
-    func postedNetworkBatchIsLoggedByLegacyDriver() async throws {
-        let driver = NetworkLegacyPageDriver()
-        let (webView, _) = makeTestWebView()
-        defer { driver.detachPageWebView(preparing: .stopped) }
+    func postedNetworkBatchIsLoggedByLegacyDriver() async {
+        await withWebKitTestIsolation {
+            let driver = NetworkLegacyPageDriver()
+            let (webView, _) = makeTestWebView()
+            defer { driver.detachPageWebView(preparing: .stopped) }
 
-        driver.attachPageWebView(webView)
-        await driver.waitForPendingConfigurationForTesting()
-        await loadHTML("<html><body><p>legacy driver</p></body></html>", in: webView)
-        #expect(await waitForLegacyNetworkBootstrap(in: webView))
+            driver.attachPageWebView(webView)
+            await driver.waitForPendingConfigurationForTesting()
+            await loadHTML("<html><body><p>legacy driver</p></body></html>", in: webView)
+            #expect(await waitForLegacyNetworkBootstrap(in: webView))
 
-        driver.testHandleNetworkEventsPayload([
-            "authToken": driver.testAuthToken(),
-            "version": 1,
-            "sessionId": "legacy-session",
-            "seq": 1,
-            "events": [
-                [
-                    "kind": "requestWillBeSent",
-                    "requestId": 101,
-                    "url": "https://example.com/legacy",
-                    "method": "GET",
-                    "time": ["monotonicMs": 1_000, "wallMs": 1_700_000_000_000],
+            driver.testHandleNetworkEventsPayload([
+                "authToken": driver.testAuthToken(),
+                "version": 1,
+                "sessionId": "legacy-session",
+                "seq": 1,
+                "events": [
+                    [
+                        "kind": "requestWillBeSent",
+                        "requestId": 101,
+                        "url": "https://example.com/legacy",
+                        "method": "GET",
+                        "time": ["monotonicMs": 1_000, "wallMs": 1_700_000_000_000],
+                    ],
+                    [
+                        "kind": "responseReceived",
+                        "requestId": 101,
+                        "status": 200,
+                        "statusText": "ok",
+                        "mimeType": "text/plain",
+                        "headers": [:],
+                        "time": ["monotonicMs": 1_010, "wallMs": 1_700_000_000_010],
+                    ],
+                    [
+                        "kind": "loadingFinished",
+                        "requestId": 101,
+                        "time": ["monotonicMs": 1_020, "wallMs": 1_700_000_000_020],
+                    ],
                 ],
-                [
-                    "kind": "responseReceived",
-                    "requestId": 101,
-                    "status": 200,
-                    "statusText": "ok",
-                    "mimeType": "text/plain",
-                    "headers": [:],
-                    "time": ["monotonicMs": 1_010, "wallMs": 1_700_000_000_010],
-                ],
-                [
-                    "kind": "loadingFinished",
-                    "requestId": 101,
-                    "time": ["monotonicMs": 1_020, "wallMs": 1_700_000_000_020],
-                ],
-            ],
-        ])
-        #expect(driver.store.entry(forRequestID: 101, sessionID: "legacy-session")?.phase == .completed)
+            ])
+            #expect(driver.store.entry(forRequestID: 101, sessionID: "legacy-session")?.phase == .completed)
+        }
     }
 }
 
@@ -56,9 +59,7 @@ private final class RecordingNetworkUserContentController: WKUserContentControll
 @MainActor
 private func makeTestWebView() -> (WKWebView, RecordingNetworkUserContentController) {
     let controller = RecordingNetworkUserContentController()
-    let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = .nonPersistent()
-    configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+    let configuration = makeIsolatedTestWebViewConfiguration()
     configuration.userContentController = controller
     let webView = WKWebView(frame: .zero, configuration: configuration)
     return (webView, controller)

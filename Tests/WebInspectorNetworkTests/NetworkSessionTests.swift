@@ -16,7 +16,7 @@ struct NetworkSessionTests {
             pageAgent: pageAgent,
             bodyFetcher: pageAgent
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         session.attach(pageWebView: webView)
         session.setMode(.buffering)
@@ -30,21 +30,23 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func defaultSessionUsesLegacyFallbackWhenTransportIsUnsupported() async throws {
-        let session = NetworkSession(
-            configuration: .init(),
-            defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-        )
-        let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
-        await loadHTML("<html><body><p>legacy network</p></body></html>", in: webView)
-        #expect(await waitForLegacyNetworkBootstrap(in: webView))
+    func defaultSessionUsesLegacyFallbackWhenTransportIsUnsupported() async {
+        await withWebKitTestIsolation {
+            let session = NetworkSession(
+                configuration: .init(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            )
+            let webView = makeIsolatedTestWebView()
+            session.attach(pageWebView: webView)
+            await loadHTML("<html><body><p>legacy network</p></body></html>", in: webView)
+            #expect(await waitForLegacyNetworkBootstrap(in: webView))
 
-        #expect(session.transportSupportSnapshot?.isSupported == false)
-        #expect(session.transportCapabilities.isEmpty)
+            #expect(session.transportSupportSnapshot?.isSupported == false)
+            #expect(session.transportCapabilities.isEmpty)
 
-        let body = await session.fetchBody(ref: nil, handle: "token" as NSString, role: .response)
-        #expect(body?.full == "token")
+            let body = await session.fetchBody(ref: nil, handle: "token" as NSString, role: .response)
+            #expect(body?.full == "token")
+        }
     }
 
     @Test
@@ -100,7 +102,7 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -137,7 +139,7 @@ struct NetworkSessionTests {
     func requestBodyIfNeededDoesNotRetryFailedBody() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -162,7 +164,7 @@ struct NetworkSessionTests {
             .agentUnavailable
         })
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -205,7 +207,7 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -234,7 +236,7 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -267,7 +269,7 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()
@@ -304,7 +306,7 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
 
         let entry = makeEntry()

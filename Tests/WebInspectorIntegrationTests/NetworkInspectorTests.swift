@@ -121,7 +121,7 @@ struct NetworkInspectorTests {
             }
         }
         let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
@@ -157,7 +157,7 @@ struct NetworkInspectorTests {
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
 
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let bodyStates = fetchStateRecorder(for: body)
         inspector.attach(to: webView)
 
@@ -173,7 +173,7 @@ struct NetworkInspectorTests {
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
         let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
         let entry = makeEntry()
 
@@ -206,7 +206,7 @@ struct NetworkInspectorTests {
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
         let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
 
         let firstEntry = makeEntry()
@@ -248,7 +248,7 @@ struct NetworkInspectorTests {
         inspector.selectEntry(entry)
 
         inspector.detach()
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
 
         #expect(fetcher.fetchRefs.isEmpty)

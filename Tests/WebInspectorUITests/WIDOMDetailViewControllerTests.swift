@@ -21,8 +21,7 @@ struct WIDOMDetailViewControllerAppKitTests {
         }
         let window = makeWindow(contentViewController: viewController)
         defer {
-            window.orderOut(nil)
-            window.contentViewController = nil
+            disposeWindow(window)
         }
 
         viewController.loadViewIfNeeded()
@@ -81,8 +80,7 @@ struct WIDOMDetailViewControllerAppKitTests {
         }
         let window = makeWindow(contentViewController: viewController)
         defer {
-            window.orderOut(nil)
-            window.contentViewController = nil
+            disposeWindow(window)
         }
 
         viewController.loadViewIfNeeded()
@@ -117,6 +115,13 @@ private func makeWindow(contentViewController: NSViewController) -> NSWindow {
     window.makeKeyAndOrderFront(nil)
     window.contentView?.layoutSubtreeIfNeeded()
     return window
+}
+
+@MainActor
+private func disposeWindow(_ window: NSWindow) {
+    window.orderOut(nil)
+    window.contentViewController = nil
+    window.close()
 }
 
 private struct DOMSelectionSummary: Equatable, Sendable {

@@ -89,232 +89,239 @@ struct DOMInspectorTests {
 
     @Test
     func detachClearsErrorMessageAndGraphState() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        let webView = makeTestWebView()
-        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
+        await withWebKitTestIsolation {
+            let controller = WIInspectorController()
+            let inspector = controller.dom
+            let webView = makeTestWebView()
+            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
-        inspector.attach(to: webView)
-        await loadHTML(
-            """
-            <html><body><main><div id="target">Hello</div></main></body></html>
-            """,
-            in: webView
-        )
-        await inspector.reloadInspector()
-        _ = await treeRowsLoaded.next(where: { $0 })
-
-        guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
-            Issue.record("expected a loaded DOM root before mutating selection state")
-            return
-        }
-
-        inspector.session.graphStore.applySelectionSnapshot(
-            .init(
-                nodeID: selectedNodeID,
-                preview: "<div class=\"target\">",
-                attributes: [],
-                path: [],
-                selectorPath: ".target",
-                styleRevision: 0
+            inspector.attach(to: webView)
+            await loadHTML(
+                """
+                <html><body><main><div id="target">Hello</div></main></body></html>
+                """,
+                in: webView
             )
-        )
-        inspector.session.graphStore.applyMatchedStyles(
-            .init(
-                nodeId: selectedNodeID,
-                rules: [
-                    DOMMatchedStyleRule(
-                        origin: .author,
-                        selectorText: ".target",
-                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                        sourceLabel: "inline"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 3
-            ),
-            for: selectedNodeID
-        )
-        inspector.session.graphStore.beginMatchedStylesLoading(for: selectedNodeID)
+            await inspector.reloadInspector()
+            _ = await treeRowsLoaded.next(where: { $0 })
 
-        inspector.detach()
+            guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
+                Issue.record("expected a loaded DOM root before mutating selection state")
+                return
+            }
 
-        #expect(inspector.errorMessage == nil)
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.entriesByID.isEmpty)
-        #expect(inspector.treeRows.isEmpty)
+            inspector.session.graphStore.applySelectionSnapshot(
+                .init(
+                    nodeID: selectedNodeID,
+                    preview: "<div class=\"target\">",
+                    attributes: [],
+                    path: [],
+                    selectorPath: ".target",
+                    styleRevision: 0
+                )
+            )
+            inspector.session.graphStore.applyMatchedStyles(
+                .init(
+                    nodeId: selectedNodeID,
+                    rules: [
+                        DOMMatchedStyleRule(
+                            origin: .author,
+                            selectorText: ".target",
+                            declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                            sourceLabel: "inline"
+                        ),
+                    ],
+                    truncated: true,
+                    blockedStylesheetCount: 3
+                ),
+                for: selectedNodeID
+            )
+            inspector.session.graphStore.beginMatchedStylesLoading(for: selectedNodeID)
+
+            inspector.detach()
+
+            #expect(inspector.errorMessage == nil)
+            #expect(inspector.selectedEntry == nil)
+            #expect(inspector.session.graphStore.entriesByID.isEmpty)
+            #expect(inspector.treeRows.isEmpty)
+        }
     }
 
     @Test
     func reloadInspectorLoadsTreeRowsForAttachedPage() async {
-        let controller = makeTransportController()
-        let inspector = controller.dom
-        let webView = makeTestWebView()
-        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
+        await withWebKitTestIsolation {
+            let controller = makeTransportController()
+            let inspector = controller.dom
+            let webView = makeTestWebView()
+            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
-        inspector.attach(to: webView)
-        await loadHTML(
-            """
-            <html>
-                <body>
-                    <main id="content">
-                        <section><h1>Hello</h1><p>World</p></section>
-                    </main>
-                </body>
-            </html>
-            """,
-            in: webView
-        )
+            inspector.attach(to: webView)
+            await loadHTML(
+                """
+                <html>
+                    <body>
+                        <main id="content">
+                            <section><h1>Hello</h1><p>World</p></section>
+                        </main>
+                    </body>
+                </html>
+                """,
+                in: webView
+            )
 
-        await inspector.reloadInspector()
+            await inspector.reloadInspector()
 
-        _ = await treeRowsLoaded.next(where: { $0 })
-        #expect(inspector.treeRows.count > 0)
-        #expect(inspector.session.graphStore.rootID != nil)
-        #expect(inspector.transportSupportSnapshot != nil)
+            _ = await treeRowsLoaded.next(where: { $0 })
+            #expect(inspector.treeRows.count > 0)
+            #expect(inspector.session.graphStore.rootID != nil)
+            #expect(inspector.transportSupportSnapshot != nil)
+        }
     }
 
     @Test
     func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
-        let controller = WIInspectorController(
-            domSession: DOMSession(
-                configuration: .init(),
-                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-            ),
-            networkSession: NetworkSession(
-                configuration: .init(),
-                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+        await withWebKitTestIsolation {
+            let controller = WIInspectorController(
+                domSession: DOMSession(
+                    configuration: .init(),
+                    defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+                ),
+                networkSession: NetworkSession(
+                    configuration: .init(),
+                    defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+                )
             )
-        )
-        let inspector = controller.dom
-        let webView = makeTestWebView()
-        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
+            let inspector = controller.dom
+            let webView = makeTestWebView()
+            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
-        inspector.attach(to: webView)
-        await loadHTML(
-            """
-            <html>
-                <body>
-                    <main id="legacy-content">
-                        <section><h1>Hello</h1><p>Legacy</p></section>
-                    </main>
-                </body>
-            </html>
-            """,
-            in: webView
-        )
+            inspector.attach(to: webView)
+            await loadHTML(
+                """
+                <html>
+                    <body>
+                        <main id="legacy-content">
+                            <section><h1>Hello</h1><p>Legacy</p></section>
+                        </main>
+                    </body>
+                </html>
+                """,
+                in: webView
+            )
 
-        await inspector.reloadInspector()
+            await inspector.reloadInspector()
 
-        _ = await treeRowsLoaded.next(where: { $0 })
-        #expect(inspector.transportSupportSnapshot?.isSupported == false)
-        #expect(inspector.treeRows.count > 0)
-        #expect(inspector.session.graphStore.rootID != nil)
+            _ = await treeRowsLoaded.next(where: { $0 })
+            #expect(inspector.transportSupportSnapshot?.isSupported == false)
+            #expect(inspector.treeRows.count > 0)
+            #expect(inspector.session.graphStore.rootID != nil)
+        }
     }
 
     @Test
     func selectingEntryLoadsMatchedStylesViaTransportWithoutProtocolEnable() async {
-        let controller = makeTransportController()
-        let inspector = controller.dom
-        let webView = makeTestWebView()
+        await withWebKitTestIsolation {
+            let controller = makeTransportController()
+            let inspector = controller.dom
+            let webView = makeTestWebView()
 
-        inspector.attach(to: webView)
-        await loadHTML(
-            """
-            <html>
-                <head>
-                    <style>
-                        #content {
-                            color: rgb(255, 0, 0);
-                            display: block;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <main id="content">Hello</main>
-                </body>
-            </html>
-            """,
-            in: webView
-        )
+            inspector.attach(to: webView)
+            await loadHTML(
+                """
+                <html>
+                    <head>
+                        <style>
+                            #content {
+                                color: rgb(255, 0, 0);
+                                display: block;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <main id="content">Hello</main>
+                    </body>
+                </html>
+                """,
+                in: webView
+            )
 
-        let snapshot = try? await inspector.session.captureSnapshot(maxDepth: 5)
-        guard let snapshot,
-              let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
-            Issue.record("target node was not found in transport snapshot")
-            return
-        }
+            let snapshot = try? await inspector.session.captureSnapshot(maxDepth: 5)
+            guard let snapshot,
+                  let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
+                Issue.record("target node was not found in transport snapshot")
+                return
+            }
 
-        do {
-            let payload = try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
-            #expect(payload.rules.contains(where: { $0.selectorText.contains("#content") }))
-            #expect(inspector.errorMessage == nil)
-        } catch {
-            Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")
+            do {
+                let payload = try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
+                #expect(payload.rules.contains(where: { $0.selectorText.contains("#content") }))
+                #expect(inspector.errorMessage == nil)
+            } catch {
+                Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")
+            }
         }
     }
 
     @Test
     func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        let controller = makeTransportController()
-        let inspector = controller.dom
-        let webView = makeTestWebView()
-        let undoManager = UndoManager()
-        let deleteEvents = AsyncValueQueue<WIDOMInspectorStore.DeleteMutationEvent>()
-        let html = """
-        <html>
-            <body>
-                <div id="first">First</div>
-                <div id="second">Second</div>
-            </body>
-        </html>
-        """
+        try await withWebKitTestIsolation {
+            let controller = makeTransportController()
+            let inspector = controller.dom
+            let webView = makeTestWebView()
+            let undoManager = UndoManager()
+            let deleteEvents = AsyncValueQueue<WIDOMInspectorStore.DeleteMutationEvent>()
+            let html = """
+            <html>
+                <body>
+                    <div id="first">First</div>
+                    <div id="second">Second</div>
+                </body>
+            </html>
+            """
 
-        inspector.attach(to: webView)
-        await loadHTML(html, in: webView)
-        await inspector.reloadInspector()
-        inspector.onDeleteMutationForTesting = { event in
-            Task {
-                await deleteEvents.push(event)
+            inspector.attach(to: webView)
+            await loadHTML(html, in: webView)
+            await inspector.reloadInspector()
+            inspector.onDeleteMutationForTesting = { event in
+                Task {
+                    await deleteEvents.push(event)
+                }
             }
+
+            let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+            guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
+                  let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
+            else {
+                Issue.record("target nodes were not found in snapshot")
+                return
+            }
+
+            inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
+            let firstDelete = await deleteEvents.next()
+            #expect(firstDelete == .removed(nodeId: firstNodeID))
+            #expect(await domNodeExists(withID: "first", in: webView) == false)
+
+            inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
+            let secondDelete = await deleteEvents.next()
+            #expect(secondDelete == .removed(nodeId: secondNodeID))
+            #expect(await domNodeExists(withID: "second", in: webView) == false)
+
+            undoManager.undo()
+            let secondRestore = await deleteEvents.next()
+            #expect(secondRestore == .restored(nodeId: secondNodeID))
+            #expect(await domNodeExists(withID: "second", in: webView))
+            #expect(await domNodeExists(withID: "first", in: webView) == false)
+
+            undoManager.undo()
+            let firstRestore = await deleteEvents.next()
+            #expect(firstRestore == .restored(nodeId: firstNodeID))
+            #expect(await domNodeExists(withID: "first", in: webView))
+            #expect(await domNodeExists(withID: "second", in: webView) == true)
         }
-
-        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
-        guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
-              let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
-        else {
-            Issue.record("target nodes were not found in snapshot")
-            return
-        }
-
-        inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-        let firstDelete = await deleteEvents.next()
-        #expect(firstDelete == .removed(nodeId: firstNodeID))
-        #expect(await domNodeExists(withID: "first", in: webView) == false)
-
-        inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
-        let secondDelete = await deleteEvents.next()
-        #expect(secondDelete == .removed(nodeId: secondNodeID))
-        #expect(await domNodeExists(withID: "second", in: webView) == false)
-
-        undoManager.undo()
-        let secondRestore = await deleteEvents.next()
-        #expect(secondRestore == .restored(nodeId: secondNodeID))
-        #expect(await domNodeExists(withID: "second", in: webView))
-        #expect(await domNodeExists(withID: "first", in: webView) == false)
-
-        undoManager.undo()
-        let firstRestore = await deleteEvents.next()
-        #expect(firstRestore == .restored(nodeId: firstNodeID))
-        #expect(await domNodeExists(withID: "first", in: webView))
-        #expect(await domNodeExists(withID: "second", in: webView) == true)
     }
 
     private func makeTestWebView() -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        return WKWebView(frame: .zero, configuration: configuration)
+        makeIsolatedTestWebView()
     }
 
     private func makeTransportController() -> WIInspectorController {

@@ -61,7 +61,7 @@ struct DOMFrontendStoreTests {
             graphStore: graphStore,
             pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let pageWebView = WKWebView(frame: .zero)
+        let pageWebView = makeIsolatedTestWebView()
         _ = session.attach(to: pageWebView)
 
         let store = DOMFrontendStore(session: session)

@@ -174,7 +174,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
@@ -201,7 +201,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
@@ -240,7 +240,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let errorMessages = errorMessageRecorder(for: inspector)
         let projectionRevisions = graphProjectionRevisionRecorder(for: inspector)
@@ -279,7 +279,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
@@ -308,7 +308,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
@@ -353,7 +353,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
@@ -389,7 +389,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
@@ -429,7 +429,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
@@ -460,41 +460,43 @@ struct WIDOMModelTests {
 
     @Test
     func repeatedProgrammaticSelectionDoesNotBlockSubsequentObservedSelectionRefresh() async {
-        let graphStore = DOMGraphStore()
-        let driver = StubDOMPageDriver(
-            graphStore: graphStore,
-            rootSnapshot: .init(root: makeDocumentTree())
-        )
-        let session = DOMSession(
-            configuration: .init(),
-            graphStore: graphStore,
-            pageAgent: driver
-        )
-        let inspector = WIDOMInspectorStore(session: session)
-
-        graphStore.applySnapshot(.init(root: makeDocumentTree()))
-        #expect(graphStore.entry(forNodeID: 3) != nil)
-        #expect(graphStore.entry(forNodeID: 2) != nil)
-
-        let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
-        inspector.selectEntry(bodyID)
-        let initialRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 3 })
-        #expect(initialRefresh.nodeID == 3)
-
-        inspector.selectEntry(bodyID)
-
-        graphStore.applySelectionSnapshot(
-            .init(
-                nodeID: 2,
-                preview: "<html>",
-                attributes: [],
-                path: ["html"],
-                selectorPath: "html",
-                styleRevision: 1
+        await withWebKitTestIsolation {
+            let graphStore = DOMGraphStore()
+            let driver = StubDOMPageDriver(
+                graphStore: graphStore,
+                rootSnapshot: .init(root: makeDocumentTree())
             )
-        )
-        let observedRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 2 })
-        #expect(observedRefresh.nodeID == 2)
+            let session = DOMSession(
+                configuration: .init(),
+                graphStore: graphStore,
+                pageAgent: driver
+            )
+            let inspector = WIDOMInspectorStore(session: session)
+
+            graphStore.applySnapshot(.init(root: makeDocumentTree()))
+            #expect(graphStore.entry(forNodeID: 3) != nil)
+            #expect(graphStore.entry(forNodeID: 2) != nil)
+
+            let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
+            inspector.selectEntry(bodyID)
+            let initialRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 3 })
+            #expect(initialRefresh.nodeID == 3)
+
+            inspector.selectEntry(bodyID)
+
+            graphStore.applySelectionSnapshot(
+                .init(
+                    nodeID: 2,
+                    preview: "<html>",
+                    attributes: [],
+                    path: ["html"],
+                    selectorPath: "html",
+                    styleRevision: 1
+                )
+            )
+            let observedRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 2 })
+            #expect(observedRefresh.nodeID == 2)
+        }
     }
 
     @Test
@@ -551,7 +553,7 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 

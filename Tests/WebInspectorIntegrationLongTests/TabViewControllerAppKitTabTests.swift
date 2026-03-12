@@ -79,8 +79,7 @@ struct TabViewControllerAppKitTabTests {
         let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID])
@@ -100,8 +99,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
@@ -142,8 +140,7 @@ struct TabViewControllerAppKitTabTests {
         let container = WIInspectorViewController(controller, webView: nil, tabs: descriptors)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let identifiers = toolbarIdentifierRawValues(in: window)
@@ -171,8 +168,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         await selectTabViaPicker(index: 1, in: window, container: container, renderEvents: observers.render)
@@ -228,8 +224,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let renderBaseline = container.contentRenderRevisionForTesting
@@ -285,8 +280,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         await selectTabViaPicker(index: 1, in: window, container: container, renderEvents: observers.render)
@@ -312,8 +306,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         #expect(container.visibleContentTabIDForTesting == "wi_dom")
@@ -341,8 +334,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let renderBaseline = container.contentRenderRevisionForTesting
@@ -366,8 +358,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         #expect(toolbarIdentifierRawValues(in: window) == [
@@ -403,8 +394,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         await selectTabViaPicker(index: 1, in: window, container: container, renderEvents: observers.render)
@@ -435,8 +425,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let initialToolbarBaseline = container.toolbarStateRevisionForTesting
@@ -552,8 +541,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let initialVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
@@ -580,8 +568,7 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
-            container.viewDidDisappear()
-            _ = window
+            disposeWindow(window, containing: container)
         }
 
         let domController = try? #require(container.visibleContentViewControllerForTesting as? WIDOMViewController)
@@ -612,6 +599,13 @@ struct TabViewControllerAppKitTabTests {
         container.loadViewIfNeeded()
         container.viewWillAppear()
         return window
+    }
+
+    private func disposeWindow(_ window: NSWindow, containing container: WIInspectorViewController) {
+        container.viewDidDisappear()
+        window.orderOut(nil)
+        window.contentViewController = nil
+        window.close()
     }
 
     private func tabPicker(in window: NSWindow) -> NSSegmentedControl? {

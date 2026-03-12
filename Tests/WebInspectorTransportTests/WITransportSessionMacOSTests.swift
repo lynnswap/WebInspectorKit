@@ -3,57 +3,60 @@ import AppKit
 import Foundation
 import WebKit
 import XCTest
+import WebInspectorTestSupport
 @testable import WebInspectorTransport
 
 @MainActor
 final class WITransportSessionMacOSTests: XCTestCase {
     func testSessionAttachesToHostedWKWebViewAndReadsDOM() async throws {
-        let hostedWebView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
-        let window = makeHostWindow(with: hostedWebView)
-        hostedWebView.isInspectable = true
-        try await loadHTML("<html><body><p id='greeting'>Hello transport</p></body></html>", in: hostedWebView)
-        let baselineVisibleWindowIdentifiers = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
+        try await withWebKitTestIsolation {
+            let hostedWebView = makeIsolatedTestWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+            let window = makeHostWindow(with: hostedWebView)
+            hostedWebView.isInspectable = true
+            try await loadHTML("<html><body><p id='greeting'>Hello transport</p></body></html>", in: hostedWebView)
+            let baselineVisibleWindowIdentifiers = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
 
-        let session = WITransportSession(
-            configuration: .init(
-                responseTimeout: .seconds(15),
-                eventBufferLimit: 64,
-                dropEventsWithoutSubscribers: true
+            let session = WITransportSession(
+                configuration: .init(
+                    responseTimeout: .seconds(15),
+                    eventBufferLimit: 64,
+                    dropEventsWithoutSubscribers: true
+                )
             )
-        )
-        var didCleanup = false
+            var didCleanup = false
 
-        try await session.attach(to: hostedWebView)
-        defer {
-            if !didCleanup {
-                session.detach()
-                window.orderOut(nil)
-                window.close()
+            try await session.attach(to: hostedWebView)
+            defer {
+                if !didCleanup {
+                    session.detach()
+                    window.orderOut(nil)
+                    window.close()
+                }
             }
+
+            XCTAssertTrue(window.isVisible)
+            XCTAssertEqual(
+                Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init)),
+                baselineVisibleWindowIdentifiers
+            )
+            XCTAssertTrue(session.supportSnapshot.isSupported)
+            XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
+
+            _ = try await session.page.send(WITransportCommands.DOM.Enable())
+            let document = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 4))
+            let outerHTMLNodeID = document.root.children?.first?.nodeId ?? document.root.nodeId
+            let outerHTML = try await session.page.send(
+                WITransportCommands.DOM.GetOuterHTML(nodeId: outerHTMLNodeID)
+            )
+
+            XCTAssertEqual(document.root.nodeName, "#document")
+            XCTAssertTrue(outerHTML.outerHTML.contains("Hello transport"))
+
+            session.detach()
+            window.orderOut(nil)
+            window.close()
+            didCleanup = true
         }
-
-        XCTAssertTrue(window.isVisible)
-        XCTAssertEqual(
-            Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init)),
-            baselineVisibleWindowIdentifiers
-        )
-        XCTAssertTrue(session.supportSnapshot.isSupported)
-        XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
-
-        _ = try await session.page.send(WITransportCommands.DOM.Enable())
-        let document = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 4))
-        let outerHTMLNodeID = document.root.children?.first?.nodeId ?? document.root.nodeId
-        let outerHTML = try await session.page.send(
-            WITransportCommands.DOM.GetOuterHTML(nodeId: outerHTMLNodeID)
-        )
-
-        XCTAssertEqual(document.root.nodeName, "#document")
-        XCTAssertTrue(outerHTML.outerHTML.contains("Hello transport"))
-
-        session.detach()
-        window.orderOut(nil)
-        window.close()
-        didCleanup = true
     }
 }
 

@@ -1,6 +1,9 @@
 import Foundation
 import ObservationBridge
 import Synchronization
+#if canImport(WebKit)
+import WebKit
+#endif
 
 public actor AsyncValueQueue<Value: Sendable> {
     private var values: [Value] = []
@@ -80,6 +83,34 @@ public actor AsyncGate {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+}
+
+public actor AsyncExclusiveLock {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    public init() {}
+
+    public func acquire() async {
+        guard isHeld else {
+            isHeld = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    public func release() {
+        guard waiters.isEmpty == false else {
+            isHeld = false
+            return
+        }
+
+        let waiter = waiters.removeFirst()
+        waiter.resume()
     }
 }
 
@@ -289,3 +320,45 @@ public final class TestClock: Clock, @unchecked Sendable {
         }
     }
 }
+
+private let webKitTestIsolationLock = AsyncExclusiveLock()
+
+@MainActor
+public func acquireWebKitTestIsolation() async {
+    await webKitTestIsolationLock.acquire()
+}
+
+@MainActor
+public func releaseWebKitTestIsolation() async {
+    await webKitTestIsolationLock.release()
+}
+
+@MainActor
+public func withWebKitTestIsolation<T>(
+    _ body: @MainActor () async throws -> T
+) async rethrows -> T {
+    await acquireWebKitTestIsolation()
+    do {
+        let result = try await body()
+        await releaseWebKitTestIsolation()
+        return result
+    } catch {
+        await releaseWebKitTestIsolation()
+        throw error
+    }
+}
+
+#if canImport(WebKit)
+@MainActor
+public func makeIsolatedTestWebViewConfiguration() -> WKWebViewConfiguration {
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+    return configuration
+}
+
+@MainActor
+public func makeIsolatedTestWebView(frame: CGRect = .zero) -> WKWebView {
+    WKWebView(frame: frame, configuration: makeIsolatedTestWebViewConfiguration())
+}
+#endif

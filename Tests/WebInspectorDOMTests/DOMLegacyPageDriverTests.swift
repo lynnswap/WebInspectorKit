@@ -1,5 +1,6 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 @testable import WebInspectorTransport
@@ -8,39 +9,41 @@ import WebKit
 struct DOMLegacyPageDriverTests {
     @Test
     func unsupportedTransportSnapshotUsesLegacyDriverAndLoadsDocument() async throws {
-        let session = DOMSession(
-            configuration: .init(snapshotDepth: 3, subtreeDepth: 2),
-            graphStore: DOMGraphStore(),
-            defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-        )
-        let (webView, controller) = makeTestWebView()
+        try await withWebKitTestIsolation {
+            let session = DOMSession(
+                configuration: .init(snapshotDepth: 3, subtreeDepth: 2),
+                graphStore: DOMGraphStore(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            )
+            let (webView, controller) = makeTestWebView()
 
-        session.attach(to: webView)
-        await loadHTML(
-            """
-            <html>
-                <body>
-                    <main id="content">
-                        <section id="child">Hello</section>
-                    </main>
-                </body>
-            </html>
-            """,
-            in: webView
-        )
+            session.attach(to: webView)
+            await loadHTML(
+                """
+                <html>
+                    <body>
+                        <main id="content">
+                            <section id="child">Hello</section>
+                        </main>
+                    </body>
+                </html>
+                """,
+                in: webView
+            )
 
-        try await session.reloadDocument(preserveState: false)
-        let snapshot = try await session.captureSnapshot(maxDepth: 4)
-        let contentNodeID = try #require(findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content"))
-        let childNodes = try await session.requestChildNodes(parentNodeId: contentNodeID)
+            try await session.reloadDocument(preserveState: false)
+            let snapshot = try await session.captureSnapshot(maxDepth: 4)
+            let contentNodeID = try #require(findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content"))
+            let childNodes = try await session.requestChildNodes(parentNodeId: contentNodeID)
 
-        #expect(session.transportSupportSnapshot?.isSupported == false)
-        #expect(session.transportCapabilities.isEmpty)
-        #expect(session.graphStore.rootID != nil)
-        #expect(controller.userScripts.count == 2)
-        #expect(childNodes.contains { descriptor in
-            descriptor.attributes.contains { $0.name == "id" && $0.value == "child" }
-        })
+            #expect(session.transportSupportSnapshot?.isSupported == false)
+            #expect(session.transportCapabilities.isEmpty)
+            #expect(session.graphStore.rootID != nil)
+            #expect(controller.userScripts.count == 2)
+            #expect(childNodes.contains { descriptor in
+                descriptor.attributes.contains { $0.name == "id" && $0.value == "child" }
+            })
+        }
     }
 
     @Test
@@ -206,9 +209,7 @@ private final class RecordingDOMUserContentController: WKUserContentController {
 @MainActor
 private func makeTestWebView() -> (WKWebView, RecordingDOMUserContentController) {
     let controller = RecordingDOMUserContentController()
-    let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = .nonPersistent()
-    configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+    let configuration = makeIsolatedTestWebViewConfiguration()
     configuration.userContentController = controller
     let webView = WKWebView(frame: .zero, configuration: configuration)
     return (webView, controller)

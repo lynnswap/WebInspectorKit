@@ -8,12 +8,13 @@ import WebInspectorTestSupport
 @testable import WebInspectorTransport
 
 @MainActor
+@Suite(.serialized)
 struct WISharedTransportRegistryTests {
     @Test
     func sameWebViewSharesSingleTransportAttachmentAcrossLeases() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let firstLease = registry.acquireLease(for: webView)
         let secondLease = registry.acquireLease(for: webView)
@@ -31,7 +32,7 @@ struct WISharedTransportRegistryTests {
     func networkIngressFansOutSingleEventToMultipleConsumersWithoutDuplication() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let firstLease = registry.acquireLease(for: webView)
         let secondLease = registry.acquireLease(for: webView)
@@ -85,7 +86,7 @@ struct WISharedTransportRegistryTests {
     func networkIngressIncludesWebSocketTransportEvents() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let consumerID = UUID()
@@ -133,7 +134,7 @@ struct WISharedTransportRegistryTests {
             bodyFetcher: driver,
             transportCapabilityProvider: driver
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         session.attach(pageWebView: webView)
 
@@ -155,7 +156,7 @@ struct WISharedTransportRegistryTests {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
         let driver = NetworkTransportDriver(registry: registry)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
@@ -197,7 +198,7 @@ struct WISharedTransportRegistryTests {
     func registryDetachesTransportOnlyAfterLastLeaseIsReleased() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let firstLease = registry.acquireLease(for: webView)
         let secondLease = registry.acquireLease(for: webView)
@@ -216,7 +217,7 @@ struct WISharedTransportRegistryTests {
     func networkIngressRestartsAfterTransportFailureWhileConsumersRemain() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let ingressReadyEvents = AsyncValueQueue<Void>()
@@ -285,7 +286,7 @@ struct WISharedTransportRegistryTests {
     func domIngressRestartsAfterTransportFailureWhileConsumersRemain() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let ingressReadyEvents = AsyncValueQueue<Void>()
@@ -352,7 +353,7 @@ struct WISharedTransportRegistryTests {
     func networkIngressReenablesAfterCommittedProvisionalTarget() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let consumerID = UUID()
@@ -381,7 +382,7 @@ struct WISharedTransportRegistryTests {
     func domIngressIncludesChildNodeCountUpdatedEvents() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let consumerID = UUID()
@@ -419,7 +420,7 @@ struct WISharedTransportRegistryTests {
             ]
         )
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let consumerID = UUID()
@@ -455,7 +456,7 @@ struct WISharedTransportRegistryTests {
     func networkTransportDriverDeinitReleasesSharedLease() async {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         weak var driver: NetworkTransportDriver?
 
         do {
@@ -479,7 +480,7 @@ struct WISharedTransportRegistryTests {
     func cssDomainReadyNoopsWithoutSendingCSSEnable() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         let lease = registry.acquireLease(for: webView)
         let consumerID = UUID()
@@ -505,7 +506,7 @@ struct WISharedTransportRegistryTests {
     func domTransportDriverDeinitReleasesSharedLease() async {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         weak var driver: DOMTransportDriver?
 
         do {
@@ -556,7 +557,7 @@ struct WISharedTransportRegistryTests {
             registry: registry,
             selectionBridge: nil
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         #expect(await waitForCondition {
@@ -601,7 +602,7 @@ struct WISharedTransportRegistryTests {
             registry: registry,
             selectionBridge: nil
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         #expect(await waitForCondition {
@@ -647,7 +648,7 @@ struct WISharedTransportRegistryTests {
             registry: registry,
             selectionBridge: nil
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         #expect(await waitForCondition {
@@ -688,7 +689,7 @@ struct WISharedTransportRegistryTests {
             graphStore: DOMGraphStore(),
             registry: registry
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         #expect(await waitForCondition {
@@ -728,7 +729,7 @@ struct WISharedTransportRegistryTests {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
         let driver = NetworkTransportDriver(registry: registry)
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
@@ -868,6 +869,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     private(set) var sentPagePayloads: [[String: Any]] = []
     private(set) var documentDepthRequests: [Int] = []
     private var messageHandlers: WITransportBackendMessageHandlers?
+    private var holdsWebKitIsolation = false
     private let pageMethodErrors: [String: String]
     private let pageResultProvider: ((String, [String: Any]) -> [String: Any]?)?
 
@@ -879,8 +881,20 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         self.pageResultProvider = pageResultProvider
     }
 
+    deinit {
+        guard holdsWebKitIsolation else {
+            return
+        }
+        holdsWebKitIsolation = false
+        Task { @MainActor in
+            await releaseWebKitTestIsolation()
+        }
+    }
+
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
         _ = webView
+        await acquireWebKitTestIsolation()
+        holdsWebKitIsolation = true
         attachCallCount += 1
         self.messageHandlers = messageHandlers
         messageHandlers.handleRootMessage(
@@ -895,6 +909,12 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     func detach() {
         detachCallCount += 1
         messageHandlers = nil
+        if holdsWebKitIsolation {
+            holdsWebKitIsolation = false
+            Task { @MainActor in
+                await releaseWebKitTestIsolation()
+            }
+        }
         Task {
             await sharedTransportStateChanges.push(())
         }

@@ -1,5 +1,6 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 import WebInspectorTransport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
@@ -194,7 +195,7 @@ struct DOMTransportDriverTests {
             graphStore: DOMGraphStore(),
             selectionBridge: bridge
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         driver.webView = webView
 
         let result = try await driver.beginSelectionMode()
@@ -225,7 +226,7 @@ struct DOMTransportDriverTests {
             graphStore: DOMGraphStore(),
             selectionBridge: bridge
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
         driver.webView = webView
 
         _ = try? await driver.beginSelectionMode()

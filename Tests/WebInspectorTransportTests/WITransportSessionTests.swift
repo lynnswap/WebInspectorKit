@@ -30,7 +30,7 @@ struct WITransportSessionTests {
                 await detached.open()
             }
         }
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
         #expect(session.state == .attached)
@@ -73,7 +73,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
 
@@ -103,7 +103,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
         _ = try await session.page.send(WITransportCommands.DOM.Enable())
@@ -131,7 +131,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
-        let webView = WKWebView(frame: .zero)
+        let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
         _ = try await session.page.send(TestCSSEnable())

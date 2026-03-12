@@ -119,65 +119,64 @@ struct WISessionStateTests {
 
     @Test
     func macOSNativeLoadingStateTriggersTransportRebindHooks() async {
-        let clock = TestClock()
-        let transportSnapshot = WITransportSupportSnapshot(
-            availability: .supported,
-            backendKind: .macOSNativeInspector,
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-            failureReason: nil
-        )
-        let domDriver = RebindDOMPageDriver()
-        let networkDriver = RebindNetworkPageDriver()
-        let controller = WIInspectorController(
-            domSession: DOMSession(
-                configuration: .init(),
-                graphStore: DOMGraphStore(),
-                pageAgent: domDriver,
-                transportSupportSnapshot: transportSnapshot
-            ),
-            networkSession: NetworkSession(
-                configuration: .init(),
-                pageAgent: networkDriver,
-                bodyFetcher: networkDriver,
-                transportSupportSnapshot: transportSnapshot
-            ),
-            rebindClock: clock
-        )
-        let webView = makeTestWebView()
+        await withWebKitTestIsolation {
+            let clock = TestClock()
+            let transportSnapshot = WITransportSupportSnapshot(
+                availability: .supported,
+                backendKind: .macOSNativeInspector,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
+                failureReason: nil
+            )
+            let domDriver = RebindDOMPageDriver()
+            let networkDriver = RebindNetworkPageDriver()
+            let controller = WIInspectorController(
+                domSession: DOMSession(
+                    configuration: .init(),
+                    graphStore: DOMGraphStore(),
+                    pageAgent: domDriver,
+                    transportSupportSnapshot: transportSnapshot
+                ),
+                networkSession: NetworkSession(
+                    configuration: .init(),
+                    pageAgent: networkDriver,
+                    bodyFetcher: networkDriver,
+                    transportSupportSnapshot: transportSnapshot
+                ),
+                rebindClock: clock
+            )
+            let webView = makeTestWebView()
 
-        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
-        controller.connect(to: webView)
+            controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
+            controller.connect(to: webView)
 
-        await loadHTML("<html><body><p>initial</p></body></html>", in: webView)
-        await clock.sleep(untilSuspendedBy: 1)
-        clock.advance(by: .milliseconds(20))
-        await domDriver.resumeCounter.wait(untilAtLeast: 1)
-        await networkDriver.resumeCounter.wait(untilAtLeast: 1)
+            await loadHTML("<html><body><p>initial</p></body></html>", in: webView)
+            await clock.sleep(untilSuspendedBy: 1)
+            clock.advance(by: .milliseconds(20))
+            await domDriver.resumeCounter.wait(untilAtLeast: 1)
+            await networkDriver.resumeCounter.wait(untilAtLeast: 1)
 
-        let domPrepareBaseline = domDriver.prepareForTransportRebindCallCount
-        let domResumeBaseline = domDriver.resumeAfterTransportRebindCallCount
-        let domReloadBaseline = domDriver.reloadDocumentCallCount
-        let networkPrepareBaseline = networkDriver.prepareForTransportRebindCallCount
-        let networkResumeBaseline = networkDriver.resumeAfterTransportRebindCallCount
+            let domPrepareBaseline = domDriver.prepareForTransportRebindCallCount
+            let domResumeBaseline = domDriver.resumeAfterTransportRebindCallCount
+            let domReloadBaseline = domDriver.reloadDocumentCallCount
+            let networkPrepareBaseline = networkDriver.prepareForTransportRebindCallCount
+            let networkResumeBaseline = networkDriver.resumeAfterTransportRebindCallCount
 
-        await loadHTML("<html><body><p>follow-up</p></body></html>", in: webView)
-        await clock.sleep(untilSuspendedBy: 1)
-        clock.advance(by: .milliseconds(20))
-        await domDriver.resumeCounter.wait(untilAtLeast: domResumeBaseline + 1)
-        await networkDriver.resumeCounter.wait(untilAtLeast: networkResumeBaseline + 1)
+            await loadHTML("<html><body><p>follow-up</p></body></html>", in: webView)
+            await clock.sleep(untilSuspendedBy: 1)
+            clock.advance(by: .milliseconds(20))
+            await domDriver.resumeCounter.wait(untilAtLeast: domResumeBaseline + 1)
+            await networkDriver.resumeCounter.wait(untilAtLeast: networkResumeBaseline + 1)
 
-        #expect(domDriver.prepareForTransportRebindCallCount == domPrepareBaseline + 1)
-        #expect(domDriver.resumeAfterTransportRebindCallCount >= domResumeBaseline + 1)
-        #expect(domDriver.reloadDocumentCallCount >= domReloadBaseline + 1)
-        #expect(networkDriver.prepareForTransportRebindCallCount == networkPrepareBaseline + 1)
-        #expect(networkDriver.resumeAfterTransportRebindCallCount >= networkResumeBaseline + 1)
+            #expect(domDriver.prepareForTransportRebindCallCount == domPrepareBaseline + 1)
+            #expect(domDriver.resumeAfterTransportRebindCallCount >= domResumeBaseline + 1)
+            #expect(domDriver.reloadDocumentCallCount >= domReloadBaseline + 1)
+            #expect(networkDriver.prepareForTransportRebindCallCount == networkPrepareBaseline + 1)
+            #expect(networkDriver.resumeAfterTransportRebindCallCount >= networkResumeBaseline + 1)
+        }
     }
 
     private func makeTestWebView() -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        return WKWebView(frame: .zero, configuration: configuration)
+        makeIsolatedTestWebView()
     }
 
     private func loadHTML(_ html: String, in webView: WKWebView) async {
