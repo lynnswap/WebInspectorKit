@@ -59,6 +59,8 @@ final class DOMFrontendStore: NSObject {
     var onSelectionDidClear: (@MainActor () -> Void)?
 #if DEBUG
     @ObservationIgnored private var requestedDocumentsForTesting: [(depth: Int, preserveState: Bool)] = []
+    package var onReadyMessageProcessedForTesting: (@MainActor () -> Void)?
+    package var onProtocolPayloadHandledForTesting: (@MainActor () -> Void)?
 #endif
 
     init(session: DOMSession) {
@@ -266,6 +268,9 @@ private extension DOMFrontendStore {
         isReady = true
         inspectorLogger.notice("dom frontend ready")
         Task {
+            defer {
+                self.onReadyMessageProcessedForTesting?()
+            }
             await applyConfigurationToInspector()
             let didRequestDocument = await flushPendingWork()
             if didRequestDocument == false,
@@ -381,6 +386,9 @@ private extension DOMFrontendStore {
         Task { [weak self] in
             guard let self else {
                 return
+            }
+            defer {
+                self.onProtocolPayloadHandledForTesting?()
             }
             if let method {
                 inspectorLogger.notice("routing DOM protocol method \(method, privacy: .public)")
@@ -948,9 +956,15 @@ extension DOMFrontendStore {
     }
 
     func testHandleProtocolPayload(_ payload: Any?) async {
-        handleProtocolPayload(payload)
-        await Task.yield()
-        await Task.yield()
+        let previousHandler = onProtocolPayloadHandledForTesting
+        await withCheckedContinuation { continuation in
+            onProtocolPayloadHandledForTesting = {
+                previousHandler?()
+                continuation.resume()
+            }
+            handleProtocolPayload(payload)
+        }
+        onProtocolPayloadHandledForTesting = previousHandler
     }
 
     func testRequestFreshDocumentAfterStaleNodeResponse() async {

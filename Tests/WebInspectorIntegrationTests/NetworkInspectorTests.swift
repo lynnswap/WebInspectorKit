@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import ObservationBridge
+import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorCore
 @testable import WebInspectorNetwork
@@ -107,7 +108,7 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func selectingEntryFetchesSelectedBodiesWhenAttached() async {
+    func selectingEntryFetchesSelectedBodiesWhenAttached() async throws {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             switch ref {
             case "req_ref":
@@ -125,17 +126,20 @@ struct NetworkInspectorTests {
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
         entry.responseBody = makeBody(reference: "resp_ref", role: .response)
+        let requestBody = try #require(entry.requestBody)
+        let responseBody = try #require(entry.responseBody)
+        let requestBodyStates = fetchStateRecorder(for: requestBody)
+        let responseBodyStates = fetchStateRecorder(for: responseBody)
 
         inspector.selectEntry(entry)
 
-        let fetched = await waitUntil {
-            fetcher.fetchRefs.count == 2
-                && Set(fetcher.fetchRefs.compactMap { $0 }) == Set(["req_ref", "resp_ref"])
-                && entry.requestBody?.full == "resolved request"
-                && entry.responseBody?.full == "resolved response"
-        }
-        #expect(fetched)
+        _ = await requestBodyStates.next(where: { $0 == "full" })
+        _ = await responseBodyStates.next(where: { $0 == "full" })
+
         #expect(fetcher.fetchRefs.count == 2)
+        #expect(Set(fetcher.fetchRefs.compactMap { $0 }) == Set(["req_ref", "resp_ref"]))
+        #expect(entry.requestBody?.full == "resolved request")
+        #expect(entry.responseBody?.full == "resolved response")
     }
 
     @Test
@@ -150,22 +154,17 @@ struct NetworkInspectorTests {
 
         inspector.selectEntry(entry)
 
-        for _ in 0..<64 {
-            await Task.yield()
-        }
-
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
 
         let webView = WKWebView(frame: .zero)
+        let bodyStates = fetchStateRecorder(for: body)
         inspector.attach(to: webView)
 
-        let fetched = await waitUntil {
-            fetcher.fetchRefs == ["resp_ref"]
-                && body.fetchState == .full
-                && body.full == "resolved response"
-        }
-        #expect(fetched)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchRefs == ["resp_ref"])
+        #expect(body.fetchState == .full)
+        #expect(body.full == "resolved response")
     }
 
     @Test
@@ -180,28 +179,28 @@ struct NetworkInspectorTests {
 
         inspector.selectEntry(entry)
 
-        for _ in 0..<64 {
-            await Task.yield()
-        }
-
         #expect(fetcher.fetchRefs.isEmpty)
 
         let body = makeBody(reference: "late-ref", role: .response)
+        let bodyStates = fetchStateRecorder(for: body)
         entry.responseBody = body
 
-        let fetched = await waitUntil {
-            fetcher.fetchRefs == ["late-ref"]
-                && body.fetchState == .full
-                && body.full == "late body"
-        }
-        #expect(fetched)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchRefs == ["late-ref"])
+        #expect(body.fetchState == .full)
+        #expect(body.full == "late body")
     }
 
     @Test
     func selectingNewEntryCancelsPreviousSelectionFetch() async {
+        let slowFetchStarted = AsyncGate()
+        let releaseSlowFetch = AsyncGate()
+        let slowFetchFinished = AsyncGate()
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             if ref == "slow-ref" {
-                try? await Task.sleep(nanoseconds: 120_000_000)
+                await slowFetchStarted.open()
+                await releaseSlowFetch.wait()
+                await slowFetchFinished.open()
                 return self.makeFetchedBody(full: "slow body", reference: ref, role: role)
             }
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
@@ -217,21 +216,19 @@ struct NetworkInspectorTests {
         let secondEntry = makeEntry(requestID: 2)
         let secondBody = makeBody(reference: "fast-ref", role: .response)
         secondEntry.responseBody = secondBody
+        let firstBodyStates = fetchStateRecorder(for: firstBody)
+        let secondBodyStates = fetchStateRecorder(for: secondBody)
 
         inspector.selectEntry(firstEntry)
-        let firstStarted = await waitUntil {
-            firstBody.fetchState == .fetching
-        }
-        #expect(firstStarted)
+        _ = await firstBodyStates.next(where: { $0 == "fetching" })
+        await slowFetchStarted.wait()
 
         inspector.selectEntry(secondEntry)
 
-        let secondFetched = await waitUntil {
-            secondBody.full == "fast body" && secondBody.fetchState == .full
-        }
-        #expect(secondFetched)
+        _ = await secondBodyStates.next(where: { $0 == "full" })
 
-        try? await Task.sleep(nanoseconds: 180_000_000)
+        await releaseSlowFetch.open()
+        await slowFetchFinished.wait()
 
         #expect(firstBody.fetchState == .inline)
         #expect(firstBody.full == nil)
@@ -253,10 +250,6 @@ struct NetworkInspectorTests {
         inspector.detach()
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
-
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
@@ -449,10 +442,7 @@ struct NetworkInspectorTests {
             monotonicMs: 1_010
         )
 
-        let cleared = await waitUntil {
-            inspector.selectedEntry == nil
-        }
-        #expect(cleared)
+        #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.count == 1)
         #expect(inspector.store.entries.first?.requestID == 72)
         #expect(inspector.store.entries.first?.id != initiallySelectedID)
@@ -480,12 +470,10 @@ struct NetworkInspectorTests {
                 "wallMs": 1_700_000_000_020.0
             ]
         ])
+        let displayEntries = displayEntryRecorder(for: queryModel)
         inspector.store.applyEvent(responseReceived)
 
-        let updated = await waitUntil {
-            queryModel.displayEntries.first?.statusLabel == "404"
-        }
-        #expect(updated)
+        _ = await displayEntries.next(where: { $0.first?.statusLabel == "404" })
         #expect(queryModel.displayEntries.first?.statusSeverity == .warning)
         #expect(queryModel.displayEntries.first?.fileTypeLabel == "json")
     }
@@ -493,58 +481,44 @@ struct NetworkInspectorTests {
     @Test
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
         let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
-        var emittedValues: [String] = []
-        var observationHandles = Set<ObservationHandle>()
+        let recorder = searchTextRecorder(for: queryModel)
 
-        queryModel.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
-        ) { value in
-            emittedValues.append(value)
-        }
-        .store(in: &observationHandles)
-
-        let receivedInitial = await waitUntil { emittedValues.count >= 1 }
-        #expect(receivedInitial)
+        let initialValue = await recorder.next()
+        #expect(initialValue == "")
 
         queryModel.searchText = "dup-keyword"
-        let receivedUpdated = await waitUntil { emittedValues.count >= 2 }
-        #expect(receivedUpdated)
+        let updatedValue = await recorder.next()
+        #expect(updatedValue == "dup-keyword")
 
         queryModel.searchText = "dup-keyword"
-        for _ in 0..<64 {
-            await Task.yield()
-        }
+        queryModel.searchText = "final-keyword"
 
-        #expect(emittedValues.count == 2)
-        #expect(emittedValues.last == "dup-keyword")
+        let nextValue = await recorder.next()
+        #expect(nextValue == "final-keyword")
     }
 
     @Test
     func observeSearchTextStopsEmittingAfterCancel() async {
         let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
-        var callbackCount = 0
-
-        let handle = queryModel.observeTask(
-            \.searchText,
-            options: [.removeDuplicates]
-        ) { _ in
-            callbackCount += 1
+        let emissions = AsyncValueQueue<String>()
+        let handle = queryModel.observe(\.searchText, options: [.removeDuplicates]) { value in
+            Task {
+                await emissions.push(value)
+            }
         }
 
-        let receivedInitial = await waitUntil { callbackCount >= 1 }
-        #expect(receivedInitial)
+        let initialValue = await emissions.next()
+        #expect(initialValue == "")
 
         handle.cancel()
-        await Task.yield()
-        let countAfterCancel = callbackCount
 
         queryModel.searchText = "after-cancel"
-        for _ in 0..<64 {
-            await Task.yield()
-        }
+        queryModel.searchText = "after-cancel-2"
+        let confirmation = searchTextRecorder(for: queryModel)
+        let confirmedValue = await confirmation.next()
+        #expect(confirmedValue == "after-cancel-2")
 
-        #expect(callbackCount == countAfterCancel)
+        #expect(await emissions.snapshot().isEmpty)
     }
 
     private func makeEntry(requestID: Int = 1) -> NetworkEntry {
@@ -625,19 +599,76 @@ struct NetworkInspectorTests {
         let decoded = try JSONDecoder().decode(NetworkEventPayload.self, from: data)
         return try #require(HTTPNetworkEvent(payload: decoded, sessionID: sessionID))
     }
+}
 
-    private func waitUntil(
-        maxTicks: Int = 512,
-        _ condition: () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
+@MainActor
+private func fetchStateRecorder(
+    for body: NetworkBody
+) -> ObservationRecorder<String> {
+    let recorder = ObservationRecorder<String>()
+    recorder.record { didChange in
+        body.observe(\.fetchState, options: [.removeDuplicates]) { state in
+            didChange(fetchStateLabel(state))
         }
-        return condition()
     }
+    return recorder
+}
+
+private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
+    switch state {
+    case .inline:
+        "inline"
+    case .fetching:
+        "fetching"
+    case .full:
+        "full"
+    case .failed(.unavailable):
+        "failed:unavailable"
+    case .failed(.decodeFailed):
+        "failed:decodeFailed"
+    case .failed(.unknown):
+        "failed:unknown"
+    case nil:
+        "nil"
+    }
+}
+
+@MainActor
+private func searchTextRecorder(for queryModel: WINetworkQueryState) -> ObservationRecorder<String> {
+    let recorder = ObservationRecorder<String>()
+    recorder.record { didChange in
+        return queryModel.observe(\.searchText, options: [.removeDuplicates]) { value in
+            didChange(value)
+        }
+    }
+    return recorder
+}
+
+private struct NetworkDisplayEntrySnapshot: Equatable, Sendable {
+    let requestID: Int
+    let statusLabel: String
+    let fileTypeLabel: String
+}
+
+@MainActor
+private func displayEntryRecorder(
+    for queryModel: WINetworkQueryState
+) -> ObservationRecorder<[NetworkDisplayEntrySnapshot]> {
+    let recorder = ObservationRecorder<[NetworkDisplayEntrySnapshot]>()
+    recorder.record { didChange in
+        queryModel.observe(\.displayEntriesRevision, options: [.removeDuplicates]) { _ in
+            didChange(
+                queryModel.displayEntries.map {
+                    NetworkDisplayEntrySnapshot(
+                        requestID: $0.requestID,
+                        statusLabel: $0.statusLabel,
+                        fileTypeLabel: $0.fileTypeLabel
+                    )
+                }
+            )
+        }
+    }
+    return recorder
 }
 
 @MainActor

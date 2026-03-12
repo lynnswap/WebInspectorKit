@@ -1,4 +1,6 @@
 import Testing
+import ObservationBridge
+import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorCore
 @testable import WebInspectorNetwork
@@ -36,7 +38,7 @@ struct NetworkSessionTests {
         let webView = WKWebView(frame: .zero)
         session.attach(pageWebView: webView)
         await loadHTML("<html><body><p>legacy network</p></body></html>", in: webView)
-        await waitForLegacyNetworkBootstrap(in: webView)
+        #expect(await waitForLegacyNetworkBootstrap(in: webView))
 
         #expect(session.transportSupportSnapshot?.isSupported == false)
         #expect(session.transportCapabilities.isEmpty)
@@ -104,13 +106,13 @@ struct NetworkSessionTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
+        let states = fetchStateRecorder(for: body)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        let fetched = await waitUntil {
-            body.fetchState == .full && body.full == "body"
-        }
-        #expect(fetched)
+        let fetched = await states.next(where: { $0 == "full" })
+        #expect(fetched == "full")
+        #expect(body.full == "body")
         #expect(fetcher.fetchRefs == ["resp_ref"])
     }
 
@@ -127,10 +129,6 @@ struct NetworkSessionTests {
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        for _ in 0..<64 {
-            await Task.yield()
-        }
-
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
     }
@@ -145,19 +143,15 @@ struct NetworkSessionTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
+        let states = fetchStateRecorder(for: body)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        let failed = await waitUntil {
-            body.fetchState == .failed(.unavailable)
-        }
-        #expect(failed)
+        let failed = await states.next(where: { $0 == "failed:unavailable" })
+        #expect(failed == "failed:unavailable")
         #expect(fetcher.fetchRefs.count == 1)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchRefs.count == 1)
     }
@@ -174,20 +168,28 @@ struct NetworkSessionTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
+        let states = fetchStateRecorder(for: body)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        let failed = await waitUntil {
-            body.fetchState == .failed(.unavailable)
-        }
-        #expect(failed)
+        let failed = await states.next(where: { $0 == "failed:unavailable" })
+        #expect(failed == "failed:unavailable")
         #expect(fetcher.fetchRefs == ["resp_ref"])
     }
 
     @Test
     func cancelBodyFetchesResetsFetchingStateAndPreventsApply() async {
+        let fetchStarted = AsyncGate()
+        let releaseFetch = AsyncGate()
+        let fetchFinished = AsyncGate()
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            await fetchStarted.open()
+            await releaseFetch.wait()
+            defer {
+                Task {
+                    await fetchFinished.open()
+                }
+            }
             return NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -209,16 +211,17 @@ struct NetworkSessionTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
+        let states = fetchStateRecorder(for: body)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        let started = await waitUntil {
-            body.fetchState == .fetching
-        }
-        #expect(started)
+        let started = await states.next(where: { $0 == "fetching" })
+        #expect(started == "fetching")
+        await fetchStarted.wait()
 
         session.cancelBodyFetches(for: entry)
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        await releaseFetch.open()
+        await fetchFinished.wait()
 
         #expect(body.fetchState == .inline)
         #expect(body.full == nil)
@@ -250,10 +253,6 @@ struct NetworkSessionTests {
         failedBody.fetchState = .failed(.unavailable)
         entry.responseBody = failedBody
         session.requestBodyIfNeeded(for: entry, role: .response)
-
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(fetchingBody.fetchState == .fetching)
@@ -287,13 +286,12 @@ struct NetworkSessionTests {
             role: .response
         )
         entry.responseBody = body
+        let states = fetchStateRecorder(for: body)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        let failed = await waitUntil {
-            body.fetchState == .failed(.unavailable)
-        }
-        #expect(failed)
+        let failed = await states.next(where: { $0 == "failed:unavailable" })
+        #expect(failed == "failed:unavailable")
         #expect(fetcher.fetchRefs.isEmpty)
     }
 
@@ -327,10 +325,6 @@ struct NetworkSessionTests {
         entry.requestBody = body
 
         session.requestBodyIfNeeded(for: entry, role: .request)
-
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
@@ -366,19 +360,6 @@ struct NetworkSessionTests {
         )
     }
 
-    private func waitUntil(
-        maxTicks: Int = 512,
-        _ condition: () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
-        }
-        return condition()
-    }
-
     private func loadHTML(_ html: String, in webView: WKWebView) async {
         let navigationDelegate = NavigationDelegate()
         webView.navigationDelegate = navigationDelegate
@@ -389,27 +370,53 @@ struct NetworkSessionTests {
         }
     }
 
-    private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async {
-        for _ in 0..<200 {
-            let raw = try? await webView.evaluateJavaScript(
-                """
-                (() => ({
-                    tokenReady: Boolean(window.__wiNetworkControlToken),
-                    handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
-                    agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
-                }))();
-                """,
-                in: nil,
-                contentWorld: .page
-            )
-            let payload = raw as? NSDictionary
-            let tokenReady = (payload?["tokenReady"] as? Bool) ?? ((payload?["tokenReady"] as? NSNumber)?.boolValue ?? false)
-            let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
-            let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
-            if tokenReady && handlerReady && agentReady {
-                return
+    private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async -> Bool {
+        let raw = try? await webView.evaluateJavaScript(
+            """
+            (() => ({
+                bootstrapReady: typeof window.__wiBootstrapNetworkAuthToken === "function",
+                handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
+                agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
+            }))();
+            """,
+            in: nil,
+            contentWorld: .page
+        )
+        let payload = raw as? NSDictionary
+        let bootstrapReady = (payload?["bootstrapReady"] as? Bool) ?? ((payload?["bootstrapReady"] as? NSNumber)?.boolValue ?? false)
+        let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
+        let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
+        return bootstrapReady && handlerReady && agentReady
+    }
+
+    private func fetchStateRecorder(
+        for body: NetworkBody
+    ) -> ObservationRecorder<String> {
+        let recorder = ObservationRecorder<String>()
+        recorder.record { didChange in
+            body.observe(\.fetchState, options: [.removeDuplicates]) { state in
+                didChange(fetchStateLabel(state))
             }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return recorder
+    }
+
+    private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
+        switch state {
+        case .inline:
+            "inline"
+        case .fetching:
+            "fetching"
+        case .full:
+            "full"
+        case .failed(.unavailable):
+            "failed:unavailable"
+        case .failed(.decodeFailed):
+            "failed:decodeFailed"
+        case .failed(.unknown):
+            "failed:unknown"
+        case nil:
+            "nil"
         }
     }
 }

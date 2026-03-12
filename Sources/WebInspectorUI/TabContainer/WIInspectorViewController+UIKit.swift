@@ -78,6 +78,8 @@ public final class WIInspectorViewController: UIViewController {
     private let renderCache = WIUIKitTabRenderCache()
     private var sessionObservationHandles: Set<ObservationHandle> = []
     private var panelConfigurationObserverID: UUID?
+    package private(set) var tabResolutionRevisionForTesting: UInt64 = 0
+    package var onTabResolutionForTesting: (@MainActor (UInt64) -> Void)?
 
     private var activeHost: (UIViewController & WIUIKitTabHost)?
     private var activeHostKind: HostKind?
@@ -236,6 +238,11 @@ public final class WIInspectorViewController: UIViewController {
             from: panelConfigurations,
             reusing: requestedTabs
         )
+        tabResolutionRevisionForTesting &+= 1
+        if tabResolutionRevisionForTesting == 0 {
+            tabResolutionRevisionForTesting = 1
+        }
+        onTabResolutionForTesting?(tabResolutionRevisionForTesting)
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {

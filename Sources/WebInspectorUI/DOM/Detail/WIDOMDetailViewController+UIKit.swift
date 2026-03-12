@@ -147,6 +147,8 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
+    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
+    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
     private var selectedObservationHandles: Set<ObservationHandle> = []
     private weak var observedSelectedEntry: DOMEntry?
     private weak var observedSelectedStyle: DOMStyleState?
@@ -561,6 +563,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         pendingReloadDataTask?.cancel()
         let snapshot = makeSnapshot()
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
+        recordSnapshotApplyForTesting()
     }
 
     private func applySnapshotUsingReloadData() {
@@ -580,6 +583,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             guard !Task.isCancelled else {
                 return
             }
+            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -647,6 +651,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         needsSnapshotReloadOnNextAppearance = false
         applySnapshotUsingReloadData()
+    }
+
+    private func recordSnapshotApplyForTesting() {
+        snapshotApplyRevisionForTesting &+= 1
+        if snapshotApplyRevisionForTesting == 0 {
+            snapshotApplyRevisionForTesting = 1
+        }
+        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
     }
 
     private func makeRenderSections() -> [RenderSection] {

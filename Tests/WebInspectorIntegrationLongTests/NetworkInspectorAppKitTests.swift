@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import WebInspectorTestSupport
 @testable import WebInspectorUI
 @testable import WebInspectorCore
 @testable import WebInspectorNetwork
@@ -88,21 +87,12 @@ struct NetworkInspectorAppKitTests {
         let lifecycleTask = Task { @MainActor in
             for _ in 0..<8 {
                 controller?.viewWillAppear()
-                await Task.yield()
                 controller?.viewDidDisappear()
-                await Task.yield()
             }
         }
-        let completed = await valueWithinTimeout(seconds: 10) {
-            await lifecycleTask.value
-            return true
-        }
-        #expect(completed == true)
+        await lifecycleTask.value
 
         controller = nil
-        for _ in 0..<8 {
-            await Task.yield()
-        }
         #expect(weakController == nil)
     }
 

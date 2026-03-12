@@ -1,5 +1,7 @@
+import Foundation
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 @testable import WebInspectorNetwork
@@ -41,9 +43,15 @@ struct WISharedTransportRegistryTests {
 
         firstLease.addNetworkConsumer(firstID) { event in
             firstEvents.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
         secondLease.addNetworkConsumer(secondID) { event in
             secondEvents.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await firstLease.ensureNetworkEventIngress()
@@ -85,6 +93,9 @@ struct WISharedTransportRegistryTests {
 
         lease.addNetworkConsumer(consumerID) { event in
             methods.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await lease.ensureNetworkEventIngress()
@@ -147,6 +158,7 @@ struct WISharedTransportRegistryTests {
         let webView = WKWebView(frame: .zero)
 
         driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
 
         #expect(await waitForCondition {
             backend.sentPageMethods.contains("Network.enable")
@@ -207,14 +219,24 @@ struct WISharedTransportRegistryTests {
         let webView = WKWebView(frame: .zero)
 
         let lease = registry.acquireLease(for: webView)
+        let ingressReadyEvents = AsyncValueQueue<Void>()
+        lease.onNetworkIngressReadyForTesting = {
+            Task {
+                await ingressReadyEvents.push(())
+            }
+        }
         let consumerID = UUID()
         var events: [String] = []
 
         lease.addNetworkConsumer(consumerID) { event in
             events.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await lease.ensureNetworkEventIngress()
+        _ = await ingressReadyEvents.next()
         #expect(backend.sentPageMethods.filter { $0 == "Network.enable" }.count == 1)
         backend.emitPageEvent(
             method: "Network.loadingFinished",
@@ -237,7 +259,10 @@ struct WISharedTransportRegistryTests {
         #expect(await waitForCondition {
             backend.attachCallCount == 2
         })
-        #expect(backend.sentPageMethods.filter { $0 == "Network.enable" }.count == 2)
+        #expect(await waitForCondition {
+            backend.sentPageMethods.filter { $0 == "Network.enable" }.count == 2
+        })
+        _ = await ingressReadyEvents.next()
 
         backend.emitPageEvent(
             method: "Network.loadingFinished",
@@ -263,14 +288,24 @@ struct WISharedTransportRegistryTests {
         let webView = WKWebView(frame: .zero)
 
         let lease = registry.acquireLease(for: webView)
+        let ingressReadyEvents = AsyncValueQueue<Void>()
+        lease.onDOMIngressReadyForTesting = {
+            Task {
+                await ingressReadyEvents.push(())
+            }
+        }
         let consumerID = UUID()
         var events: [String] = []
 
         lease.addDOMConsumer(consumerID) { event in
             events.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await lease.ensureDOMEventIngress()
+        _ = await ingressReadyEvents.next()
         #expect(backend.sentPageMethods.filter { $0 == "DOM.enable" }.count == 1)
         #expect(backend.sentPageMethods.filter { $0 == "CSS.enable" }.isEmpty)
         backend.emitPageEvent(
@@ -292,7 +327,10 @@ struct WISharedTransportRegistryTests {
         #expect(await waitForCondition {
             backend.attachCallCount == 2
         })
-        #expect(backend.sentPageMethods.filter { $0 == "DOM.enable" }.count == 2)
+        #expect(await waitForCondition {
+            backend.sentPageMethods.filter { $0 == "DOM.enable" }.count == 2
+        })
+        _ = await ingressReadyEvents.next()
         #expect(backend.sentPageMethods.filter { $0 == "CSS.enable" }.isEmpty)
 
         backend.emitPageEvent(
@@ -351,6 +389,9 @@ struct WISharedTransportRegistryTests {
 
         lease.addDOMConsumer(consumerID) { event in
             events.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await lease.ensureDOMEventIngress()
@@ -386,6 +427,9 @@ struct WISharedTransportRegistryTests {
 
         lease.addDOMConsumer(consumerID) { event in
             events.append(event.method)
+            Task {
+                await sharedTransportStateChanges.push(())
+            }
         }
 
         try await lease.ensureDOMEventIngress()
@@ -687,6 +731,7 @@ struct WISharedTransportRegistryTests {
         let webView = WKWebView(frame: .zero)
 
         driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
         #expect(await waitForCondition {
             backend.attachCallCount == 1
                 && backend.sentPageMethods.contains("Network.enable")
@@ -699,6 +744,10 @@ struct WISharedTransportRegistryTests {
                 "url": "wss://example.com/socket",
             ]
         )
+        #expect(await waitForCondition {
+            driver.store.entries.count == 1
+                && driver.store.entries.first?.requestType == "websocket"
+        })
         backend.emitPageEvent(
             method: "Network.webSocketWillSendHandshakeRequest",
             params: [
@@ -712,6 +761,9 @@ struct WISharedTransportRegistryTests {
                 ],
             ]
         )
+        #expect(await waitForCondition {
+            driver.store.entries.first?.requestHeaders["sec-websocket-protocol"] == "chat"
+        })
         backend.emitPageEvent(
             method: "Network.webSocketFrameSent",
             params: [
@@ -725,6 +777,11 @@ struct WISharedTransportRegistryTests {
                 ],
             ]
         )
+        #expect(await waitForCondition {
+            driver.store.entries.first?.webSocket?.frames.count == 1
+                && driver.store.entries.first?.webSocket?.frames.first?.direction == .outgoing
+                && driver.store.entries.first?.webSocket?.frames.first?.payload == "hello"
+        })
         backend.emitPageEvent(
             method: "Network.webSocketClosed",
             params: [
@@ -755,6 +812,8 @@ struct WISharedTransportRegistryTests {
     }
 }
 
+private let sharedTransportStateChanges = AsyncValueQueue<Void>()
+
 @MainActor
 private extension WISharedTransportRegistryTests {
     func makeRegistry(using backend: FakeRegistryBackend) -> WISharedTransportRegistry {
@@ -767,15 +826,22 @@ private extension WISharedTransportRegistryTests {
     }
 
     func waitForCondition(
-        maxAttempts: Int = 50,
-        intervalNanoseconds: UInt64 = 20_000_000,
+        maxTurns: Int = 8_192,
         condition: @escaping @MainActor () async -> Bool
     ) async -> Bool {
-        for _ in 0..<maxAttempts {
+        if await condition() {
+            return true
+        }
+
+        for _ in 0..<maxTurns {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    continuation.resume()
+                }
+            }
             if await condition() {
                 return true
             }
-            try? await Task.sleep(nanoseconds: intervalNanoseconds)
         }
         return await condition()
     }
@@ -820,11 +886,18 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         messageHandlers.handleRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
         )
+        messageHandlers.waitForPendingMessagesForTesting?()
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     func detach() {
         detachCallCount += 1
         messageHandlers = nil
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     func sendRootMessage(_ message: String) throws {
@@ -869,6 +942,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             )
         }
         _ = outerIdentifier
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
@@ -890,6 +966,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             #"{"method":"\#(method)","params":\#(paramsString)}"#,
             "page-A"
         )
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     func emitRootEvent(method: String, params: [String: Any]) {
@@ -903,10 +982,16 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         messageHandlers?.handleRootMessage(
             #"{"method":"\#(method)","params":\#(paramsString)}"#
         )
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     func emitFatalFailure(_ message: String) {
         messageHandlers?.handleFatalFailure(message)
+        Task {
+            await sharedTransportStateChanges.push(())
+        }
     }
 
     private func decodeMessagePayload(_ message: String) throws -> [String: Any] {

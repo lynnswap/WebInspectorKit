@@ -303,34 +303,25 @@ struct ControllerActivationTests {
 
         controller.connect(to: webView)
         selectTab("wi_network", in: store)
-        await waitForControllerState(
-            controller,
-            store: store,
-            lifecycle: .active,
-            selectedTabID: "wi_network",
-            hasAttachedPage: true,
-            networkMode: .active
-        )
+        #expect(controller.lifecycle == .active)
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
+        #expect(controller.dom.session.hasPageWebView == true)
+        #expect(controller.network.session.hasAttachedPageWebView == true)
+        #expect(controller.network.session.mode == .active)
 
         controller.connect(to: nil)
-        await waitForControllerState(
-            controller,
-            store: store,
-            lifecycle: .suspended,
-            selectedTabID: "wi_network",
-            hasAttachedPage: false,
-            networkMode: .stopped
-        )
+        #expect(controller.lifecycle == .suspended)
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
+        #expect(controller.dom.session.hasPageWebView == false)
+        #expect(controller.network.session.hasAttachedPageWebView == false)
+        #expect(controller.network.session.mode == .stopped)
 
         controller.connect(to: webView)
-        await waitForControllerState(
-            controller,
-            store: store,
-            lifecycle: .active,
-            selectedTabID: "wi_network",
-            hasAttachedPage: true,
-            networkMode: .active
-        )
+        #expect(controller.lifecycle == .active)
+        #expect(store.selectedPanelConfiguration?.identifier == "wi_network")
+        #expect(controller.dom.session.hasPageWebView == true)
+        #expect(controller.network.session.hasAttachedPageWebView == true)
+        #expect(controller.network.session.mode == .active)
     }
 
     private func makeBoundSession(
@@ -367,25 +358,4 @@ struct ControllerActivationTests {
         store.setSelectedPanelFromUI(panel)
     }
 
-    private func waitForControllerState(
-        _ controller: WIInspectorController,
-        store: WIInspectorController,
-        lifecycle: WISessionLifecycle,
-        selectedTabID: String?,
-        hasAttachedPage: Bool,
-        networkMode: NetworkLoggingMode
-    ) async {
-        for _ in 0..<80 {
-            if controller.lifecycle == lifecycle,
-               store.selectedPanelConfiguration?.identifier == selectedTabID,
-               controller.dom.session.hasPageWebView == hasAttachedPage,
-               controller.network.session.hasAttachedPageWebView == hasAttachedPage,
-               controller.network.session.mode == networkMode {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-
-        Issue.record("Timed out waiting for synchronized controller state")
-    }
 }

@@ -214,7 +214,8 @@ struct WITransportMessageRouterTests {
         #expect(event?.method == "DOM.documentUpdated")
         #expect(event?.targetIdentifier == "page-A")
 
-        if let unexpected = try await Self.nextValue(from: iterator, timeout: .milliseconds(100)) {
+        await router.disconnect()
+        if let unexpected = try await Self.nextValue(from: iterator) {
             Issue.record("Expected no additional filtered event, but received \(unexpected.method).")
         }
     }
@@ -442,22 +443,9 @@ private extension WITransportMessageRouterTests {
     }
 
     static func nextValue<T: Sendable>(
-        from iterator: IteratorBox<T>,
-        timeout: Duration = .seconds(1)
+        from iterator: IteratorBox<T>
     ) async throws -> T? {
-        try await withThrowingTaskGroup(of: T?.self) { group in
-            group.addTask {
-                await iterator.next()
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                return nil
-            }
-
-            let value = try await group.next() ?? nil
-            group.cancelAll()
-            return value
-        }
+        await iterator.next()
     }
 
     enum TestError: Error {

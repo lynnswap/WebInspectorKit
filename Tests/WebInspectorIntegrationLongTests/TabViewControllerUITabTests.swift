@@ -1,5 +1,6 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorUI
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
@@ -256,15 +257,19 @@ struct TabViewControllerUITabTests {
             webView: nil,
             tabs: [.dom(), .network()]
         )
+        let tabResolutionRevisions = AsyncValueQueue<UInt64>()
+        container.onTabResolutionForTesting = { revision in
+            Task {
+                await tabResolutionRevisions.push(revision)
+            }
+        }
 
         container.loadViewIfNeeded()
         configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .network()])
         #expect(container.resolvedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
 
         controller.configurePanels([WIInspectorTab.dom().configuration])
-        for _ in 0..<8 {
-            await Task.yield()
-        }
+        _ = await tabResolutionRevisions.next()
 
         #expect(container.resolvedTabIDsForTesting == [WIInspectorTab.domTabID])
         #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.domTabID)

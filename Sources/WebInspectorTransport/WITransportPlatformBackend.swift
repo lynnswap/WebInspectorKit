@@ -25,6 +25,7 @@ struct WITransportBackendMessageHandlers {
     let handleRootMessage: (String) -> Void
     let handlePageMessage: (String, String) -> Void
     let handleFatalFailure: (String) -> Void
+    let waitForPendingMessagesForTesting: (() -> Void)?
 }
 
 @MainActor

@@ -40,6 +40,7 @@ actor WITransportMessageRouter {
     }
 
     private let configuration: WITransportConfiguration
+    private let clock: any Clock<Duration>
     private var rootDispatcher: RootDispatcher?
     private var pageDispatcher: PageDispatcher?
     private var nextIdentifierValue = 1
@@ -57,8 +58,12 @@ actor WITransportMessageRouter {
     private var nextTargetCreationOrder = 0
     private var pageTargetWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(configuration: WITransportConfiguration) {
+    init(
+        configuration: WITransportConfiguration,
+        clock: any Clock<Duration> = ContinuousClock()
+    ) {
         self.configuration = configuration
+        self.clock = clock
     }
 
     func connect(
@@ -122,7 +127,7 @@ actor WITransportMessageRouter {
                 await self.awaitPageTargetReady()
             }
             group.addTask {
-                try await Task.sleep(for: timeout)
+                try await self.clock.sleep(for: timeout)
                 throw WITransportError.requestTimedOut(scope: .root, method: "Target.targetCreated")
             }
 
@@ -324,7 +329,7 @@ private extension WITransportMessageRouter {
     func timeoutTask(identifier: Int, method: String, scope: WITransportTargetScope) -> Task<Void, Never> {
         Task {
             do {
-                try await Task.sleep(for: configuration.responseTimeout)
+                try await clock.sleep(for: configuration.responseTimeout)
             } catch {
                 return
             }

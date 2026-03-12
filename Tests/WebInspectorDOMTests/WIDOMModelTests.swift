@@ -1,6 +1,7 @@
 import Testing
 import WebKit
 import ObservationBridge
+import WebInspectorTestSupport
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -23,14 +24,12 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let rowIDs = treeRowIDsRecorder(for: inspector)
 
-        inspector.attach(to: webView)
+        try? await session.reloadDocument()
+        let loadedRows = await rowIDs.next(where: { $0.isEmpty == false })
 
-        let loaded = await waitUntil {
-            inspector.treeRows.isEmpty == false
-        }
-        #expect(loaded == true)
+        #expect(loadedRows.isEmpty == false)
         #expect(Array(inspector.treeRows.map(\.id.nodeID).prefix(2)) == [2, 3])
         #expect(inspector.treeRows.first?.depth == 0)
         #expect(inspector.expandedEntryIDs.contains(where: { $0.nodeID == 1 }))
@@ -63,30 +62,21 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let rowIDs = treeRowIDsRecorder(for: inspector)
 
-        inspector.attach(to: webView)
-        let initialRowsLoaded = await waitUntil {
-            inspector.treeRows.contains(where: { $0.id.nodeID == 4 })
-        }
-        #expect(initialRowsLoaded == true)
+        try? await session.reloadDocument()
+        _ = await rowIDs.next(where: { $0.contains(4) })
 
         let targetID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 4)
         inspector.toggleExpansion(of: targetID)
+        let expandedRows = await rowIDs.next(where: { $0.contains(5) })
 
-        let childLoaded = await waitUntil {
-            inspector.treeRows.contains(where: { $0.id.nodeID == 5 })
-        }
-        #expect(childLoaded == true)
+        #expect(expandedRows.contains(5))
         #expect(driver.requestedParentNodeIDs == [4])
 
         inspector.toggleExpansion(of: targetID)
         inspector.toggleExpansion(of: targetID)
-
-        let noRefetch = await waitUntil {
-            driver.requestedParentNodeIDs.count == 1
-        }
-        #expect(noRefetch == true)
+        #expect(driver.requestedParentNodeIDs.count == 1)
     }
 
     @Test
@@ -129,14 +119,12 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let rowIDs = treeRowIDsRecorder(for: inspector)
 
-        inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            inspector.treeRows.isEmpty == false
-        }
+        try? await session.reloadDocument()
+        let loadedRows = await rowIDs.next(where: { $0.isEmpty == false })
 
-        #expect(loaded == true)
+        #expect(loadedRows.isEmpty == false)
         #expect(inspector.treeRows.first?.id.nodeID == 1)
     }
 
@@ -153,23 +141,20 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
 
-        inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        try? await session.reloadDocument()
+        _ = await rootIDs.next(where: { $0 != nil })
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
-        await Task.yield()
+        await driver.highlightCounter.wait(untilAtLeast: 1)
 
         #expect(inspector.selectedEntry?.id == bodyID)
         #expect(driver.highlightedNodeIDs == [3])
 
         inspector.selectEntry(nil)
-        await Task.yield()
+        await driver.hideHighlightCounter.wait(untilAtLeast: 1)
 
         #expect(inspector.selectedEntry == nil)
         #expect(driver.hideHighlightCallCount == 1)
@@ -190,16 +175,16 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
+        _ = await rootIDs.next(where: { $0 != nil })
+        let initialReloadCount = await driver.reloadCounter.snapshot()
         inspector.toggleSelectionMode()
+        await driver.reloadCounter.wait(untilAtLeast: initialReloadCount + 1)
 
-        let updated = await waitUntil {
-            session.configuration.snapshotDepth >= 13
-                && driver.reloadRequestedDepths.contains(13)
-        }
-
-        #expect(updated == true)
+        #expect(session.configuration.snapshotDepth >= 13)
+        #expect(driver.reloadRequestedDepths.contains(13))
         #expect(session.configuration.rootBootstrapDepth >= 13)
     }
 
@@ -217,20 +202,15 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
-
-        let initialRefresh = await waitUntil {
-            driver.matchedStylesRequests == [3]
-        }
-        #expect(initialRefresh == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 1)
+        #expect(driver.matchedStylesRequests == [3])
 
         graphStore.applySelectionSnapshot(
             .init(
@@ -242,11 +222,8 @@ struct WIDOMModelTests {
                 styleRevision: 1
             )
         )
-
-        let refreshed = await waitUntil {
-            driver.matchedStylesRequests == [3, 3]
-        }
-        #expect(refreshed == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 2)
+        #expect(driver.matchedStylesRequests == [3, 3])
     }
 
     @Test
@@ -264,25 +241,29 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let errorMessages = errorMessageRecorder(for: inspector)
+        let projectionRevisions = graphProjectionRevisionRecorder(for: inspector)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 1)
+        _ = await errorMessages.next(where: { $0 != nil })
 
-        let failedOnce = await waitUntil {
-            driver.matchedStylesRequests.count == 1 && inspector.errorMessage != nil
-        }
-        #expect(failedOnce == true)
+        let previousRevision = inspector.graphProjectionRevision
+        graphStore.applyMutationBundle(
+            .init(events: [
+                .attributeModified(nodeID: 2, name: "lang", value: "en", layoutFlags: nil, isRendered: nil)
+            ])
+        )
+        _ = await projectionRevisions.next(where: { $0 > previousRevision })
 
-        let retried = await waitUntil(timeoutNanoseconds: 300_000_000) {
-            driver.matchedStylesRequests.count > 1
-        }
-        #expect(retried == false)
+        #expect(driver.matchedStylesRequests.count == 1)
+        #expect(inspector.selectedEntry?.style.loadState == .failed)
+        #expect(inspector.errorMessage == StubDOMPageDriverError.missingNode.localizedDescription)
     }
 
     @Test
@@ -299,27 +280,19 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
-
-        let initialRefresh = await waitUntil {
-            driver.matchedStylesRequests == [3]
-        }
-        #expect(initialRefresh == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 1)
+        #expect(driver.matchedStylesRequests == [3])
 
         graphStore.invalidateStyle(for: 3, reason: .manualRefresh)
-
-        let refreshed = await waitUntil {
-            driver.matchedStylesRequests == [3, 3]
-        }
-        #expect(refreshed == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 2)
+        #expect(driver.matchedStylesRequests == [3, 3])
     }
 
     @Test
@@ -336,21 +309,16 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
-
-        let initialRefresh = await waitUntil {
-            driver.matchedStylesRequests == [3]
-                && driver.matchedStylesRequestRevisions.isEmpty == false
-        }
-        #expect(initialRefresh == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 1)
+        #expect(driver.matchedStylesRequests == [3])
+        #expect(driver.matchedStylesRequestRevisions.isEmpty == false)
 
         for revision in 1...3 {
             graphStore.applySelectionSnapshot(
@@ -364,12 +332,10 @@ struct WIDOMModelTests {
                 )
             )
         }
+        await driver.matchedStylesCounter.wait(untilAtLeast: 2)
 
-        let refreshed = await waitUntil {
-            driver.matchedStylesRequests.count >= 2
-                && driver.matchedStylesRequestRevisions.last == 3
-        }
-        #expect(refreshed == true)
+        #expect(driver.matchedStylesRequests.count >= 2)
+        #expect(driver.matchedStylesRequestRevisions.last == 3)
         #expect(driver.matchedStylesRequestRevisions.contains(1) == false)
         #expect(driver.matchedStylesRequestRevisions.contains(2) == false)
     }
@@ -388,19 +354,11 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
-        var observationHandles = Set<ObservationHandle>()
-        var observedNodeIDs: [Int?] = []
-
-        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { selected in
-            observedNodeIDs.append(selected?.id.nodeID)
-        }
-        .store(in: &observationHandles)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         graphStore.applySelectionSnapshot(
             .init(
@@ -412,11 +370,9 @@ struct WIDOMModelTests {
                 styleRevision: 1
             )
         )
+        let snapshot = await selectedSnapshots.next(where: { $0?.nodeID == 3 })
 
-        let published = await waitUntil {
-            observedNodeIDs.contains(3)
-        }
-        #expect(published == true)
+        #expect(snapshot?.nodeID == 3)
         #expect(inspector.selectedEntry?.id.nodeID == 3)
     }
 
@@ -434,19 +390,11 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
-        var observationHandles = Set<ObservationHandle>()
-        var observedNodeIDs: [Int?] = []
-
-        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { selected in
-            observedNodeIDs.append(selected?.id.nodeID)
-        }
-        .store(in: &observationHandles)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         inspector.withFrontendStore { store in
             store.testHandleDOMSelectionMessage([
@@ -458,11 +406,9 @@ struct WIDOMModelTests {
                 "styleRevision": 1
             ])
         }
+        let snapshot = await selectedSnapshots.next(where: { $0?.nodeID == 3 })
 
-        let published = await waitUntil {
-            observedNodeIDs.contains(3)
-        }
-        #expect(published == true)
+        #expect(snapshot?.nodeID == 3)
         #expect(inspector.selectedEntry?.selectorPath == "html > body")
     }
 
@@ -484,12 +430,13 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
         inspector.attach(to: webView)
-        let initialLoad = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil && graphStore.entry(forNodeID: 6) == nil
-        }
-        #expect(initialLoad == true)
+        _ = await rootIDs.next(where: { $0 != nil })
+        #expect(graphStore.entry(forNodeID: 3) != nil)
+        #expect(graphStore.entry(forNodeID: 6) == nil)
 
         inspector.withFrontendStore { store in
             store.testHandleDOMSelectionMessage([
@@ -503,11 +450,9 @@ struct WIDOMModelTests {
                 "styleRevision": 1
             ])
         }
+        let recoveredSnapshot = await selectedSnapshots.next(where: { $0?.nodeID == 6 })
 
-        let recovered = await waitUntil {
-            inspector.selectedEntry?.id.nodeID == 6
-        }
-        #expect(recovered == true)
+        #expect(recoveredSnapshot?.nodeID == 6)
         #expect(driver.reloadRequestedDepths == [4, 8])
         #expect(inspector.selectedEntry?.selectorPath == "#target")
         #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" && $0.value == "target" }) == true)
@@ -526,21 +471,15 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
 
-        inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil && graphStore.entry(forNodeID: 2) != nil
-        }
-        #expect(loaded == true)
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
+        #expect(graphStore.entry(forNodeID: 3) != nil)
+        #expect(graphStore.entry(forNodeID: 2) != nil)
 
         let bodyID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 3)
         inspector.selectEntry(bodyID)
-
-        let initialRefresh = await waitUntil {
-            driver.matchedStylesRequests.last == 3
-        }
-        #expect(initialRefresh == true)
+        let initialRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 3 })
+        #expect(initialRefresh.nodeID == 3)
 
         inspector.selectEntry(bodyID)
 
@@ -554,11 +493,8 @@ struct WIDOMModelTests {
                 styleRevision: 1
             )
         )
-
-        let observedRefresh = await waitUntil {
-            driver.matchedStylesRequests.last == 2
-        }
-        #expect(observedRefresh == true)
+        let observedRefresh = await driver.matchedStylesEvents.next(where: { $0.nodeID == 2 })
+        #expect(observedRefresh.nodeID == 2)
     }
 
     @Test
@@ -574,13 +510,8 @@ struct WIDOMModelTests {
             pageAgent: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
-        let webView = WKWebView(frame: .zero)
 
-        inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
         let staleID = DOMEntryID(documentGeneration: graphStore.documentGeneration, nodeID: 999)
         inspector.selectEntry(staleID)
@@ -595,16 +526,14 @@ struct WIDOMModelTests {
                 styleRevision: 1
             )
         )
-
-        let refreshed = await waitUntil {
-            driver.matchedStylesRequests.last == 3
-        }
-        #expect(refreshed == true)
+        await driver.matchedStylesCounter.wait(untilAtLeast: 1)
+        #expect(driver.matchedStylesRequests.last == 3)
     }
 
     @Test
     func rapidFrontendSelectionMissesRecoverLatestRequestedNode() async {
         let graphStore = DOMGraphStore()
+        let reloadGate = AsyncGate()
         let driver = StubDOMPageDriver(
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree()),
@@ -613,7 +542,8 @@ struct WIDOMModelTests {
                 .init(root: makeRecoveryDocumentTree(nodeID: 6, idValue: "first-target")),
                 .init(root: makeRecoveryDocumentTree(nodeID: 7, idValue: "second-target"))
             ],
-            reloadDelayNanoseconds: 50_000_000
+            gatedReloadIndices: [2, 3],
+            reloadGate: reloadGate
         )
         let session = DOMSession(
             configuration: .init(),
@@ -622,12 +552,11 @@ struct WIDOMModelTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
 
         inspector.attach(to: webView)
-        let loaded = await waitUntil {
-            graphStore.entry(forNodeID: 3) != nil
-        }
-        #expect(loaded == true)
+        _ = await rootIDs.next(where: { $0 != nil })
 
         inspector.withFrontendStore { store in
             store.testHandleDOMSelectionMessage([
@@ -651,13 +580,14 @@ struct WIDOMModelTests {
                 "styleRevision": 2
             ])
         }
+        await reloadGate.open()
+        let recoveredSnapshot = await selectedSnapshots.next(where: {
+            $0?.nodeID == 7
+                && $0?.selectorPath == "#second-target"
+                && $0?.attributes.contains(.init(name: "id", value: "second-target")) == true
+        })
 
-        let recovered = await waitUntil(timeoutNanoseconds: 2_000_000_000) {
-            inspector.selectedEntry?.id.nodeID == 7
-                && inspector.selectedEntry?.selectorPath == "#second-target"
-                && inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" && $0.value == "second-target" }) == true
-        }
-        #expect(recovered == true)
+        #expect(recoveredSnapshot?.nodeID == 7)
     }
 
 #if canImport(AppKit)
@@ -690,11 +620,9 @@ struct WIDOMModelTests {
         NSPasteboard.general.clearContents()
 
         inspector.copySelection(.html)
+        await driver.selectionCopyCounter.wait(untilAtLeast: 1)
 
-        let copied = await waitUntil {
-            NSPasteboard.general.string(forType: .string) == "<body>Hello</body>"
-        }
-        #expect(copied == true)
+        #expect(NSPasteboard.general.string(forType: .string) == "<body>Hello</body>")
     }
 #endif
 }
@@ -711,7 +639,8 @@ private final class StubDOMPageDriver: DOMPageDriving {
     private let selectionCopyTextResult: String
     private let matchedStylesError: (any Error)?
     private var pendingSelectedNodeID: Int?
-    private let reloadDelayNanoseconds: UInt64
+    private let gatedReloadIndices: Set<Int>
+    private let reloadGate: AsyncGate?
 
     private(set) var requestedParentNodeIDs: [Int] = []
     private(set) var highlightedNodeIDs: [Int] = []
@@ -719,6 +648,13 @@ private final class StubDOMPageDriver: DOMPageDriving {
     private(set) var reloadRequestedDepths: [Int] = []
     private(set) var matchedStylesRequests: [Int] = []
     private(set) var matchedStylesRequestRevisions: [Int] = []
+    let reloadCounter = AsyncCounter()
+    let childRequestCounter = AsyncCounter()
+    let matchedStylesCounter = AsyncCounter()
+    let matchedStylesEvents = AsyncValueQueue<DOMMatchedStylesRequestEvent>()
+    let highlightCounter = AsyncCounter()
+    let hideHighlightCounter = AsyncCounter()
+    let selectionCopyCounter = AsyncCounter()
 
     init(
         graphStore: DOMGraphStore,
@@ -728,7 +664,8 @@ private final class StubDOMPageDriver: DOMPageDriving {
         selectionModeResult: DOMSelectionModeResult = .init(cancelled: true, requiredDepth: 0),
         selectionCopyTextResult: String = "",
         matchedStylesError: (any Error)? = nil,
-        reloadDelayNanoseconds: UInt64 = 0
+        gatedReloadIndices: Set<Int> = [],
+        reloadGate: AsyncGate? = nil
     ) {
         self.graphStore = graphStore
         self.reloadSnapshots = reloadSnapshots ?? [rootSnapshot]
@@ -736,7 +673,8 @@ private final class StubDOMPageDriver: DOMPageDriving {
         self.selectionModeResult = selectionModeResult
         self.selectionCopyTextResult = selectionCopyTextResult
         self.matchedStylesError = matchedStylesError
-        self.reloadDelayNanoseconds = reloadDelayNanoseconds
+        self.gatedReloadIndices = gatedReloadIndices
+        self.reloadGate = reloadGate
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
@@ -756,10 +694,11 @@ private final class StubDOMPageDriver: DOMPageDriving {
     }
 
     func reloadDocument(preserveState: Bool, requestedDepth: Int?) async throws {
+        let reloadIndex = await reloadCounter.increment()
         reloadRequestedDepths.append(requestedDepth ?? 0)
         _ = requestedDepth
-        if reloadDelayNanoseconds > 0 {
-            try await Task.sleep(nanoseconds: reloadDelayNanoseconds)
+        if gatedReloadIndices.contains(reloadIndex) {
+            await reloadGate?.wait()
         }
         let snapshot = reloadSnapshots[min(reloadRequestedDepths.count - 1, reloadSnapshots.count - 1)]
         if preserveState == false {
@@ -780,6 +719,7 @@ private final class StubDOMPageDriver: DOMPageDriving {
     }
 
     func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor] {
+        await childRequestCounter.increment()
         requestedParentNodeIDs.append(parentNodeId)
         let descriptors = requestedChildren[parentNodeId] ?? []
         if graphStore.entry(forNodeID: parentNodeId) != nil {
@@ -805,8 +745,11 @@ private final class StubDOMPageDriver: DOMPageDriving {
 
     func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
         _ = maxMatchedRules
+        await matchedStylesCounter.increment()
         matchedStylesRequests.append(nodeId)
-        matchedStylesRequestRevisions.append(graphStore.selectedEntry?.style.sourceRevision ?? -1)
+        let revision = graphStore.selectedEntry?.style.sourceRevision ?? -1
+        matchedStylesRequestRevisions.append(revision)
+        await matchedStylesEvents.push(.init(nodeID: nodeId, revision: revision))
         if let matchedStylesError {
             throw matchedStylesError
         }
@@ -832,10 +775,12 @@ private final class StubDOMPageDriver: DOMPageDriving {
     }
 
     func highlight(nodeId: Int) async {
+        await highlightCounter.increment()
         highlightedNodeIDs.append(nodeId)
     }
 
     func hideHighlight() async {
+        await hideHighlightCounter.increment()
         hideHighlightCallCount += 1
     }
 
@@ -877,8 +822,25 @@ private final class StubDOMPageDriver: DOMPageDriving {
     func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         _ = nodeId
         _ = kind
+        await selectionCopyCounter.increment()
         return selectionCopyTextResult
     }
+}
+
+private struct DOMSelectedSnapshot: Equatable, Sendable {
+    let nodeID: Int?
+    let selectorPath: String
+    let attributes: [DOMAttributeSummary]
+}
+
+private struct DOMMatchedStylesRequestEvent: Equatable, Sendable {
+    let nodeID: Int
+    let revision: Int
+}
+
+private struct DOMAttributeSummary: Equatable, Sendable {
+    let name: String
+    let value: String
 }
 
 private enum StubDOMPageDriverError: Error {
@@ -1051,17 +1013,67 @@ private func makeRecoveryDocumentTree(
 }
 
 @MainActor
-private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
-    pollIntervalNanoseconds: UInt64 = 10_000_000,
-    _ condition: @escaping @MainActor () -> Bool
-) async -> Bool {
-    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-    while DispatchTime.now().uptimeNanoseconds < deadline {
-        if condition() {
-            return true
+private func rootNodeIDRecorder(for graphStore: DOMGraphStore) -> ObservationRecorder<Int?> {
+    let recorder = ObservationRecorder<Int?>()
+    recorder.record { didChange in
+        graphStore.observe(\.rootID, options: [.removeDuplicates]) { rootID in
+            didChange(rootID?.nodeID)
         }
-        try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
     }
-    return condition()
+    return recorder
+}
+
+@MainActor
+private func treeRowIDsRecorder(for inspector: WIDOMInspectorStore) -> ObservationRecorder<[Int]> {
+    let recorder = ObservationRecorder<[Int]>()
+    recorder.record { didChange in
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
+            didChange(inspector.treeRows.map(\.id.nodeID))
+        }
+    }
+    return recorder
+}
+
+@MainActor
+private func selectedSnapshotRecorder(
+    for inspector: WIDOMInspectorStore
+) -> ObservationRecorder<DOMSelectedSnapshot?> {
+    let recorder = ObservationRecorder<DOMSelectedSnapshot?>()
+    recorder.record { didChange in
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
+            let snapshot = inspector.selectedEntry.map { entry in
+                DOMSelectedSnapshot(
+                    nodeID: entry.id.nodeID,
+                    selectorPath: entry.selectorPath,
+                    attributes: entry.attributes.map { DOMAttributeSummary(name: $0.name, value: $0.value) }
+                )
+            }
+            didChange(snapshot)
+        }
+    }
+    return recorder
+}
+
+@MainActor
+private func errorMessageRecorder(for inspector: WIDOMInspectorStore) -> ObservationRecorder<String?> {
+    let recorder = ObservationRecorder<String?>()
+    recorder.record { didChange in
+        inspector.observe(\.errorMessage, options: [.removeDuplicates]) { errorMessage in
+            didChange(errorMessage)
+        }
+    }
+    return recorder
+}
+
+@MainActor
+private func graphProjectionRevisionRecorder(
+    for inspector: WIDOMInspectorStore
+) -> ObservationRecorder<UInt64> {
+    let recorder = ObservationRecorder<UInt64>()
+    recorder.record { didChange in
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { revision in
+            didChange(revision)
+        }
+    }
+    return recorder
 }

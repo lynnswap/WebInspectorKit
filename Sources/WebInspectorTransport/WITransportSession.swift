@@ -14,6 +14,8 @@ public final class WITransportSession {
 
     private let configuration: WITransportConfiguration
     private let backendFactory: @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend
+    private let routerClock: any Clock<Duration>
+    package var onStateTransitionForTesting: (@MainActor (State) -> Void)?
     private weak var webView: WKWebView?
     private var originalInspectability: Bool?
     private var backend: (any WITransportPlatformBackend)?
@@ -25,10 +27,12 @@ public final class WITransportSession {
 
     init(
         configuration: WITransportConfiguration = .init(),
-        backendFactory: @escaping @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend
+        backendFactory: @escaping @MainActor (WITransportConfiguration) -> any WITransportPlatformBackend,
+        routerClock: any Clock<Duration> = ContinuousClock()
     ) {
         self.configuration = configuration
         self.backendFactory = backendFactory
+        self.routerClock = routerClock
         self.supportSnapshot = backendFactory(configuration).supportSnapshot
     }
 
@@ -56,13 +60,17 @@ public final class WITransportSession {
             throw WITransportError.unsupported(backend.supportSnapshot.failureReason ?? "inspector backend unavailable")
         }
 
-        state = .attaching
+        transition(to: .attaching)
         self.webView = webView
 
-        let router = WITransportMessageRouter(configuration: configuration)
+        let router = WITransportMessageRouter(
+            configuration: configuration,
+            clock: routerClock
+        )
 
         self.backend = backend
         self.router = router
+        let inboundMessageGroup = DispatchGroup()
 
         do {
             await router.connect(
@@ -89,19 +97,26 @@ public final class WITransportSession {
                 to: webView,
                 messageHandlers: WITransportBackendMessageHandlers(
                     handleRootMessage: { [router] message in
-                        Task {
+                        inboundMessageGroup.enter()
+                        Task.detached {
                             await router.handleIncomingRootMessage(message)
+                            inboundMessageGroup.leave()
                         }
                     },
                     handlePageMessage: { [router] message, targetIdentifier in
-                        Task {
+                        inboundMessageGroup.enter()
+                        Task.detached {
                             await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
+                            inboundMessageGroup.leave()
                         }
                     },
                     handleFatalFailure: { [sessionReference = SessionReference(self)] message in
                         Task { @MainActor in
                             sessionReference.session?.handleBackendFatalFailure(message)
                         }
+                    },
+                    waitForPendingMessagesForTesting: {
+                        inboundMessageGroup.wait()
                     }
                 )
             )
@@ -111,7 +126,7 @@ public final class WITransportSession {
             guard state == .attaching, self.backend != nil, self.router != nil else {
                 throw WITransportError.transportClosed
             }
-            state = .attached
+            transition(to: .attached)
             log("attached")
         } catch {
             await router.disconnect()
@@ -119,7 +134,7 @@ public final class WITransportSession {
             self.backend = nil
             self.router = nil
             self.webView = nil
-            state = .detached
+            transition(to: .detached)
             restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
             self.originalInspectability = nil
 
@@ -149,7 +164,7 @@ public final class WITransportSession {
         backend = nil
         router = nil
         webView = nil
-        state = .detached
+        transition(to: .detached)
         log("detached")
     }
 }
@@ -256,7 +271,7 @@ private extension WITransportSession {
         backend = nil
         self.router = nil
         webView = nil
-        state = .detached
+        transition(to: .detached)
         originalInspectability = nil
 
         if let router {
@@ -264,6 +279,11 @@ private extension WITransportSession {
                 await router.disconnect()
             }
         }
+    }
+
+    func transition(to newState: State) {
+        state = newState
+        onStateTransitionForTesting?(newState)
     }
 }
 

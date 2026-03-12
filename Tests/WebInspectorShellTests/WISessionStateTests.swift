@@ -1,6 +1,7 @@
 import Testing
 import WebKit
 import ObservationBridge
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 @testable import WebInspectorNetwork
@@ -100,42 +101,25 @@ struct WISessionStateTests {
 
     @Test
     func selectedPanelObservationEmitsOnSelectionChange() async {
-        actor Recorder {
-            var values: [String?] = []
-            func append(_ value: String?) {
-                values.append(value)
-            }
-            func snapshot() -> [String?] {
-                values
-            }
-        }
-
         let controller = WIInspectorController()
         controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
-
-        let recorder = Recorder()
-        var observationHandles = Set<ObservationHandle>()
-        controller.observeTask([\.selectedPanelConfiguration]) {
-            await recorder.append(controller.selectedPanelConfiguration?.identifier)
+        let expectedNetworkID = WIInspectorTab.networkTabID
+        let recorder = ObservationRecorder<String?>()
+        recorder.record { didChange in
+            controller.observeTask([\.selectedPanelConfiguration]) {
+                didChange(controller.selectedPanelConfiguration?.identifier)
+            }
         }
-        .store(in: &observationHandles)
 
         let networkPanel = controller.panelConfigurations.first { $0.identifier == WIInspectorTab.networkTabID }
         controller.setSelectedPanelFromUI(networkPanel)
-
-        for _ in 0..<50 {
-            let values = await recorder.snapshot()
-            if values.contains(WIInspectorTab.networkTabID) {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-
-        Issue.record("selectedPanel observation did not emit network selection")
+        let observedValue = await recorder.next(where: { $0 == expectedNetworkID })
+        #expect(observedValue == expectedNetworkID)
     }
 
     @Test
     func macOSNativeLoadingStateTriggersTransportRebindHooks() async {
+        let clock = TestClock()
         let transportSnapshot = WITransportSupportSnapshot(
             availability: .supported,
             backendKind: .macOSNativeInspector,
@@ -156,7 +140,8 @@ struct WISessionStateTests {
                 pageAgent: networkDriver,
                 bodyFetcher: networkDriver,
                 transportSupportSnapshot: transportSnapshot
-            )
+            ),
+            rebindClock: clock
         )
         let webView = makeTestWebView()
 
@@ -164,11 +149,10 @@ struct WISessionStateTests {
         controller.connect(to: webView)
 
         await loadHTML("<html><body><p>initial</p></body></html>", in: webView)
-        let initialRebindCompleted = await waitUntil {
-            domDriver.resumeAfterTransportRebindCallCount >= domDriver.prepareForTransportRebindCallCount
-                && networkDriver.resumeAfterTransportRebindCallCount >= networkDriver.prepareForTransportRebindCallCount
-        }
-        #expect(initialRebindCompleted)
+        await clock.sleep(untilSuspendedBy: 1)
+        clock.advance(by: .milliseconds(20))
+        await domDriver.resumeCounter.wait(untilAtLeast: 1)
+        await networkDriver.resumeCounter.wait(untilAtLeast: 1)
 
         let domPrepareBaseline = domDriver.prepareForTransportRebindCallCount
         let domResumeBaseline = domDriver.resumeAfterTransportRebindCallCount
@@ -177,16 +161,16 @@ struct WISessionStateTests {
         let networkResumeBaseline = networkDriver.resumeAfterTransportRebindCallCount
 
         await loadHTML("<html><body><p>follow-up</p></body></html>", in: webView)
+        await clock.sleep(untilSuspendedBy: 1)
+        clock.advance(by: .milliseconds(20))
+        await domDriver.resumeCounter.wait(untilAtLeast: domResumeBaseline + 1)
+        await networkDriver.resumeCounter.wait(untilAtLeast: networkResumeBaseline + 1)
 
-        let rebindTriggered = await waitUntil {
-            domDriver.prepareForTransportRebindCallCount == domPrepareBaseline + 1
-                && domDriver.resumeAfterTransportRebindCallCount >= domResumeBaseline + 1
-                && domDriver.reloadDocumentCallCount >= domReloadBaseline + 1
-                && networkDriver.prepareForTransportRebindCallCount == networkPrepareBaseline + 1
-                && networkDriver.resumeAfterTransportRebindCallCount >= networkResumeBaseline + 1
-        }
-
-        #expect(rebindTriggered)
+        #expect(domDriver.prepareForTransportRebindCallCount == domPrepareBaseline + 1)
+        #expect(domDriver.resumeAfterTransportRebindCallCount >= domResumeBaseline + 1)
+        #expect(domDriver.reloadDocumentCallCount >= domReloadBaseline + 1)
+        #expect(networkDriver.prepareForTransportRebindCallCount == networkPrepareBaseline + 1)
+        #expect(networkDriver.resumeAfterTransportRebindCallCount >= networkResumeBaseline + 1)
     }
 
     private func makeTestWebView() -> WKWebView {
@@ -204,19 +188,6 @@ struct WISessionStateTests {
             delegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: URL(string: "https://example.com/"))
         }
-    }
-
-    private func waitUntil(
-        maxTicks: Int = 200,
-        _ condition: @escaping @MainActor () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        return condition()
     }
 
     private func selectTab(_ identifier: String, in controller: WIInspectorController) {
@@ -262,6 +233,9 @@ private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDrivi
     private(set) var prepareForTransportRebindCallCount = 0
     private(set) var resumeAfterTransportRebindCallCount = 0
     private(set) var reloadDocumentCallCount = 0
+    let prepareCounter = AsyncCounter()
+    let resumeCounter = AsyncCounter()
+    let reloadCounter = AsyncCounter()
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
         _ = configuration
@@ -283,6 +257,7 @@ private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDrivi
         _ = preserveState
         _ = requestedDepth
         reloadDocumentCallCount += 1
+        await reloadCounter.increment()
     }
 
     func requestChildNodes(parentNodeId: Int) async throws -> [DOMGraphNodeDescriptor] {
@@ -375,10 +350,16 @@ private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDrivi
 
     func prepareForTransportRebind() {
         prepareForTransportRebindCallCount += 1
+        Task {
+            await prepareCounter.increment()
+        }
     }
 
     func resumeAfterTransportRebind() {
         resumeAfterTransportRebindCallCount += 1
+        Task {
+            await resumeCounter.increment()
+        }
     }
 }
 
@@ -389,6 +370,8 @@ private final class RebindNetworkPageDriver: NetworkPageDriving, NetworkTranspor
 
     private(set) var prepareForTransportRebindCallCount = 0
     private(set) var resumeAfterTransportRebindCallCount = 0
+    let prepareCounter = AsyncCounter()
+    let resumeCounter = AsyncCounter()
 
     func setMode(_ mode: NetworkLoggingMode) {
         _ = mode
@@ -415,9 +398,15 @@ private final class RebindNetworkPageDriver: NetworkPageDriving, NetworkTranspor
 
     func prepareForTransportRebind() {
         prepareForTransportRebindCallCount += 1
+        Task {
+            await prepareCounter.increment()
+        }
     }
 
     func resumeAfterTransportRebind() {
         resumeAfterTransportRebindCallCount += 1
+        Task {
+            await resumeCounter.increment()
+        }
     }
 }

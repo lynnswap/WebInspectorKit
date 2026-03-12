@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import UIKit
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorNetwork
 @testable import WebInspectorUI
@@ -31,15 +32,16 @@ struct NetworkDetailViewControllerTests {
         inspector.attach(to: webView)
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
+        let responseBody = try #require(entry.responseBody)
+        let bodyStates = fetchStateRecorder(for: responseBody)
         inspector.selectEntry(entry)
 
         let viewController = WINetworkDetailViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
 
-        let fetched = await waitUntil {
-            fetcher.fetchCount == 1 && entry.responseBody?.full == "eager response body"
-        }
-        #expect(fetched)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchCount == 1)
+        #expect(entry.responseBody?.full == "eager response body")
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
@@ -63,24 +65,21 @@ struct NetworkDetailViewControllerTests {
         let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
+        let responseBody = try #require(entry.responseBody)
+        let bodyStates = fetchStateRecorder(for: responseBody)
         inspector.selectEntry(entry)
 
         let viewController = WINetworkDetailViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
-
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
 
-        let fetched = await waitUntil {
-            fetcher.fetchCount == 1 && entry.responseBody?.full == "reattached response body"
-        }
-        #expect(fetched)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchCount == 1)
+        #expect(entry.responseBody?.full == "reattached response body")
     }
 
     @Test
@@ -107,6 +106,12 @@ struct NetworkDetailViewControllerTests {
         inspector.selectEntry(entry)
 
         let viewController = WINetworkDetailViewController(inspector: inspector)
+        let snapshotRevisions = AsyncValueQueue<UInt64>()
+        viewController.onSnapshotAppliedForTesting = { revision in
+            Task {
+                await snapshotRevisions.push(revision)
+            }
+        }
         viewController.loadViewIfNeeded()
         viewController.view.frame = CGRect(x: 0, y: 0, width: 375, height: 812)
         viewController.view.layoutIfNeeded()
@@ -115,10 +120,10 @@ struct NetworkDetailViewControllerTests {
             viewController.view.subviews.compactMap { $0 as? UICollectionView }.first
         )
 
-        let initialSnapshotApplied = await waitUntil {
-            collectionView.numberOfSections == 3
+        while collectionView.numberOfSections != 3 {
+            _ = await snapshotRevisions.next()
         }
-        #expect(initialSnapshotApplied)
+        #expect(collectionView.numberOfSections == 3)
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
         #expect(listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) != nil)
         #expect(
@@ -129,17 +134,21 @@ struct NetworkDetailViewControllerTests {
             NetworkHeaderField(name: "content-type", value: "application/json")
         ])
 
-        let headersUpdated = await waitUntil {
-            self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
+        while self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) != "content-type" {
+            _ = await snapshotRevisions.next()
         }
-        #expect(headersUpdated)
+        #expect(self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type")
 
         entry.responseBody = makeBody(reference: "resp_ref")
+        let responseBody = try #require(entry.responseBody)
+        let bodyStates = fetchStateRecorder(for: responseBody)
 
-        let bodySectionAdded = await waitUntil {
-            collectionView.numberOfSections == 4 && fetcher.fetchCount == 1
+        while collectionView.numberOfSections != 4 {
+            _ = await snapshotRevisions.next()
         }
-        #expect(bodySectionAdded)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchCount == 1)
+        #expect(collectionView.numberOfSections == 4)
         #expect(entry.responseBody?.full == "response body")
     }
 
@@ -164,6 +173,7 @@ struct NetworkDetailViewControllerTests {
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
+        let bodyStates = fetchStateRecorder(for: body)
         inspector.selectEntry(entry)
 
         let viewController = WINetworkBodyPreviewViewController(
@@ -173,19 +183,14 @@ struct NetworkDetailViewControllerTests {
         )
         viewController.loadViewIfNeeded()
 
-        for _ in 0..<64 {
-            await Task.yield()
-        }
-
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
 
-        let fetched = await waitUntil {
-            fetcher.fetchCount == 1 && body.full == "reattached preview body"
-        }
-        #expect(fetched)
+        _ = await bodyStates.next(where: { $0 == "full" })
+        #expect(fetcher.fetchCount == 1)
+        #expect(body.full == "reattached preview body")
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
@@ -219,10 +224,6 @@ struct NetworkDetailViewControllerTests {
             bodyState: body
         )
         viewController.loadViewIfNeeded()
-
-        for _ in 0..<64 {
-            await Task.yield()
-        }
 
         #expect(fetcher.fetchCount == 0)
         #expect(body.full == nil)
@@ -272,18 +273,37 @@ struct NetworkDetailViewControllerTests {
         }
         return content.text
     }
+}
 
-    private func waitUntil(
-        maxTicks: Int = 512,
-        _ condition: () -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxTicks {
-            if condition() {
-                return true
-            }
-            await Task.yield()
+@MainActor
+private func fetchStateRecorder(
+    for body: NetworkBody
+) -> ObservationRecorder<String> {
+    let recorder = ObservationRecorder<String>()
+    recorder.record { didChange in
+        body.observe(\.fetchState, options: [.removeDuplicates]) { state in
+            didChange(fetchStateLabel(state))
         }
-        return condition()
+    }
+    return recorder
+}
+
+private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
+    switch state {
+    case .inline:
+        "inline"
+    case .fetching:
+        "fetching"
+    case .full:
+        "full"
+    case .failed(.unavailable):
+        "failed:unavailable"
+    case .failed(.decodeFailed):
+        "failed:decodeFailed"
+    case .failed(.unknown):
+        "failed:unknown"
+    case nil:
+        "nil"
     }
 }
 

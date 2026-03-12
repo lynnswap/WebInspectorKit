@@ -283,7 +283,8 @@ let package = Package(
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorCore"
+                "WebInspectorCore",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
@@ -291,7 +292,8 @@ let package = Package(
         .testTarget(
             name: "WebInspectorTransportTests",
             dependencies: [
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorTransportTests",
             swiftSettings: strictSwiftSettings
@@ -314,6 +316,7 @@ let package = Package(
                 "WebInspectorCore",
                 "WebInspectorDOM",
                 "WebInspectorTransport",
+                "WebInspectorTestSupport",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorDOMTests",
@@ -324,7 +327,8 @@ let package = Package(
             dependencies: [
                 "WebInspectorCore",
                 "WebInspectorNetwork",
-                "WebInspectorTransport"
+                "WebInspectorTransport",
+                "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorNetworkTests",
             swiftSettings: strictSwiftSettings

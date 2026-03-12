@@ -1,5 +1,6 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 
@@ -65,10 +66,15 @@ struct DOMFrontendStoreTests {
 
         let store = DOMFrontendStore(session: session)
         _ = store.makeInspectorWebView()
+        let readyMessageProcessed = AsyncGate()
+        store.onReadyMessageProcessedForTesting = {
+            Task {
+                await readyMessageProcessed.open()
+            }
+        }
 
         store.testHandleReadyMessage()
-        await Task.yield()
-        await Task.yield()
+        await readyMessageProcessed.wait()
 
         #expect(store.testRequestedDocuments.isEmpty)
     }

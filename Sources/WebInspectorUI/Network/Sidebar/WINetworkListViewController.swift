@@ -17,6 +17,8 @@ public final class WINetworkListViewController: UICollectionViewController {
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
+    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
+    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
     private lazy var dataSource = makeDataSource()
     private var searchController: UISearchController {
         queryModel.searchController
@@ -164,6 +166,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         Task {
             let snapshot = self.makeSnapshot(displayEntries: displayEntries)
             await self.dataSource.apply(snapshot, animatingDifferences: false)
+            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -175,6 +178,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         Task {
             let snapshot = self.makeSnapshot(displayEntries: self.queryModel.displayEntries)
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
+            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -193,6 +197,14 @@ public final class WINetworkListViewController: UICollectionViewController {
         } else {
             contentUnavailableConfiguration = nil
         }
+    }
+
+    private func recordSnapshotApplyForTesting() {
+        snapshotApplyRevisionForTesting &+= 1
+        if snapshotApplyRevisionForTesting == 0 {
+            snapshotApplyRevisionForTesting = 1
+        }
+        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
     }
 
     private func configureListCell(_ cell: WINetworkObservingListCell, item: NetworkEntry) {

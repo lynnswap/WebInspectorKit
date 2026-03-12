@@ -1,4 +1,5 @@
 import Testing
+import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
@@ -91,6 +92,7 @@ struct DOMInspectorTests {
         let controller = WIInspectorController()
         let inspector = controller.dom
         let webView = makeTestWebView()
+        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
         inspector.attach(to: webView)
         await loadHTML(
@@ -100,10 +102,7 @@ struct DOMInspectorTests {
             in: webView
         )
         await inspector.reloadInspector()
-        let loaded = await waitForCondition {
-            inspector.treeRows.isEmpty == false
-        }
-        #expect(loaded == true)
+        _ = await treeRowsLoaded.next(where: { $0 })
 
         guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
             Issue.record("expected a loaded DOM root before mutating selection state")
@@ -151,6 +150,7 @@ struct DOMInspectorTests {
         let controller = makeTransportController()
         let inspector = controller.dom
         let webView = makeTestWebView()
+        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
         inspector.attach(to: webView)
         await loadHTML(
@@ -168,11 +168,9 @@ struct DOMInspectorTests {
 
         await inspector.reloadInspector()
 
-        let loaded = await waitForCondition {
-            inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
-        }
-        #expect(loaded == true)
+        _ = await treeRowsLoaded.next(where: { $0 })
         #expect(inspector.treeRows.count > 0)
+        #expect(inspector.session.graphStore.rootID != nil)
         #expect(inspector.transportSupportSnapshot != nil)
     }
 
@@ -190,6 +188,7 @@ struct DOMInspectorTests {
         )
         let inspector = controller.dom
         let webView = makeTestWebView()
+        let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
         inspector.attach(to: webView)
         await loadHTML(
@@ -207,12 +206,10 @@ struct DOMInspectorTests {
 
         await inspector.reloadInspector()
 
-        let loaded = await waitForCondition {
-            inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
-        }
-        #expect(loaded == true)
+        _ = await treeRowsLoaded.next(where: { $0 })
         #expect(inspector.transportSupportSnapshot?.isSupported == false)
         #expect(inspector.treeRows.count > 0)
+        #expect(inspector.session.graphStore.rootID != nil)
     }
 
     @Test
@@ -241,9 +238,7 @@ struct DOMInspectorTests {
             in: webView
         )
 
-        let snapshot = try? await withTimeout(.seconds(10), description: "captureSnapshot for matched styles") {
-            try await inspector.session.captureSnapshot(maxDepth: 5)
-        }
+        let snapshot = try? await inspector.session.captureSnapshot(maxDepth: 5)
         guard let snapshot,
               let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
             Issue.record("target node was not found in transport snapshot")
@@ -251,9 +246,7 @@ struct DOMInspectorTests {
         }
 
         do {
-            let payload = try await withTimeout(.seconds(10), description: "matchedStyles for #content") {
-                try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
-            }
+            let payload = try await inspector.session.matchedStyles(nodeId: contentNodeID, maxRules: 0)
             #expect(payload.rules.contains(where: { $0.selectorText.contains("#content") }))
             #expect(inspector.errorMessage == nil)
         } catch {
@@ -267,6 +260,7 @@ struct DOMInspectorTests {
         let inspector = controller.dom
         let webView = makeTestWebView()
         let undoManager = UndoManager()
+        let deleteEvents = AsyncValueQueue<WIDOMInspectorStore.DeleteMutationEvent>()
         let html = """
         <html>
             <body>
@@ -279,10 +273,13 @@ struct DOMInspectorTests {
         inspector.attach(to: webView)
         await loadHTML(html, in: webView)
         await inspector.reloadInspector()
-
-        let snapshot = try await withTimeout(.seconds(10), description: "captureSnapshot") {
-            try await inspector.session.captureSnapshot(maxDepth: 5)
+        inspector.onDeleteMutationForTesting = { event in
+            Task {
+                await deleteEvents.push(event)
+            }
         }
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
         guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
               let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
         else {
@@ -291,29 +288,25 @@ struct DOMInspectorTests {
         }
 
         inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-        let firstDeleted = await waitForCondition {
-            await domNodeExists(withID: "first", in: webView) == false
-        }
-        #expect(firstDeleted == true)
+        let firstDelete = await deleteEvents.next()
+        #expect(firstDelete == .removed(nodeId: firstNodeID))
+        #expect(await domNodeExists(withID: "first", in: webView) == false)
 
         inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
-        let secondDeleted = await waitForCondition {
-            await domNodeExists(withID: "second", in: webView) == false
-        }
-        #expect(secondDeleted == true)
+        let secondDelete = await deleteEvents.next()
+        #expect(secondDelete == .removed(nodeId: secondNodeID))
+        #expect(await domNodeExists(withID: "second", in: webView) == false)
 
         undoManager.undo()
-        let secondRestored = await waitForCondition {
-            await domNodeExists(withID: "second", in: webView)
-        }
-        #expect(secondRestored == true)
+        let secondRestore = await deleteEvents.next()
+        #expect(secondRestore == .restored(nodeId: secondNodeID))
+        #expect(await domNodeExists(withID: "second", in: webView))
         #expect(await domNodeExists(withID: "first", in: webView) == false)
 
         undoManager.undo()
-        let firstRestored = await waitForCondition {
-            await domNodeExists(withID: "first", in: webView)
-        }
-        #expect(firstRestored == true)
+        let firstRestore = await deleteEvents.next()
+        #expect(firstRestore == .restored(nodeId: firstNodeID))
+        #expect(await domNodeExists(withID: "first", in: webView))
         #expect(await domNodeExists(withID: "second", in: webView) == true)
     }
 
@@ -337,48 +330,7 @@ struct DOMInspectorTests {
 
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
-            navigationDelegate.timeoutTask = Task { @MainActor in
-                try? await Task.sleep(for: .seconds(10))
-                navigationDelegate.resumeIfNeeded()
-            }
             webView.loadHTMLString(html, baseURL: nil)
-        }
-    }
-
-    private func waitForCondition(
-        maxAttempts: Int = 250,
-        intervalNanoseconds: UInt64 = 20_000_000,
-        condition: @escaping @MainActor () async -> Bool
-    ) async -> Bool {
-        for _ in 0..<maxAttempts {
-            if await condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: intervalNanoseconds)
-        }
-        return await condition()
-    }
-
-    private func withTimeout<T: Sendable>(
-        _ duration: Duration,
-        description: String,
-        operation: @escaping @MainActor @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(for: duration)
-                throw TimeoutError(description: description)
-            }
-
-            let value = try await group.next()
-            group.cancelAll()
-            guard let value else {
-                throw TimeoutError(description: description)
-            }
-            return value
         }
     }
 
@@ -433,6 +385,20 @@ struct DOMInspectorTests {
     }
 }
 
+@MainActor
+private func treeRowsLoadedRecorder(
+    for inspector: WIDOMInspectorStore
+) -> ObservationRecorder<Bool> {
+    let recorder = ObservationRecorder<Bool>()
+    recorder.record { didChange in
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
+            didChange(inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil)
+        }
+    }
+    return recorder
+}
+
+
 private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
     WITransportSupportSnapshot(
         availability: .unsupported,
@@ -440,14 +406,6 @@ private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
         capabilities: [],
         failureReason: "unsupported for test"
     )
-}
-
-private struct TimeoutError: Error, LocalizedError {
-    let description: String
-
-    var errorDescription: String? {
-        "Timed out while waiting for \(description)."
-    }
 }
 
 @MainActor
@@ -462,7 +420,6 @@ private final class NoopBodyFetcher: NetworkBodyFetching {
 
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {
     var continuation: CheckedContinuation<Void, Never>?
-    var timeoutTask: Task<Void, Never>?
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         resumeIfNeeded()
@@ -477,8 +434,6 @@ private final class NavigationDelegate: NSObject, WKNavigationDelegate {
     }
 
     func resumeIfNeeded() {
-        timeoutTask?.cancel()
-        timeoutTask = nil
         continuation?.resume()
         continuation = nil
     }

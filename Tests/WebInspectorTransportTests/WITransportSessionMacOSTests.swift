@@ -53,7 +53,6 @@ final class WITransportSessionMacOSTests: XCTestCase {
         session.detach()
         window.orderOut(nil)
         window.close()
-        try await settleUI()
         didCleanup = true
     }
 }
@@ -63,16 +62,6 @@ private extension WITransportSessionMacOSTests {
     func loadHTML(_ html: String, in webView: WKWebView) async throws {
         let delegate = NavigationDelegate()
         webView.navigationDelegate = delegate
-        let timeoutError = WITransportError.attachFailed(
-            "Timed out while waiting for WKWebView navigation to finish in macOS transport tests."
-        )
-        let timeoutTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(10))
-            delegate.resumeIfNeeded(throwing: timeoutError)
-        }
-        defer {
-            timeoutTask.cancel()
-        }
 
         try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
@@ -105,11 +94,6 @@ private extension WITransportSessionMacOSTests {
         return window
     }
 
-    func settleUI() async throws {
-        for _ in 0..<8 {
-            try await Task.sleep(for: .milliseconds(50))
-        }
-    }
 }
 
 @MainActor

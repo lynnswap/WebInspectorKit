@@ -45,6 +45,16 @@ package final class WISharedTransportRegistry {
             self.entry = entry
         }
 
+        package var onNetworkIngressReadyForTesting: (@MainActor () -> Void)? {
+            get { entry.onNetworkIngressReadyForTesting }
+            set { entry.onNetworkIngressReadyForTesting = newValue }
+        }
+
+        package var onDOMIngressReadyForTesting: (@MainActor () -> Void)? {
+            get { entry.onDOMIngressReadyForTesting }
+            set { entry.onDOMIngressReadyForTesting = newValue }
+        }
+
         package var inspectorTransportCapabilities: Set<InspectorTransportCapability> {
             entry.inspectorTransportCapabilities
         }
@@ -129,6 +139,8 @@ package final class WISharedTransportRegistry {
         private var domIngressTask: Task<Void, Error>?
         private var networkIngressReady = false
         private var domIngressReady = false
+        var onNetworkIngressReadyForTesting: (@MainActor () -> Void)?
+        var onDOMIngressReadyForTesting: (@MainActor () -> Void)?
 
         init(webView: WKWebView, transportSession: WITransportSession) {
             self.webView = webView
@@ -323,6 +335,7 @@ package final class WISharedTransportRegistry {
                 )
                 self.networkIngressReady = true
                 self.startNetworkEventLoop(with: stream)
+                self.onNetworkIngressReadyForTesting?()
             }
             networkIngressTask = task
             defer { networkIngressTask = nil }
@@ -365,6 +378,7 @@ package final class WISharedTransportRegistry {
                 )
                 self.domIngressReady = true
                 self.startDOMEventLoop(with: stream)
+                self.onDOMIngressReadyForTesting?()
             }
             domIngressTask = task
             defer { domIngressTask = nil }

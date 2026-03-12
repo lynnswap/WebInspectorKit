@@ -43,6 +43,12 @@ public struct WIDOMTreeRow: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 public final class WIDOMInspectorStore {
+    package enum DeleteMutationEvent: Sendable, Equatable {
+        case removed(nodeId: Int)
+        case restored(nodeId: Int)
+        case redone(nodeId: Int)
+    }
+
     private struct StyleRefreshKey: Hashable {
         let entryID: DOMEntryID
         let nodeID: Int
@@ -75,6 +81,7 @@ public final class WIDOMInspectorStore {
     @ObservationIgnored private var frontendSelectionRecoveryKey: FrontendSelectionRecoveryKey?
     @ObservationIgnored private let frontendStore: DOMFrontendStore
     @ObservationIgnored private var uiBridge: (any WIDOMUIBridge)?
+    package var onDeleteMutationForTesting: (@MainActor (DeleteMutationEvent) -> Void)?
 
     package init(
         session: DOMSession,
@@ -541,11 +548,13 @@ private extension WIDOMInspectorStore {
             guard let self else { return }
             guard let undoManager else {
                 await self.session.removeNode(nodeId: nodeId)
+                self.onDeleteMutationForTesting?(.removed(nodeId: nodeId))
                 return
             }
             self.rememberDeleteUndoManager(undoManager)
             guard let undoToken = await self.session.removeNodeWithUndo(nodeId: nodeId) else {
                 await self.session.removeNode(nodeId: nodeId)
+                self.onDeleteMutationForTesting?(.removed(nodeId: nodeId))
                 return
             }
             self.registerUndoDelete(
@@ -553,6 +562,7 @@ private extension WIDOMInspectorStore {
                 nodeId: nodeId,
                 undoManager: undoManager
             )
+            self.onDeleteMutationForTesting?(.removed(nodeId: nodeId))
         }
     }
 
@@ -600,6 +610,7 @@ private extension WIDOMInspectorStore {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
             }
+            self.onDeleteMutationForTesting?(.restored(nodeId: nodeId))
             self.session.rememberPendingSelection(nodeId: nodeId)
             if self.session.transportSupportSnapshot?.isSupported == false {
                 Task { @MainActor [weak self] in
@@ -635,6 +646,7 @@ private extension WIDOMInspectorStore {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
             }
+            self.onDeleteMutationForTesting?(.redone(nodeId: nodeId))
             if self.selectedEntry?.id.nodeID == nodeId {
                 self.session.graphStore.select((nil as DOMEntryID?))
                 self.session.rememberPendingSelection(nodeId: nil)

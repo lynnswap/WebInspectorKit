@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorTransport
 
@@ -20,13 +21,22 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        let detached = AsyncGate()
+        session.onStateTransitionForTesting = { state in
+            guard state == .detached else {
+                return
+            }
+            Task {
+                await detached.open()
+            }
+        }
         let webView = WKWebView(frame: .zero)
 
         try await session.attach(to: webView)
         #expect(session.state == .attached)
 
         backend.emitFatalFailure("backend died")
-        try await Task.sleep(for: .milliseconds(50))
+        await detached.wait()
 
         #expect(session.state == .detached)
 
@@ -170,6 +180,7 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         messageHandlers.handleRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
         )
+        messageHandlers.waitForPendingMessagesForTesting?()
     }
 
     func detach() {

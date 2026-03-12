@@ -2,6 +2,7 @@
 import Testing
 import AppKit
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 @testable import WebInspectorUI
@@ -12,6 +13,12 @@ struct WIDOMDetailViewControllerAppKitTests {
     func detailViewRefreshesWhenSelectionSnapshotChanges() async {
         let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
         let viewController = WIDOMDetailViewController(inspector: inspector)
+        let renderRefreshes = AsyncValueQueue<Int>()
+        viewController.onRenderRefreshForTesting = { count in
+            Task {
+                await renderRefreshes.push(count)
+            }
+        }
         let window = makeWindow(contentViewController: viewController)
         defer {
             window.orderOut(nil)
@@ -36,10 +43,8 @@ struct WIDOMDetailViewControllerAppKitTests {
             )
         )
 
-        let updated = await waitUntilAppKit {
-            viewController.testRenderRefreshCount > initialRefreshCount
-        }
-        #expect(updated)
+        let updatedRefreshCount = await renderRefreshes.next(where: { $0 > initialRefreshCount })
+        #expect(updatedRefreshCount > initialRefreshCount)
     }
 
     @Test
@@ -59,14 +64,21 @@ struct WIDOMDetailViewControllerAppKitTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
+        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
         inspector.attach(to: webView)
 
-        let initialLoad = await waitUntilAppKit {
-            inspector.session.graphStore.entry(forNodeID: 3) != nil && inspector.session.graphStore.entry(forNodeID: 6) == nil
-        }
-        #expect(initialLoad)
+        _ = await rootNodeIDs.next(where: { $0 != nil })
+        #expect(inspector.session.graphStore.entry(forNodeID: 3) != nil)
+        #expect(inspector.session.graphStore.entry(forNodeID: 6) == nil)
 
         let viewController = WIDOMDetailViewController(inspector: inspector)
+        let renderRefreshes = AsyncValueQueue<Int>()
+        viewController.onRenderRefreshForTesting = { count in
+            Task {
+                await renderRefreshes.push(count)
+            }
+        }
         let window = makeWindow(contentViewController: viewController)
         defer {
             window.orderOut(nil)
@@ -90,12 +102,12 @@ struct WIDOMDetailViewControllerAppKitTests {
             ])
         }
 
-        let recovered = await waitUntilAppKit(timeoutNanoseconds: 10_000_000_000) {
-            inspector.selectedEntry?.id.nodeID == 6
-                && inspector.selectedEntry?.selectorPath == "#target"
-                && viewController.testRenderRefreshCount > initialRefreshCount
-        }
-        #expect(recovered)
+        let recoveredSelection = await selectedSnapshots.next(where: {
+            $0?.nodeID == 6 && $0?.selectorPath == "#target"
+        })
+        let recoveredRefreshCount = await renderRefreshes.next(where: { $0 > initialRefreshCount })
+        #expect(recoveredSelection?.nodeID == 6)
+        #expect(recoveredRefreshCount > initialRefreshCount)
     }
 }
 
@@ -107,22 +119,38 @@ private func makeWindow(contentViewController: NSViewController) -> NSWindow {
     return window
 }
 
-@MainActor
-private func waitUntilAppKit(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
-    pollIntervalNanoseconds: UInt64 = 10_000_000,
-    _ condition: @escaping @MainActor () -> Bool
-) async -> Bool {
-    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-    while DispatchTime.now().uptimeNanoseconds < deadline {
-        if condition() {
-            return true
-        }
-        try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
-    }
-    return condition()
+private struct DOMSelectionSummary: Equatable, Sendable {
+    let nodeID: Int?
+    let selectorPath: String
 }
 
+@MainActor
+private func rootNodeIDRecorder(for graphStore: DOMGraphStore) -> ObservationRecorder<Int?> {
+    let recorder = ObservationRecorder<Int?>()
+    recorder.record { didChange in
+        graphStore.observe(\.rootID, options: [.removeDuplicates]) { rootID in
+            didChange(rootID?.nodeID)
+        }
+    }
+    return recorder
+}
+
+@MainActor
+private func selectedSnapshotRecorder(
+    for inspector: WIDOMInspectorStore
+) -> ObservationRecorder<DOMSelectionSummary?> {
+    let recorder = ObservationRecorder<DOMSelectionSummary?>()
+    recorder.record { didChange in
+        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
+            didChange(
+                inspector.selectedEntry.map {
+                    DOMSelectionSummary(nodeID: $0.id.nodeID, selectorPath: $0.selectorPath)
+                }
+            )
+        }
+    }
+    return recorder
+}
 
 @MainActor
 private final class AppKitDetailRecoveryPageDriver: DOMPageDriving {
@@ -375,6 +403,7 @@ private func makeDetailRecoveryResolvedTree() -> DOMGraphNodeDescriptor {
 import Testing
 import UIKit
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorDOM
 @testable import WebInspectorUI
@@ -385,6 +414,12 @@ struct WIDOMDetailViewControllerTests {
     func detailViewAppliesLatestSelectionSnapshotAfterRapidDOMBursts() async {
         let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
         let viewController = WIDOMDetailViewController(inspector: inspector)
+        let snapshotRevisions = AsyncValueQueue<UInt64>()
+        viewController.onSnapshotAppliedForTesting = { revision in
+            Task {
+                await snapshotRevisions.push(revision)
+            }
+        }
         let host = UINavigationController(rootViewController: viewController)
         let window = makeWindow(rootViewController: host)
         defer {
@@ -392,10 +427,9 @@ struct WIDOMDetailViewControllerTests {
             window.rootViewController = nil
         }
 
-        let initial = await waitUntil {
-            listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#hplogo > span"
+        while listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) != "#hplogo > span" {
+            _ = await snapshotRevisions.next()
         }
-        #expect(initial)
 
         let graphStore = inspector.session.graphStore
         for revision in 1...3 {
@@ -415,10 +449,9 @@ struct WIDOMDetailViewControllerTests {
             )
         }
 
-        let updated = await waitUntil {
-            listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#hplogo > span.state-3"
+        while listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) != "#hplogo > span.state-3" {
+            _ = await snapshotRevisions.next()
         }
-        #expect(updated)
         #expect(
             listCellText(
                 in: viewController.collectionView,
@@ -444,14 +477,20 @@ struct WIDOMDetailViewControllerTests {
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = WKWebView(frame: .zero)
+        let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
         inspector.attach(to: webView)
 
-        let initialLoad = await waitUntil {
-            inspector.session.graphStore.entry(forNodeID: 3) != nil && inspector.session.graphStore.entry(forNodeID: 6) == nil
-        }
-        #expect(initialLoad)
+        _ = await rootNodeIDs.next(where: { $0 != nil })
+        #expect(inspector.session.graphStore.entry(forNodeID: 3) != nil)
+        #expect(inspector.session.graphStore.entry(forNodeID: 6) == nil)
 
         let viewController = WIDOMDetailViewController(inspector: inspector)
+        let snapshotRevisions = AsyncValueQueue<UInt64>()
+        viewController.onSnapshotAppliedForTesting = { revision in
+            Task {
+                await snapshotRevisions.push(revision)
+            }
+        }
         let host = UINavigationController(rootViewController: viewController)
         let window = makeWindow(rootViewController: host)
         defer {
@@ -474,10 +513,9 @@ struct WIDOMDetailViewControllerTests {
             ])
         }
 
-        let recovered = await waitUntil {
-            listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) == "#target"
+        while listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) != "#target" {
+            _ = await snapshotRevisions.next()
         }
-        #expect(recovered)
         #expect(viewController.collectionView.isHidden == false)
         #expect(
             listCellText(
@@ -512,24 +550,6 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
     window.layoutIfNeeded()
     return window
 }
-
-@MainActor
-private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
-    pollIntervalNanoseconds: UInt64 = 10_000_000,
-    _ condition: @escaping @MainActor () -> Bool
-) async -> Bool {
-    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-    while DispatchTime.now().uptimeNanoseconds < deadline {
-        if condition() {
-            return true
-        }
-        try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
-    }
-    return condition()
-}
-
-
 
 @MainActor
 private final class UIKitDetailRecoveryPageDriver: DOMPageDriving {
@@ -777,3 +797,14 @@ private func makeDetailRecoveryResolvedTree() -> DOMGraphNodeDescriptor {
     )
 }
 #endif
+
+@MainActor
+private func sharedRootNodeIDRecorder(for graphStore: DOMGraphStore) -> ObservationRecorder<Int?> {
+    let recorder = ObservationRecorder<Int?>()
+    recorder.record { didChange in
+        graphStore.observe(\.rootID, options: [.removeDuplicates]) { rootID in
+            didChange(rootID?.nodeID)
+        }
+    }
+    return recorder
+}

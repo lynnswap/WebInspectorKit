@@ -21,6 +21,10 @@ public final class WIInspectorViewController: NSViewController, NSToolbarDelegat
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
     private var toolbarObservationHandles: Set<ObservationHandle> = []
+    private var toolbarStateRevision: UInt64 = 0
+    private var contentRenderRevision: UInt64 = 0
+    package var onToolbarStateUpdatedForTesting: (@MainActor (UInt64) -> Void)?
+    package var onContentRenderedForTesting: (@MainActor (UInt64) -> Void)?
     // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
@@ -174,6 +178,18 @@ public final class WIInspectorViewController: NSViewController, NSToolbarDelegat
         networkQueryModel
     }
 
+    var toolbarStateRevisionForTesting: UInt64 {
+        toolbarStateRevision
+    }
+
+    var contentRenderRevisionForTesting: UInt64 {
+        contentRenderRevision
+    }
+
+    func forceToolbarRefreshForTesting() {
+        updateToolbarState()
+    }
+
     private func bindSessionTabs() {
         sessionObservationHandles.removeAll()
         if let panelConfigurationObserverID {
@@ -219,11 +235,16 @@ public final class WIInspectorViewController: NSViewController, NSToolbarDelegat
     }
 
     private func render() {
+        contentRenderRevision &+= 1
+        if contentRenderRevision == 0 {
+            contentRenderRevision = 1
+        }
         normalizeModelSelectionForHiddenElementIfNeeded()
         let displayTabs = displayTabsForCurrentState()
         pruneContentControllerCache(for: displayTabs)
         renderSelectedContent(displayTabs: displayTabs)
         updateToolbarState()
+        onContentRenderedForTesting?(contentRenderRevision)
     }
 
     private func renderSelectedContent(displayTabs: [WIInspectorTab]) {
@@ -532,6 +553,11 @@ public final class WIInspectorViewController: NSViewController, NSToolbarDelegat
                 searchField.stringValue = currentSearchText
             }
         }
+        toolbarStateRevision &+= 1
+        if toolbarStateRevision == 0 {
+            toolbarStateRevision = 1
+        }
+        onToolbarStateUpdatedForTesting?(toolbarStateRevision)
     }
 
     private func refreshTabPickerState() {

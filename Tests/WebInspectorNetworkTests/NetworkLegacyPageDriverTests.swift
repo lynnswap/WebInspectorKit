@@ -14,7 +14,7 @@ struct NetworkLegacyPageDriverTests {
         driver.attachPageWebView(webView)
         await driver.waitForPendingConfigurationForTesting()
         await loadHTML("<html><body><p>legacy driver</p></body></html>", in: webView)
-        await waitForLegacyNetworkBootstrap(in: webView)
+        #expect(await waitForLegacyNetworkBootstrap(in: webView))
 
         driver.testHandleNetworkEventsPayload([
             "authToken": driver.testAuthToken(),
@@ -45,16 +45,7 @@ struct NetworkLegacyPageDriverTests {
                 ],
             ],
         ])
-
-        var completed = false
-        for _ in 0..<512 {
-            if driver.store.entry(forRequestID: 101, sessionID: "legacy-session")?.phase == .completed {
-                completed = true
-                break
-            }
-            await Task.yield()
-        }
-        #expect(completed)
+        #expect(driver.store.entry(forRequestID: 101, sessionID: "legacy-session")?.phase == .completed)
     }
 }
 
@@ -85,28 +76,23 @@ private func loadHTML(_ html: String, in webView: WKWebView) async {
 }
 
 @MainActor
-private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async {
-    for _ in 0..<200 {
-        let raw = try? await webView.evaluateJavaScript(
-            """
-            (() => ({
-                tokenReady: Boolean(window.__wiNetworkControlToken),
-                handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
-                agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
-            }))();
-            """,
-            in: nil,
-            contentWorld: .page
-        )
-        let payload = raw as? NSDictionary
-        let tokenReady = (payload?["tokenReady"] as? Bool) ?? ((payload?["tokenReady"] as? NSNumber)?.boolValue ?? false)
-        let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
-        let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
-        if tokenReady && handlerReady && agentReady {
-            return
-        }
-        try? await Task.sleep(nanoseconds: 10_000_000)
-    }
+private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async -> Bool {
+    let raw = try? await webView.evaluateJavaScript(
+        """
+        (() => ({
+            bootstrapReady: typeof window.__wiBootstrapNetworkAuthToken === "function",
+            handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
+            agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
+        }))();
+        """,
+        in: nil,
+        contentWorld: .page
+    )
+    let payload = raw as? NSDictionary
+    let bootstrapReady = (payload?["bootstrapReady"] as? Bool) ?? ((payload?["bootstrapReady"] as? NSNumber)?.boolValue ?? false)
+    let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
+    let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
+    return bootstrapReady && handlerReady && agentReady
 }
 
 @MainActor

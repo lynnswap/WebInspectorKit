@@ -33,6 +33,8 @@ import UIKit
     private let showsNavigationControls: Bool
     @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
+    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
+    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
     @ObservationIgnored private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -164,6 +166,7 @@ import UIKit
         Task {
             let snapshot = self.makeSnapshot()
             await self.dataSource.apply(snapshot, animatingDifferences: false)
+            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -171,6 +174,7 @@ import UIKit
         Task {
             let snapshot = self.makeSnapshot()
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
+            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -195,6 +199,14 @@ import UIKit
 
     private func requestSnapshotUpdate() {
         applySnapshotUsingReloadData()
+    }
+
+    private func recordSnapshotApplyForTesting() {
+        snapshotApplyRevisionForTesting &+= 1
+        if snapshotApplyRevisionForTesting == 0 {
+            snapshotApplyRevisionForTesting = 1
+        }
+        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
     }
 
     private func makeRenderSections() -> [RenderSection] {

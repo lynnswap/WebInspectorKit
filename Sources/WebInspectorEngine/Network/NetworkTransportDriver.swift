@@ -201,6 +201,10 @@ final class NetworkTransportDriver: NetworkPageDriving, InspectorTransportCapabi
         resetStoreState()
     }
 
+    package func waitForAttachForTesting() async {
+        await attachTask?.value
+    }
+
     package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         _ = handle
 

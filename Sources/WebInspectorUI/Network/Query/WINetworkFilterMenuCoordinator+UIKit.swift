@@ -7,6 +7,8 @@ import ObservationBridge
 final class WINetworkFilterMenuCoordinator {
     private unowned let queryModel: WINetworkQueryState
     private var observationHandles: Set<ObservationHandle> = []
+    package private(set) var menuStateRevisionForTesting: UInt64 = 0
+    package var onMenuStateUpdatedForTesting: (@MainActor (UInt64) -> Void)?
 
     private lazy var barButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -74,6 +76,11 @@ final class WINetworkFilterMenuCoordinator {
     private func applyMenuStateAfterMutation(effectiveFilters: Set<NetworkResourceFilter>) {
         barButtonItem.isSelected = !effectiveFilters.isEmpty
         barButtonItem.menu = makeMenu()
+        menuStateRevisionForTesting &+= 1
+        if menuStateRevisionForTesting == 0 {
+            menuStateRevisionForTesting = 1
+        }
+        onMenuStateUpdatedForTesting?(menuStateRevisionForTesting)
     }
 }
 #endif

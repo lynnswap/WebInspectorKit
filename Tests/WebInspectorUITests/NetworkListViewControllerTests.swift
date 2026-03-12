@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import UIKit
+import WebInspectorTestSupport
 @testable import WebInspectorCore
 @_spi(PreviewSupport) @testable import WebInspectorNetwork
 @testable import WebInspectorUI
@@ -16,6 +17,12 @@ struct NetworkListViewControllerTests {
             inspector: inspector,
             queryModel: queryModel
         )
+        let snapshotRevisions = AsyncValueQueue<UInt64>()
+        viewController.onSnapshotAppliedForTesting = { revision in
+            Task {
+                await snapshotRevisions.push(revision)
+            }
+        }
         let host = UINavigationController(rootViewController: viewController)
         let window = makeWindow(rootViewController: host)
         defer {
@@ -23,10 +30,8 @@ struct NetworkListViewControllerTests {
             window.rootViewController = nil
         }
 
-        let visible = await waitUntil {
-            viewController.collectionView.window != nil
-        }
-        #expect(visible)
+        _ = await snapshotRevisions.next()
+        #expect(viewController.collectionView.window != nil)
 
         for requestID in 1001...1003 {
             inspector.wiApplyPreviewBatch(
@@ -37,12 +42,12 @@ struct NetworkListViewControllerTests {
             )
         }
 
-        let updated = await waitUntil {
-            viewController.collectionView.numberOfSections == 1
-                && viewController.collectionView.numberOfItems(inSection: 0) == 3
+        while viewController.collectionView.numberOfItems(inSection: 0) != 3 {
+            _ = await snapshotRevisions.next()
         }
-        #expect(updated)
         #expect(queryModel.displayEntries.map(\.requestID) == [1003, 1002, 1001])
+        #expect(viewController.collectionView.numberOfSections == 1)
+        #expect(viewController.collectionView.numberOfItems(inSection: 0) == 3)
         #expect(
             listCellText(
                 in: viewController.collectionView,
@@ -56,20 +61,22 @@ struct NetworkListViewControllerTests {
         let inspector = WINetworkInspectorStore(session: NetworkSession())
         let queryModel = WINetworkQueryState(inspector: inspector)
         let coordinator = WINetworkFilterMenuCoordinator(queryModel: queryModel)
+        let menuStateRevisions = AsyncValueQueue<UInt64>()
+        coordinator.onMenuStateUpdatedForTesting = { revision in
+            Task {
+                await menuStateRevisions.push(revision)
+            }
+        }
 
         #expect(coordinator.item.isSelected == false)
 
         queryModel.setFilter(.image, enabled: true)
-        let selected = await waitUntil {
-            coordinator.item.isSelected
-        }
-        #expect(selected)
+        _ = await menuStateRevisions.next()
+        #expect(coordinator.item.isSelected)
 
         queryModel.clearFilters()
-        let cleared = await waitUntil {
-            coordinator.item.isSelected == false
-        }
-        #expect(cleared)
+        _ = await menuStateRevisions.next()
+        #expect(coordinator.item.isSelected == false)
     }
 
     private func makeResourceTimingBatchPayload(
@@ -133,19 +140,4 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
     return window
 }
 
-@MainActor
-private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
-    pollIntervalNanoseconds: UInt64 = 10_000_000,
-    _ condition: @escaping @MainActor () -> Bool
-) async -> Bool {
-    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-    while DispatchTime.now().uptimeNanoseconds < deadline {
-        if condition() {
-            return true
-        }
-        try? await Task.sleep(nanoseconds: pollIntervalNanoseconds)
-    }
-    return condition()
-}
 #endif

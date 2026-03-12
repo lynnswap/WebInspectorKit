@@ -18,6 +18,7 @@ public final class WIInspectorController {
     public let dom: WIDOMInspectorStore
     public let network: WINetworkInspectorStore
 
+    private let rebindClock: any Clock<Duration>
     private weak var connectedPageWebView: WKWebView?
     private var hasConfiguredPanelsFromUI = false
     @ObservationIgnored private var pageLoadingObservation: AnyCancellable?
@@ -29,16 +30,19 @@ public final class WIInspectorController {
     public convenience init(configuration: WIInspectorConfiguration = .init()) {
         self.init(
             domSession: DOMSession(configuration: configuration.dom),
-            networkSession: NetworkSession(configuration: configuration.network)
+            networkSession: NetworkSession(configuration: configuration.network),
+            rebindClock: ContinuousClock()
         )
     }
 
     init(
         domSession: DOMSession,
-        networkSession: NetworkSession
+        networkSession: NetworkSession,
+        rebindClock: any Clock<Duration> = ContinuousClock()
     ) {
         self.dom = WIDOMInspectorStore(session: domSession)
         self.network = WINetworkInspectorStore(session: networkSession)
+        self.rebindClock = rebindClock
         self.dom.setRecoverableErrorHandler { [weak self] message in
             self?.lastRecoverableError = message
         }
@@ -272,7 +276,7 @@ private extension WIInspectorController {
 
             if !resumeDOMAfterLoad {
                 while webView.isLoading {
-                    try? await Task.sleep(nanoseconds: 20_000_000)
+                    try? await self.rebindClock.sleep(for: .milliseconds(20))
                     guard !Task.isCancelled else {
                         return
                     }

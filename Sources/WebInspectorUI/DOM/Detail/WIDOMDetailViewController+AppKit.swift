@@ -15,6 +15,7 @@ public final class WIDOMDetailViewController: NSViewController {
     private weak var observedSelectedEntry: DOMEntry?
     private weak var observedSelectedStyle: DOMStyleState?
     private var renderRefreshCount = 0
+    package var onRenderRefreshForTesting: (@MainActor (Int) -> Void)?
 
     public init(inspector: WIDOMInspectorStore) {
         self.inspector = inspector
@@ -81,6 +82,7 @@ public final class WIDOMDetailViewController: NSViewController {
         renderRefreshCount += 1
         hostingController?.rootView = ElementDetailsMacRootView(inspector: inspector)
         hostingController?.view.layoutSubtreeIfNeeded()
+        onRenderRefreshForTesting?(renderRefreshCount)
     }
 
     private func reconnectSelectedObservationIfNeeded() {

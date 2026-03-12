@@ -48,6 +48,7 @@ final class DOMLegacyPageDriver: NSObject, DOMPageDriving, PageAgent {
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
+    private let retryClock: any Clock<Duration>
     private let handleCache = WIJSHandleCache(capacity: 128)
     private let bundleNormalizer = DOMLegacyBundleNormalizer()
 
@@ -63,12 +64,14 @@ final class DOMLegacyPageDriver: NSObject, DOMPageDriving, PageAgent {
     init(
         configuration: DOMConfiguration,
         graphStore: DOMGraphStore,
-        controllerStateRegistry: WIUserContentControllerStateRegistry = .shared
+        controllerStateRegistry: WIUserContentControllerStateRegistry = .shared,
+        retryClock: any Clock<Duration> = ContinuousClock()
     ) {
         self.configuration = configuration
         self.graphStore = graphStore
         runtime = .shared
         self.controllerStateRegistry = controllerStateRegistry
+        self.retryClock = retryClock
         bridgeMode = runtime.startupMode()
         bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
@@ -525,7 +528,7 @@ private extension DOMLegacyPageDriver {
                 return true
             }
             if attempt < autoSnapshotConfigureRetryCount - 1 {
-                try? await Task.sleep(nanoseconds: autoSnapshotConfigureRetryDelayNanoseconds)
+                try? await retryClock.sleep(for: .nanoseconds(Int64(autoSnapshotConfigureRetryDelayNanoseconds)))
             }
         }
         return false
