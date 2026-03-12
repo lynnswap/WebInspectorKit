@@ -49,6 +49,7 @@ actor WITransportMessageRouter {
     private var pageOuterToInnerIdentifiers: [Int: Int] = [:]
 
     private var subscriptions: [UUID: EventSubscription] = [:]
+    private var pageTargetChangeSubscriptions: [UUID: AsyncStream<WITransportPageTargetChange>.Continuation] = [:]
     private var backlogs: [WITransportTargetScope: [WITransportEventEnvelope]] = [:]
     private var currentPageTargetIdentifier: String?
     private var committedPageTargetIdentifier: String?
@@ -102,6 +103,10 @@ actor WITransportMessageRouter {
             subscription.continuation.finish()
         }
         subscriptions.removeAll()
+        for continuation in pageTargetChangeSubscriptions.values {
+            continuation.finish()
+        }
+        pageTargetChangeSubscriptions.removeAll()
         backlogs.removeAll()
 
         log("router disconnected")
@@ -145,6 +150,19 @@ actor WITransportMessageRouter {
             continuation.onTermination = { _ in
                 Task {
                     await self.removeSubscription(identifier)
+                }
+            }
+        }
+    }
+
+    func pageTargetChanges(bufferingLimit: Int?) -> AsyncStream<WITransportPageTargetChange> {
+        let limit = max(1, bufferingLimit ?? configuration.eventBufferLimit)
+        return AsyncStream(bufferingPolicy: .bufferingNewest(limit)) { continuation in
+            let identifier = UUID()
+            pageTargetChangeSubscriptions[identifier] = continuation
+            continuation.onTermination = { _ in
+                Task {
+                    await self.removePageTargetChangeSubscription(identifier)
                 }
             }
         }
@@ -477,6 +495,18 @@ private extension WITransportMessageRouter {
         } else {
             log("cleared page target reason=\(reason)")
         }
+
+        let change = WITransportPageTargetChange(
+            targetIdentifier: selectedTarget?.identifier,
+            reason: reason
+        )
+        for continuation in pageTargetChangeSubscriptions.values {
+            continuation.yield(change)
+        }
+    }
+
+    func removePageTargetChangeSubscription(_ identifier: UUID) {
+        pageTargetChangeSubscriptions.removeValue(forKey: identifier)
     }
 
     private func preferredTarget(ofType type: String) -> KnownTarget? {

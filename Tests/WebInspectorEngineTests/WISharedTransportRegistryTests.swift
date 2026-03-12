@@ -309,6 +309,35 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func networkIngressReenablesAfterCommittedProvisionalTarget() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let webView = WKWebView(frame: .zero)
+
+        let lease = registry.acquireLease(for: webView)
+        let consumerID = UUID()
+        lease.addNetworkConsumer(consumerID) { _ in }
+
+        try await lease.ensureNetworkEventIngress()
+        #expect(backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A"])
+
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-A",
+                "newTargetId": "page-B",
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        lease.removeNetworkConsumer(consumerID)
+        lease.release()
+    }
+
+    @Test
     func domIngressIncludesChildNodeCountUpdatedEvents() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
@@ -703,6 +732,11 @@ private extension WISharedTransportRegistryTests {
 
 @MainActor
 private final class FakeRegistryBackend: WITransportPlatformBackend {
+    struct SentPageTarget: Equatable {
+        let method: String
+        let targetIdentifier: String
+    }
+
     var supportSnapshot = WITransportSupportSnapshot(
         availability: .supported,
         backendKind: .macOSNativeInspector,
@@ -713,6 +747,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     private(set) var attachCallCount = 0
     private(set) var detachCallCount = 0
     private(set) var sentPageMethods: [String] = []
+    private(set) var sentPageTargets: [SentPageTarget] = []
     private(set) var sentPagePayloads: [[String: Any]] = []
     private(set) var documentDepthRequests: [Int] = []
     private var messageHandlers: WITransportBackendMessageHandlers?
@@ -750,6 +785,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         sentPagePayloads.append(payload)
         if let method = payload["method"] as? String {
             sentPageMethods.append(method)
+            sentPageTargets.append(SentPageTarget(method: method, targetIdentifier: targetIdentifier))
             if method == "DOM.getDocument" {
                 let params = payload["params"] as? [String: Any]
                 if let requestedDepth = params?["depth"] as? Int {
@@ -759,7 +795,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             if let identifier = payload["id"] as? Int, let errorMessage = pageMethodErrors[method] {
                 messageHandlers?.handlePageMessage(
                     #"{"id":\#(identifier),"error":{"message":"\#(errorMessage)"}}"#,
-                    "page-A"
+                    targetIdentifier
                 )
                 return
             }
@@ -770,7 +806,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
                let resultString = String(data: data, encoding: .utf8) {
                 messageHandlers?.handlePageMessage(
                     #"{"id":\#(identifier),"result":\#(resultString)}"#,
-                    "page-A"
+                    targetIdentifier
                 )
                 return
             }
@@ -778,10 +814,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         if let identifier = payload["id"] as? Int {
             messageHandlers?.handlePageMessage(
                 #"{"id":\#(identifier),"result":{}}"#,
-                "page-A"
+                targetIdentifier
             )
         }
-        _ = targetIdentifier
         _ = outerIdentifier
     }
 
@@ -803,6 +838,19 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         messageHandlers?.handlePageMessage(
             #"{"method":"\#(method)","params":\#(paramsString)}"#,
             "page-A"
+        )
+    }
+
+    func emitRootEvent(method: String, params: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(params),
+              let data = try? JSONSerialization.data(withJSONObject: params),
+              let paramsString = String(data: data, encoding: .utf8) else {
+            Issue.record("Failed to encode fake root event params for \(method)")
+            return
+        }
+
+        messageHandlers?.handleRootMessage(
+            #"{"method":"\#(method)","params":\#(paramsString)}"#
         )
     }
 

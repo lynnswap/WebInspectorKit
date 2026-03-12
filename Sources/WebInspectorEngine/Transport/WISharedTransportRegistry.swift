@@ -119,6 +119,8 @@ final class WISharedTransportRegistry {
         private var domConsumers: [UUID: @MainActor (WITransportEventEnvelope) -> Void] = [:]
         private var networkEventTask: Task<Void, Never>?
         private var domEventTask: Task<Void, Never>?
+        private var pageTargetLifecycleTask: Task<Void, Never>?
+        private var pageTargetLifecycleSubscriptionPending = false
         private var networkIngressTask: Task<Void, Error>?
         private var domIngressTask: Task<Void, Error>?
         private var networkIngressReady = false
@@ -151,13 +153,15 @@ final class WISharedTransportRegistry {
 
         func ensureAttached() async throws {
             if transportSession.state == .attached {
-                startEventTasksIfNeeded()
+                await ensurePageTargetLifecycleTaskIfNeeded()
+                startDomainEventTasksIfNeeded()
                 return
             }
 
             if let attachmentTask {
                 try await attachmentTask.value
-                startEventTasksIfNeeded()
+                await ensurePageTargetLifecycleTaskIfNeeded()
+                startDomainEventTasksIfNeeded()
                 return
             }
 
@@ -178,7 +182,8 @@ final class WISharedTransportRegistry {
                 throw error
             }
             attachmentTask = nil
-            startEventTasksIfNeeded()
+            await ensurePageTargetLifecycleTaskIfNeeded()
+            startDomainEventTasksIfNeeded()
         }
 
         func sendPage<C: WITransportPageCommand>(_ command: sending C) async throws -> C.Response {
@@ -240,12 +245,14 @@ final class WISharedTransportRegistry {
             networkEventTask = nil
             domEventTask?.cancel()
             domEventTask = nil
+            pageTargetLifecycleTask?.cancel()
+            pageTargetLifecycleTask = nil
             networkConsumers.removeAll()
             domConsumers.removeAll()
             transportSession.detach()
         }
 
-        private func startEventTasksIfNeeded() {
+        private func startDomainEventTasksIfNeeded() {
             Task { @MainActor [weak self] in
                 guard let self else {
                     return
@@ -257,6 +264,33 @@ final class WISharedTransportRegistry {
                     return
                 }
                 try? await self.ensureDOMEventIngress()
+            }
+        }
+
+        private func ensurePageTargetLifecycleTaskIfNeeded() async {
+            guard pageTargetLifecycleTask == nil, !pageTargetLifecycleSubscriptionPending else {
+                return
+            }
+            pageTargetLifecycleSubscriptionPending = true
+            defer {
+                pageTargetLifecycleSubscriptionPending = false
+            }
+
+            let pageTargetChangeStream = await self.transportSession.pageTargetChangeStream()
+
+            pageTargetLifecycleTask = Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                for await event in pageTargetChangeStream {
+                    if Task.isCancelled {
+                        break
+                    }
+                    await self.handlePageTargetLifecycleEvent(event)
+                }
+
+                self.pageTargetLifecycleTask = nil
             }
         }
 
@@ -422,6 +456,33 @@ final class WISharedTransportRegistry {
             }
         }
 
+        private func handlePageTargetLifecycleEvent(_ event: WITransportPageTargetChange) async {
+            _ = event
+            if !networkConsumers.isEmpty {
+                do {
+                    _ = try await self.transportSession.page.send(WITransportCommands.Network.Enable())
+                } catch {
+                    guard shouldIgnorePageTargetLifecycleError(error) else {
+                        return
+                    }
+                }
+            }
+
+            if !domConsumers.isEmpty {
+                do {
+                    _ = try await self.transportSession.page.send(WITransportCommands.DOM.Enable())
+                } catch let error as WITransportError {
+                    guard shouldIgnoreMissingDOMEnable(error) || shouldIgnorePageTargetLifecycleError(error) else {
+                        return
+                    }
+                } catch {
+                    guard shouldIgnorePageTargetLifecycleError(error) else {
+                        return
+                    }
+                }
+            }
+        }
+
         private func publish(
             _ event: WITransportEventEnvelope,
             to consumers: [UUID: @MainActor (WITransportEventEnvelope) -> Void]
@@ -440,6 +501,23 @@ final class WISharedTransportRegistry {
             }
             return message.contains("'DOM.enable' was not found")
                 || message.contains("DOM.enable was not found")
+        }
+
+        private func shouldIgnorePageTargetLifecycleError(_ error: Error) -> Bool {
+            if error is CancellationError {
+                return true
+            }
+
+            guard let transportError = error as? WITransportError else {
+                return false
+            }
+
+            switch transportError {
+            case .notAttached, .pageTargetUnavailable, .transportClosed:
+                return true
+            default:
+                return false
+            }
         }
 
     }

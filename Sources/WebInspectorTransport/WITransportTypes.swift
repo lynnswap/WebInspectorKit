@@ -149,3 +149,8 @@ public struct WITransportEventEnvelope: Sendable {
         try decoder.decode(T.self, from: paramsData)
     }
 }
+
+package struct WITransportPageTargetChange: Sendable {
+    let targetIdentifier: String?
+    let reason: String
+}
