@@ -4,10 +4,10 @@ import AppKit
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WIDOMDetailViewControllerAppKitTests {
     @Test
     func detailViewRefreshesWhenSelectionSnapshotChanges() async {
@@ -56,12 +56,13 @@ struct WIDOMDetailViewControllerAppKitTests {
                 .init(root: makeDetailRecoveryResolvedTree())
             ]
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let frontendRuntime = WIDOMFrontendRuntime(session: session)
+        let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
         let webView = WKWebView(frame: .zero)
         let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
@@ -87,18 +88,16 @@ struct WIDOMDetailViewControllerAppKitTests {
         let initialRefreshCount = viewController.testRenderRefreshCount
         #expect(inspector.selectedEntry == nil)
 
-        inspector.withFrontendStore { store in
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 6,
-                "preview": "<div id=\"target\">",
-                "attributes": [
-                    ["name": "id", "value": "target"],
-                ],
-                "path": ["html", "body", "main", "div"],
-                "selectorPath": "#target",
-                "styleRevision": 1
-            ])
-        }
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 6,
+            "preview": "<div id=\"target\">",
+            "attributes": [
+                ["name": "id", "value": "target"],
+            ],
+            "path": ["html", "body", "main", "div"],
+            "selectorPath": "#target",
+            "styleRevision": 1
+        ])
 
         let recoveredSelection = await selectedSnapshots.next(where: {
             $0?.nodeID == 6 && $0?.selectorPath == "#target"
@@ -158,9 +157,14 @@ private func selectedSnapshotRecorder(
 }
 
 @MainActor
-private final class AppKitDetailRecoveryPageDriver: DOMPageDriving {
-    weak var eventSink: (any DOMProtocolEventSink)?
+private final class AppKitDetailRecoveryPageDriver: WIDOMBackend {
+    weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    let support = WIInspectorBackendSupport(
+        availability: .unsupported,
+        backendKind: .legacy,
+        capabilities: [.domDomain]
+    )
 
     private let graphStore: DOMGraphStore
     private let reloadSnapshots: [DOMGraphSnapshot]
@@ -410,10 +414,11 @@ import UIKit
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
+@testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WIDOMDetailViewControllerTests {
     @Test
     func detailViewAppliesLatestSelectionSnapshotAfterRapidDOMBursts() async {
@@ -475,12 +480,13 @@ struct WIDOMDetailViewControllerTests {
                 .init(root: makeDetailRecoveryResolvedTree())
             ]
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let frontendRuntime = WIDOMFrontendRuntime(session: session)
+        let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
         let webView = WKWebView(frame: .zero)
         let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
         inspector.attach(to: webView)
@@ -505,18 +511,16 @@ struct WIDOMDetailViewControllerTests {
 
         #expect(viewController.collectionView.isHidden == true)
 
-        inspector.withFrontendStore { store in
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 6,
-                "preview": "<div id=\"target\">",
-                "attributes": [
-                    ["name": "id", "value": "target"],
-                ],
-                "path": ["html", "body", "main", "div"],
-                "selectorPath": "#target",
-                "styleRevision": 1
-            ])
-        }
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 6,
+            "preview": "<div id=\"target\">",
+            "attributes": [
+                ["name": "id", "value": "target"],
+            ],
+            "path": ["html", "body", "main", "div"],
+            "selectorPath": "#target",
+            "styleRevision": 1
+        ])
 
         while listCellText(in: viewController.collectionView, at: IndexPath(item: 0, section: 1)) != "#target" {
             _ = await snapshotRevisions.next()
@@ -557,9 +561,14 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
 }
 
 @MainActor
-private final class UIKitDetailRecoveryPageDriver: DOMPageDriving {
-    weak var eventSink: (any DOMProtocolEventSink)?
+private final class UIKitDetailRecoveryPageDriver: WIDOMBackend {
+    weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    let support = WIInspectorBackendSupport(
+        availability: .unsupported,
+        backendKind: .legacy,
+        capabilities: [.domDomain]
+    )
 
     private let graphStore: DOMGraphStore
     private let reloadSnapshots: [DOMGraphSnapshot]

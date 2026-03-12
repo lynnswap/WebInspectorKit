@@ -2,18 +2,18 @@ import Foundation
 import Testing
 @testable import WebInspectorUI
 @testable import WebInspectorCore
-@testable import WebInspectorNetwork
+@testable import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
 
 @MainActor
 
-
+@Suite(.serialized, .webKitIsolated)
 struct NetworkInspectorAppKitTests {
     @Test
     func networkTabDoesNotAutoSelectEntryWhenEntriesExist() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -38,7 +38,7 @@ struct NetworkInspectorAppKitTests {
 
     @Test
     func networkTabUpdatesDetailWhenSelectionChanges() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -68,7 +68,7 @@ struct NetworkInspectorAppKitTests {
 
     @Test
     func networkTabLifecycleCanRepeatWithoutLeaking() async throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,

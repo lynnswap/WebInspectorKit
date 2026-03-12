@@ -16,7 +16,7 @@ This release includes **breaking API changes** around product exposure, typed pa
 ## New Architecture
 
 - `WebInspectorKit` is the only supported public entry point.
-- Internal targets are split into `WebInspectorCore`, `WebInspectorDOM`, `WebInspectorNetwork`, `WebInspectorShell`, `WebInspectorUI`, `WebInspectorSPI`, `WebInspectorTransport`, and `WebInspectorScripts`.
+- Internal targets are split into `WebInspectorCore`, `WebInspectorUI`, `WebInspectorTransport`, `WebInspectorResources`, and a thin `WebInspectorKit` umbrella.
 - `WIInspectorController` owns lifecycle, page binding, selected panel, and DOM/Network activation policy.
 - `WIDOMInspectorStore` owns DOM inspector state.
 - `WINetworkInspectorStore` owns network inspector state.

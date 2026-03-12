@@ -1,10 +1,12 @@
 import Foundation
 import ObservationBridge
 import WebInspectorCore
-import WebInspectorNetwork
+import WebInspectorResources
+import WebInspectorCore
 
 #if canImport(UIKit)
 import UIKit
+import WebInspectorResources
 
 @MainActor
 @Observable public final class WINetworkDetailViewController: UIViewController, UICollectionViewDelegate {

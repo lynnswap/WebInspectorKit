@@ -1,7 +1,9 @@
 import WebInspectorCore
+import WebInspectorResources
 
 #if canImport(UIKit)
 import UIKit
+import WebInspectorResources
 
 @MainActor
 enum DOMSecondaryMenuBuilder {

@@ -1,8 +1,10 @@
 import WebInspectorCore
-import WebInspectorDOM
+import WebInspectorResources
+import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
+import WebInspectorResources
 import ObservationBridge
 import SwiftUI
 
@@ -154,15 +156,15 @@ private struct ElementDetailsMacRootView: View {
                     }
                 }
 
-                Section(LocalizedStringResource("dom.element.section.element", bundle: .module)) {
+                Section(LocalizedStringResource("dom.element.section.element", bundle: .webInspectorResources)) {
                     previewRow
                 }
 
-                Section(LocalizedStringResource("dom.element.section.selector", bundle: .module)) {
+                Section(LocalizedStringResource("dom.element.section.selector", bundle: .webInspectorResources)) {
                     selectorRow
                 }
 
-                Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
+                Section(LocalizedStringResource("dom.element.section.styles", bundle: .webInspectorResources)) {
                     stylesSection
                 }
 
@@ -170,7 +172,7 @@ private struct ElementDetailsMacRootView: View {
                     computedSection
                 }
 
-                Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
+                Section(LocalizedStringResource("dom.element.section.attributes", bundle: .webInspectorResources)) {
                     attributesSection
                 }
             }

@@ -4,14 +4,14 @@ import Testing
 import UIKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@_spi(PreviewSupport) @testable import WebInspectorNetwork
+@_spi(PreviewSupport) @testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
 struct NetworkListViewControllerTests {
     @Test
     func listViewAppliesLatestSnapshotAfterRapidNetworkBursts() async {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         let viewController = WINetworkListViewController(
             inspector: inspector,
@@ -58,7 +58,7 @@ struct NetworkListViewControllerTests {
 
     @Test
     func filterMenuReflectsEffectiveFiltersAfterObservationUpdate() async {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         let coordinator = WINetworkFilterMenuCoordinator(queryModel: queryModel)
         let menuStateRevisions = AsyncValueQueue<UInt64>()

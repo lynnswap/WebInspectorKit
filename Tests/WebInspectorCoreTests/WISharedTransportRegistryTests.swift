@@ -3,12 +3,12 @@ import Testing
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
-@testable import WebInspectorNetwork
+@testable import WebInspectorCore
+@testable import WebInspectorCore
 @testable import WebInspectorTransport
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .webKitIsolated)
 struct WISharedTransportRegistryTests {
     @Test
     func sameWebViewSharesSingleTransportAttachmentAcrossLeases() async throws {
@@ -128,11 +128,9 @@ struct WISharedTransportRegistryTests {
         )
         let registry = makeRegistry(using: backend)
         let driver = NetworkTransportDriver(registry: registry)
-        let session = NetworkSession(
+        let session = WINetworkRuntime(
             configuration: .init(),
-            pageAgent: driver,
-            bodyFetcher: driver,
-            transportCapabilityProvider: driver
+            backend: driver
         )
         let webView = makeIsolatedTestWebView()
 
@@ -142,7 +140,7 @@ struct WISharedTransportRegistryTests {
             backend.sentPageMethods.contains("Network.enable")
         })
 
-        let body = await session.fetchBody(ref: "request-1", handle: nil, role: .request)
+        let body = await session.fetchBody(ref: "request-1", handle: nil as AnyObject?, role: .request)
 
         #expect(body?.role == .request)
         #expect(body?.full == "name=value")
@@ -869,7 +867,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     private(set) var sentPagePayloads: [[String: Any]] = []
     private(set) var documentDepthRequests: [Int] = []
     private var messageHandlers: WITransportBackendMessageHandlers?
-    private var holdsWebKitIsolation = false
+    private var ownsWebKitTestIsolation = false
     private let pageMethodErrors: [String: String]
     private let pageResultProvider: ((String, [String: Any]) -> [String: Any]?)?
 
@@ -882,10 +880,10 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     }
 
     deinit {
-        guard holdsWebKitIsolation else {
+        guard ownsWebKitTestIsolation else {
             return
         }
-        holdsWebKitIsolation = false
+        ownsWebKitTestIsolation = false
         Task { @MainActor in
             await releaseWebKitTestIsolation()
         }
@@ -893,8 +891,12 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
 
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
         _ = webView
-        await acquireWebKitTestIsolation()
-        holdsWebKitIsolation = true
+        if isWebKitTestIsolationActive {
+            ownsWebKitTestIsolation = false
+        } else {
+            await acquireWebKitTestIsolation()
+            ownsWebKitTestIsolation = true
+        }
         attachCallCount += 1
         self.messageHandlers = messageHandlers
         messageHandlers.handleRootMessage(
@@ -909,8 +911,8 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     func detach() {
         detachCallCount += 1
         messageHandlers = nil
-        if holdsWebKitIsolation {
-            holdsWebKitIsolation = false
+        if ownsWebKitTestIsolation {
+            ownsWebKitTestIsolation = false
             Task { @MainActor in
                 await releaseWebKitTestIsolation()
             }

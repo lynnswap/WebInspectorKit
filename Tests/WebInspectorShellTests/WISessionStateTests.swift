@@ -1,15 +1,17 @@
 import Testing
 import WebKit
 import ObservationBridge
+import WebInspectorKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
-@testable import WebInspectorNetwork
-@testable import WebInspectorShell
+@testable import WebInspectorCore
+@testable import WebInspectorCore
+@testable import WebInspectorCore
 @testable import WebInspectorUI
 @testable import WebInspectorTransport
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WISessionStateTests {
     @Test
     func tabUserInfoKeepsAssignedValue() {
@@ -121,26 +123,17 @@ struct WISessionStateTests {
     func macOSNativeLoadingStateTriggersTransportRebindHooks() async {
         await withWebKitTestIsolation {
             let clock = TestClock()
-            let transportSnapshot = WITransportSupportSnapshot(
-                availability: .supported,
-                backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-                failureReason: nil
-            )
             let domDriver = RebindDOMPageDriver()
             let networkDriver = RebindNetworkPageDriver()
             let controller = WIInspectorController(
-                domSession: DOMSession(
+                domSession: WIDOMRuntime(
                     configuration: .init(),
                     graphStore: DOMGraphStore(),
-                    pageAgent: domDriver,
-                    transportSupportSnapshot: transportSnapshot
+                    backend: domDriver
                 ),
-                networkSession: NetworkSession(
+                networkSession: WINetworkRuntime(
                     configuration: .init(),
-                    pageAgent: networkDriver,
-                    bodyFetcher: networkDriver,
-                    transportSupportSnapshot: transportSnapshot
+                    backend: networkDriver
                 ),
                 rebindClock: clock
             )
@@ -155,11 +148,11 @@ struct WISessionStateTests {
             await domDriver.resumeCounter.wait(untilAtLeast: 1)
             await networkDriver.resumeCounter.wait(untilAtLeast: 1)
 
-            let domPrepareBaseline = domDriver.prepareForTransportRebindCallCount
-            let domResumeBaseline = domDriver.resumeAfterTransportRebindCallCount
+            let domPrepareBaseline = domDriver.prepareForNavigationReconnectCallCount
+            let domResumeBaseline = domDriver.resumeAfterNavigationReconnectCallCount
             let domReloadBaseline = domDriver.reloadDocumentCallCount
-            let networkPrepareBaseline = networkDriver.prepareForTransportRebindCallCount
-            let networkResumeBaseline = networkDriver.resumeAfterTransportRebindCallCount
+            let networkPrepareBaseline = networkDriver.prepareForNavigationReconnectCallCount
+            let networkResumeBaseline = networkDriver.resumeAfterNavigationReconnectCallCount
 
             await loadHTML("<html><body><p>follow-up</p></body></html>", in: webView)
             await clock.sleep(untilSuspendedBy: 1)
@@ -167,11 +160,11 @@ struct WISessionStateTests {
             await domDriver.resumeCounter.wait(untilAtLeast: domResumeBaseline + 1)
             await networkDriver.resumeCounter.wait(untilAtLeast: networkResumeBaseline + 1)
 
-            #expect(domDriver.prepareForTransportRebindCallCount == domPrepareBaseline + 1)
-            #expect(domDriver.resumeAfterTransportRebindCallCount >= domResumeBaseline + 1)
+            #expect(domDriver.prepareForNavigationReconnectCallCount == domPrepareBaseline + 1)
+            #expect(domDriver.resumeAfterNavigationReconnectCallCount >= domResumeBaseline + 1)
             #expect(domDriver.reloadDocumentCallCount >= domReloadBaseline + 1)
-            #expect(networkDriver.prepareForTransportRebindCallCount == networkPrepareBaseline + 1)
-            #expect(networkDriver.resumeAfterTransportRebindCallCount >= networkResumeBaseline + 1)
+            #expect(networkDriver.prepareForNavigationReconnectCallCount == networkPrepareBaseline + 1)
+            #expect(networkDriver.resumeAfterNavigationReconnectCallCount >= networkResumeBaseline + 1)
         }
     }
 
@@ -225,12 +218,17 @@ private final class NavigationDelegate: NSObject, WKNavigationDelegate {
 }
 
 @MainActor
-private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDriving {
-    weak var eventSink: (any DOMProtocolEventSink)?
+private final class RebindDOMPageDriver: WIDOMBackend {
+    weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    let support = WIInspectorBackendSupport(
+        availability: .supported,
+        backendKind: .nativeInspectorMacOS,
+        capabilities: [.domDomain, .pageTargetRouting]
+    )
 
-    private(set) var prepareForTransportRebindCallCount = 0
-    private(set) var resumeAfterTransportRebindCallCount = 0
+    private(set) var prepareForNavigationReconnectCallCount = 0
+    private(set) var resumeAfterNavigationReconnectCallCount = 0
     private(set) var reloadDocumentCallCount = 0
     let prepareCounter = AsyncCounter()
     let resumeCounter = AsyncCounter()
@@ -347,15 +345,15 @@ private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDrivi
         return ""
     }
 
-    func prepareForTransportRebind() {
-        prepareForTransportRebindCallCount += 1
+    func prepareForNavigationReconnect() {
+        prepareForNavigationReconnectCallCount += 1
         Task {
             await prepareCounter.increment()
         }
     }
 
-    func resumeAfterTransportRebind() {
-        resumeAfterTransportRebindCallCount += 1
+    func resumeAfterNavigationReconnect() {
+        resumeAfterNavigationReconnectCallCount += 1
         Task {
             await resumeCounter.increment()
         }
@@ -363,12 +361,17 @@ private final class RebindDOMPageDriver: DOMPageDriving, DOMTransportRebindDrivi
 }
 
 @MainActor
-private final class RebindNetworkPageDriver: NetworkPageDriving, NetworkTransportRebindDriving {
+private final class RebindNetworkPageDriver: WINetworkBackend {
     private(set) weak var webView: WKWebView?
     let store = NetworkStore()
+    let support = WIInspectorBackendSupport(
+        availability: .supported,
+        backendKind: .nativeInspectorMacOS,
+        capabilities: [.networkDomain, .pageTargetRouting]
+    )
 
-    private(set) var prepareForTransportRebindCallCount = 0
-    private(set) var resumeAfterTransportRebindCallCount = 0
+    private(set) var prepareForNavigationReconnectCallCount = 0
+    private(set) var resumeAfterNavigationReconnectCallCount = 0
     let prepareCounter = AsyncCounter()
     let resumeCounter = AsyncCounter()
 
@@ -388,22 +391,22 @@ private final class RebindNetworkPageDriver: NetworkPageDriving, NetworkTranspor
     func clearNetworkLogs() {
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         _ = ref
         _ = handle
         _ = role
         return .bodyUnavailable
     }
 
-    func prepareForTransportRebind() {
-        prepareForTransportRebindCallCount += 1
+    func prepareForNavigationReconnect() {
+        prepareForNavigationReconnectCallCount += 1
         Task {
             await prepareCounter.increment()
         }
     }
 
-    func resumeAfterTransportRebind() {
-        resumeAfterTransportRebindCallCount += 1
+    func resumeAfterNavigationReconnect() {
+        resumeAfterNavigationReconnectCallCount += 1
         Task {
             await resumeCounter.increment()
         }

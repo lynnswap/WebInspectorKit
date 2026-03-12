@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import UIKit
 import ObservationBridge
-import WebInspectorDOM
+import WebInspectorCore
 
 @MainActor
 public final class WIDOMViewController: UIViewController, WICompactNavigationHosting {

@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorResources
 
 @MainActor
 final class WINetworkSearchControllerCoordinator: NSObject, UISearchResultsUpdating {

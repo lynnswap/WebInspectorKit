@@ -1,10 +1,11 @@
 import Foundation
 import Testing
 import WebKit
+@testable import WebInspectorTransport
 @testable import WebInspectorCore
-@testable import WebInspectorNetwork
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct NetworkLegacyResourceLoadObserverTests {
     @Test
     func dropsFetchAndXHRResourceTypesFromNativeObserver() {

@@ -6,6 +6,7 @@ import WebKit
 import AppKit
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WIDOMTreeViewControllerAppKitTests {
     @Test
     func embedsInspectorWebViewForPreview() {
@@ -49,6 +50,7 @@ private func findWebView(in view: NSView) -> WKWebView? {
 import UIKit
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WIDOMTreeViewControllerUIKitTests {
     @Test
     func embedsInspectorWebViewForPreview() {

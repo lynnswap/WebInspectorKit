@@ -1,13 +1,13 @@
 import Testing
+import WebInspectorKit
 import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
-@testable import WebInspectorNetwork
-@testable import WebInspectorShell
 @testable import WebInspectorTransport
+@testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
@@ -90,10 +90,9 @@ struct DOMInspectorTests {
     @Test
     func detachClearsErrorMessageAndGraphState() async {
         await withWebKitTestIsolation {
-            let controller = WIInspectorController()
+            let controller = makeTransportController()
             let inspector = controller.dom
             let webView = makeTestWebView()
-            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
             inspector.attach(to: webView)
             await loadHTML(
@@ -103,7 +102,7 @@ struct DOMInspectorTests {
                 in: webView
             )
             await inspector.reloadInspector()
-            _ = await treeRowsLoaded.next(where: { $0 })
+            #expect(await waitForTreeRowsToLoad(in: inspector))
 
             guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
                 Issue.record("expected a loaded DOM root before mutating selection state")
@@ -167,7 +166,6 @@ struct DOMInspectorTests {
             let controller = makeTransportController()
             let inspector = controller.dom
             let webView = makeTestWebView()
-            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
             inspector.attach(to: webView)
             await loadHTML(
@@ -185,10 +183,10 @@ struct DOMInspectorTests {
 
             await inspector.reloadInspector()
 
-            _ = await treeRowsLoaded.next(where: { $0 })
+            #expect(await waitForTreeRowsToLoad(in: inspector))
             #expect(inspector.treeRows.count > 0)
             #expect(inspector.session.graphStore.rootID != nil)
-            #expect(inspector.transportSupportSnapshot != nil)
+            #expect(inspector.backendSupport.isSupported)
         }
     }
 
@@ -196,18 +194,17 @@ struct DOMInspectorTests {
     func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
         await withWebKitTestIsolation {
             let controller = WIInspectorController(
-                domSession: DOMSession(
+                domSession: WIDOMRuntime(
                     configuration: .init(),
                     defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
                 ),
-                networkSession: NetworkSession(
+                networkSession: WINetworkRuntime(
                     configuration: .init(),
                     defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
                 )
             )
             let inspector = controller.dom
             let webView = makeTestWebView()
-            let treeRowsLoaded = treeRowsLoadedRecorder(for: inspector)
 
             inspector.attach(to: webView)
             await loadHTML(
@@ -225,8 +222,8 @@ struct DOMInspectorTests {
 
             await inspector.reloadInspector()
 
-            _ = await treeRowsLoaded.next(where: { $0 })
-            #expect(inspector.transportSupportSnapshot?.isSupported == false)
+            #expect(await waitForTreeRowsToLoad(in: inspector))
+            #expect(inspector.backendSupport.isSupported)
             #expect(inspector.treeRows.count > 0)
             #expect(inspector.session.graphStore.rootID != nil)
         }
@@ -277,9 +274,9 @@ struct DOMInspectorTests {
     }
 
     @Test
-    func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        try await withWebKitTestIsolation {
-            let controller = makeTransportController()
+    func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async {
+        await withWebKitTestIsolation {
+            let controller = makeLegacyController()
             let inspector = controller.dom
             let webView = makeTestWebView()
             let undoManager = UndoManager()
@@ -296,17 +293,25 @@ struct DOMInspectorTests {
             inspector.attach(to: webView)
             await loadHTML(html, in: webView)
             await inspector.reloadInspector()
+            #expect(await waitForTreeRowsToLoad(in: inspector))
             inspector.onDeleteMutationForTesting = { event in
                 Task {
                     await deleteEvents.push(event)
                 }
             }
 
-            let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
-            guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
-                  let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
+            guard let firstNodeID = findNodeId(
+                in: inspector.session.graphStore,
+                attributeName: "id",
+                attributeValue: "first"
+            ),
+            let secondNodeID = findNodeId(
+                in: inspector.session.graphStore,
+                attributeName: "id",
+                attributeValue: "second"
+            )
             else {
-                Issue.record("target nodes were not found in snapshot")
+                Issue.record("target nodes were not found in graph store")
                 return
             }
 
@@ -339,9 +344,40 @@ struct DOMInspectorTests {
     }
 
     private func makeTransportController() -> WIInspectorController {
+        let domGraphStore = DOMGraphStore()
+        let domBackend = WIInspectorBackendFactory.makeDOMBackend(
+            configuration: .init(),
+            graphStore: domGraphStore
+        )
+        let domRuntime = WIDOMRuntime(
+            configuration: .init(),
+            graphStore: domGraphStore,
+            backend: domBackend
+        )
+        let domFrontendBridge = WIDOMFrontendRuntime(session: domRuntime)
+
+        let networkRuntime = WINetworkRuntime(
+            configuration: .init(),
+            backend: WIInspectorBackendFactory.makeNetworkBackend(configuration: .init())
+        )
+
+        return WIInspectorController(
+            domSession: domRuntime,
+            networkSession: networkRuntime,
+            domFrontendBridge: domFrontendBridge
+        )
+    }
+
+    private func makeLegacyController() -> WIInspectorController {
         WIInspectorController(
-            domSession: DOMSession(configuration: .init()),
-            networkSession: NetworkSession(bodyFetcher: NoopBodyFetcher())
+            domSession: WIDOMRuntime(
+                configuration: .init(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            ),
+            networkSession: WINetworkRuntime(
+                configuration: .init(),
+                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
+            )
         )
     }
 
@@ -381,6 +417,18 @@ struct DOMInspectorTests {
     }
 
     private func findNodeId(
+        in graphStore: DOMGraphStore,
+        attributeName: String,
+        attributeValue: String
+    ) -> Int? {
+        graphStore.entriesByID.values.first(where: { entry in
+            entry.attributes.contains(where: { attribute in
+                attribute.name == attributeName && attribute.value == attributeValue
+            })
+        })?.id.nodeID
+    }
+
+    private func findNodeId(
         inNode node: [String: Any],
         attributeName: String,
         attributeValue: String
@@ -407,16 +455,27 @@ struct DOMInspectorTests {
 }
 
 @MainActor
-private func treeRowsLoadedRecorder(
-    for inspector: WIDOMInspectorStore
-) -> ObservationRecorder<Bool> {
-    let recorder = ObservationRecorder<Bool>()
-    recorder.record { didChange in
-        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
-            didChange(inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil)
+private func waitForTreeRowsToLoad(
+    in inspector: WIDOMInspectorStore,
+    maxTurns: Int = 8_192
+) async -> Bool {
+    if inspector.treeRows.isEmpty == false, inspector.session.graphStore.rootID != nil {
+        return true
+    }
+
+    for _ in 0..<maxTurns {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+
+        if inspector.treeRows.isEmpty == false, inspector.session.graphStore.rootID != nil {
+            return true
         }
     }
-    return recorder
+
+    return inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
 }
 
 
@@ -431,7 +490,7 @@ private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
 
 @MainActor
 private final class NoopBodyFetcher: NetworkBodyFetching {
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         _ = ref
         _ = handle
         _ = role

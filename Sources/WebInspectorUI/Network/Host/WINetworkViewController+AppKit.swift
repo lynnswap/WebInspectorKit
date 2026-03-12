@@ -1,9 +1,11 @@
 import Foundation
 import WebInspectorCore
-import WebInspectorNetwork
+import WebInspectorResources
+import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
+import WebInspectorResources
 import SwiftUI
 
 @MainActor
@@ -110,7 +112,7 @@ private struct NetworkMacListTab: View {
                 emptyState
             } else {
                 Table(queryModel.displayEntries, selection: tableSelection) {
-                    TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .webInspectorResources))) { entry in
                         Text(entry.displayName)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -118,7 +120,7 @@ private struct NetworkMacListTab: View {
                     }
                     .width(min: 220, ideal: 320)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.status", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.status", bundle: .webInspectorResources))) { entry in
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(networkStatusColor(for: entry.statusSeverity))
@@ -130,25 +132,25 @@ private struct NetworkMacListTab: View {
                     }
                     .width(min: 92, ideal: 120)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.method", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.method", bundle: .webInspectorResources))) { entry in
                         Text(entry.method)
                             .font(.footnote.monospaced())
                     }
                     .width(min: 80, ideal: 96)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.type", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.type", bundle: .webInspectorResources))) { entry in
                         Text(entry.fileTypeLabel)
                             .font(.footnote.monospaced())
                     }
                     .width(min: 88, ideal: 110)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.duration", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.duration", bundle: .webInspectorResources))) { entry in
                         Text(entry.duration.map(entry.durationText(for:)) ?? "-")
                             .font(.footnote)
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.size", bundle: .module))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.size", bundle: .webInspectorResources))) { entry in
                         Text(entry.encodedBodyLength.map(entry.sizeText(for:)) ?? "-")
                             .font(.footnote.monospaced())
                     }
@@ -166,8 +168,8 @@ private struct NetworkMacListTab: View {
                 .foregroundStyle(.secondary)
         } description: {
             VStack(spacing: 4) {
-                Text(LocalizedStringResource("network.empty.title", bundle: .module))
-                Text(LocalizedStringResource("network.empty.description", bundle: .module))
+                Text(LocalizedStringResource("network.empty.title", bundle: .webInspectorResources))
+                Text(LocalizedStringResource("network.empty.description", bundle: .webInspectorResources))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -207,32 +209,32 @@ private struct NetworkMacDetailTab: View {
     var body: some View {
         if let entry {
             List {
-                Section(LocalizedStringResource("network.detail.section.overview", bundle: .module)) {
+                Section(LocalizedStringResource("network.detail.section.overview", bundle: .webInspectorResources)) {
                     overviewRow(for: entry)
                 }
 
-                Section(LocalizedStringResource("network.section.request", bundle: .module)) {
+                Section(LocalizedStringResource("network.section.request", bundle: .webInspectorResources)) {
                     headersRows(entry.requestHeaders)
                 }
 
                 if let requestBody = entry.requestBody {
-                    Section(LocalizedStringResource("network.section.body.request", bundle: .module)) {
+                    Section(LocalizedStringResource("network.section.body.request", bundle: .webInspectorResources)) {
                         bodyRow(entry: entry, body: requestBody)
                     }
                 }
 
-                Section(LocalizedStringResource("network.section.response", bundle: .module)) {
+                Section(LocalizedStringResource("network.section.response", bundle: .webInspectorResources)) {
                     headersRows(entry.responseHeaders)
                 }
 
                 if let responseBody = entry.responseBody {
-                    Section(LocalizedStringResource("network.section.body.response", bundle: .module)) {
+                    Section(LocalizedStringResource("network.section.body.response", bundle: .webInspectorResources)) {
                         bodyRow(entry: entry, body: responseBody)
                     }
                 }
 
                 if let error = entry.errorDescription, !error.isEmpty {
-                    Section(LocalizedStringResource("network.section.error", bundle: .module)) {
+                    Section(LocalizedStringResource("network.section.error", bundle: .webInspectorResources)) {
                         errorRow(error)
                     }
                 }
@@ -254,8 +256,8 @@ private struct NetworkMacDetailTab: View {
                     .foregroundStyle(.secondary)
             } description: {
                 VStack(spacing: 4) {
-                    Text(LocalizedStringResource("network.empty.title", bundle: .module))
-                    Text(LocalizedStringResource("network.empty.description", bundle: .module))
+                    Text(LocalizedStringResource("network.empty.title", bundle: .webInspectorResources))
+                    Text(LocalizedStringResource("network.empty.description", bundle: .webInspectorResources))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -294,7 +296,7 @@ private struct NetworkMacDetailTab: View {
     @ViewBuilder
     private func headersRows(_ headers: NetworkHeaders) -> some View {
         if headers.isEmpty {
-            Text(LocalizedStringResource("network.headers.empty", bundle: .module))
+            Text(LocalizedStringResource("network.headers.empty", bundle: .webInspectorResources))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         } else {

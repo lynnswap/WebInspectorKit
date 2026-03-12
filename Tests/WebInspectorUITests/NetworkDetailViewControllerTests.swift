@@ -5,10 +5,11 @@ import UIKit
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorNetwork
+@testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct NetworkDetailViewControllerTests {
     @Test
     func detailViewReflectsModelDrivenFetchForSelectedResponseBody() async throws {
@@ -27,7 +28,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -62,7 +63,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         let responseBody = try #require(entry.responseBody)
@@ -99,7 +100,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -169,7 +170,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
@@ -211,7 +212,7 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -309,7 +310,7 @@ private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
     private(set) var fetchCount = 0
 
     init(
@@ -323,7 +324,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         fetchCount += 1
         return await onFetch(ref, handle, role)
     }

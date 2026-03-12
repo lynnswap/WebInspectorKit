@@ -1,4 +1,5 @@
 import WebInspectorCore
+import WebInspectorResources
 
 extension NetworkBody.FetchError {
     var localizedDescriptionText: String {
