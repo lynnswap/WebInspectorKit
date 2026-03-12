@@ -186,7 +186,7 @@ struct DOMTransportDriverTests {
     func selectionModeUsesBridgeHelperOnMacAndStoresPendingSelectedNode() async throws {
         let bridge = StubDOMSelectionBridge(
             result: .init(cancelled: false, requiredDepth: 5),
-            selectedNodePath: [0, 0]
+            selectedNodePath: [1, 0, 0]
         )
         let driver = DOMTransportDriver(
             configuration: .init(),
@@ -261,6 +261,65 @@ struct DOMTransportDriverTests {
         driver.testApplyDocument(root: document, preserveState: true)
 
         #expect(graphStore.selectedEntry?.id.nodeID == 3)
+    }
+
+    @Test
+    func pendingSelectionPathResolvesSelectedEntryAcrossHeadBodySiblingsOnPreserveStateReload() {
+        let graphStore = DOMGraphStore()
+        let driver = DOMTransportDriver(
+            configuration: .init(),
+            graphStore: graphStore
+        )
+        driver.testSetPendingSelectedNodePath([1, 0, 0])
+
+        let target = makeNode(
+            nodeId: 4,
+            nodeType: 1,
+            nodeName: "DIV",
+            localName: "div",
+            children: []
+        )
+        let main = makeNode(
+            nodeId: 5,
+            nodeType: 1,
+            nodeName: "MAIN",
+            localName: "main",
+            children: [target]
+        )
+        let body = makeNode(
+            nodeId: 3,
+            nodeType: 1,
+            nodeName: "BODY",
+            localName: "body",
+            children: [main]
+        )
+        let head = makeNode(
+            nodeId: 6,
+            nodeType: 1,
+            nodeName: "HEAD",
+            localName: "head",
+            children: []
+        )
+        let html = makeNode(
+            nodeId: 2,
+            nodeType: 1,
+            nodeName: "HTML",
+            localName: "html",
+            children: [head, body]
+        )
+        let document = makeNode(
+            nodeId: 1,
+            nodeType: 9,
+            nodeName: "#document",
+            localName: "",
+            children: [html],
+            layoutFlags: ["rendered"]
+        )
+
+        #expect(driver.testResolvedPendingSelectedNodeID(in: document) == 4)
+        driver.testApplyDocument(root: document, preserveState: true)
+
+        #expect(graphStore.selectedEntry?.id.nodeID == 4)
     }
 
     @Test
@@ -353,17 +412,23 @@ struct DOMTransportDriverTests {
             method: "CSS.getMatchedStylesForNode",
             message: "Missing node for given nodeId"
         )
+        let computedError = WITransportError.remoteError(
+            scope: .page,
+            method: "CSS.getComputedStyleForNode",
+            message: "Missing node for given nodeId"
+        )
 
-        let payload = try driver.testMakeMatchedStylesPayloadForFailures(
+        let payload = try driver.testMakeStylePayloadForFailures(
             nodeId: 42,
-            maxRules: 0,
+            maxMatchedRules: 0,
             inlineError: inlineError,
-            matchedError: matchedError
+            matchedError: matchedError,
+            computedError: computedError
         )
 
         #expect(payload.nodeId == 42)
-        #expect(payload.rules.isEmpty)
-        #expect(payload.truncated == false)
+        #expect(payload.matched.sections.isEmpty)
+        #expect(payload.matched.blockedStylesheetCount == 0)
     }
 }
 

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { cancelElementSelection, startElementSelection } from "../Runtime/DOMAgent/dom-agent-selection";
+import {
+    cancelElementSelection,
+    consumePendingSelectionPath,
+    startElementSelection
+} from "../Runtime/DOMAgent/dom-agent-selection";
 import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
 
 function resetInspectorState() {
@@ -104,5 +108,49 @@ describe("dom-agent-selection", () => {
 
         expect(Array.isArray(inspector.pendingSelectionPath)).toBe(true);
         expect(inspector.pendingSelectionPath?.at(-1)).toBe(0);
+    });
+
+    it("stores nested inspector-compatible paths across whitespace-only siblings", async () => {
+        document.body.innerHTML = [
+            "<main id=\"root\">",
+            "  <section id=\"section\">",
+            "    <div id=\"target\">hello</div>",
+            "  </section>",
+            "  <aside id=\"other\">later</aside>",
+            "</main>",
+        ].join("\n");
+        const target = document.getElementById("target") as HTMLElement;
+        installBoundingRect(target);
+        Object.defineProperty(document, "elementFromPoint", {
+            configurable: true,
+            value: () => target,
+        });
+
+        const selectionPromise = startElementSelection();
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 20, clientY: 24 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 20, clientY: 24 }));
+
+        await selectionPromise;
+
+        expect(inspector.pendingSelectionPath).toEqual([1, 0, 0, 0]);
+    });
+
+    it("consumes the pending selection path only once", async () => {
+        document.body.innerHTML = "<main id=\"root\">\n  <div id=\"target\">hello</div>\n</main>";
+        const target = document.getElementById("target") as HTMLElement;
+        installBoundingRect(target);
+        Object.defineProperty(document, "elementFromPoint", {
+            configurable: true,
+            value: () => target,
+        });
+
+        const selectionPromise = startElementSelection();
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 20, clientY: 24 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 20, clientY: 24 }));
+
+        await selectionPromise;
+
+        expect(consumePendingSelectionPath()).toEqual([1, 0, 0]);
+        expect(consumePendingSelectionPath()).toBeNull();
     });
 });
