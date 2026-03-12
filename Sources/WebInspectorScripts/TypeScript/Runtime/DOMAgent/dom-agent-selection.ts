@@ -10,6 +10,56 @@ type SelectionResult = {
 
 type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
 
+function isASCIIWhitespaceTextNode(node: AnyNode | null) {
+    return !!node
+        && node.nodeType === Node.TEXT_NODE
+        && typeof node.nodeValue === "string"
+        && /^[\t\n\f\r ]*$/.test(node.nodeValue);
+}
+
+function inspectorCompatibleChildIndex(parent: ParentNode, child: AnyNode) {
+    var visibleIndex = 0;
+    for (var index = 0; index < parent.childNodes.length; index += 1) {
+        var sibling = parent.childNodes[index] as AnyNode;
+        if (isASCIIWhitespaceTextNode(sibling)) {
+            continue;
+        }
+        if (sibling === child) {
+            return visibleIndex;
+        }
+        visibleIndex += 1;
+    }
+    return -1;
+}
+
+function computeInspectorCompatibleNodePath(node: AnyNode | null) {
+    if (!node) {
+        return null;
+    }
+    var root = document.documentElement || document.body;
+    if (!root) {
+        return null;
+    }
+    var current: AnyNode | null = node;
+    var path: number[] = [];
+    while (current && current !== root) {
+        var parent = current.parentNode;
+        if (!parent) {
+            return null;
+        }
+        var index = inspectorCompatibleChildIndex(parent, current);
+        if (index < 0) {
+            return null;
+        }
+        path.unshift(index);
+        current = parent as AnyNode | null;
+    }
+    if (current !== root) {
+        return null;
+    }
+    return path;
+}
+
 function normalizeSelectionTarget(target: AnyNode | null) {
     var current = target;
     while (current) {
@@ -161,7 +211,7 @@ export function startElementSelection() {
                 cancelSelection();
                 return;
             }
-            var path = computeNodePath(node);
+            var path = computeInspectorCompatibleNodePath(node) || computeNodePath(node);
             if (!path) {
                 cancelSelection();
                 return;
@@ -259,4 +309,10 @@ export function cancelElementSelection() {
     restoreSelectionCursor();
     uninstallWindowClickBlocker();
     return false;
+}
+
+export function consumePendingSelectionPath() {
+    var path = Array.isArray(inspector.pendingSelectionPath) ? inspector.pendingSelectionPath.slice() : null;
+    inspector.pendingSelectionPath = null;
+    return path;
 }

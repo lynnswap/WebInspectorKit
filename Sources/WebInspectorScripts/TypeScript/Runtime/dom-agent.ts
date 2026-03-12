@@ -6,7 +6,7 @@ import {
     createNodeHandle
 } from "./DOMAgent/dom-agent-dom-core";
 import {clearHighlight, highlightDOMNode, highlightDOMNodeHandle} from "./DOMAgent/dom-agent-overlay";
-import {cancelElementSelection, startElementSelection} from "./DOMAgent/dom-agent-selection";
+import {cancelElementSelection, consumePendingSelectionPath, startElementSelection} from "./DOMAgent/dom-agent-selection";
 import {
     configureAutoSnapshot,
     disableAutoSnapshot,
@@ -44,6 +44,7 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         captureSubtreeEnvelope: captureDOMSubtreeEnvelope,
         startSelection: startElementSelection,
         cancelSelection: cancelElementSelection,
+        consumePendingSelectionPath: consumePendingSelectionPath,
         highlightNode: highlightDOMNode,
         highlightNodeHandle: highlightDOMNodeHandle,
         clearHighlight: clearHighlight,

@@ -70,12 +70,10 @@ final class DOMSelectionBridge: DOMSelectionBridging {
     func resolveSelectedNodePath(on webView: WKWebView, maxDepth: Int) async throws -> [Int]? {
         let rawResult = try await webView.callAsyncJavaScript(
             """
-            const maxSnapshotDepth = Math.max(1, maxDepth);
-            if (!window.webInspectorDOM || typeof window.webInspectorDOM.captureSnapshotEnvelope !== "function") {
+            if (!window.webInspectorDOM || typeof window.webInspectorDOM.consumePendingSelectionPath !== "function") {
                 return null;
             }
-            const snapshot = window.webInspectorDOM.captureSnapshotEnvelope(maxSnapshotDepth);
-            return Array.isArray(snapshot?.selectedNodePath) ? snapshot.selectedNodePath : null;
+            return window.webInspectorDOM.consumePendingSelectionPath();
             """,
             arguments: ["maxDepth": max(1, maxDepth)],
             in: nil,

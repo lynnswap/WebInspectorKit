@@ -86,4 +86,23 @@ describe("dom-agent-selection", () => {
         cancelElementSelection();
         await selectionPromise;
     });
+
+    it("stores inspector-compatible selection paths that ignore whitespace-only text nodes", async () => {
+        document.body.innerHTML = "<main id=\"root\">\n  <div id=\"target\">hello</div>\n  <span id=\"other\">later</span>\n</main>";
+        const target = document.getElementById("target") as HTMLElement;
+        installBoundingRect(target);
+        Object.defineProperty(document, "elementFromPoint", {
+            configurable: true,
+            value: () => target,
+        });
+
+        const selectionPromise = startElementSelection();
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 20, clientY: 24 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: 20, clientY: 24 }));
+
+        await selectionPromise;
+
+        expect(Array.isArray(inspector.pendingSelectionPath)).toBe(true);
+        expect(inspector.pendingSelectionPath?.at(-1)).toBe(0);
+    });
 });
