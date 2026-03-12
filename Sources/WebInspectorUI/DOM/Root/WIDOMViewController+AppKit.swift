@@ -1,6 +1,6 @@
 #if canImport(AppKit)
 import AppKit
-import WebInspectorDOM
+import WebInspectorCore
 
 @MainActor
 public final class WIDOMViewController: NSSplitViewController {

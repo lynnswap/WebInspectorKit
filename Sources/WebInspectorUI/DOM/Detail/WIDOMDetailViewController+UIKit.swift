@@ -1,9 +1,11 @@
 import WebInspectorCore
-import WebInspectorDOM
+import WebInspectorResources
+import WebInspectorCore
 import ObservationBridge
 
 #if canImport(UIKit)
 import UIKit
+import WebInspectorResources
 import SwiftUI
 
 private protocol DiffableStableID: Hashable, Sendable {}

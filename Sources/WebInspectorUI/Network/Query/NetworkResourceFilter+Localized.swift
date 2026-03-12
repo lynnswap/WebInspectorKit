@@ -1,4 +1,5 @@
 import WebInspectorCore
+import WebInspectorResources
 
 extension NetworkResourceFilter {
     var localizedTitle: String {

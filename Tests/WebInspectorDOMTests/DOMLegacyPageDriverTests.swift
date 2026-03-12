@@ -2,15 +2,16 @@ import Testing
 import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
+@testable import WebInspectorCore
 @testable import WebInspectorTransport
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct DOMLegacyPageDriverTests {
     @Test
     func unsupportedTransportSnapshotUsesLegacyDriverAndLoadsDocument() async throws {
         try await withWebKitTestIsolation {
-            let session = DOMSession(
+            let session = WIDOMRuntime(
                 configuration: .init(snapshotDepth: 3, subtreeDepth: 2),
                 graphStore: DOMGraphStore(),
                 defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
@@ -36,8 +37,9 @@ struct DOMLegacyPageDriverTests {
             let contentNodeID = try #require(findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content"))
             let childNodes = try await session.requestChildNodes(parentNodeId: contentNodeID)
 
-            #expect(session.transportSupportSnapshot?.isSupported == false)
-            #expect(session.transportCapabilities.isEmpty)
+            #expect(session.backendSupport.isSupported)
+            #expect(session.testPageAgentTypeName() == "DOMLegacyPageDriver")
+            #expect(session.transportCapabilities == [.domDomain])
             #expect(session.graphStore.rootID != nil)
             #expect(controller.userScripts.count == 2)
             #expect(childNodes.contains { descriptor in
@@ -161,7 +163,7 @@ struct DOMLegacyPageDriverTests {
 
     @Test
     func macOSNativeTransportUsesTransportDriver() {
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: DOMGraphStore(),
             defaultTransportSupportSnapshot: .init(
@@ -177,7 +179,7 @@ struct DOMLegacyPageDriverTests {
 }
 
 @MainActor
-private final class RecordingDOMProtocolEventSink: DOMProtocolEventSink {
+private final class RecordingDOMProtocolEventSink: WIDOMProtocolEventSink {
     struct Event {
         let method: String
         let paramsData: Data

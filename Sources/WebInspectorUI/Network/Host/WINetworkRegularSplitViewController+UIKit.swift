@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorNetwork
+import WebInspectorCore
 
 #if canImport(UIKit)
 import UIKit

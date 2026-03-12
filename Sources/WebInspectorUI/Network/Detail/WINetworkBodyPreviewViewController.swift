@@ -2,8 +2,10 @@
 import Foundation
 import ObservationBridge
 import UIKit
+import WebInspectorResources
 import WebInspectorCore
-import WebInspectorNetwork
+import WebInspectorResources
+import WebInspectorCore
 
 @MainActor
 public final class WINetworkBodyPreviewViewController: UIViewController, UICollectionViewDelegate {

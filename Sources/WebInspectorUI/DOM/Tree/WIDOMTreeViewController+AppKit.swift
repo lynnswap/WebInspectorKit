@@ -1,10 +1,12 @@
 import WebKit
 import ObservationBridge
 import WebInspectorCore
-import WebInspectorDOM
+import WebInspectorResources
+import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
+import WebInspectorResources
 
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {

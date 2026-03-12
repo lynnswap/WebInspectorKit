@@ -1,6 +1,6 @@
 import WebKit
 import WebInspectorCore
-import WebInspectorDOM
+import WebInspectorCore
 import ObservationBridge
 
 #if canImport(UIKit)

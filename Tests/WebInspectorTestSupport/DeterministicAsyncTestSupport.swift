@@ -322,6 +322,14 @@ public final class TestClock: Clock, @unchecked Sendable {
 }
 
 private let webKitTestIsolationLock = AsyncExclusiveLock()
+private enum WebKitTestIsolationContext {
+    @TaskLocal static var isActive = false
+}
+
+@MainActor
+public var isWebKitTestIsolationActive: Bool {
+    WebKitTestIsolationContext.isActive
+}
 
 @MainActor
 public func acquireWebKitTestIsolation() async {
@@ -337,9 +345,15 @@ public func releaseWebKitTestIsolation() async {
 public func withWebKitTestIsolation<T>(
     _ body: @MainActor () async throws -> T
 ) async rethrows -> T {
+    if WebKitTestIsolationContext.isActive {
+        return try await body()
+    }
+
     await acquireWebKitTestIsolation()
     do {
-        let result = try await body()
+        let result = try await WebKitTestIsolationContext.$isActive.withValue(true) {
+            try await body()
+        }
         await releaseWebKitTestIsolation()
         return result
     } catch {

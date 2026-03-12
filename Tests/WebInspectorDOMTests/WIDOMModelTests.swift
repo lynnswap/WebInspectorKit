@@ -5,11 +5,11 @@ import WebInspectorTestSupport
 #if canImport(AppKit)
 import AppKit
 #endif
+@testable import WebInspectorUI
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
 
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .webKitIsolated)
 struct WIDOMModelTests {
     @Test
     func attachBuildsNativeTreeRowsFromTransportSnapshot() async {
@@ -18,10 +18,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
@@ -56,10 +56,10 @@ struct WIDOMModelTests {
             rootSnapshot: rootSnapshot,
             requestedChildren: [4: [childDescriptor]]
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
@@ -113,10 +113,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: rootSnapshot
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
@@ -135,10 +135,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let rootIDs = rootNodeIDRecorder(for: graphStore)
@@ -168,10 +168,10 @@ struct WIDOMModelTests {
             rootSnapshot: .init(root: makeDocumentTree()),
             selectionModeResult: .init(cancelled: false, requiredDepth: 12)
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -195,10 +195,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -234,10 +234,10 @@ struct WIDOMModelTests {
             rootSnapshot: .init(root: makeDocumentTree()),
             matchedStylesError: StubDOMPageDriverError.missingNode
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -273,10 +273,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -302,10 +302,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -347,10 +347,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
         let webView = makeIsolatedTestWebView()
@@ -383,12 +383,12 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let (inspector, frontendRuntime) = makeInspectorWithFrontendRuntime(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
@@ -396,16 +396,14 @@ struct WIDOMModelTests {
         inspector.attach(to: webView)
         _ = await rootIDs.next(where: { $0 != nil })
 
-        inspector.withFrontendStore { store in
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 3,
-                "preview": "<body>",
-                "attributes": [],
-                "path": ["html", "body"],
-                "selectorPath": "html > body",
-                "styleRevision": 1
-            ])
-        }
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 3,
+            "preview": "<body>",
+            "attributes": [],
+            "path": ["html", "body"],
+            "selectorPath": "html > body",
+            "styleRevision": 1
+        ])
         let snapshot = await selectedSnapshots.next(where: { $0?.nodeID == 3 })
 
         #expect(snapshot?.nodeID == 3)
@@ -423,12 +421,12 @@ struct WIDOMModelTests {
                 .init(root: makeRecoveryDocumentTree())
             ]
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let (inspector, frontendRuntime) = makeInspectorWithFrontendRuntime(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
@@ -438,18 +436,16 @@ struct WIDOMModelTests {
         #expect(graphStore.entry(forNodeID: 3) != nil)
         #expect(graphStore.entry(forNodeID: 6) == nil)
 
-        inspector.withFrontendStore { store in
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 6,
-                "preview": "<div id=\"target\">",
-                "attributes": [
-                    ["name": "id", "value": "target"],
-                ],
-                "path": ["html", "body", "main", "div"],
-                "selectorPath": "#target",
-                "styleRevision": 1
-            ])
-        }
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 6,
+            "preview": "<div id=\"target\">",
+            "attributes": [
+                ["name": "id", "value": "target"],
+            ],
+            "path": ["html", "body", "main", "div"],
+            "selectorPath": "#target",
+            "styleRevision": 1
+        ])
         let recoveredSnapshot = await selectedSnapshots.next(where: { $0?.nodeID == 6 })
 
         #expect(recoveredSnapshot?.nodeID == 6)
@@ -466,10 +462,10 @@ struct WIDOMModelTests {
                 graphStore: graphStore,
                 rootSnapshot: .init(root: makeDocumentTree())
             )
-            let session = DOMSession(
+            let session = WIDOMRuntime(
                 configuration: .init(),
                 graphStore: graphStore,
-                pageAgent: driver
+                backend: driver
             )
             let inspector = WIDOMInspectorStore(session: session)
 
@@ -506,10 +502,10 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             rootSnapshot: .init(root: makeDocumentTree())
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
 
@@ -547,12 +543,12 @@ struct WIDOMModelTests {
             gatedReloadIndices: [2, 3],
             reloadGate: reloadGate
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let (inspector, frontendRuntime) = makeInspectorWithFrontendRuntime(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
@@ -560,28 +556,26 @@ struct WIDOMModelTests {
         inspector.attach(to: webView)
         _ = await rootIDs.next(where: { $0 != nil })
 
-        inspector.withFrontendStore { store in
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 6,
-                "preview": "<div id=\"first-target\">",
-                "attributes": [
-                    ["name": "id", "value": "first-target"],
-                ],
-                "path": ["html", "body", "main", "div"],
-                "selectorPath": "#first-target",
-                "styleRevision": 1
-            ])
-            store.testHandleDOMSelectionMessage([
-                "nodeId": 7,
-                "preview": "<div id=\"second-target\">",
-                "attributes": [
-                    ["name": "id", "value": "second-target"],
-                ],
-                "path": ["html", "body", "main", "div"],
-                "selectorPath": "#second-target",
-                "styleRevision": 2
-            ])
-        }
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 6,
+            "preview": "<div id=\"first-target\">",
+            "attributes": [
+                ["name": "id", "value": "first-target"],
+            ],
+            "path": ["html", "body", "main", "div"],
+            "selectorPath": "#first-target",
+            "styleRevision": 1
+        ])
+        frontendRuntime.testHandleDOMSelectionMessage([
+            "nodeId": 7,
+            "preview": "<div id=\"second-target\">",
+            "attributes": [
+                ["name": "id", "value": "second-target"],
+            ],
+            "path": ["html", "body", "main", "div"],
+            "selectorPath": "#second-target",
+            "styleRevision": 2
+        ])
         await reloadGate.open()
         let recoveredSnapshot = await selectedSnapshots.next(where: {
             $0?.nodeID == 7
@@ -601,10 +595,10 @@ struct WIDOMModelTests {
             rootSnapshot: .init(root: makeDocumentTree()),
             selectionCopyTextResult: "<body>Hello</body>"
         )
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: driver
+            backend: driver
         )
         let inspector = WIDOMInspectorStore(session: session)
 
@@ -630,9 +624,23 @@ struct WIDOMModelTests {
 }
 
 @MainActor
-private final class StubDOMPageDriver: DOMPageDriving {
-    weak var eventSink: (any DOMProtocolEventSink)?
+private func makeInspectorWithFrontendRuntime(
+    session: WIDOMRuntime
+) -> (inspector: WIDOMInspectorStore, frontendRuntime: WIDOMFrontendRuntime) {
+    let frontendRuntime = WIDOMFrontendRuntime(session: session)
+    let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
+    return (inspector, frontendRuntime)
+}
+
+@MainActor
+private final class StubDOMPageDriver: WIDOMBackend {
+    weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    let support = WIInspectorBackendSupport(
+        availability: .unsupported,
+        backendKind: .legacy,
+        capabilities: [.domDomain]
+    )
 
     private let graphStore: DOMGraphStore
     private let reloadSnapshots: [DOMGraphSnapshot]

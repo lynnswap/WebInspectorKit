@@ -116,8 +116,8 @@ let container = WIInspectorViewController(
 ## Testing
 
 - `swift test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run typecheck`
+- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run test`
+- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run typecheck`
 
 ## Migration
 

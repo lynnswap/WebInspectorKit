@@ -5,6 +5,7 @@ import WebKit
 @testable import WebInspectorTransport
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct WITransportSessionTests {
     @Test
     func macOSDefaultBackendFactoryUsesNativeInspectorBackend() {

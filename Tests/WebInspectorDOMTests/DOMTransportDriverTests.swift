@@ -1,11 +1,12 @@
 import Testing
 import WebKit
 import WebInspectorTestSupport
-import WebInspectorTransport
+@testable import WebInspectorTransport
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
+@testable import WebInspectorCore
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct DOMTransportDriverTests {
     @Test
     func nodeDescriptorPreservesRenderedStateFromLayoutFlags() {

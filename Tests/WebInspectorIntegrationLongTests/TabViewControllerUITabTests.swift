@@ -1,16 +1,18 @@
 import Testing
 import WebKit
+import WebInspectorKit
 import WebInspectorTestSupport
 @testable import WebInspectorUI
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
-@testable import WebInspectorNetwork
-@testable import WebInspectorShell
+@testable import WebInspectorCore
+@testable import WebInspectorCore
+@testable import WebInspectorCore
 
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct TabViewControllerUITabTests {
     @Test
     func containerUsesCompactHostWhenSizeClassIsCompact() {

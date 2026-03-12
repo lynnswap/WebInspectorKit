@@ -1,22 +1,23 @@
 import Testing
 import WebKit
 import WebInspectorTestSupport
+@testable import WebInspectorUI
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct DOMFrontendStoreTests {
     @Test
     func frontendSelectionMessageOnlyUpdatesSelectionSnapshot() {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         store.testHandleDOMSelectionMessage([
             "nodeId": 3,
@@ -37,12 +38,12 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         store.testSetReady(true)
         store.testPrepareForFrontendReloadIfNeeded()
@@ -56,15 +57,15 @@ struct DOMFrontendStoreTests {
     @Test
     func readyMessageDoesNotBootstrapFrontendDocumentWhenAuthoritativeGraphIsEmpty() async {
         let graphStore = DOMGraphStore()
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
         let pageWebView = makeIsolatedTestWebView()
         _ = session.attach(to: pageWebView)
 
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
         _ = store.makeInspectorWebView()
         let readyMessageProcessed = AsyncGate()
         store.onReadyMessageProcessedForTesting = {
@@ -84,13 +85,13 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTreeWithMissingBodyChildren()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
 
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
         let response = try #require(
             store.testImmediateFrontendResponseIfPossible(
                 id: 71,
@@ -118,13 +119,13 @@ struct DOMFrontendStoreTests {
         graphStore.resetForDocumentUpdate()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
 
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
         let response = store.testImmediateFrontendResponseIfPossible(
             id: 72,
             method: "DOM.getDocument",
@@ -143,12 +144,12 @@ struct DOMFrontendStoreTests {
         graphStore.resetForDocumentUpdate()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         let staleResponse = try #require(
             store.testStaleProtocolResponseIfNeeded(
@@ -170,12 +171,12 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         store.testSetPendingDocumentRequest(depth: 6, preserveState: false)
         store.testSetPendingProtocolEvents([
@@ -197,12 +198,12 @@ struct DOMFrontendStoreTests {
         let originalRootID = graphStore.rootID
         let originalEntryCount = graphStore.entriesByID.count
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         await store.testHandleProtocolPayload([
             "id": 7,
@@ -223,12 +224,12 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         #expect(store.testParseProtocolIdentifier(true as NSNumber) == nil)
         #expect(store.testParseProtocolIdentifier(NSNumber(value: 1.5)) == nil)
@@ -239,12 +240,12 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         await store.testRequestFreshDocumentAfterStaleNodeResponse()
 
@@ -259,12 +260,12 @@ struct DOMFrontendStoreTests {
         let graphStore = DOMGraphStore()
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: StubDOMFrontendStorePageDriver(graphStore: graphStore)
+            backend: StubDOMFrontendStorePageDriver(graphStore: graphStore)
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         store.testSetReady(true)
         await store.testHandleProtocolPayload([
@@ -284,12 +285,12 @@ struct DOMFrontendStoreTests {
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
         let pageDriver = StubDOMFrontendStorePageDriver(graphStore: graphStore)
-        let session = DOMSession(
+        let session = WIDOMRuntime(
             configuration: .init(),
             graphStore: graphStore,
-            pageAgent: pageDriver
+            backend: pageDriver
         )
-        let store = DOMFrontendStore(session: session)
+        let store = WIDOMFrontendRuntime(session: session)
 
         store.testSetReady(true)
         await store.testHandleProtocolPayload([
@@ -306,9 +307,14 @@ struct DOMFrontendStoreTests {
 }
 
 @MainActor
-private final class StubDOMFrontendStorePageDriver: DOMPageDriving {
-    weak var eventSink: (any DOMProtocolEventSink)?
+private final class StubDOMFrontendStorePageDriver: WIDOMBackend {
+    weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
+    let support = WIInspectorBackendSupport(
+        availability: .unsupported,
+        backendKind: .legacy,
+        capabilities: [.domDomain]
+    )
     private(set) var requestedChildNodeIDs: [Int] = []
 
     init(graphStore: DOMGraphStore) {

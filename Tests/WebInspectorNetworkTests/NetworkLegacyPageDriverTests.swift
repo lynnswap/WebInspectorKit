@@ -1,10 +1,11 @@
 import Testing
 import WebKit
 import WebInspectorTestSupport
+@testable import WebInspectorTransport
 @testable import WebInspectorCore
-@testable import WebInspectorNetwork
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct NetworkLegacyPageDriverTests {
     @Test
     func postedNetworkBatchIsLoggedByLegacyDriver() async {

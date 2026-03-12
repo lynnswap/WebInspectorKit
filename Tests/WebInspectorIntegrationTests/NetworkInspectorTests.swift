@@ -4,13 +4,13 @@ import ObservationBridge
 import WebInspectorTestSupport
 import WebKit
 @testable import WebInspectorCore
-@testable import WebInspectorNetwork
-@testable import WebInspectorShell
+@testable import WebInspectorCore
+@testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
 
-
+@Suite(.serialized, .webKitIsolated)
 struct NetworkInspectorTests {
     @Test
     func applyFetchedBodyUpdatesDecodedBodyLengthForResponseBody() {
@@ -120,7 +120,7 @@ struct NetworkInspectorTests {
                 return nil
             }
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -147,7 +147,7 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
@@ -172,7 +172,7 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
         let entry = makeEntry()
@@ -205,7 +205,7 @@ struct NetworkInspectorTests {
             }
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
         inspector.attach(to: webView)
 
@@ -241,7 +241,7 @@ struct NetworkInspectorTests {
             Issue.record("reattach should not fetch cleared selection")
             return nil
         }
-        let inspector = WINetworkInspectorStore(session: NetworkSession(bodyFetcher: fetcher))
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "stale-ref", role: .response)
         entry.responseBody = body
@@ -257,7 +257,7 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesAppliesSearchResourceFilterAndSortTogether() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
 
         try applyRequestStart(
@@ -297,7 +297,7 @@ struct NetworkInspectorTests {
 
     @Test
     func assigningEmptyActiveFiltersClearsEffectiveFilters() {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
 
         queryModel.activeFilters = [.image, .script]
@@ -310,7 +310,7 @@ struct NetworkInspectorTests {
 
     @Test
     func clearResetsSelectedEntry() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -332,7 +332,7 @@ struct NetworkInspectorTests {
 
     @Test
     func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -358,7 +358,7 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -391,7 +391,7 @@ struct NetworkInspectorTests {
 
     @Test
     func selectedEntryRemainsWhenFilterExcludesDisplayedEntries() throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -421,7 +421,7 @@ struct NetworkInspectorTests {
     @Test
     func selectedEntryClearsWhenPrunedFromStoreByRetentionLimit() async throws {
         let inspector = WINetworkInspectorStore(
-            session: NetworkSession(configuration: .init(maxEntries: 1))
+            session: WINetworkRuntime(configuration: .init(maxEntries: 1))
         )
         try applyRequestStart(
             to: inspector,
@@ -450,7 +450,7 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
-        let inspector = WINetworkInspectorStore(session: NetworkSession())
+        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
         let queryModel = WINetworkQueryState(inspector: inspector)
         try applyRequestStart(
             to: inspector,
@@ -480,7 +480,7 @@ struct NetworkInspectorTests {
 
     @Test
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
-        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
+        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: WINetworkRuntime()))
         let recorder = searchTextRecorder(for: queryModel)
 
         let initialValue = await recorder.next()
@@ -499,7 +499,7 @@ struct NetworkInspectorTests {
 
     @Test
     func observeSearchTextStopsEmittingAfterCancel() async {
-        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: NetworkSession()))
+        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: WINetworkRuntime()))
         let emissions = AsyncValueQueue<String>()
         let handle = queryModel.observe(\.searchText, options: [.removeDuplicates]) { value in
             Task {
@@ -673,7 +673,7 @@ private func displayEntryRecorder(
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
     private(set) var fetchRefs: [String?] = []
 
     init(
@@ -687,7 +687,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         fetchRefs.append(ref)
         return await onFetch(ref, handle, role)
     }

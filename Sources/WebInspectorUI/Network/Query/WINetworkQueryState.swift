@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import ObservationBridge
 import WebInspectorCore
-import WebInspectorNetwork
+import WebInspectorCore
 #if canImport(UIKit)
 import UIKit
 #endif

@@ -1,16 +1,18 @@
 import Testing
 import WebKit
+import WebInspectorKit
 import WebInspectorTestSupport
 @testable import WebInspectorUI
 @testable import WebInspectorCore
-@testable import WebInspectorDOM
-@testable import WebInspectorNetwork
-@testable import WebInspectorShell
+@testable import WebInspectorCore
+@testable import WebInspectorCore
+@testable import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
 
 @MainActor
+@Suite(.serialized, .webKitIsolated)
 struct TabViewControllerAppKitTabTests {
     private let tabPickerIdentifierRaw = "WIContainerToolbar.TabPicker"
     private let domPickIdentifierRaw = "WIContainerToolbar.DOMPick"
