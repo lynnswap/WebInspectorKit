@@ -23,12 +23,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func loadViewIfNeededRendersInitialContentAndSelection() {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
         ]
-        let container = WIInspectorViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
@@ -40,106 +40,106 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func appKitNormalizesStandaloneElementTabToDOM() {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
-            makeDescriptor(id: WIInspectorTab.elementTabID, title: "Element")
+            makeDescriptor(id: WITab.elementTabID, title: "Element")
         ]
-        let container = WIInspectorViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID])
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.domTabID)
-        #expect(container.visibleContentTabIDForTesting == WIInspectorTab.domTabID)
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(container.visibleContentTabIDForTesting == WITab.domTabID)
         #expect(container.visibleContentViewControllerForTesting is WIDOMViewController)
-        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.elementTabID])
-        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.elementTabID)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.elementTabID])
+        #expect(controller.selectedPanelConfiguration?.identifier == WITab.elementTabID)
     }
 
     @Test
     func appKitKeepsSyntheticDOMFallbackWhenElementAndNetworkAreConfiguredWithoutDOM() {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
-            makeDescriptor(id: WIInspectorTab.elementTabID, title: "Element"),
-            makeDescriptor(id: WIInspectorTab.networkTabID, title: "Network")
+            makeDescriptor(id: WITab.elementTabID, title: "Element"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
 
         container.loadViewIfNeeded()
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.domTabID)
-        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.elementTabID, WIInspectorTab.networkTabID])
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
     }
 
     @Test
     func standaloneElementProxyKeepsDOMAutoSnapshotEnabled() {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
-            makeDescriptor(id: WIInspectorTab.elementTabID, title: "Element")
+            makeDescriptor(id: WITab.elementTabID, title: "Element")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let window = mountInWindow(container)
         defer {
             disposeWindow(window, containing: container)
         }
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID])
-        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.elementTabID)
-        #expect(controller.dom.session.isAutoSnapshotEnabled == true)
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
+        #expect(controller.selectedPanelConfiguration?.identifier == WITab.elementTabID)
+        #expect(controller.domStore.session.isAutoSnapshotEnabled == true)
     }
 
     @Test
     func appKitRemovesElementWhenDOMTabExists() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
-            makeDescriptor(id: WIInspectorTab.domTabID, title: "DOM"),
-            makeDescriptor(id: WIInspectorTab.elementTabID, title: "Element"),
-            makeDescriptor(id: WIInspectorTab.networkTabID, title: "Network")
+            makeDescriptor(id: WITab.domTabID, title: "DOM"),
+            makeDescriptor(id: WITab.elementTabID, title: "Element"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
             disposeWindow(window, containing: container)
         }
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.domTabID)
-        #expect(controller.panelConfigurations.map(\.identifier) == [WIInspectorTab.domTabID, WIInspectorTab.elementTabID, WIInspectorTab.networkTabID])
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
 
         await selectTabViaPicker(index: 1, in: window, container: container, renderEvents: observers.render)
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.networkTabID)
-        #expect(container.visibleContentTabIDForTesting == WIInspectorTab.networkTabID)
+        #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
+        #expect(container.visibleContentTabIDForTesting == WITab.networkTabID)
         #expect(container.visibleContentViewControllerForTesting is WINetworkViewController)
     }
 
     @Test
     func appKitHiddenElementSelectionNormalizesToDOMWhenDOMExists() {
-        let controller = WIInspectorController()
-        let dom = makeDescriptor(id: WIInspectorTab.domTabID, title: "DOM")
-        let element = makeDescriptor(id: WIInspectorTab.elementTabID, title: "Element")
-        let network = makeDescriptor(id: WIInspectorTab.networkTabID, title: "Network")
-        let container = WIInspectorViewController(controller, webView: nil, tabs: [dom, element, network])
+        let controller = WISessionController()
+        let dom = makeDescriptor(id: WITab.domTabID, title: "DOM")
+        let element = makeDescriptor(id: WITab.elementTabID, title: "Element")
+        let network = makeDescriptor(id: WITab.networkTabID, title: "Network")
+        let container = WIContainerViewController(controller, webView: nil, tabs: [dom, element, network])
 
         controller.setSelectedPanelFromUI(element.configuration)
-        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.elementTabID)
+        #expect(controller.selectedPanelConfiguration?.identifier == WITab.elementTabID)
 
         container.loadViewIfNeeded()
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.domTabID)
-        #expect(controller.selectedPanelConfiguration?.identifier == WIInspectorTab.domTabID)
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
+        #expect(controller.selectedPanelConfiguration?.identifier == WITab.domTabID)
     }
 
     @Test
     func toolbarContainsTabPickerAndUsesDescriptorTitles() {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
         ]
-        let container = WIInspectorViewController(controller, webView: nil, tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: nil, tabs: descriptors)
         let window = mountInWindow(container)
         defer {
             disposeWindow(window, containing: container)
@@ -161,12 +161,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func pickerSelectionUpdatesVisibleContentAndModelSelectionWhenConnected() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -182,8 +182,8 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func externalPanelUpdatesRefreshDisplayedTabs() async {
-        let controller = WIInspectorController()
-        let container = WIInspectorViewController(
+        let controller = WISessionController()
+        let container = WIContainerViewController(
             controller,
             webView: nil,
             tabs: [.dom(), .network()]
@@ -191,34 +191,34 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
 
         container.loadViewIfNeeded()
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID, WIInspectorTab.networkTabID])
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
 
         let renderBaseline = container.contentRenderRevisionForTesting
-        controller.configurePanels([WIInspectorTab.dom().configuration])
+        controller.configurePanels([WITab.dom().configuration])
         await waitForRender(on: observers.render, after: renderBaseline)
 
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID])
-        #expect(container.selectedTabIdentifierForTesting == WIInspectorTab.domTabID)
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
+        #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
     }
 
     @Test
     func externalPanelUpdatesPreserveDuplicateCustomTabMetadata() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let firstController = MarkerViewController(marker: "first")
         let secondController = MarkerViewController(marker: "second")
-        let firstDescriptor = WIInspectorTab(
+        let firstDescriptor = WITab(
             id: "custom",
             title: "First",
             systemImage: "circle",
             viewControllerProvider: { _ in firstController }
         )
-        let secondDescriptor = WIInspectorTab(
+        let secondDescriptor = WITab(
             id: "custom",
             title: "Second",
             systemImage: "circle",
             viewControllerProvider: { _ in secondController }
         )
-        let container = WIInspectorViewController(
+        let container = WIContainerViewController(
             controller,
             webView: nil,
             tabs: [firstDescriptor, secondDescriptor]
@@ -231,8 +231,8 @@ struct TabViewControllerAppKitTabTests {
 
         let renderBaseline = container.contentRenderRevisionForTesting
         controller.configurePanels([
-            WIInspectorPanelConfiguration(kind: .custom("custom")),
-            WIInspectorPanelConfiguration(kind: .custom("custom"))
+            WIPanelConfiguration(kind: .custom("custom")),
+            WIPanelConfiguration(kind: .custom("custom"))
         ])
         await waitForRender(on: observers.render, after: renderBaseline)
 
@@ -249,8 +249,8 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func externalPanelUpdatesRejectUnsupportedCustomPanels() async {
-        let controller = WIInspectorController()
-        let container = WIInspectorViewController(
+        let controller = WISessionController()
+        let container = WIContainerViewController(
             controller,
             webView: nil,
             tabs: [.dom()]
@@ -258,11 +258,11 @@ struct TabViewControllerAppKitTabTests {
         let observers = attachTestObservers(to: container)
 
         container.loadViewIfNeeded()
-        #expect(container.displayedTabIDsForTesting == [WIInspectorTab.domTabID])
+        #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
 
         let renderBaseline = container.contentRenderRevisionForTesting
         controller.configurePanels([
-            WIInspectorPanelConfiguration(kind: .custom("remote-custom"))
+            WIPanelConfiguration(kind: .custom("remote-custom"))
         ])
         await waitForRender(on: observers.render, after: renderBaseline)
 
@@ -273,12 +273,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func pickerCanSwitchBackFromNetworkToDOM() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -299,12 +299,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func rebuildingTabsKeepsVisibleContentBoundToSelectedTab() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -327,12 +327,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func emptyTabsClearSelectionAndHideVisibleContent() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -351,12 +351,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func toolbarLayoutTracksSelectedTab() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -387,12 +387,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkSearchToolbarFieldUpdatesSearchText() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -418,12 +418,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkFilterToolbarItemBecomesProminentWhenFiltering() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -486,17 +486,17 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func replacingDescriptorWithSameIdentifierRebuildsCachedContentController() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let firstController = MarkerViewController(marker: "first")
         let secondController = MarkerViewController(marker: "second")
 
-        let firstDescriptor = WIInspectorTab(
+        let firstDescriptor = WITab(
             id: "custom",
             title: "Custom",
             systemImage: "circle",
             viewControllerProvider: { _ in firstController }
         )
-        let container = WIInspectorViewController(controller, webView: nil, tabs: [firstDescriptor])
+        let container = WIContainerViewController(controller, webView: nil, tabs: [firstDescriptor])
         let observers = attachTestObservers(to: container)
         container.loadViewIfNeeded()
 
@@ -504,7 +504,7 @@ struct TabViewControllerAppKitTabTests {
         #expect(initialVisible?.marker == "first")
 
         let renderBaseline = container.contentRenderRevisionForTesting
-        let replacedDescriptor = WIInspectorTab(
+        let replacedDescriptor = WITab(
             id: "custom",
             title: "Custom",
             systemImage: "circle",
@@ -519,23 +519,23 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func duplicateIdentifierTabsUseDistinctCachedContentControllers() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let firstController = MarkerViewController(marker: "first")
         let secondController = MarkerViewController(marker: "second")
-        let firstDescriptor = WIInspectorTab(
+        let firstDescriptor = WITab(
             id: "custom",
             title: "First",
             systemImage: "circle",
             viewControllerProvider: { _ in firstController }
         )
-        let secondDescriptor = WIInspectorTab(
+        let secondDescriptor = WITab(
             id: "custom",
             title: "Second",
             systemImage: "circle",
             viewControllerProvider: { _ in secondController }
         )
 
-        let container = WIInspectorViewController(
+        let container = WIContainerViewController(
             controller,
             webView: nil,
             tabs: [firstDescriptor, secondDescriptor]
@@ -561,12 +561,12 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func appKitSplitViewsUseStableAutosaveNamesAcrossTabSwitches() async {
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ]
-        let container = WIInspectorViewController(controller, webView: makeTestWebView(), tabs: descriptors)
+        let container = WIContainerViewController(controller, webView: makeTestWebView(), tabs: descriptors)
         let observers = attachTestObservers(to: container)
         let window = mountInWindow(container)
         defer {
@@ -581,8 +581,8 @@ struct TabViewControllerAppKitTabTests {
         #expect(networkController?.splitView.autosaveName == "WebInspectorKit.NetworkSplitView")
     }
 
-    private func makeDescriptor(id: String, title: String) -> WIInspectorTab {
-        WIInspectorTab(
+    private func makeDescriptor(id: String, title: String) -> WITab {
+        WITab(
             id: id,
             title: title,
             systemImage: "circle"
@@ -596,14 +596,14 @@ struct TabViewControllerAppKitTabTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func mountInWindow(_ container: WIInspectorViewController) -> NSWindow {
+    private func mountInWindow(_ container: WIContainerViewController) -> NSWindow {
         let window = NSWindow(contentViewController: container)
         container.loadViewIfNeeded()
         container.viewWillAppear()
         return window
     }
 
-    private func disposeWindow(_ window: NSWindow, containing container: WIInspectorViewController) {
+    private func disposeWindow(_ window: NSWindow, containing container: WIContainerViewController) {
         container.viewDidDisappear()
         window.orderOut(nil)
         window.contentViewController = nil
@@ -637,7 +637,7 @@ struct TabViewControllerAppKitTabTests {
     }
 
     private func attachTestObservers(
-        to container: WIInspectorViewController
+        to container: WIContainerViewController
     ) -> (render: AsyncValueQueue<UInt64>, toolbar: AsyncValueQueue<UInt64>) {
         let render = AsyncValueQueue<UInt64>()
         let toolbar = AsyncValueQueue<UInt64>()
@@ -671,7 +671,7 @@ struct TabViewControllerAppKitTabTests {
     private func selectTabViaPicker(
         index: Int,
         in window: NSWindow,
-        container: WIInspectorViewController,
+        container: WIContainerViewController,
         renderEvents: AsyncValueQueue<UInt64>
     ) async {
         guard

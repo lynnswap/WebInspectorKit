@@ -14,7 +14,7 @@ public final class WINetworkListViewController: UICollectionViewController {
         case main
     }
 
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let queryModel: WINetworkQueryState
     private var observationHandles: Set<ObservationHandle> = []
 
@@ -34,15 +34,15 @@ public final class WINetworkListViewController: UICollectionViewController {
         makeOverflowMenuElement()
     }
 
-    public init(inspector: WINetworkInspectorStore) {
-        self.inspector = inspector
-        self.queryModel = WINetworkQueryState(inspector: inspector)
+    public init(store: WINetworkStore) {
+        self.store = store
+        self.queryModel = WINetworkQueryState(store: store)
         super.init(collectionViewLayout: Self.makeListLayout())
         startObservingQueryState()
     }
 
-    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
-        self.inspector = inspector
+    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
+        self.store = store
         self.queryModel = queryModel
         super.init(collectionViewLayout: Self.makeListLayout())
         startObservingQueryState()
@@ -266,7 +266,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasEntries = !inspector.store.entries.isEmpty
+        let hasEntries = !store.store.entries.isEmpty
         let clearAction = UIAction(
             title: wiLocalized("network.controls.clear"),
             image: UIImage(systemName: "trash"),
@@ -284,15 +284,15 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func clearEntries() {
-        inspector.clear()
+        store.clear()
     }
 
     public override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let entry = dataSource.itemIdentifier(for: indexPath) else {
-            inspector.selectEntry(nil)
+            store.selectEntry(nil)
             return
         }
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
     }
 }
 
@@ -330,7 +330,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         UINavigationController(
             rootViewController: WINetworkListViewController(
-                inspector: WINetworkPreviewFixtures.makeInspector(mode: .root)
+                store: WINetworkPreviewFixtures.makeStore(mode: .root)
             )
         )
     }

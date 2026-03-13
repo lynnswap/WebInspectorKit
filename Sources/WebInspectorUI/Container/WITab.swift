@@ -15,16 +15,16 @@ public typealias WIPlatformViewController = NSViewController
 #endif
 
 @MainActor
-public final class WIInspectorTab: NSObject {
+public final class WITab: NSObject {
     public static let domTabID = "wi_dom"
     public static let elementTabID = "wi_element"
     public static let networkTabID = "wi_network"
 
-    public typealias Role = WIInspectorPanelConfiguration.Role
+    public typealias Role = WIPanelConfiguration.Role
 
-    public typealias ViewControllerProvider = @MainActor (WIInspectorTab) -> WIPlatformViewController
+    public typealias ViewControllerProvider = @MainActor (WITab) -> WIPlatformViewController
 
-    public let configuration: WIInspectorPanelConfiguration
+    public let configuration: WIPanelConfiguration
     public let identifier: String
     public let title: String
     public let image: WIPlatformImage?
@@ -33,12 +33,12 @@ public final class WIInspectorTab: NSObject {
     public var userInfo: Any?
 
     public var id: String { identifier }
-    public var panelKind: WIInspectorPanelKind { configuration.kind }
+    public var panelKind: WIPanelKind { configuration.kind }
 
     public init(
         title: String,
         image: WIPlatformImage?,
-        panelConfiguration: WIInspectorPanelConfiguration,
+        panelConfiguration: WIPanelConfiguration,
         viewControllerProvider: ViewControllerProvider? = nil,
         userInfo: Any? = nil
     ) {
@@ -53,7 +53,7 @@ public final class WIInspectorTab: NSObject {
     }
 
     public convenience init(
-        panelKind: WIInspectorPanelKind,
+        panelKind: WIPanelKind,
         title: String,
         image: WIPlatformImage?,
         role: Role = .other,
@@ -63,14 +63,14 @@ public final class WIInspectorTab: NSObject {
         self.init(
             title: title,
             image: image,
-            panelConfiguration: WIInspectorPanelConfiguration(kind: panelKind, role: role),
+            panelConfiguration: WIPanelConfiguration(kind: panelKind, role: role),
             viewControllerProvider: viewControllerProvider,
             userInfo: userInfo
         )
     }
 
     public convenience init(
-        panelKind: WIInspectorPanelKind,
+        panelKind: WIPanelKind,
         title: String,
         systemImage: String,
         role: Role = .other,
@@ -133,7 +133,7 @@ public final class WIInspectorTab: NSObject {
 #endif
     }
 
-    private static func panelKind(for identifier: String) -> WIInspectorPanelKind {
+    private static func panelKind(for identifier: String) -> WIPanelKind {
         switch identifier {
         case domTabID:
             .domTree
@@ -147,11 +147,11 @@ public final class WIInspectorTab: NSObject {
     }
 
     static func projectedTabs(
-        from panelConfigurations: [WIInspectorPanelConfiguration],
-        reusing existingTabs: [WIInspectorTab]
-    ) -> [WIInspectorTab] {
+        from panelConfigurations: [WIPanelConfiguration],
+        reusing existingTabs: [WITab]
+    ) -> [WITab] {
         var remainingTabs = existingTabs
-        var projectedTabs: [WIInspectorTab] = []
+        var projectedTabs: [WITab] = []
         projectedTabs.reserveCapacity(panelConfigurations.count)
 
         for panelConfiguration in panelConfigurations {
@@ -168,7 +168,7 @@ public final class WIInspectorTab: NSObject {
             if let reusableIndex = reusableIndexes.first {
                 let reusableTab = remainingTabs.remove(at: reusableIndex)
                 projectedTabs.append(
-                    WIInspectorTab(
+                    WITab(
                         title: reusableTab.title,
                         image: reusableTab.image,
                         panelConfiguration: panelConfiguration,
@@ -187,7 +187,7 @@ public final class WIInspectorTab: NSObject {
         return projectedTabs
     }
 
-    private static func fallbackTab(for panelConfiguration: WIInspectorPanelConfiguration) -> WIInspectorTab? {
+    private static func fallbackTab(for panelConfiguration: WIPanelConfiguration) -> WITab? {
         let fallbackTitle: String
         let fallbackSystemImage: String
 
@@ -205,7 +205,7 @@ public final class WIInspectorTab: NSObject {
             return nil
         }
 
-        return WIInspectorTab(
+        return WITab(
             title: fallbackTitle,
             image: systemImage(named: fallbackSystemImage, accessibilityDescription: fallbackTitle),
             panelConfiguration: panelConfiguration

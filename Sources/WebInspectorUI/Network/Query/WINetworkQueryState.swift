@@ -10,7 +10,7 @@ import UIKit
 @MainActor
 @Observable
 public final class WINetworkQueryState {
-    public let inspector: WINetworkInspectorStore
+    public let store: WINetworkStore
     public var searchText: String = ""
     public var activeFilters: Set<NetworkResourceFilter> = [] {
         didSet {
@@ -37,7 +37,7 @@ public final class WINetworkQueryState {
     public var displayEntries: [NetworkEntry] {
         _ = displayEntriesRevision
         let trimmedQuery = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filteredEntries = inspector.store.entries.filter { entry in
+        let filteredEntries = store.store.entries.filter { entry in
             if !effectiveFilters.isEmpty,
                effectiveFilters.contains(entry.resourceFilter) == false {
                 return false
@@ -50,8 +50,8 @@ public final class WINetworkQueryState {
         return filteredEntries.sorted(using: sortDescriptors)
     }
 
-    public init(inspector: WINetworkInspectorStore) {
-        self.inspector = inspector
+    public init(store: WINetworkStore) {
+        self.store = store
         startObservingStore()
     }
 
@@ -115,7 +115,7 @@ public final class WINetworkQueryState {
 
 private extension WINetworkQueryState {
     func startObservingStore() {
-        inspector.store.observe(
+        store.store.observe(
             \.entries,
             options: [.removeDuplicates]
         ) { [weak self] _ in

@@ -8,7 +8,7 @@ import UIKit
 import AppKit
 #endif
 
-private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspectorStore")
+private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMStore")
 private let domDeleteUndoHistoryLimit = 128
 private let domGraphObservationThrottle = ObservationThrottle(
     interval: .milliseconds(80),
@@ -40,7 +40,7 @@ public struct WIDOMTreeRow: Identifiable, Hashable, Sendable {
 
 @MainActor
 @Observable
-public final class WIDOMInspectorStore {
+public final class WIDOMStore {
     package enum DeleteMutationEvent: Sendable, Equatable {
         case removed(nodeId: Int)
         case restored(nodeId: Int)
@@ -114,7 +114,7 @@ public final class WIDOMInspectorStore {
         return session.graphStore.selectedEntry
     }
 
-    public var backendSupport: WIInspectorBackendSupport {
+    public var backendSupport: WIBackendSupport {
         session.backendSupport
     }
 
@@ -131,8 +131,8 @@ public final class WIDOMInspectorStore {
         uiBridge = bridge
     }
 
-    package func makeInspectorWebView() -> WKWebView {
-        let inspectorWebView = frontendBridge?.makeInspectorWebView() ?? WKWebView(frame: .zero)
+    package func makeFrontendWebView() -> WKWebView {
+        let inspectorWebView = frontendBridge?.makeFrontendWebView() ?? WKWebView(frame: .zero)
         if session.hasPageWebView, session.graphStore.rootID != nil {
             syncFrontendTreeIfNeeded(preserveState: session.graphStore.rootID != nil)
         }
@@ -267,7 +267,7 @@ public final class WIDOMInspectorStore {
     package func detach() {
         resetInteractionState()
         session.detach()
-        frontendBridge?.detachInspectorWebView()
+        frontendBridge?.detachFrontendWebView()
         clearTreeState()
         errorMessage = nil
     }
@@ -284,7 +284,7 @@ public final class WIDOMInspectorStore {
         }
     }
 
-    public func reloadInspector(preserveState: Bool = false) async {
+    public func reloadFrontend(preserveState: Bool = false) async {
         await reloadInspectorImpl(preserveState: preserveState, minimumDepth: nil)
     }
 
@@ -325,7 +325,7 @@ public final class WIDOMInspectorStore {
     }
 }
 
-extension WIDOMInspectorStore: WIDOMFrontendBridgeDelegate {
+extension WIDOMStore: WIDOMFrontendBridgeDelegate {
     package func domFrontendDidReceiveRecoverableError(_ message: String) {
         publishRecoverableError(message)
     }
@@ -339,7 +339,7 @@ extension WIDOMInspectorStore: WIDOMFrontendBridgeDelegate {
     }
 }
 
-private extension WIDOMInspectorStore {
+private extension WIDOMStore {
     func startObservingGraphStore() {
         let graphStore = session.graphStore
 
@@ -842,7 +842,7 @@ private extension WIDOMInspectorStore {
     }
 
     func syncFrontendTreeIfNeeded(preserveState: Bool, depth: Int? = nil) {
-        guard frontendBridge?.hasInspectorWebView == true, session.graphStore.rootID != nil else {
+        guard frontendBridge?.hasFrontendWebView == true, session.graphStore.rootID != nil else {
             return
         }
         frontendBridge?.updateConfiguration(session.configuration)
@@ -1008,7 +1008,7 @@ private extension WIDOMInspectorStore {
     }
 }
 
-private extension WIDOMInspectorStore {
+private extension WIDOMStore {
     func prepareSelectionUIIfNeeded() {
         if let uiBridge {
             uiBridge.prepareForSelection(using: session)

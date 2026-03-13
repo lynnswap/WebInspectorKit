@@ -1,8 +1,8 @@
 import WebInspectorCore
 
 package extension WITransportSupportSnapshot {
-    var inspectorBackendSupport: WIInspectorBackendSupport {
-        let resolvedBackendKind: WIInspectorBackendKind
+    var backendSupport: WIBackendSupport {
+        let resolvedBackendKind: WIBackendKind
         switch self.backendKind {
         case .iOSNativeInspector:
             resolvedBackendKind = .nativeInspectorIOS
@@ -14,11 +14,11 @@ package extension WITransportSupportSnapshot {
 
         let mappedCapabilities = Set(
             capabilities.compactMap { capability in
-                WIInspectorBackendCapability(rawValue: capability.rawValue)
+                WIBackendCapability(rawValue: capability.rawValue)
             }
         )
 
-        return WIInspectorBackendSupport(
+        return WIBackendSupport(
             availability: availability == .supported ? .supported : .unsupported,
             backendKind: resolvedBackendKind,
             capabilities: mappedCapabilities,

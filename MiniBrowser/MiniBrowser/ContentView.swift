@@ -10,28 +10,28 @@ struct ContentView: View {
 
     @Environment(\.windowScene) private var windowScene
     @State private var model: BrowserViewModel?
-    @State private var inspectorController: WIInspectorController?
+    @State private var sessionController: WISessionController?
     @State private var didAutoPresentInspector = false
     @State private var didAutoStartSelection = false
 
     private let logger = Logger(subsystem: "MiniBrowser", category: "ContentView")
     
     var body: some View {
-        if let model, let inspectorController {
+        if let model, let sessionController {
             NavigationStack {
-                inspectorContent(model: model, inspectorController: inspectorController)
+                inspectorContent(model: model, sessionController: sessionController)
             }
         } else {
             Color.clear
                 .onAppear {
                     model = BrowserViewModel(url: initialBrowserURL())
-                    inspectorController = WIInspectorController()
+                    sessionController = WISessionController()
                 }
         }
     }
 
     @ViewBuilder
-    private func inspectorContent(model: BrowserViewModel, inspectorController: WIInspectorController) -> some View {
+    private func inspectorContent(model: BrowserViewModel, sessionController: WISessionController) -> some View {
         ContentWebView(model: model)
             .task(
                 id: AutoInspectorPresentationTrigger(
@@ -42,7 +42,7 @@ struct ContentView: View {
                 maybeAutoPresentInspector(
                     windowScene: windowScene,
                     model: model,
-                    inspectorController: inspectorController
+                    sessionController: sessionController
                 )
             }
             .toolbar {
@@ -51,7 +51,7 @@ struct ContentView: View {
                         _ = presentWebInspector(
                             windowScene: windowScene,
                             model: model,
-                            inspectorController: inspectorController
+                            sessionController: sessionController
                         )
                     } label: {
                         Image(systemName: "chevron.left.forwardslash.chevron.right")
@@ -87,7 +87,7 @@ struct ContentView: View {
     private func maybeAutoPresentInspector(
         windowScene: WindowScene?,
         model: BrowserViewModel,
-        inspectorController: WIInspectorController
+        sessionController: WISessionController
     ) {
         guard !didAutoPresentInspector else {
             return
@@ -104,18 +104,18 @@ struct ContentView: View {
         let didPresent = presentWebInspector(
             windowScene: windowScene,
             model: model,
-            inspectorController: inspectorController,
+            sessionController: sessionController,
             tabs: autoInspectorTabs(from: environment)
         )
         didAutoPresentInspector = didPresent
         maybeAutoStartSelectionIfNeeded(
             didPresent: didPresent,
-            inspectorController: inspectorController,
+            sessionController: sessionController,
             environment: environment
         )
     }
 
-    private func autoInspectorTabs(from environment: [String: String]) -> [WIInspectorTab] {
+    private func autoInspectorTabs(from environment: [String: String]) -> [WITab] {
         guard let rawValue = environment["MINIBROWSER_AUTO_OPEN_INSPECTOR_TABS"] else {
             return [.dom(), .network()]
         }
@@ -124,7 +124,7 @@ struct ContentView: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        var tabs: [WIInspectorTab] = []
+        var tabs: [WITab] = []
         for entry in requested {
             switch entry {
             case "dom":
@@ -142,7 +142,7 @@ struct ContentView: View {
     @MainActor
     private func maybeAutoStartSelectionIfNeeded(
         didPresent: Bool,
-        inspectorController: WIInspectorController,
+        sessionController: WISessionController,
         environment: [String: String]
     ) {
         guard didPresent else {
@@ -159,8 +159,8 @@ struct ContentView: View {
         Task { @MainActor in
             logger.notice("auto-starting DOM selection mode for diagnostics")
             for _ in 0..<100 {
-                if inspectorController.dom.hasPageWebView {
-                    inspectorController.dom.toggleSelectionMode()
+                if sessionController.domStore.hasPageWebView {
+                    sessionController.domStore.toggleSelectionMode()
                     return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)

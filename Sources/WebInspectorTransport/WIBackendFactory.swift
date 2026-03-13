@@ -1,7 +1,7 @@
 import WebInspectorCore
 
 @MainActor
-package enum WIInspectorBackendFactory {
+package enum WIBackendFactory {
     package static func makeDOMBackend(
         configuration: DOMConfiguration,
         graphStore: DOMGraphStore,
@@ -12,7 +12,7 @@ package enum WIInspectorBackendFactory {
             return DOMTransportDriver(
                 configuration: configuration,
                 graphStore: graphStore,
-                initialSupport: resolvedSupport.inspectorBackendSupport
+                initialSupport: resolvedSupport.backendSupport
             )
         }
         return DOMLegacyPageDriver(
@@ -28,7 +28,7 @@ package enum WIInspectorBackendFactory {
         let resolvedSupport = supportSnapshot ?? WITransportSession().supportSnapshot
         if resolvedSupport.isSupported {
             return NetworkTransportDriver(
-                initialSupport: resolvedSupport.inspectorBackendSupport
+                initialSupport: resolvedSupport.backendSupport
             )
         }
         return NetworkLegacyPageDriver()

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WIInspectorBackendKind: String, Sendable {
+public enum WIBackendKind: String, Sendable {
     case nativeInspectorIOS
     case nativeInspectorMacOS
     case privateCore
@@ -9,27 +9,27 @@ public enum WIInspectorBackendKind: String, Sendable {
     case unsupported
 }
 
-public enum WIInspectorBackendCapability: String, Hashable, Sendable {
+public enum WIBackendCapability: String, Hashable, Sendable {
     case domDomain
     case networkDomain
     case pageTargetRouting
 }
 
-public struct WIInspectorBackendSupport: Sendable {
+public struct WIBackendSupport: Sendable {
     public enum Availability: String, Sendable {
         case supported
         case unsupported
     }
 
     public let availability: Availability
-    public let backendKind: WIInspectorBackendKind
-    public let capabilities: Set<WIInspectorBackendCapability>
+    public let backendKind: WIBackendKind
+    public let capabilities: Set<WIBackendCapability>
     public let failureReason: String?
 
     public init(
         availability: Availability,
-        backendKind: WIInspectorBackendKind,
-        capabilities: Set<WIInspectorBackendCapability> = [],
+        backendKind: WIBackendKind,
+        capabilities: Set<WIBackendCapability> = [],
         failureReason: String? = nil
     ) {
         self.availability = availability

@@ -4,15 +4,15 @@ import WebKit
 
 @MainActor
 @Observable
-public final class WIInspectorController {
+public final class WISessionController {
     public private(set) var lifecycle: WISessionLifecycle = .disconnected
     public private(set) var lastRecoverableError: String?
-    public private(set) var panelConfigurations: [WIInspectorPanelConfiguration] = []
-    public private(set) var selectedPanelConfiguration: WIInspectorPanelConfiguration?
+    public private(set) var panelConfigurations: [WIPanelConfiguration] = []
+    public private(set) var selectedPanelConfiguration: WIPanelConfiguration?
     package private(set) var panelConfigurationRevision: UInt64 = 0
 
-    public let dom: WIDOMInspectorStore
-    public let network: WINetworkInspectorStore
+    public let domStore: WIDOMStore
+    public let networkStore: WINetworkStore
 
     private let rebindClock: any Clock<Duration>
     private weak var connectedPageWebView: WKWebView?
@@ -29,13 +29,13 @@ public final class WIInspectorController {
         domFrontendBridge: (any WIDOMFrontendBridge)? = nil,
         rebindClock: any Clock<Duration> = ContinuousClock()
     ) {
-        self.dom = WIDOMInspectorStore(
+        self.domStore = WIDOMStore(
             session: domSession,
             frontendBridge: domFrontendBridge
         )
-        self.network = WINetworkInspectorStore(session: networkSession)
+        self.networkStore = WINetworkStore(session: networkSession)
         self.rebindClock = rebindClock
-        self.dom.setRecoverableErrorHandler { [weak self] message in
+        self.domStore.setRecoverableErrorHandler { [weak self] message in
             self?.lastRecoverableError = message
         }
     }
@@ -50,8 +50,8 @@ public final class WIInspectorController {
         navigationRebindTask = nil
         stopObservingPageLoading()
         resetNavigationRebindState()
-        dom.suspend()
-        network.suspend()
+        domStore.suspend()
+        networkStore.suspend()
         lifecycle = .suspended
     }
 
@@ -61,12 +61,12 @@ public final class WIInspectorController {
         stopObservingPageLoading()
         connectedPageWebView = nil
         resetNavigationRebindState()
-        dom.detach()
-        network.detach()
+        domStore.detach()
+        networkStore.detach()
         lifecycle = .disconnected
     }
 
-    public func configurePanels(_ panelConfigurations: [WIInspectorPanelConfiguration]) {
+    public func configurePanels(_ panelConfigurations: [WIPanelConfiguration]) {
         hasConfiguredPanelsFromUI = true
         let didChange = self.panelConfigurations != panelConfigurations
         self.panelConfigurations = panelConfigurations
@@ -82,15 +82,15 @@ public final class WIInspectorController {
         notifyPanelConfigurationObservers()
     }
 
-    public var domBackendSupport: WIInspectorBackendSupport {
-        dom.backendSupport
+    public var domBackendSupport: WIBackendSupport {
+        domStore.backendSupport
     }
 
-    public var networkBackendSupport: WIInspectorBackendSupport {
-        network.backendSupport
+    public var networkBackendSupport: WIBackendSupport {
+        networkStore.backendSupport
     }
 
-    package func setSelectedPanelFromUI(_ panelConfiguration: WIInspectorPanelConfiguration?) {
+    package func setSelectedPanelFromUI(_ panelConfiguration: WIPanelConfiguration?) {
         let resolvedPanel = resolveSelectionCandidate(panelConfiguration)
         if panelConfiguration != nil, resolvedPanel == nil {
             return
@@ -141,7 +141,7 @@ public final class WIInspectorController {
     }
 }
 
-private extension WIInspectorController {
+private extension WISessionController {
     struct RuntimeAttachmentState {
         let domEnabled: Bool
         let networkEnabled: Bool
@@ -153,8 +153,8 @@ private extension WIInspectorController {
 #if os(macOS)
         lifecycle == .active
             && (
-                dom.backendSupport.backendKind == .nativeInspectorMacOS
-                    || network.backendSupport.backendKind == .nativeInspectorMacOS
+                domStore.backendSupport.backendKind == .nativeInspectorMacOS
+                    || networkStore.backendSupport.backendKind == .nativeInspectorMacOS
             )
 #else
         false
@@ -229,10 +229,10 @@ private extension WIInspectorController {
         navigationRebindTask?.cancel()
         navigationRebindTask = nil
         if runtimeState.domEnabled {
-            dom.session.prepareForNavigationReconnect()
+            domStore.session.prepareForNavigationReconnect()
         }
         if runtimeState.networkEnabled {
-            network.session.prepareForNavigationReconnect()
+            networkStore.session.prepareForNavigationReconnect()
         }
         navigationRebindPrepared = true
         scheduleNavigationRebindResume()
@@ -283,7 +283,7 @@ private extension WIInspectorController {
 
             let runtimeState = self.currentRuntimeAttachmentState()
             if runtimeState.networkEnabled {
-                self.network.session.resumeAfterNavigationReconnect(to: webView)
+                self.networkStore.session.resumeAfterNavigationReconnect(to: webView)
             }
             guard runtimeState.domEnabled else {
                 self.navigationRebindPrepared = false
@@ -291,7 +291,7 @@ private extension WIInspectorController {
             }
 
             do {
-                try await self.dom.session.resumeAfterNavigationReconnect(
+                try await self.domStore.session.resumeAfterNavigationReconnect(
                     to: webView,
                     reloadDocument: true
                 )
@@ -306,8 +306,8 @@ private extension WIInspectorController {
         }
     }
 
-    func applyNormalizedSelection(preferredPanel: WIInspectorPanelConfiguration?) {
-        let normalizedPanel: WIInspectorPanelConfiguration?
+    func applyNormalizedSelection(preferredPanel: WIPanelConfiguration?) {
+        let normalizedPanel: WIPanelConfiguration?
         if panelConfigurations.isEmpty {
             normalizedPanel = nil
         } else if let preferredPanel,
@@ -326,8 +326,8 @@ private extension WIInspectorController {
     }
 
     func resolveSelectionCandidate(
-        _ requestedPanelConfiguration: WIInspectorPanelConfiguration?
-    ) -> WIInspectorPanelConfiguration? {
+        _ requestedPanelConfiguration: WIPanelConfiguration?
+    ) -> WIPanelConfiguration? {
         guard let requestedPanelConfiguration else {
             return nil
         }
@@ -345,47 +345,47 @@ private extension WIInspectorController {
 
     func syncRuntimeStateFromTabs() {
         if lifecycle == .suspended {
-            dom.suspend()
-            network.suspend()
+            domStore.suspend()
+            networkStore.suspend()
             return
         }
 
         let runtimeState = currentRuntimeAttachmentState()
         if navigationRebindPrepared, connectedPageWebView?.isLoading == true {
             if runtimeState.domEnabled {
-                dom.session.prepareForNavigationReconnect()
+                domStore.session.prepareForNavigationReconnect()
             }
             if runtimeState.networkEnabled {
-                network.session.prepareForNavigationReconnect()
+                networkStore.session.prepareForNavigationReconnect()
             }
-            dom.setAutoSnapshotEnabled(runtimeState.domEnabled && runtimeState.domAutoSnapshotEnabled)
-            network.setMode(runtimeState.networkEnabled ? runtimeState.networkMode : .buffering)
+            domStore.setAutoSnapshotEnabled(runtimeState.domEnabled && runtimeState.domAutoSnapshotEnabled)
+            networkStore.setMode(runtimeState.networkEnabled ? runtimeState.networkMode : .buffering)
             return
         }
 
         if let webView = connectedPageWebView {
             if runtimeState.domEnabled {
-                dom.attach(to: webView)
+                domStore.attach(to: webView)
             } else {
-                dom.suspend()
+                domStore.suspend()
             }
 
             if runtimeState.networkEnabled {
-                network.attach(to: webView)
+                networkStore.attach(to: webView)
             } else {
-                network.suspend()
+                networkStore.suspend()
             }
         } else {
             if runtimeState.domEnabled == false || lifecycle != .disconnected {
-                dom.suspend()
+                domStore.suspend()
             }
             if runtimeState.networkEnabled == false || lifecycle != .disconnected {
-                network.suspend()
+                networkStore.suspend()
             }
         }
 
-        dom.setAutoSnapshotEnabled(runtimeState.domEnabled && runtimeState.domAutoSnapshotEnabled)
-        network.setMode(runtimeState.networkEnabled ? runtimeState.networkMode : .buffering)
+        domStore.setAutoSnapshotEnabled(runtimeState.domEnabled && runtimeState.domAutoSnapshotEnabled)
+        networkStore.setMode(runtimeState.networkEnabled ? runtimeState.networkMode : .buffering)
     }
 
     func currentRuntimeAttachmentState() -> RuntimeAttachmentState {

@@ -57,7 +57,7 @@ final class NetworkLegacyPageDriver: NSObject, WINetworkBackend, PageAgent {
         bridgeMode
     }
 
-    var support: WIInspectorBackendSupport {
+    var support: WIBackendSupport {
         bridgeMode.networkBackendSupport()
     }
 

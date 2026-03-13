@@ -31,7 +31,7 @@ import WebInspectorResources
         let itemIDs: [DetailItemID]
     }
 
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let showsNavigationControls: Bool
     @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
@@ -47,20 +47,20 @@ import WebInspectorResources
     @ObservationIgnored private lazy var dataSource = makeDataSource()
     
     private var entry:NetworkEntry? {
-        inspector.selectedEntry
+        store.selectedEntry
     }
 
     public init(
-        inspector: WINetworkInspectorStore,
+        store: WINetworkStore,
         showsNavigationControls: Bool = true
     ) {
-        self.inspector = inspector
+        self.store = store
         self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
 
-        display(inspector.selectedEntry)
+        display(store.selectedEntry)
 
-        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
+        store.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
             self?.display(newValue)
         }
         .store(in: &observationHandles)
@@ -603,7 +603,7 @@ import WebInspectorResources
             return
         }
 
-        let preview = WINetworkBodyPreviewViewController(entry: entry, inspector: inspector, bodyState: body)
+        let preview = WINetworkBodyPreviewViewController(entry: entry, store: store, bodyState: body)
         if showsNavigationControls {
             navigationController?.pushViewController(preview, animated: true)
             return
@@ -757,7 +757,7 @@ import SwiftUI
             return UIViewController()
         }
         return UINavigationController(
-            rootViewController: WINetworkDetailViewController(inspector: context.inspector)
+            rootViewController: WINetworkDetailViewController(store: context.store)
         )
     }
 }

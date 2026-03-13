@@ -52,11 +52,11 @@ package final class WINetworkRuntime {
         backend.webView != nil
     }
 
-    package var backendSupport: WIInspectorBackendSupport {
+    package var backendSupport: WIBackendSupport {
         backend.support
     }
 
-    package var transportCapabilities: Set<WIInspectorBackendCapability> {
+    package var transportCapabilities: Set<WIBackendCapability> {
         backend.support.capabilities
     }
 
@@ -254,7 +254,7 @@ private final class WINetworkUnavailableBackend: WINetworkBackend {
     weak var webView: WKWebView?
     let store = NetworkStore()
 
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .unsupported,
         failureReason: "No backend was provided."
@@ -292,7 +292,7 @@ private final class WINetworkUnavailableBackend: WINetworkBackend {
 private final class WINetworkBodyFetchingBackend: WINetworkBackend {
     weak var webView: WKWebView?
     let store = NetworkStore()
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .unsupported,
         failureReason: "Test body fetch backend."

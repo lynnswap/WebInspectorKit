@@ -69,11 +69,11 @@ package final class WIDOMFrontendRuntime: NSObject, WIDOMFrontendBridge {
         session.eventSink = self
     }
 
-    package var hasInspectorWebView: Bool {
+    package var hasFrontendWebView: Bool {
         webView != nil
     }
 
-    package func makeInspectorWebView() -> WKWebView {
+    package func makeFrontendWebView() -> WKWebView {
         if let webView {
             attachInspectorWebView()
             return webView
@@ -86,11 +86,11 @@ package final class WIDOMFrontendRuntime: NSObject, WIDOMFrontendBridge {
         return newWebView
     }
 
-    package func detachInspectorWebView() {
+    package func detachFrontendWebView() {
         guard let webView else {
             return
         }
-        detachInspectorWebView(ifMatches: webView)
+        detachFrontendWebView(ifMatches: webView)
         resetInspectorState()
         self.webView = nil
     }
@@ -154,7 +154,7 @@ package final class WIDOMFrontendRuntime: NSObject, WIDOMFrontendBridge {
         webView.navigationDelegate = self
     }
 
-    private func detachInspectorWebView(ifMatches webView: InspectorWebView) {
+    private func detachFrontendWebView(ifMatches webView: InspectorWebView) {
         guard self.webView === webView else {
             return
         }
@@ -336,7 +336,7 @@ private extension WIDOMFrontendRuntime {
         )
         if didSelectNewNode || didStyleRelevantSnapshotChange {
             inspectorLogger.notice(
-                "frontend selection updated nodeId=\(nodeID, privacy: .public); matched styles refresh is delegated to WIDOMInspectorStore"
+                "frontend selection updated nodeId=\(nodeID, privacy: .public); matched styles refresh is delegated to WIDOMStore"
             )
         }
     }

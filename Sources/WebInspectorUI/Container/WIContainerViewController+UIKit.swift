@@ -16,19 +16,19 @@ final class WIUIKitTabRenderCache {
     private var compactTabByTabID: [ObjectIdentifier: UITab] = [:]
     private var modelTabIDByCompactTabID: [ObjectIdentifier: ObjectIdentifier] = [:]
 
-    func rootViewController(for tab: WIInspectorTab) -> UIViewController? {
+    func rootViewController(for tab: WITab) -> UIViewController? {
         rootViewControllerByTabID[ObjectIdentifier(tab)]
     }
 
-    func setRootViewController(_ viewController: UIViewController, for tab: WIInspectorTab) {
+    func setRootViewController(_ viewController: UIViewController, for tab: WITab) {
         rootViewControllerByTabID[ObjectIdentifier(tab)] = viewController
     }
 
-    func compactTab(for tab: WIInspectorTab) -> UITab? {
+    func compactTab(for tab: WITab) -> UITab? {
         compactTabByTabID[ObjectIdentifier(tab)]
     }
 
-    func setCompactTab(_ compactTab: UITab, for tab: WIInspectorTab) {
+    func setCompactTab(_ compactTab: UITab, for tab: WITab) {
         let tabID = ObjectIdentifier(tab)
         if let previousCompactTab = compactTabByTabID[tabID] {
             modelTabIDByCompactTabID.removeValue(forKey: ObjectIdentifier(previousCompactTab))
@@ -37,14 +37,14 @@ final class WIUIKitTabRenderCache {
         modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] = tabID
     }
 
-    func modelTab(for compactTab: UITab, among tabs: [WIInspectorTab]) -> WIInspectorTab? {
+    func modelTab(for compactTab: UITab, among tabs: [WITab]) -> WITab? {
         guard let modelTabID = modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] else {
             return nil
         }
         return tabs.first(where: { ObjectIdentifier($0) == modelTabID })
     }
 
-    func prune(activeTabs: [WIInspectorTab]) {
+    func prune(activeTabs: [WITab]) {
         let activeTabIDs = Set(activeTabs.map { ObjectIdentifier($0) })
         rootViewControllerByTabID = rootViewControllerByTabID.filter { activeTabIDs.contains($0.key) }
         compactTabByTabID = compactTabByTabID.filter { activeTabIDs.contains($0.key) }
@@ -66,15 +66,15 @@ final class WIUIKitTabRenderCache {
 }
 
 @MainActor
-public final class WIInspectorViewController: UIViewController {
+public final class WIContainerViewController: UIViewController {
     private enum HostKind {
         case compact
         case regular
     }
 
-    public private(set) var inspectorController: WIInspectorController
+    public private(set) var sessionController: WISessionController
 
-    private var requestedTabs: [WIInspectorTab]
+    private var requestedTabs: [WITab]
     private let renderCache = WIUIKitTabRenderCache()
     private var sessionObservationHandles: Set<ObservationHandle> = []
     private var panelConfigurationObserverID: UUID?
@@ -87,17 +87,17 @@ public final class WIInspectorViewController: UIViewController {
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
 
     public init(
-        _ inspectorController: WIInspectorController,
+        _ sessionController: WISessionController,
         webView: WKWebView?,
-        tabs: [WIInspectorTab] = [.dom(), .network()]
+        tabs: [WITab] = [.dom(), .network()]
     ) {
-        self.inspectorController = inspectorController
+        self.sessionController = sessionController
         self.requestedTabs = tabs
         super.init(nibName: nil, bundle: nil)
         if let webView {
-            inspectorController.setPageWebViewFromUI(webView)
+            sessionController.setPageWebViewFromUI(webView)
         }
-        inspectorController.configurePanels(tabs.map(\.configuration))
+        sessionController.configurePanels(tabs.map(\.configuration))
     }
 
     @available(*, unavailable)
@@ -107,26 +107,26 @@ public final class WIInspectorViewController: UIViewController {
 
     isolated deinit {
         if let panelConfigurationObserverID {
-            inspectorController.removePanelConfigurationObserver(panelConfigurationObserverID)
+            sessionController.removePanelConfigurationObserver(panelConfigurationObserverID)
         }
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
-        inspectorController.setPageWebViewFromUI(webView)
+        sessionController.setPageWebViewFromUI(webView)
         if isViewLoaded {
-            inspectorController.activateFromUIIfPossible()
+            sessionController.activateFromUIIfPossible()
         }
     }
 
-    public func setInspectorController(_ inspectorController: WIInspectorController) {
-        guard self.inspectorController !== inspectorController else {
+    public func setSessionController(_ sessionController: WISessionController) {
+        guard self.sessionController !== sessionController else {
             return
         }
 
         let currentRequestedTabs = requestedTabs
-        let currentSelectedPanel = self.inspectorController.selectedPanelConfiguration
-        let currentPageWebView = self.inspectorController.pageWebViewForUI
-        let previousController = self.inspectorController
+        let currentSelectedPanel = self.sessionController.selectedPanelConfiguration
+        let currentPageWebView = self.sessionController.pageWebViewForUI
+        let previousController = self.sessionController
         if let panelConfigurationObserverID {
             previousController.removePanelConfigurationObserver(panelConfigurationObserverID)
             self.panelConfigurationObserverID = nil
@@ -134,22 +134,22 @@ public final class WIInspectorViewController: UIViewController {
         renderCache.resetAll()
         previousController.disconnect()
 
-        self.inspectorController = inspectorController
-        inspectorController.setPageWebViewFromUI(currentPageWebView)
-        inspectorController.configurePanels(currentRequestedTabs.map(\.configuration))
-        inspectorController.setSelectedPanelFromUI(currentSelectedPanel)
+        self.sessionController = sessionController
+        sessionController.setPageWebViewFromUI(currentPageWebView)
+        sessionController.configurePanels(currentRequestedTabs.map(\.configuration))
+        sessionController.setSelectedPanelFromUI(currentSelectedPanel)
         bindSessionState()
 
         if isViewLoaded {
             synchronizeRequestedTabsFromControllerIfNeeded()
             rebuildLayout(forceHostReplacement: true)
-            inspectorController.activateFromUIIfPossible()
+            sessionController.activateFromUIIfPossible()
         }
     }
 
-    public func setTabs(_ tabs: [WIInspectorTab]) {
+    public func setTabs(_ tabs: [WITab]) {
         requestedTabs = tabs
-        inspectorController.configurePanels(tabs.map(\.configuration))
+        sessionController.configurePanels(tabs.map(\.configuration))
         if isViewLoaded {
             rebuildLayout(forceHostReplacement: true)
         }
@@ -168,13 +168,13 @@ public final class WIInspectorViewController: UIViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        inspectorController.activateFromUIIfPossible()
+        sessionController.activateFromUIIfPossible()
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if view.window == nil {
-            inspectorController.suspend()
+            sessionController.suspend()
         }
     }
 
@@ -204,10 +204,10 @@ public final class WIInspectorViewController: UIViewController {
     private func bindSessionState() {
         sessionObservationHandles.removeAll()
         if let panelConfigurationObserverID {
-            inspectorController.removePanelConfigurationObserver(panelConfigurationObserverID)
+            sessionController.removePanelConfigurationObserver(panelConfigurationObserverID)
         }
 
-        panelConfigurationObserverID = inspectorController.addPanelConfigurationObserver { [weak self] in
+        panelConfigurationObserverID = sessionController.addPanelConfigurationObserver { [weak self] in
             guard let self else {
                 return
             }
@@ -217,7 +217,7 @@ public final class WIInspectorViewController: UIViewController {
             }
         }
 
-        inspectorController.observe(\.panelConfigurationRevision) { [weak self] _ in
+        sessionController.observe(\.panelConfigurationRevision) { [weak self] _ in
             guard let self else {
                 return
             }
@@ -230,11 +230,11 @@ public final class WIInspectorViewController: UIViewController {
     }
 
     private func synchronizeRequestedTabsFromControllerIfNeeded() {
-        let panelConfigurations = inspectorController.panelConfigurations
+        let panelConfigurations = sessionController.panelConfigurations
         guard requestedTabs.map(\.configuration) != panelConfigurations else {
             return
         }
-        requestedTabs = WIInspectorTab.projectedTabs(
+        requestedTabs = WITab.projectedTabs(
             from: panelConfigurations,
             reusing: requestedTabs
         )
@@ -273,13 +273,13 @@ public final class WIInspectorViewController: UIViewController {
         switch kind {
         case .compact:
             host = WICompactTabHostViewController(
-                model: inspectorController,
+                model: sessionController,
                 tabs: requestedTabs,
                 renderCache: renderCache
             )
         case .regular:
             host = WIRegularTabHostViewController(
-                model: inspectorController,
+                model: sessionController,
                 tabs: requestedTabs,
                 renderCache: renderCache
             )
@@ -304,7 +304,7 @@ public final class WIInspectorViewController: UIViewController {
         rebuildLayout()
     }
 
-    func makeTabRootViewController(for tab: WIInspectorTab) -> UIViewController? {
+    func makeTabRootViewController(for tab: WITab) -> UIViewController? {
         if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
@@ -316,11 +316,11 @@ public final class WIInspectorViewController: UIViewController {
         } else {
             switch tab.panelKind {
             case .domTree:
-                viewController = WIDOMViewController(inspector: inspectorController.dom)
+                viewController = WIDOMViewController(store: sessionController.domStore)
             case .domDetail:
-                viewController = WIDOMDetailViewController(inspector: inspectorController.dom)
+                viewController = WIDOMDetailViewController(store: sessionController.domStore)
             case .network:
-                viewController = WINetworkViewController(inspector: inspectorController.network)
+                viewController = WINetworkViewController(store: sessionController.networkStore)
             case .custom:
                 viewController = nil
             }
@@ -351,11 +351,11 @@ extension WIRegularTabHostViewController: WIUIKitTabHost {}
 import SwiftUI
 #Preview("Tab Container (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIInspectorPreviewFixtures.makeController()
-        let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
-        WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
-        WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)
-        return WIInspectorViewController(
+        let session = WISessionPreviewFixtures.makeSessionController()
+        let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.domStore)
+        WIDOMPreviewFixtures.applySampleSelection(to: session.domStore, mode: .selected)
+        WINetworkPreviewFixtures.applySampleData(to: session.networkStore, mode: .detail)
+        return WIContainerViewController(
             session,
             webView: previewWebView,
             tabs: [.dom(), .network()]

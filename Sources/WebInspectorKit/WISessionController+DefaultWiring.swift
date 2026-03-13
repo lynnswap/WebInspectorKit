@@ -2,10 +2,10 @@ import WebInspectorCore
 import WebInspectorTransport
 import WebInspectorUI
 
-public extension WIInspectorController {
-    convenience init(configuration: WIInspectorConfiguration = .init()) {
+public extension WISessionController {
+    convenience init(configuration: WISessionConfiguration = .init()) {
         let domGraphStore = DOMGraphStore()
-        let domBackend = WIInspectorBackendFactory.makeDOMBackend(
+        let domBackend = WIBackendFactory.makeDOMBackend(
             configuration: configuration.dom,
             graphStore: domGraphStore
         )
@@ -16,7 +16,7 @@ public extension WIInspectorController {
         )
         let domFrontendBridge = WIDOMFrontendRuntime(session: domRuntime)
 
-        let networkBackend = WIInspectorBackendFactory.makeNetworkBackend(
+        let networkBackend = WIBackendFactory.makeNetworkBackend(
             configuration: configuration.network
         )
         let networkRuntime = WINetworkRuntime(

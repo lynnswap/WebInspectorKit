@@ -4,7 +4,7 @@ import WebKit
 package protocol WIDOMBackend: AnyObject {
     var eventSink: (any WIDOMProtocolEventSink)? { get set }
     var webView: WKWebView? { get }
-    var support: WIInspectorBackendSupport { get }
+    var support: WIBackendSupport { get }
 
     func updateConfiguration(_ configuration: DOMConfiguration)
     func attachPageWebView(_ newWebView: WKWebView?)

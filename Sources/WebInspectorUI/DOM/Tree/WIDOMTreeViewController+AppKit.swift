@@ -10,15 +10,15 @@ import WebInspectorResources
 
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private var contextMenuNodeID: Int?
     private weak var inspectorWebView: WKWebView?
     private let errorLabel = NSTextField(labelWithString: "")
     private var observationHandles: Set<ObservationHandle> = []
 
-    public init(inspector: WIDOMInspectorStore) {
-        self.inspector = inspector
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+    public init(store: WIDOMStore) {
+        self.store = store
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -34,10 +34,10 @@ public final class WIDOMTreeViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let inspectorWebView = inspector.makeInspectorWebView()
+        let inspectorWebView = store.makeFrontendWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         self.inspectorWebView = inspectorWebView
-        inspector.setDOMContextMenuProvider { [weak self] nodeID in
+        store.setDOMContextMenuProvider { [weak self] nodeID in
             guard let self else {
                 return nil
             }
@@ -125,7 +125,7 @@ public final class WIDOMTreeViewController: NSViewController {
         guard let nodeID else {
             return
         }
-        inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        store.deleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {
@@ -140,7 +140,7 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         Task {
             do {
-                let text = try await inspector.session.selectionCopyText(nodeId: nodeID, kind: kind)
+                let text = try await store.session.selectionCopyText(nodeId: nodeID, kind: kind)
                 guard !text.isEmpty else {
                     return
                 }
@@ -164,7 +164,7 @@ public final class WIDOMTreeViewController: NSViewController {
     }
 
     private func startObservingErrorState() {
-        inspector.observe(
+        store.observe(
             \.errorMessage,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -172,7 +172,7 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         .store(in: &observationHandles)
 
-        inspector.session.graphStore.observe(
+        store.session.graphStore.observe(
             \.rootID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -182,9 +182,9 @@ public final class WIDOMTreeViewController: NSViewController {
     }
 
     private func updateErrorPresentation() {
-        guard let errorMessage = inspector.errorMessage,
+        guard let errorMessage = store.errorMessage,
               errorMessage.isEmpty == false,
-              inspector.session.graphStore.rootID == nil else {
+              store.session.graphStore.rootID == nil else {
             errorLabel.stringValue = ""
             errorLabel.isHidden = true
             inspectorWebView?.isHidden = false
@@ -205,7 +205,7 @@ public final class WIDOMTreeViewController: NSViewController {
 import SwiftUI
 #Preview("DOM Tree (AppKit)") {
     WIAppKitPreviewContainer {
-        WIDOMTreeViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected))
+        WIDOMTreeViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
     }
 }
 #endif

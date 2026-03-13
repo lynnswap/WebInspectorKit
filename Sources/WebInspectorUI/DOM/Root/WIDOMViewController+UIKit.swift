@@ -10,7 +10,7 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
         case regular
     }
 
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private let compactRootViewController: WIDOMTreeViewController
     private let compactNavigationController: UINavigationController
     private let regularHostViewController: WIDOMRegularSplitViewController
@@ -42,17 +42,17 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
         true
     }
 
-    public init(inspector: WIDOMInspectorStore) {
-        self.inspector = inspector
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+    public init(store: WIDOMStore) {
+        self.store = store
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         self.compactRootViewController = WIDOMTreeViewController(
-            inspector: inspector,
+            store: store,
             showsNavigationControls: true
         )
         let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
         wiApplyClearNavigationBarStyle(to: compactNavigationController)
         self.compactNavigationController = compactNavigationController
-        self.regularHostViewController = WIDOMRegularSplitViewController(inspector: inspector)
+        self.regularHostViewController = WIDOMRegularSplitViewController(store: store)
 
         super.init(nibName: nil, bundle: nil)
     }
@@ -122,7 +122,7 @@ public final class WIDOMViewController: UIViewController, WICompactNavigationHos
 
 @MainActor
 private final class WIDOMRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private let domTreeViewController: WIDOMTreeViewController
     private let domTreeNavigationController: UINavigationController
     private let elementDetailsViewController: WIDOMDetailViewController
@@ -153,11 +153,11 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         return item
     }()
 
-    init(inspector: WIDOMInspectorStore) {
-        self.inspector = inspector
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+    init(store: WIDOMStore) {
+        self.store = store
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         let domTreeViewController = WIDOMTreeViewController(
-            inspector: inspector,
+            store: store,
             showsNavigationControls: false
         )
         self.domTreeViewController = domTreeViewController
@@ -167,7 +167,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         self.domTreeNavigationController = domTreeNavigationController
 
         let elementDetailsViewController = WIDOMDetailViewController(
-            inspector: inspector,
+            store: store,
             showsNavigationControls: false
         )
         self.elementDetailsViewController = elementDetailsViewController
@@ -223,9 +223,9 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     }
 
     private func updateNavigationItemState() {
-        pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.isEnabled = store.hasPageWebView
         pickItem.image = UIImage(systemName: pickSymbolName)
-        pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+        pickItem.tintColor = store.isSelectingElement ? .systemBlue : .label
         menuItem.menu = makeDOMSecondaryMenu()
 
         applyNavigationItemState(to: navigationItem)
@@ -267,21 +267,21 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         }
         hasStartedObservingNavigationState = true
 
-        inspector.observe(
+        store.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
         }
         .store(in: &navigationObservationHandles)
-        inspector.observe(
+        store.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
         }
         .store(in: &navigationObservationHandles)
-        inspector.session.graphStore.observe(
+        store.session.graphStore.observe(
             \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -298,37 +298,37 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
 
     private func makeDOMSecondaryMenu() -> UIMenu {
         DOMSecondaryMenuBuilder.makeMenu(
-            hasSelection: inspector.selectedEntry != nil,
-            hasPageWebView: inspector.hasPageWebView,
+            hasSelection: store.selectedEntry != nil,
+            hasPageWebView: store.hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.store.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.store.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.store.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 guard let self else {
                     return
                 }
                 Task {
-                    await self.inspector.reloadInspector()
+                    await self.store.reloadFrontend()
                 }
             },
             onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
+                self?.store.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
-                self?.inspector.deleteSelectedNode(undoManager: self?.undoManager)
+                self?.store.deleteSelectedNode(undoManager: self?.undoManager)
             }
         )
     }
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        store.toggleSelectionMode()
     }
 
     func splitViewController(
@@ -343,9 +343,9 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
 import SwiftUI
 #Preview("DOM Root (UIKit)") {
     WIUIKitPreviewContainer {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
-        WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(inspector)
-        return WIDOMViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+        WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(store)
+        return WIDOMViewController(store: store)
     }
 }
 #endif

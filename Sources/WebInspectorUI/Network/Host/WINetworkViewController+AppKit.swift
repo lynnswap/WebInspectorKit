@@ -12,20 +12,20 @@ import SwiftUI
 public final class WINetworkViewController: NSSplitViewController {
     private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.NetworkSplitView")
 
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let queryModel: WINetworkQueryState
     private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
-    public convenience init(inspector: WINetworkInspectorStore) {
+    public convenience init(store: WINetworkStore) {
         self.init(
-            inspector: inspector,
-            queryModel: WINetworkQueryState(inspector: inspector)
+            store: store,
+            queryModel: WINetworkQueryState(store: store)
         )
     }
 
-    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
-        self.inspector = inspector
+    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
+        self.store = store
         self.queryModel = queryModel
         super.init(nibName: nil, bundle: nil)
     }
@@ -38,10 +38,10 @@ public final class WINetworkViewController: NSSplitViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         splitView.autosaveName = Self.splitViewAutosaveName
-        inspector.selectEntry(nil)
+        store.selectEntry(nil)
 
-        let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector, queryModel: queryModel))
-        let detailController = NetworkMacDetailViewController(inspector: inspector)
+        let listHost = NSHostingController(rootView: NetworkMacListTab(store: store, queryModel: queryModel))
+        let detailController = NetworkMacDetailViewController(store: store)
         listHostingController = listHost
         detailViewController = detailController
 
@@ -63,11 +63,11 @@ public final class WINetworkViewController: NSSplitViewController {
 
 @MainActor
 private final class NetworkMacDetailViewController: NSViewController {
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private var hostingController: NSHostingController<NetworkMacDetailTab>?
 
-    init(inspector: WINetworkInspectorStore) {
-        self.inspector = inspector
+    init(store: WINetworkStore) {
+        self.store = store
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -83,7 +83,7 @@ private final class NetworkMacDetailViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let hostingController = NSHostingController(rootView: NetworkMacDetailTab(inspector: inspector))
+        let hostingController = NSHostingController(rootView: NetworkMacDetailTab(store: store))
         self.hostingController = hostingController
         addChild(hostingController)
         let hostedView = hostingController.view
@@ -103,7 +103,7 @@ private final class NetworkMacDetailViewController: NSViewController {
 
 @MainActor
 private struct NetworkMacListTab: View {
-    @Bindable var inspector: WINetworkInspectorStore
+    @Bindable var store: WINetworkStore
     @Bindable var queryModel: WINetworkQueryState
 
     var body: some View {
@@ -180,7 +180,7 @@ private struct NetworkMacListTab: View {
     private var tableSelection: Binding<Set<UUID>> {
         Binding(
             get: {
-                guard let selected = inspector.selectedEntry?.id else {
+                guard let selected = store.selectedEntry?.id else {
                     return []
                 }
                 return [selected]
@@ -188,7 +188,7 @@ private struct NetworkMacListTab: View {
             set: { newSelection in
                 let selected = newSelection.first
                 let selectedEntry = queryModel.displayEntries.first(where: { $0.id == selected })
-                inspector.selectEntry(selectedEntry)
+                store.selectEntry(selectedEntry)
             }
         )
     }
@@ -196,14 +196,14 @@ private struct NetworkMacListTab: View {
 
 @MainActor
 private struct NetworkMacDetailTab: View {
-    @Bindable var inspector: WINetworkInspectorStore
+    @Bindable var store: WINetworkStore
 
     private var entry: NetworkEntry? {
-        inspector.selectedEntry
+        store.selectedEntry
     }
 
     private var hasEntries: Bool {
-        !inspector.store.entries.isEmpty
+        !store.store.entries.isEmpty
     }
 
     var body: some View {
@@ -459,13 +459,13 @@ private func decodedBodyText(from body: NetworkBody) -> String? {
 import SwiftUI
 #Preview("Network Root (AppKit)") {
     WIAppKitPreviewContainer {
-        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .root))
+        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .root))
     }
 }
 
 #Preview("Network Root Long Title (AppKit)") {
     WIAppKitPreviewContainer {
-        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .rootLongTitle))
+        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .rootLongTitle))
     }
 }
 #endif

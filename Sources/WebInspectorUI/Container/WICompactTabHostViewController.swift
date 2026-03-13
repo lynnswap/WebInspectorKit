@@ -5,13 +5,13 @@ import WebInspectorCore
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
-    private let model: WIInspectorController
-    private let requestedTabs: [WIInspectorTab]
+    private let model: WISessionController
+    private let requestedTabs: [WITab]
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
-    init(model: WIInspectorController, tabs: [WIInspectorTab], renderCache: WIUIKitTabRenderCache) {
+    init(model: WISessionController, tabs: [WITab], renderCache: WIUIKitTabRenderCache) {
         self.model = model
         requestedTabs = tabs
         self.renderCache = renderCache
@@ -89,7 +89,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return true
     }
 
-    private func makeNativeTab(for tab: WIInspectorTab) -> UITab {
+    private func makeNativeTab(for tab: WITab) -> UITab {
         if let cached = renderCache.compactTab(for: tab) {
             return cached
         }
@@ -107,7 +107,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return nativeTab
     }
 
-    private func syncNativeSelection(with panelConfiguration: WIInspectorPanelConfiguration?) {
+    private func syncNativeSelection(with panelConfiguration: WIPanelConfiguration?) {
         guard tabs.isEmpty == false else {
             return
         }
@@ -151,13 +151,13 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         applyUserSelection(selectedTab: selectedModelTab)
     }
 
-    private func applyUserSelection(selectedTab: WIInspectorTab) {
+    private func applyUserSelection(selectedTab: WITab) {
         model.setSelectedPanelFromUI(selectedTab.configuration)
     }
 
     private func resolveDisplayedModelTab(
-        from requestedPanelConfiguration: WIInspectorPanelConfiguration?
-    ) -> WIInspectorTab? {
+        from requestedPanelConfiguration: WIPanelConfiguration?
+    ) -> WITab? {
         guard let requestedPanelConfiguration else {
             return requestedTabs.first
         }
@@ -173,7 +173,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return requestedTabs.first
     }
 
-    private func resolveModelTab(for nativeTab: UITab) -> WIInspectorTab? {
+    private func resolveModelTab(for nativeTab: UITab) -> WITab? {
         if let exactMatch = renderCache.modelTab(for: nativeTab, among: requestedTabs) {
             return exactMatch
         }
@@ -184,7 +184,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return nil
     }
 
-    private func resolveNativeTab(for modelTab: WIInspectorTab) -> UITab? {
+    private func resolveNativeTab(for modelTab: WITab) -> UITab? {
         if let cachedTab = renderCache.compactTab(for: modelTab),
            tabs.contains(where: { $0 === cachedTab }) {
             return cachedTab
@@ -196,7 +196,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return nil
     }
 
-    private func makeTabRootViewController(for tab: WIInspectorTab) -> UIViewController? {
+    private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
         if let cached = renderCache.rootViewController(for: tab) {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
@@ -208,11 +208,11 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         } else {
             switch tab.panelKind {
             case .domTree:
-                viewController = WIDOMViewController(inspector: model.dom)
+                viewController = WIDOMViewController(store: model.domStore)
             case .domDetail:
-                viewController = WIDOMDetailViewController(inspector: model.dom)
+                viewController = WIDOMDetailViewController(store: model.domStore)
             case .network:
-                viewController = WINetworkViewController(inspector: model.network)
+                viewController = WINetworkViewController(store: model.networkStore)
             case .custom:
                 viewController = nil
             }
@@ -255,8 +255,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 import SwiftUI
 #Preview("Compact Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIInspectorPreviewFixtures.makeController()
-        let tabs: [WIInspectorTab] = [.dom(), .element(), .network()]
+        let session = WISessionPreviewFixtures.makeSessionController()
+        let tabs: [WITab] = [.dom(), .element(), .network()]
         session.configurePanels(tabs.map(\.configuration))
         let host = WICompactTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
         session.setSelectedPanelFromUI(tabs.first?.configuration)

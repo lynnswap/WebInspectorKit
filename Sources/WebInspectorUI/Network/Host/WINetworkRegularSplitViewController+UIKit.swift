@@ -6,23 +6,23 @@ import UIKit
 
 @MainActor
 final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
 
     private let listPaneViewController: WINetworkListViewController
     private let listNavigationController: UINavigationController
     private let detailViewController: WINetworkDetailViewController
     private let detailNavigationController: UINavigationController
 
-    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
-        self.inspector = inspector
-        let listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
+    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
+        self.store = store
+        let listPaneViewController = WINetworkListViewController(store: store, queryModel: queryModel)
         self.listPaneViewController = listPaneViewController
         let listNavigationController = UINavigationController(rootViewController: listPaneViewController)
         wiApplyClearNavigationBarStyle(to: listNavigationController)
         listNavigationController.navigationBar.prefersLargeTitles = false
         self.listNavigationController = listNavigationController
         let detailViewController = WINetworkDetailViewController(
-            inspector: inspector,
+            store: store,
             showsNavigationControls: false
         )
         self.detailViewController = detailViewController
@@ -81,7 +81,7 @@ final class WINetworkRegularSplitViewController: UISplitViewController, UISplitV
         _ splitViewController: UISplitViewController,
         topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column
     ) -> UISplitViewController.Column {
-        if inspector.selectedEntry == nil {
+        if store.selectedEntry == nil {
             return .primary
         }
         return proposedTopColumn

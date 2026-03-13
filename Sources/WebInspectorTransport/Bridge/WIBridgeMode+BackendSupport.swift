@@ -1,23 +1,23 @@
 import WebInspectorCore
 
 package extension WIBridgeMode {
-    func domBackendSupport() -> WIInspectorBackendSupport {
-        WIInspectorBackendSupport(
+    func domBackendSupport() -> WIBackendSupport {
+        WIBackendSupport(
             availability: .supported,
             backendKind: inspectorBackendKind,
             capabilities: [.domDomain]
         )
     }
 
-    func networkBackendSupport() -> WIInspectorBackendSupport {
-        WIInspectorBackendSupport(
+    func networkBackendSupport() -> WIBackendSupport {
+        WIBackendSupport(
             availability: .supported,
             backendKind: inspectorBackendKind,
             capabilities: [.networkDomain]
         )
     }
 
-    private var inspectorBackendKind: WIInspectorBackendKind {
+    private var inspectorBackendKind: WIBackendKind {
         switch self {
         case .privateCore:
             .privateCore

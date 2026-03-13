@@ -47,11 +47,11 @@ package final class WIDOMRuntime {
         backend.webView != nil
     }
 
-    package var backendSupport: WIInspectorBackendSupport {
+    package var backendSupport: WIBackendSupport {
         backend.support
     }
 
-    package var transportCapabilities: Set<WIInspectorBackendCapability> {
+    package var transportCapabilities: Set<WIBackendCapability> {
         backend.support.capabilities
     }
 
@@ -241,7 +241,7 @@ private final class WIDOMUnavailableBackend: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     weak var webView: WKWebView?
 
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .unsupported,
         failureReason: "No backend was provided."

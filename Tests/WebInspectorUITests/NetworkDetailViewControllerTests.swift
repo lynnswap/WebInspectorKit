@@ -28,16 +28,16 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         let responseBody = try #require(entry.responseBody)
         let bodyStates = fetchStateRecorder(for: responseBody)
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(inspector: inspector)
+        let viewController = WINetworkDetailViewController(store: store)
         viewController.loadViewIfNeeded()
 
         _ = await bodyStates.next(where: { $0 == "full" })
@@ -63,20 +63,20 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         let responseBody = try #require(entry.responseBody)
         let bodyStates = fetchStateRecorder(for: responseBody)
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(inspector: inspector)
+        let viewController = WINetworkDetailViewController(store: store)
         viewController.loadViewIfNeeded()
 
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         _ = await bodyStates.next(where: { $0 == "full" })
         #expect(fetcher.fetchCount == 1)
@@ -100,13 +100,13 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
         let entry = makeEntry()
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(inspector: inspector)
+        let viewController = WINetworkDetailViewController(store: store)
         let snapshotRevisions = AsyncValueQueue<UInt64>()
         viewController.onSnapshotAppliedForTesting = { revision in
             Task {
@@ -170,16 +170,16 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
         let bodyStates = fetchStateRecorder(for: body)
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
         let viewController = WINetworkBodyPreviewViewController(
             entry: entry,
-            inspector: inspector,
+            store: store,
             bodyState: body
         )
         viewController.loadViewIfNeeded()
@@ -187,7 +187,7 @@ struct NetworkDetailViewControllerTests {
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         _ = await bodyStates.next(where: { $0 == "full" })
         #expect(fetcher.fetchCount == 1)
@@ -212,16 +212,16 @@ struct NetworkDetailViewControllerTests {
                 role: role
             )
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
 
         let viewController = WINetworkBodyPreviewViewController(
             entry: entry,
-            inspector: inspector,
+            store: store,
             bodyState: body
         )
         viewController.loadViewIfNeeded()

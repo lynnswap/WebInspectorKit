@@ -6,10 +6,10 @@ import AppKit
 @MainActor
 package protocol WIDOMFrontendBridge: AnyObject, WIDOMProtocolEventSink {
     var delegate: (any WIDOMFrontendBridgeDelegate)? { get set }
-    var hasInspectorWebView: Bool { get }
+    var hasFrontendWebView: Bool { get }
 
-    func makeInspectorWebView() -> WKWebView
-    func detachInspectorWebView()
+    func makeFrontendWebView() -> WKWebView
+    func detachFrontendWebView()
     func updateConfiguration(_ configuration: DOMConfiguration)
     func setPreferredDepth(_ depth: Int)
     func requestDocument(depth: Int, preserveState: Bool)

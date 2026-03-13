@@ -9,7 +9,7 @@ import XCTest
 @MainActor
 final class BrowserViewModelInspectorRegressionTests: XCTestCase {
     private var retainedWindows: [NSWindow] = []
-    private var retainedInspectors: [WIInspectorController] = []
+    private var retainedInspectors: [WISessionController] = []
     private var temporaryDirectories: [URL] = []
 
     override func tearDown() {
@@ -62,8 +62,8 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         )
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        let sessionController = WISessionController()
+        retainedInspectors.append(sessionController)
         let browserWindow = makeBrowserWindow(model: model)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -82,7 +82,7 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 
         presentInspectorWindow(
             model: model,
-            inspectorController: inspectorController,
+            sessionController: sessionController,
             tabs: [.dom(), .network()],
             parentWindow: browserWindow
         )
@@ -122,8 +122,8 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        let sessionController = WISessionController()
+        retainedInspectors.append(sessionController)
         let browserWindow = makeBrowserWindow(model: model)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -145,7 +145,7 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 
         presentInspectorWindow(
             model: model,
-            inspectorController: inspectorController,
+            sessionController: sessionController,
             tabs: [.dom(), .network()],
             parentWindow: browserWindow
         )
@@ -203,15 +203,15 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
 @MainActor
 private extension BrowserViewModelInspectorRegressionTests {
     func assertInspectorAttachBehaviorAcrossHTTPSNavigation(
-        tabs: [WIInspectorTab]
+        tabs: [WITab]
     ) async throws {
         let tabIdentifiers = tabs.map { $0.identifier }.joined(separator: ",")
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
         let model = BrowserViewModel(url: initialURL)
-        let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        let sessionController = WISessionController()
+        retainedInspectors.append(sessionController)
         let browserWindow = makeBrowserWindow(model: model)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -233,7 +233,7 @@ private extension BrowserViewModelInspectorRegressionTests {
 
         presentInspectorWindow(
             model: model,
-            inspectorController: inspectorController,
+            sessionController: sessionController,
             tabs: tabs,
             parentWindow: browserWindow
         )
@@ -288,12 +288,12 @@ private extension BrowserViewModelInspectorRegressionTests {
 
     func presentInspectorWindow(
         model: BrowserViewModel,
-        inspectorController: WIInspectorController,
-        tabs: [WIInspectorTab],
+        sessionController: WISessionController,
+        tabs: [WITab],
         parentWindow: NSWindow
     ) {
-        let container = WIInspectorViewController(
-            inspectorController,
+        let container = WIContainerViewController(
+            sessionController,
             webView: model.webView,
             tabs: tabs
         )

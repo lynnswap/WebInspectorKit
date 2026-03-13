@@ -5,7 +5,7 @@ import WebKit
 
 @MainActor
 @Observable
-public final class WINetworkInspectorStore {
+public final class WINetworkStore {
     package let session: WINetworkRuntime
 
     public private(set) weak var selectedEntry: NetworkEntry?
@@ -26,7 +26,7 @@ public final class WINetworkInspectorStore {
         session.store
     }
 
-    public var backendSupport: WIInspectorBackendSupport {
+    public var backendSupport: WIBackendSupport {
         session.backendSupport
     }
 
@@ -88,7 +88,7 @@ public final class WINetworkInspectorStore {
     }
 }
 
-private extension WINetworkInspectorStore {
+private extension WINetworkStore {
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
         selectedEntryObservationHandles.removeAll()
         guard let entry else {

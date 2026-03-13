@@ -11,46 +11,46 @@ import WebKit
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.selectedEntry == nil)
+        let controller = WISessionController()
+        let store = controller.domStore
+        #expect(store.selectedEntry == nil)
+        #expect(store.session.graphStore.selectedEntry == nil)
     }
 
     @Test
     func hasPageWebViewReflectsAttachAndDetach() {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
+        let controller = WISessionController()
+        let store = controller.domStore
         let webView = makeTestWebView()
 
-        #expect(inspector.hasPageWebView == false)
-        inspector.attach(to: webView)
-        #expect(inspector.hasPageWebView == true)
-        #expect(inspector.session.lastPageWebView === webView)
+        #expect(store.hasPageWebView == false)
+        store.attach(to: webView)
+        #expect(store.hasPageWebView == true)
+        #expect(store.session.lastPageWebView === webView)
 
-        inspector.detach()
-        #expect(inspector.hasPageWebView == false)
-        #expect(inspector.session.lastPageWebView == nil)
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.treeRows.isEmpty)
+        store.detach()
+        #expect(store.hasPageWebView == false)
+        #expect(store.session.lastPageWebView == nil)
+        #expect(store.selectedEntry == nil)
+        #expect(store.treeRows.isEmpty)
     }
 
     @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        #expect(inspector.errorMessage == nil)
+        let controller = WISessionController()
+        let store = controller.domStore
+        #expect(store.errorMessage == nil)
 
-        await inspector.reloadInspector()
+        await store.reloadFrontend()
 
-        #expect(inspector.errorMessage == "Web view unavailable.")
+        #expect(store.errorMessage == "Web view unavailable.")
     }
 
     @Test
     func updateAndRemoveAttributeMutateSelectionState() {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        inspector.session.graphStore.applySnapshot(
+        let controller = WISessionController()
+        let store = controller.domStore
+        store.session.graphStore.applySnapshot(
             .init(
                 root: DOMGraphNodeDescriptor(
                     nodeID: 7,
@@ -66,7 +66,7 @@ struct DOMInspectorTests {
                 )
             )
         )
-        inspector.session.graphStore.applySelectionSnapshot(
+        store.session.graphStore.applySelectionSnapshot(
             .init(
                 nodeID: 7,
                 preview: "<div id=\"foo\">",
@@ -80,36 +80,36 @@ struct DOMInspectorTests {
             )
         )
 
-        inspector.updateAttributeValue(name: "class", value: "new")
-        #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
+        store.updateAttributeValue(name: "class", value: "new")
+        #expect(store.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
 
-        inspector.removeAttribute(name: "id")
-        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
+        store.removeAttribute(name: "id")
+        #expect(store.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
     }
 
     @Test
     func detachClearsErrorMessageAndGraphState() async {
         await withWebKitTestIsolation {
             let controller = makeTransportController()
-            let inspector = controller.dom
+            let store = controller.domStore
             let webView = makeTestWebView()
 
-            inspector.attach(to: webView)
+            store.attach(to: webView)
             await loadHTML(
                 """
                 <html><body><main><div id="target">Hello</div></main></body></html>
                 """,
                 in: webView
             )
-            await inspector.reloadInspector()
-            #expect(await waitForTreeRowsToLoad(in: inspector))
+            await store.reloadFrontend()
+            #expect(await waitForTreeRowsToLoad(in: store))
 
-            guard let selectedNodeID = inspector.session.graphStore.rootID?.nodeID else {
+            guard let selectedNodeID = store.session.graphStore.rootID?.nodeID else {
                 Issue.record("expected a loaded DOM root before mutating selection state")
                 return
             }
 
-            inspector.session.graphStore.applySelectionSnapshot(
+            store.session.graphStore.applySelectionSnapshot(
                 .init(
                     nodeID: selectedNodeID,
                     preview: "<div class=\"target\">",
@@ -119,7 +119,7 @@ struct DOMInspectorTests {
                     styleRevision: 0
                 )
             )
-            inspector.session.graphStore.applyStyle(
+            store.session.graphStore.applyStyle(
                 .init(
                     nodeId: selectedNodeID,
                     matched: .init(
@@ -149,14 +149,14 @@ struct DOMInspectorTests {
                 ),
                 for: selectedNodeID
             )
-            inspector.session.graphStore.beginStyleLoading(for: selectedNodeID)
+            store.session.graphStore.beginStyleLoading(for: selectedNodeID)
 
-            inspector.detach()
+            store.detach()
 
-            #expect(inspector.errorMessage == nil)
-            #expect(inspector.selectedEntry == nil)
-            #expect(inspector.session.graphStore.entriesByID.isEmpty)
-            #expect(inspector.treeRows.isEmpty)
+            #expect(store.errorMessage == nil)
+            #expect(store.selectedEntry == nil)
+            #expect(store.session.graphStore.entriesByID.isEmpty)
+            #expect(store.treeRows.isEmpty)
         }
     }
 
@@ -164,10 +164,10 @@ struct DOMInspectorTests {
     func reloadInspectorLoadsTreeRowsForAttachedPage() async {
         await withWebKitTestIsolation {
             let controller = makeTransportController()
-            let inspector = controller.dom
+            let store = controller.domStore
             let webView = makeTestWebView()
 
-            inspector.attach(to: webView)
+            store.attach(to: webView)
             await loadHTML(
                 """
                 <html>
@@ -181,19 +181,19 @@ struct DOMInspectorTests {
                 in: webView
             )
 
-            await inspector.reloadInspector()
+            await store.reloadFrontend()
 
-            #expect(await waitForTreeRowsToLoad(in: inspector))
-            #expect(inspector.treeRows.count > 0)
-            #expect(inspector.session.graphStore.rootID != nil)
-            #expect(inspector.backendSupport.isSupported)
+            #expect(await waitForTreeRowsToLoad(in: store))
+            #expect(store.treeRows.count > 0)
+            #expect(store.session.graphStore.rootID != nil)
+            #expect(store.backendSupport.isSupported)
         }
     }
 
     @Test
     func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
         await withWebKitTestIsolation {
-            let controller = WIInspectorController(
+            let controller = WISessionController(
                 domSession: WIDOMRuntime(
                     configuration: .init(),
                     defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
@@ -203,10 +203,10 @@ struct DOMInspectorTests {
                     defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
                 )
             )
-            let inspector = controller.dom
+            let store = controller.domStore
             let webView = makeTestWebView()
 
-            inspector.attach(to: webView)
+            store.attach(to: webView)
             await loadHTML(
                 """
                 <html>
@@ -220,12 +220,12 @@ struct DOMInspectorTests {
                 in: webView
             )
 
-            await inspector.reloadInspector()
+            await store.reloadFrontend()
 
-            #expect(await waitForTreeRowsToLoad(in: inspector))
-            #expect(inspector.backendSupport.isSupported)
-            #expect(inspector.treeRows.count > 0)
-            #expect(inspector.session.graphStore.rootID != nil)
+            #expect(await waitForTreeRowsToLoad(in: store))
+            #expect(store.backendSupport.isSupported)
+            #expect(store.treeRows.count > 0)
+            #expect(store.session.graphStore.rootID != nil)
         }
     }
 
@@ -233,10 +233,10 @@ struct DOMInspectorTests {
     func selectingEntryLoadsMatchedStylesViaTransportWithoutProtocolEnable() async {
         await withWebKitTestIsolation {
             let controller = makeTransportController()
-            let inspector = controller.dom
+            let store = controller.domStore
             let webView = makeTestWebView()
 
-            inspector.attach(to: webView)
+            store.attach(to: webView)
             await loadHTML(
                 """
                 <html>
@@ -256,7 +256,7 @@ struct DOMInspectorTests {
                 in: webView
             )
 
-            let snapshot = try? await inspector.session.captureSnapshot(maxDepth: 5)
+            let snapshot = try? await store.session.captureSnapshot(maxDepth: 5)
             guard let snapshot,
                   let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
                 Issue.record("target node was not found in transport snapshot")
@@ -264,9 +264,9 @@ struct DOMInspectorTests {
             }
 
             do {
-                let payload = try await inspector.session.styles(nodeId: contentNodeID, maxMatchedRules: 0)
+                let payload = try await store.session.styles(nodeId: contentNodeID, maxMatchedRules: 0)
                 #expect(payload.matched.allRules.contains(where: { $0.selectorText.contains("#content") }))
-                #expect(inspector.errorMessage == nil)
+                #expect(store.errorMessage == nil)
             } catch {
                 Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")
             }
@@ -277,10 +277,10 @@ struct DOMInspectorTests {
     func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async {
         await withWebKitTestIsolation {
             let controller = makeLegacyController()
-            let inspector = controller.dom
+            let store = controller.domStore
             let webView = makeTestWebView()
             let undoManager = UndoManager()
-            let deleteEvents = AsyncValueQueue<WIDOMInspectorStore.DeleteMutationEvent>()
+            let deleteEvents = AsyncValueQueue<WIDOMStore.DeleteMutationEvent>()
             let html = """
             <html>
                 <body>
@@ -290,23 +290,23 @@ struct DOMInspectorTests {
             </html>
             """
 
-            inspector.attach(to: webView)
+            store.attach(to: webView)
             await loadHTML(html, in: webView)
-            await inspector.reloadInspector()
-            #expect(await waitForTreeRowsToLoad(in: inspector))
-            inspector.onDeleteMutationForTesting = { event in
+            await store.reloadFrontend()
+            #expect(await waitForTreeRowsToLoad(in: store))
+            store.onDeleteMutationForTesting = { event in
                 Task {
                     await deleteEvents.push(event)
                 }
             }
 
             guard let firstNodeID = findNodeId(
-                in: inspector.session.graphStore,
+                in: store.session.graphStore,
                 attributeName: "id",
                 attributeValue: "first"
             ),
             let secondNodeID = findNodeId(
-                in: inspector.session.graphStore,
+                in: store.session.graphStore,
                 attributeName: "id",
                 attributeValue: "second"
             )
@@ -315,12 +315,12 @@ struct DOMInspectorTests {
                 return
             }
 
-            inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
+            store.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
             let firstDelete = await deleteEvents.next()
             #expect(firstDelete == .removed(nodeId: firstNodeID))
             #expect(await domNodeExists(withID: "first", in: webView) == false)
 
-            inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
+            store.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
             let secondDelete = await deleteEvents.next()
             #expect(secondDelete == .removed(nodeId: secondNodeID))
             #expect(await domNodeExists(withID: "second", in: webView) == false)
@@ -343,9 +343,9 @@ struct DOMInspectorTests {
         makeIsolatedTestWebView()
     }
 
-    private func makeTransportController() -> WIInspectorController {
+    private func makeTransportController() -> WISessionController {
         let domGraphStore = DOMGraphStore()
-        let domBackend = WIInspectorBackendFactory.makeDOMBackend(
+        let domBackend = WIBackendFactory.makeDOMBackend(
             configuration: .init(),
             graphStore: domGraphStore
         )
@@ -358,18 +358,18 @@ struct DOMInspectorTests {
 
         let networkRuntime = WINetworkRuntime(
             configuration: .init(),
-            backend: WIInspectorBackendFactory.makeNetworkBackend(configuration: .init())
+            backend: WIBackendFactory.makeNetworkBackend(configuration: .init())
         )
 
-        return WIInspectorController(
+        return WISessionController(
             domSession: domRuntime,
             networkSession: networkRuntime,
             domFrontendBridge: domFrontendBridge
         )
     }
 
-    private func makeLegacyController() -> WIInspectorController {
-        WIInspectorController(
+    private func makeLegacyController() -> WISessionController {
+        WISessionController(
             domSession: WIDOMRuntime(
                 configuration: .init(),
                 defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
@@ -456,10 +456,10 @@ struct DOMInspectorTests {
 
 @MainActor
 private func waitForTreeRowsToLoad(
-    in inspector: WIDOMInspectorStore,
+    in store: WIDOMStore,
     maxTurns: Int = 8_192
 ) async -> Bool {
-    if inspector.treeRows.isEmpty == false, inspector.session.graphStore.rootID != nil {
+    if store.treeRows.isEmpty == false, store.session.graphStore.rootID != nil {
         return true
     }
 
@@ -470,12 +470,12 @@ private func waitForTreeRowsToLoad(
             }
         }
 
-        if inspector.treeRows.isEmpty == false, inspector.session.graphStore.rootID != nil {
+        if store.treeRows.isEmpty == false, store.session.graphStore.rootID != nil {
             return true
         }
     }
 
-    return inspector.treeRows.isEmpty == false && inspector.session.graphStore.rootID != nil
+    return store.treeRows.isEmpty == false && store.session.graphStore.rootID != nil
 }
 
 

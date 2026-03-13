@@ -12,7 +12,7 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
         case regular
     }
 
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let queryModel: WINetworkQueryState
     private let compactHostViewController: WINetworkCompactViewController
     private let regularHostViewController: WINetworkRegularSplitViewController
@@ -44,22 +44,22 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
         true
     }
 
-    public convenience init(inspector: WINetworkInspectorStore) {
+    public convenience init(store: WINetworkStore) {
         self.init(
-            inspector: inspector,
-            queryModel: WINetworkQueryState(inspector: inspector)
+            store: store,
+            queryModel: WINetworkQueryState(store: store)
         )
     }
 
-    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
-        self.inspector = inspector
+    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
+        self.store = store
         self.queryModel = queryModel
         self.compactHostViewController = WINetworkCompactViewController(
-            inspector: inspector,
+            store: store,
             queryModel: queryModel
         )
         self.regularHostViewController = WINetworkRegularSplitViewController(
-            inspector: inspector,
+            store: store,
             queryModel: queryModel
         )
 
@@ -198,13 +198,13 @@ func decodedBodyText(from body: NetworkBody) -> String? {
 import SwiftUI
 #Preview("Network Root (UIKit)") {
     WIUIKitPreviewContainer {
-        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .root))
+        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .root))
     }
 }
 
 #Preview("Network Root Long Title (UIKit)") {
     WIUIKitPreviewContainer {
-        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .rootLongTitle))
+        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .rootLongTitle))
     }
 }
 #endif

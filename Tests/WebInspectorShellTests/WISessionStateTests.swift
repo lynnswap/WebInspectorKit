@@ -15,7 +15,7 @@ import WebInspectorTestSupport
 struct WISessionStateTests {
     @Test
     func tabUserInfoKeepsAssignedValue() {
-        let tab = WIInspectorTab(
+        let tab = WITab(
             id: "custom",
             title: "Custom",
             systemImage: "circle",
@@ -31,9 +31,9 @@ struct WISessionStateTests {
 
     @Test
     func tabEqualityUsesIdentity() {
-        let first = WIInspectorTab.dom()
+        let first = WITab.dom()
         let sameReference = first
-        let second = WIInspectorTab.dom()
+        let second = WITab.dom()
 
         #expect(first == sameReference)
         #expect(first != second)
@@ -41,8 +41,8 @@ struct WISessionStateTests {
 
     @Test
     func lifecycleTransitionsKeepSelectionOrdering() {
-        let controller = WIInspectorController()
-        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
+        let controller = WISessionController()
+        controller.configurePanels([WITab.dom().configuration, WITab.network().configuration])
         selectTab("wi_network", in: controller)
         let webView = makeTestWebView()
 
@@ -62,18 +62,18 @@ struct WISessionStateTests {
 
     @Test
     func setTabsNormalizesInvalidSelectionToFirstTab() {
-        let customA = WIInspectorTab(
+        let customA = WITab(
             id: "a",
             title: "A",
             systemImage: "a.circle"
         )
-        let customB = WIInspectorTab(
+        let customB = WITab(
             id: "b",
             title: "B",
             systemImage: "b.circle"
         )
 
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         controller.configurePanels([])
         selectTab("missing", in: controller)
         controller.configurePanels([customA.configuration, customB.configuration])
@@ -83,12 +83,12 @@ struct WISessionStateTests {
 
     @Test
     func setTabsRebuildKeepsSelectedTabNormalized() {
-        let originalA = WIInspectorTab(id: "a", title: "A", systemImage: "a.circle")
-        let originalB = WIInspectorTab(id: "b", title: "B", systemImage: "b.circle")
-        let replacementA = WIInspectorTab(id: "a", title: "A", systemImage: "a.circle")
-        let replacementC = WIInspectorTab(id: "c", title: "C", systemImage: "c.circle")
+        let originalA = WITab(id: "a", title: "A", systemImage: "a.circle")
+        let originalB = WITab(id: "b", title: "B", systemImage: "b.circle")
+        let replacementA = WITab(id: "a", title: "A", systemImage: "a.circle")
+        let replacementC = WITab(id: "c", title: "C", systemImage: "c.circle")
 
-        let controller = WIInspectorController()
+        let controller = WISessionController()
         controller.configurePanels([originalA.configuration, originalB.configuration])
         controller.setSelectedPanelFromUI(originalB.configuration)
         #expect(controller.selectedPanelConfiguration?.identifier == "b")
@@ -103,9 +103,9 @@ struct WISessionStateTests {
 
     @Test
     func selectedPanelObservationEmitsOnSelectionChange() async {
-        let controller = WIInspectorController()
-        controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
-        let expectedNetworkID = WIInspectorTab.networkTabID
+        let controller = WISessionController()
+        controller.configurePanels([WITab.dom().configuration, WITab.network().configuration])
+        let expectedNetworkID = WITab.networkTabID
         let recorder = ObservationRecorder<String?>()
         recorder.record { didChange in
             controller.observeTask([\.selectedPanelConfiguration]) {
@@ -113,7 +113,7 @@ struct WISessionStateTests {
             }
         }
 
-        let networkPanel = controller.panelConfigurations.first { $0.identifier == WIInspectorTab.networkTabID }
+        let networkPanel = controller.panelConfigurations.first { $0.identifier == WITab.networkTabID }
         controller.setSelectedPanelFromUI(networkPanel)
         let observedValue = await recorder.next(where: { $0 == expectedNetworkID })
         #expect(observedValue == expectedNetworkID)
@@ -125,7 +125,7 @@ struct WISessionStateTests {
             let clock = TestClock()
             let domDriver = RebindDOMPageDriver()
             let networkDriver = RebindNetworkPageDriver()
-            let controller = WIInspectorController(
+            let controller = WISessionController(
                 domSession: WIDOMRuntime(
                     configuration: .init(),
                     graphStore: DOMGraphStore(),
@@ -139,7 +139,7 @@ struct WISessionStateTests {
             )
             let webView = makeTestWebView()
 
-            controller.configurePanels([WIInspectorTab.dom().configuration, WIInspectorTab.network().configuration])
+            controller.configurePanels([WITab.dom().configuration, WITab.network().configuration])
             controller.connect(to: webView)
 
             await loadHTML("<html><body><p>initial</p></body></html>", in: webView)
@@ -182,9 +182,9 @@ struct WISessionStateTests {
         }
     }
 
-    private func selectTab(_ identifier: String, in controller: WIInspectorController) {
+    private func selectTab(_ identifier: String, in controller: WISessionController) {
         let panel = controller.panelConfigurations.first(where: { $0.identifier == identifier })
-            ?? WIInspectorPanelConfiguration(kind: .custom(identifier))
+            ?? WIPanelConfiguration(kind: .custom(identifier))
         controller.setSelectedPanelFromUI(panel)
     }
 }
@@ -221,7 +221,7 @@ private final class NavigationDelegate: NSObject, WKNavigationDelegate {
 private final class RebindDOMPageDriver: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .supported,
         backendKind: .nativeInspectorMacOS,
         capabilities: [.domDomain, .pageTargetRouting]
@@ -364,7 +364,7 @@ private final class RebindDOMPageDriver: WIDOMBackend {
 private final class RebindNetworkPageDriver: WINetworkBackend {
     private(set) weak var webView: WKWebView?
     let store = NetworkStore()
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .supported,
         backendKind: .nativeInspectorMacOS,
         capabilities: [.networkDomain, .pageTargetRouting]

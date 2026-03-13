@@ -13,15 +13,15 @@ enum WINetworkPreviewFixtures {
         case bodyPreviewText
     }
 
-    static func makeInspector(mode: Mode) -> WINetworkInspectorStore {
+    static func makeStore(mode: Mode) -> WINetworkStore {
         let session = WINetworkRuntime()
-        let inspector = WINetworkInspectorStore(session: session)
-        applySampleData(to: inspector, mode: mode)
-        return inspector
+        let store = WINetworkStore(session: session)
+        applySampleData(to: store, mode: mode)
+        return store
     }
 
-    static func applySampleData(to inspector: WINetworkInspectorStore, mode: Mode) {
-        let queryState = WINetworkQueryState(inspector: inspector)
+    static func applySampleData(to store: WINetworkStore, mode: Mode) {
+        let queryState = WINetworkQueryState(store: store)
         let payload: NSDictionary
         switch mode {
         case .root:
@@ -36,36 +36,36 @@ enum WINetworkPreviewFixtures {
             payload = sampleBatchPayload(bodyMode: .plainText)
         }
 
-        inspector.wiApplyPreviewBatch(payload)
+        store.wiApplyPreviewBatch(payload)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
-            inspector.selectEntry(queryState.displayEntries.first)
+            store.selectEntry(queryState.displayEntries.first)
         case .root, .rootLongTitle:
-            inspector.selectEntry(nil)
+            store.selectEntry(nil)
         }
     }
 
-    static func makeDetailContext() -> (inspector: WINetworkInspectorStore, entry: NetworkEntry)? {
-        let inspector = makeInspector(mode: .detail)
-        let queryState = WINetworkQueryState(inspector: inspector)
+    static func makeDetailContext() -> (store: WINetworkStore, entry: NetworkEntry)? {
+        let store = makeStore(mode: .detail)
+        let queryState = WINetworkQueryState(store: store)
         guard let entry = queryState.displayEntries.first else {
             return nil
         }
-        inspector.selectEntry(entry)
-        return (inspector, entry)
+        store.selectEntry(entry)
+        return (store, entry)
     }
 
-    static func makeBodyPreviewContext(textMode: Bool = false) -> (inspector: WINetworkInspectorStore, entry: NetworkEntry, body: NetworkBody)? {
-        let inspector = makeInspector(mode: textMode ? .bodyPreviewText : .bodyPreviewObjectTree)
-        let queryState = WINetworkQueryState(inspector: inspector)
+    static func makeBodyPreviewContext(textMode: Bool = false) -> (store: WINetworkStore, entry: NetworkEntry, body: NetworkBody)? {
+        let store = makeStore(mode: textMode ? .bodyPreviewText : .bodyPreviewObjectTree)
+        let queryState = WINetworkQueryState(store: store)
         guard
             let entry = queryState.displayEntries.first,
             let body = entry.responseBody ?? entry.requestBody
         else {
             return nil
         }
-        inspector.selectEntry(entry)
-        return (inspector, entry, body)
+        store.selectEntry(entry)
+        return (store, entry, body)
     }
 
     private enum BodyMode {

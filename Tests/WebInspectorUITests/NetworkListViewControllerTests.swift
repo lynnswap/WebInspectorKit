@@ -11,10 +11,10 @@ import WebInspectorTestSupport
 struct NetworkListViewControllerTests {
     @Test
     func listViewAppliesLatestSnapshotAfterRapidNetworkBursts() async {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         let viewController = WINetworkListViewController(
-            inspector: inspector,
+            store: store,
             queryModel: queryModel
         )
         let snapshotRevisions = AsyncValueQueue<UInt64>()
@@ -34,7 +34,7 @@ struct NetworkListViewControllerTests {
         #expect(viewController.collectionView.window != nil)
 
         for requestID in 1001...1003 {
-            inspector.wiApplyPreviewBatch(
+            store.wiApplyPreviewBatch(
                 makeResourceTimingBatchPayload(
                     seq: requestID - 1000,
                     requestID: requestID
@@ -58,8 +58,8 @@ struct NetworkListViewControllerTests {
 
     @Test
     func filterMenuReflectsEffectiveFiltersAfterObservationUpdate() async {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         let coordinator = WINetworkFilterMenuCoordinator(queryModel: queryModel)
         let menuStateRevisions = AsyncValueQueue<UInt64>()
         coordinator.onMenuStateUpdatedForTesting = { revision in

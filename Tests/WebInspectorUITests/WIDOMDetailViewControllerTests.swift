@@ -11,8 +11,8 @@ import WebInspectorTestSupport
 struct WIDOMDetailViewControllerAppKitTests {
     @Test
     func detailViewRefreshesWhenSelectionSnapshotChanges() async {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
-        let viewController = WIDOMDetailViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+        let viewController = WIDOMDetailViewController(store: store)
         let renderRefreshes = AsyncValueQueue<Int>()
         viewController.onRenderRefreshForTesting = { count in
             Task {
@@ -27,7 +27,7 @@ struct WIDOMDetailViewControllerAppKitTests {
         viewController.loadViewIfNeeded()
         let initialRefreshCount = viewController.testRenderRefreshCount
 
-        inspector.session.graphStore.applySelectionSnapshot(
+        store.session.graphStore.applySelectionSnapshot(
             .init(
                 nodeID: 6,
                 preview: "<span data-state=\"3\">Latest 3</span>",
@@ -62,17 +62,17 @@ struct WIDOMDetailViewControllerAppKitTests {
             backend: driver
         )
         let frontendRuntime = WIDOMFrontendRuntime(session: session)
-        let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
+        let store = WIDOMStore(session: session, frontendBridge: frontendRuntime)
         let webView = WKWebView(frame: .zero)
         let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
-        let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
-        inspector.attach(to: webView)
+        let selectedSnapshots = selectedSnapshotRecorder(for: store)
+        store.attach(to: webView)
 
         _ = await rootNodeIDs.next(where: { $0 != nil })
-        #expect(inspector.session.graphStore.entry(forNodeID: 3) != nil)
-        #expect(inspector.session.graphStore.entry(forNodeID: 6) == nil)
+        #expect(store.session.graphStore.entry(forNodeID: 3) != nil)
+        #expect(store.session.graphStore.entry(forNodeID: 6) == nil)
 
-        let viewController = WIDOMDetailViewController(inspector: inspector)
+        let viewController = WIDOMDetailViewController(store: store)
         let renderRefreshes = AsyncValueQueue<Int>()
         viewController.onRenderRefreshForTesting = { count in
             Task {
@@ -86,7 +86,7 @@ struct WIDOMDetailViewControllerAppKitTests {
 
         viewController.loadViewIfNeeded()
         let initialRefreshCount = viewController.testRenderRefreshCount
-        #expect(inspector.selectedEntry == nil)
+        #expect(store.selectedEntry == nil)
 
         frontendRuntime.testHandleDOMSelectionMessage([
             "nodeId": 6,
@@ -141,13 +141,13 @@ private func rootNodeIDRecorder(for graphStore: DOMGraphStore) -> ObservationRec
 
 @MainActor
 private func selectedSnapshotRecorder(
-    for inspector: WIDOMInspectorStore
+    for store: WIDOMStore
 ) -> ObservationRecorder<DOMSelectionSummary?> {
     let recorder = ObservationRecorder<DOMSelectionSummary?>()
     recorder.record { didChange in
-        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
+        store.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
             didChange(
-                inspector.selectedEntry.map {
+                store.selectedEntry.map {
                     DOMSelectionSummary(nodeID: $0.id.nodeID, selectorPath: $0.selectorPath)
                 }
             )
@@ -160,7 +160,7 @@ private func selectedSnapshotRecorder(
 private final class AppKitDetailRecoveryPageDriver: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .legacy,
         capabilities: [.domDomain]
@@ -422,8 +422,8 @@ import WebInspectorTestSupport
 struct WIDOMDetailViewControllerTests {
     @Test
     func detailViewAppliesLatestSelectionSnapshotAfterRapidDOMBursts() async {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
-        let viewController = WIDOMDetailViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+        let viewController = WIDOMDetailViewController(store: store)
         let snapshotRevisions = AsyncValueQueue<UInt64>()
         viewController.onSnapshotAppliedForTesting = { revision in
             Task {
@@ -441,7 +441,7 @@ struct WIDOMDetailViewControllerTests {
             _ = await snapshotRevisions.next()
         }
 
-        let graphStore = inspector.session.graphStore
+        let graphStore = store.session.graphStore
         for revision in 1...3 {
             graphStore.applySelectionSnapshot(
                 .init(
@@ -486,16 +486,16 @@ struct WIDOMDetailViewControllerTests {
             backend: driver
         )
         let frontendRuntime = WIDOMFrontendRuntime(session: session)
-        let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
+        let store = WIDOMStore(session: session, frontendBridge: frontendRuntime)
         let webView = WKWebView(frame: .zero)
         let rootNodeIDs = sharedRootNodeIDRecorder(for: graphStore)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         _ = await rootNodeIDs.next(where: { $0 != nil })
-        #expect(inspector.session.graphStore.entry(forNodeID: 3) != nil)
-        #expect(inspector.session.graphStore.entry(forNodeID: 6) == nil)
+        #expect(store.session.graphStore.entry(forNodeID: 3) != nil)
+        #expect(store.session.graphStore.entry(forNodeID: 6) == nil)
 
-        let viewController = WIDOMDetailViewController(inspector: inspector)
+        let viewController = WIDOMDetailViewController(store: store)
         let snapshotRevisions = AsyncValueQueue<UInt64>()
         viewController.onSnapshotAppliedForTesting = { revision in
             Task {
@@ -564,7 +564,7 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
 private final class UIKitDetailRecoveryPageDriver: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .legacy,
         capabilities: [.domDomain]

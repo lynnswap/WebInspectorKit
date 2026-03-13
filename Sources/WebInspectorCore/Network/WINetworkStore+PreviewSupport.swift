@@ -2,7 +2,7 @@
 import Foundation
 
 @_spi(PreviewSupport)
-extension WINetworkInspectorStore {
+extension WINetworkStore {
     package func wiApplyPreviewBatch(_ payload: NSDictionary) {
         session.wiApplyPreviewBatch(payload)
     }

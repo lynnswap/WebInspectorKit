@@ -60,7 +60,7 @@ final class DOMLegacyPageDriver: NSObject, WIDOMBackend, PageAgent {
         bridgeMode
     }
 
-    var support: WIInspectorBackendSupport {
+    var support: WIBackendSupport {
         bridgeMode.domBackendSupport()
     }
 

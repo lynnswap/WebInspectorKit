@@ -157,14 +157,14 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
     private var nextUndoToken = 1
     private var undoStack: [Int] = []
     private var redoStack: [Int] = []
-    private let initialSupport: WIInspectorBackendSupport
+    private let initialSupport: WIBackendSupport
 
     init(
         configuration: DOMConfiguration,
         graphStore: DOMGraphStore,
         registry: WISharedTransportRegistry = .shared,
         selectionBridge: (any DOMSelectionBridging)? = DOMTransportDriver.defaultSelectionBridge(),
-        initialSupport: WIInspectorBackendSupport = WITransportSession().supportSnapshot.inspectorBackendSupport
+        initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
     ) {
         self.configuration = configuration
         self.graphStore = graphStore
@@ -185,8 +185,8 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
         lease?.supportSnapshot
     }
 
-    var support: WIInspectorBackendSupport {
-        lease?.supportSnapshot.inspectorBackendSupport
+    var support: WIBackendSupport {
+        lease?.supportSnapshot.backendSupport
             ?? initialSupport
     }
 

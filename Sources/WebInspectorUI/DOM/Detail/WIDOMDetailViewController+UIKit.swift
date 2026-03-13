@@ -134,7 +134,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         let stableIDs: [ItemStableID]
     }
 
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
     private var stateObservationHandles: Set<ObservationHandle> = []
@@ -166,10 +166,10 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
     }()
 
-    public init(inspector: WIDOMInspectorStore, showsNavigationControls: Bool = true) {
-        self.inspector = inspector
+    public init(store: WIDOMStore, showsNavigationControls: Bool = true) {
+        self.store = store
         self.showsNavigationControls = showsNavigationControls
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(collectionViewLayout: UICollectionViewLayout())
     }
 
@@ -228,16 +228,16 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return
         }
         hasStartedObservingState = true
-        let graphStore = inspector.session.graphStore
+        let graphStore = store.session.graphStore
 
-        inspector.observe(
+        store.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
-        inspector.observe(
+        store.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -265,26 +265,26 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.selectedEntry != nil
-        let hasPageWebView = inspector.hasPageWebView
+        let hasSelection = store.selectedEntry != nil
+        let hasPageWebView = store.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.store.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.store.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.store.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
-                self?.reloadInspector()
+                self?.reloadFrontend()
             },
             onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
+                self?.store.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -309,16 +309,16 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = store.hasPageWebView
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = store.isSelectingElement ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
     }
 
     private func updateContent() {
-        let currentSelectionID = inspector.selectedEntry?.id
+        let currentSelectionID = store.selectedEntry?.id
         if editingAttributeKey?.nodeID != currentSelectionID {
             clearInlineEditingState()
         }
@@ -370,7 +370,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeSections() -> [DetailSection] {
-        guard let selected = inspector.selectedEntry else {
+        guard let selected = store.selectedEntry else {
             return []
         }
 
@@ -933,7 +933,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         if editingAttributeKey == key {
             clearInlineEditingState()
         }
-        inspector.removeAttribute(name: key.name)
+        store.removeAttribute(name: key.name)
     }
 
     private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
@@ -949,7 +949,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func reconnectSelectedObservationIfNeeded() {
-        let selectedEntry = inspector.selectedEntry
+        let selectedEntry = store.selectedEntry
         let selectedStyle = selectedEntry?.style
 
         if observedSelectedEntry === selectedEntry, observedSelectedStyle === selectedStyle {
@@ -1022,19 +1022,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        store.toggleSelectionMode()
     }
 
     @objc
-    private func reloadInspector() {
+    private func reloadFrontend() {
         Task {
-            await inspector.reloadInspector()
+            await store.reloadFrontend()
         }
     }
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode(undoManager: undoManager)
+        store.deleteSelectedNode(undoManager: undoManager)
     }
 }
 
@@ -1066,7 +1066,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
     ) {
         editingAttributeKey = key
         editingDraftValue = value
-        inspector.updateAttributeValue(name: key.name, value: value)
+        store.updateAttributeValue(name: key.name, value: value)
     }
 
     fileprivate func elementAttributeEditorCellDidEndEditing(
@@ -1378,7 +1378,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         UINavigationController(
             rootViewController: WIDOMDetailViewController(
-                inspector: WIDOMPreviewFixtures.makeInspector(mode: .empty)
+                store: WIDOMPreviewFixtures.makeStore(mode: .empty)
             )
         )
     }
@@ -1388,7 +1388,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         UINavigationController(
             rootViewController: WIDOMDetailViewController(
-                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected)
+                store: WIDOMPreviewFixtures.makeStore(mode: .selected)
             )
         )
     }
@@ -1398,7 +1398,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         UINavigationController(
             rootViewController: WIDOMDetailViewController(
-                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selectedEditableAttributes)
+                store: WIDOMPreviewFixtures.makeStore(mode: .selectedEditableAttributes)
             )
         )
     }

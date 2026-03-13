@@ -21,20 +21,20 @@ enum WIDOMPreviewFixtures {
         )
     }
 
-    static func makeInspector(mode: Mode) -> WIDOMInspectorStore {
+    static func makeStore(mode: Mode) -> WIDOMStore {
         let runtime = makeRuntime()
         let frontendRuntime = WIDOMFrontendRuntime(session: runtime)
-        let inspector = WIDOMInspectorStore(
+        let store = WIDOMStore(
             session: runtime,
             frontendBridge: frontendRuntime
         )
-        applySampleTree(to: inspector)
-        applySampleSelection(to: inspector, mode: mode)
-        return inspector
+        applySampleTree(to: store)
+        applySampleSelection(to: store, mode: mode)
+        return store
     }
 
-    static func applySampleSelection(to inspector: WIDOMInspectorStore, mode: Mode) {
-        let graphStore = inspector.session.graphStore
+    static func applySampleSelection(to store: WIDOMStore, mode: Mode) {
+        let graphStore = store.session.graphStore
         graphStore.applySelectionSnapshot(nil)
 
         switch mode {
@@ -150,20 +150,20 @@ enum WIDOMPreviewFixtures {
     }
 
     @discardableResult
-    static func bootstrapDOMTreeForPreview(_ inspector: WIDOMInspectorStore) -> WKWebView {
-        let key = ObjectIdentifier(inspector)
+    static func bootstrapDOMTreeForPreview(_ store: WIDOMStore) -> WKWebView {
+        let key = ObjectIdentifier(store)
         if let existingLoader = pageLoaderByInspector[key] {
-            applySampleTree(to: inspector)
+            applySampleTree(to: store)
             return existingLoader.pageWebView
         }
 
-        let loader = WIDOMPreviewPageLoader(inspector: inspector)
+        let loader = WIDOMPreviewPageLoader(store: store)
         pageLoaderByInspector[key] = loader
-        applySampleTree(to: inspector)
+        applySampleTree(to: store)
         return loader.pageWebView
     }
 
-    static func applySampleTree(to inspector: WIDOMInspectorStore) {
+    static func applySampleTree(to store: WIDOMStore) {
         let snapshot = DOMGraphSnapshot(
             root: DOMGraphNodeDescriptor(
                 nodeID: 1,
@@ -303,14 +303,14 @@ enum WIDOMPreviewFixtures {
             selectedNodeID: 6
         )
 
-        inspector.session.graphStore.resetForDocumentUpdate()
-        inspector.session.graphStore.applySnapshot(snapshot)
-        inspector.session.graphStore.select(nodeID: snapshot.selectedNodeID)
-        inspector.setExpandedEntryIDsForTesting([
-            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 1),
-            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 2),
-            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 4),
-            DOMEntryID(documentGeneration: inspector.session.graphStore.documentGeneration, nodeID: 5),
+        store.session.graphStore.resetForDocumentUpdate()
+        store.session.graphStore.applySnapshot(snapshot)
+        store.session.graphStore.select(nodeID: snapshot.selectedNodeID)
+        store.setExpandedEntryIDsForTesting([
+            DOMEntryID(documentGeneration: store.session.graphStore.documentGeneration, nodeID: 1),
+            DOMEntryID(documentGeneration: store.session.graphStore.documentGeneration, nodeID: 2),
+            DOMEntryID(documentGeneration: store.session.graphStore.documentGeneration, nodeID: 4),
+            DOMEntryID(documentGeneration: store.session.graphStore.documentGeneration, nodeID: 5),
         ])
     }
 
@@ -319,31 +319,31 @@ enum WIDOMPreviewFixtures {
 
 @MainActor
 private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private let webView: WKWebView
 
     var pageWebView: WKWebView {
         webView
     }
 
-    init(inspector: WIDOMInspectorStore) {
-        self.inspector = inspector
+    init(store: WIDOMStore) {
+        self.store = store
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         let webView = WKWebView(frame: .zero, configuration: configuration)
         self.webView = webView
         super.init()
         webView.navigationDelegate = self
-        inspector.wiAttachPreviewPageWebView(webView)
+        store.wiAttachPreviewPageWebView(webView)
         webView.loadHTMLString(Self.sampleHTML, baseURL: URL(string: "https://preview.local"))
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor [weak inspector] in
-            guard let inspector else {
+        Task { @MainActor [weak store] in
+            guard let store else {
                 return
             }
-            await inspector.reloadInspector(preserveState: true)
+            await store.reloadFrontend(preserveState: true)
         }
     }
 
@@ -374,7 +374,7 @@ private final class PreviewDOMBackend: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
 
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .supported,
         backendKind: .legacy,
         capabilities: [.domDomain]

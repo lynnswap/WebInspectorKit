@@ -24,7 +24,7 @@ package extension NetworkBodyFetching {
 package protocol WINetworkBackend: AnyObject, NetworkBodyFetching {
     var webView: WKWebView? { get }
     var store: NetworkStore { get }
-    var support: WIInspectorBackendSupport { get }
+    var support: WIBackendSupport { get }
 
     func setMode(_ mode: NetworkLoggingMode)
     func attachPageWebView(_ newWebView: WKWebView?)

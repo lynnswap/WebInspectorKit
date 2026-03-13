@@ -3,15 +3,15 @@ import WebInspectorCore
 import WebKit
 
 @MainActor
-enum WIInspectorPreviewFixtures {
-    static func makeController() -> WIInspectorController {
+enum WISessionPreviewFixtures {
+    static func makeSessionController() -> WISessionController {
         let domRuntime = WIDOMPreviewFixtures.makeRuntime()
         let domFrontendRuntime = WIDOMFrontendRuntime(session: domRuntime)
         let networkRuntime = WINetworkRuntime(
             configuration: .init(),
             backend: PreviewNetworkBackend()
         )
-        return WIInspectorController(
+        return WISessionController(
             domSession: domRuntime,
             networkSession: networkRuntime,
             domFrontendBridge: domFrontendRuntime
@@ -23,7 +23,7 @@ enum WIInspectorPreviewFixtures {
 private final class PreviewNetworkBackend: WINetworkBackend {
     weak var webView: WKWebView?
     let store = NetworkStore()
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .supported,
         backendKind: .legacy,
         capabilities: [.networkDomain]

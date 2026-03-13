@@ -120,9 +120,9 @@ struct NetworkInspectorTests {
                 return nil
             }
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
-        inspector.attach(to: webView)
+        store.attach(to: webView)
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
         entry.responseBody = makeBody(reference: "resp_ref", role: .response)
@@ -131,7 +131,7 @@ struct NetworkInspectorTests {
         let requestBodyStates = fetchStateRecorder(for: requestBody)
         let responseBodyStates = fetchStateRecorder(for: responseBody)
 
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
         _ = await requestBodyStates.next(where: { $0 == "full" })
         _ = await responseBodyStates.next(where: { $0 == "full" })
@@ -147,19 +147,19 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
 
         let webView = makeIsolatedTestWebView()
         let bodyStates = fetchStateRecorder(for: body)
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         _ = await bodyStates.next(where: { $0 == "full" })
         #expect(fetcher.fetchRefs == ["resp_ref"])
@@ -172,12 +172,12 @@ struct NetworkInspectorTests {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
-        inspector.attach(to: webView)
+        store.attach(to: webView)
         let entry = makeEntry()
 
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
         #expect(fetcher.fetchRefs.isEmpty)
 
@@ -205,9 +205,9 @@ struct NetworkInspectorTests {
             }
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         let firstEntry = makeEntry()
         let firstBody = makeBody(reference: "slow-ref", role: .response)
@@ -219,11 +219,11 @@ struct NetworkInspectorTests {
         let firstBodyStates = fetchStateRecorder(for: firstBody)
         let secondBodyStates = fetchStateRecorder(for: secondBody)
 
-        inspector.selectEntry(firstEntry)
+        store.selectEntry(firstEntry)
         _ = await firstBodyStates.next(where: { $0 == "fetching" })
         await slowFetchStarted.wait()
 
-        inspector.selectEntry(secondEntry)
+        store.selectEntry(secondEntry)
 
         _ = await secondBodyStates.next(where: { $0 == "full" })
 
@@ -241,15 +241,15 @@ struct NetworkInspectorTests {
             Issue.record("reattach should not fetch cleared selection")
             return nil
         }
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "stale-ref", role: .response)
         entry.responseBody = body
-        inspector.selectEntry(entry)
+        store.selectEntry(entry)
 
-        inspector.detach()
+        store.detach()
         let webView = makeIsolatedTestWebView()
-        inspector.attach(to: webView)
+        store.attach(to: webView)
 
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
@@ -257,25 +257,25 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesAppliesSearchResourceFilterAndSortTogether() throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
 
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 1,
             url: "https://example.com/index.html",
             initiator: "document",
             monotonicMs: 1_000
         )
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 2,
             url: "https://cdn.example.com/image.png",
             initiator: "img",
             monotonicMs: 1_010
         )
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 3,
             url: "https://cdn.example.com/app.js",
             initiator: "script",
@@ -297,8 +297,8 @@ struct NetworkInspectorTests {
 
     @Test
     func assigningEmptyActiveFiltersClearsEffectiveFilters() {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
 
         queryModel.activeFilters = [.image, .script]
         #expect(queryModel.effectiveFilters == [.image, .script])
@@ -310,46 +310,46 @@ struct NetworkInspectorTests {
 
     @Test
     func clearResetsSelectedEntry() throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 11,
             url: "https://example.com/detail",
             initiator: "fetch",
             monotonicMs: 1_000
         )
 
-        let selectedEntry = try #require(inspector.store.entries.first)
-        inspector.selectEntry(selectedEntry)
+        let selectedEntry = try #require(store.store.entries.first)
+        store.selectEntry(selectedEntry)
 
-        inspector.clear()
+        store.clear()
 
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.store.entries.isEmpty)
+        #expect(store.selectedEntry == nil)
+        #expect(store.store.entries.isEmpty)
         #expect(queryModel.displayEntries.isEmpty)
     }
 
     @Test
     func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 31,
             url: "https://example.com/filter-target.js",
             initiator: "script",
             monotonicMs: 1_000
         )
-        let selectedEntry = try #require(inspector.store.entries.first)
-        inspector.selectEntry(selectedEntry)
+        let selectedEntry = try #require(store.store.entries.first)
+        store.selectEntry(selectedEntry)
         queryModel.searchText = "filter-target"
         queryModel.activeFilters = [.script]
 
-        inspector.clear()
+        store.clear()
 
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.store.entries.isEmpty)
+        #expect(store.selectedEntry == nil)
+        #expect(store.store.entries.isEmpty)
         #expect(queryModel.displayEntries.isEmpty)
         #expect(queryModel.searchText == "filter-target")
         #expect(queryModel.activeFilters == [.script])
@@ -358,10 +358,10 @@ struct NetworkInspectorTests {
 
     @Test
     func displayEntriesKeepsBodylessBufferedStyleEntriesSearchableAndFilterable() throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 21,
             url: "https://example.com/buffered-endpoint",
             initiator: "fetch",
@@ -376,7 +376,7 @@ struct NetworkInspectorTests {
                 "wallMs": 1_700_000_000_120.0
             ]
         ])
-        inspector.store.applyEvent(finish)
+        store.store.applyEvent(finish)
 
         queryModel.searchText = "buffered-endpoint"
         queryModel.activeFilters = [.xhrFetch]
@@ -391,17 +391,17 @@ struct NetworkInspectorTests {
 
     @Test
     func selectedEntryRemainsWhenFilterExcludesDisplayedEntries() throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 61,
             url: "https://example.com/selected.js",
             initiator: "script",
             monotonicMs: 1_000
         )
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 62,
             url: "https://example.com/other.css",
             initiator: "stylesheet",
@@ -409,51 +409,51 @@ struct NetworkInspectorTests {
         )
 
         let selectedEntry = try #require(
-            inspector.store.entries.first(where: { $0.requestID == 61 })
+            store.store.entries.first(where: { $0.requestID == 61 })
         )
-        inspector.selectEntry(selectedEntry)
+        store.selectEntry(selectedEntry)
         queryModel.activeFilters = [.stylesheet]
 
         #expect(queryModel.displayEntries.map(\.requestID) == [62])
-        #expect(inspector.selectedEntry?.id == selectedEntry.id)
+        #expect(store.selectedEntry?.id == selectedEntry.id)
     }
 
     @Test
     func selectedEntryClearsWhenPrunedFromStoreByRetentionLimit() async throws {
-        let inspector = WINetworkInspectorStore(
+        let store = WINetworkStore(
             session: WINetworkRuntime(configuration: .init(maxEntries: 1))
         )
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 71,
             url: "https://example.com/old",
             initiator: "fetch",
             monotonicMs: 1_000
         )
 
-        let initiallySelectedID = try #require(inspector.store.entries.first?.id)
-        inspector.selectEntry(inspector.store.entries.first)
+        let initiallySelectedID = try #require(store.store.entries.first?.id)
+        store.selectEntry(store.store.entries.first)
 
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 72,
             url: "https://example.com/new",
             initiator: "fetch",
             monotonicMs: 1_010
         )
 
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.store.entries.count == 1)
-        #expect(inspector.store.entries.first?.requestID == 72)
-        #expect(inspector.store.entries.first?.id != initiallySelectedID)
+        #expect(store.selectedEntry == nil)
+        #expect(store.store.entries.count == 1)
+        #expect(store.store.entries.first?.requestID == 72)
+        #expect(store.store.entries.first?.id != initiallySelectedID)
     }
 
     @Test
     func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
-        let inspector = WINetworkInspectorStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(inspector: inspector)
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
         try applyRequestStart(
-            to: inspector,
+            to: store,
             requestID: 81,
             url: "https://example.com/stateful",
             initiator: "fetch",
@@ -471,7 +471,7 @@ struct NetworkInspectorTests {
             ]
         ])
         let displayEntries = displayEntryRecorder(for: queryModel)
-        inspector.store.applyEvent(responseReceived)
+        store.store.applyEvent(responseReceived)
 
         _ = await displayEntries.next(where: { $0.first?.statusLabel == "404" })
         #expect(queryModel.displayEntries.first?.statusSeverity == .warning)
@@ -480,7 +480,7 @@ struct NetworkInspectorTests {
 
     @Test
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
-        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: WINetworkRuntime()))
+        let queryModel = WINetworkQueryState(store: WINetworkStore(session: WINetworkRuntime()))
         let recorder = searchTextRecorder(for: queryModel)
 
         let initialValue = await recorder.next()
@@ -499,7 +499,7 @@ struct NetworkInspectorTests {
 
     @Test
     func observeSearchTextStopsEmittingAfterCancel() async {
-        let queryModel = WINetworkQueryState(inspector: WINetworkInspectorStore(session: WINetworkRuntime()))
+        let queryModel = WINetworkQueryState(store: WINetworkStore(session: WINetworkRuntime()))
         let emissions = AsyncValueQueue<String>()
         let handle = queryModel.observe(\.searchText, options: [.removeDuplicates]) { value in
             Task {
@@ -573,7 +573,7 @@ struct NetworkInspectorTests {
     }
 
     private func applyRequestStart(
-        to inspector: WINetworkInspectorStore,
+        to store: WINetworkStore,
         requestID: Int,
         url: String,
         initiator: String,
@@ -591,7 +591,7 @@ struct NetworkInspectorTests {
             ]
         ]
         let event = try decodeEvent(payload)
-        inspector.store.applyEvent(event)
+        store.store.applyEvent(event)
     }
 
     private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> HTTPNetworkEvent {

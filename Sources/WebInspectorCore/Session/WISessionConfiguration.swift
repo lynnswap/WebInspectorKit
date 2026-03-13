@@ -1,5 +1,5 @@
 
-public struct WIInspectorConfiguration: Sendable {
+public struct WISessionConfiguration: Sendable {
     public var dom: DOMConfiguration
     public var network: NetworkConfiguration
 

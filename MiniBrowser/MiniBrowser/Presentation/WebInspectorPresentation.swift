@@ -7,8 +7,8 @@ import UIKit
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WIInspectorController,
-    tabs: [WIInspectorTab] = [.dom(), .network()]
+    sessionController: WISessionController,
+    tabs: [WITab] = [.dom(), .network()]
 ) -> Bool {
     guard let presenter = resolvePresenter(from: windowScene) else {
         return false
@@ -16,13 +16,13 @@ func presentWebInspector(
 
     if let existing = findPresentedContainer(from: presenter) {
         existing.setTabs(tabs)
-        existing.setInspectorController(inspectorController)
+        existing.setSessionController(sessionController)
         existing.setPageWebView(model.webView)
         return true
     }
 
-    let container = WIInspectorViewController(
-        inspectorController,
+    let container = WIContainerViewController(
+        sessionController,
         webView: model.webView,
         tabs: tabs
     )
@@ -33,7 +33,7 @@ func presentWebInspector(
 }
 
 @MainActor
-private func findPresentedContainer(from presenter: UIViewController) -> WIInspectorViewController? {
+private func findPresentedContainer(from presenter: UIViewController) -> WIContainerViewController? {
     if let direct = presenter.presentedViewController.flatMap(inspectorContainer(in:)) {
         return direct
     }
@@ -58,8 +58,8 @@ private func findPresentedContainer(from presenter: UIViewController) -> WIInspe
 }
 
 @MainActor
-private func inspectorContainer(in viewController: UIViewController) -> WIInspectorViewController? {
-    if let container = viewController as? WIInspectorViewController {
+private func inspectorContainer(in viewController: UIViewController) -> WIContainerViewController? {
+    if let container = viewController as? WIContainerViewController {
         return container
     }
     if let navigationController = viewController as? UINavigationController {
@@ -158,21 +158,21 @@ private let inspectorWindowStore = InspectorWindowStore()
 func presentWebInspector(
     windowScene: WindowScene?,
     model: BrowserViewModel,
-    inspectorController: WIInspectorController,
-    tabs: [WIInspectorTab] = [.dom(), .network()]
+    sessionController: WISessionController,
+    tabs: [WITab] = [.dom(), .network()]
 ) -> Bool {
     if let existingWindow = inspectorWindowStore.window,
-       let existingContainer = existingWindow.contentViewController as? WIInspectorViewController {
+       let existingContainer = existingWindow.contentViewController as? WIContainerViewController {
         existingContainer.setTabs(tabs)
-        existingContainer.setInspectorController(inspectorController)
+        existingContainer.setSessionController(sessionController)
         existingContainer.setPageWebView(model.webView)
         existingWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return true
     }
 
-    let container = WIInspectorViewController(
-        inspectorController,
+    let container = WIContainerViewController(
+        sessionController,
         webView: model.webView,
         tabs: tabs
     )

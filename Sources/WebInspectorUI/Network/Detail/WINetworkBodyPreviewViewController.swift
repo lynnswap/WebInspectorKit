@@ -37,7 +37,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private let entry: NetworkEntry
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let bodyState: NetworkBody
 
     private var mode: NetworkBodyPreviewRenderModel.Mode = .text
@@ -73,9 +73,9 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         return view
     }()
 
-    public init(entry: NetworkEntry, inspector: WINetworkInspectorStore, bodyState: NetworkBody) {
+    public init(entry: NetworkEntry, store: WINetworkStore, bodyState: NetworkBody) {
         self.entry = entry
-        self.inspector = inspector
+        self.store = store
         self.bodyState = bodyState
         super.init(nibName: nil, bundle: nil)
     }
@@ -606,7 +606,7 @@ import SwiftUI
         }
         let preview = WINetworkBodyPreviewViewController(
             entry: context.entry,
-            inspector: context.inspector,
+            store: context.store,
             bodyState: context.body
         )
         return UINavigationController(rootViewController: preview)
@@ -620,7 +620,7 @@ import SwiftUI
         }
         let preview = WINetworkBodyPreviewViewController(
             entry: context.entry,
-            inspector: context.inspector,
+            store: context.store,
             bodyState: context.body
         )
         return UINavigationController(rootViewController: preview)

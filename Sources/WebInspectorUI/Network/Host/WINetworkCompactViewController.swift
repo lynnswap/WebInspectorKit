@@ -8,17 +8,17 @@ import UIKit
 
 @MainActor
 final class WINetworkCompactViewController: UINavigationController, UINavigationControllerDelegate {
-    private let inspector: WINetworkInspectorStore
+    private let store: WINetworkStore
     private let listPaneViewController: WINetworkListViewController
     private var observationHandles: Set<ObservationHandle> = []
 
-    init(inspector: WINetworkInspectorStore, queryModel: WINetworkQueryState) {
-        self.inspector = inspector
-        self.listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
+    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
+        self.store = store
+        self.listPaneViewController = WINetworkListViewController(store: store, queryModel: queryModel)
         super.init(rootViewController: listPaneViewController)
         title = nil
 
-        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
+        store.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
             guard let self else { return }
             self.syncNavigationStack(for: newValue)
         }
@@ -46,7 +46,7 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
             return
         }
         let vc = WINetworkDetailViewController(
-            inspector: inspector,
+            store: store,
             showsNavigationControls: true
         )
         pushViewController(vc, animated: true)
@@ -76,8 +76,8 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
         guard viewController === listPaneViewController else {
             return
         }
-        if inspector.selectedEntry != nil {
-            inspector.selectEntry(nil)
+        if store.selectedEntry != nil {
+            store.selectEntry(nil)
         }
         applyListNavigationItems()
     }
@@ -91,10 +91,10 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
 import SwiftUI
 #Preview("Network Compact Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let inspector = WINetworkPreviewFixtures.makeInspector(mode: .detail)
+        let store = WINetworkPreviewFixtures.makeStore(mode: .detail)
         return WINetworkCompactViewController(
-            inspector: inspector,
-            queryModel: WINetworkQueryState(inspector: inspector)
+            store: store,
+            queryModel: WINetworkQueryState(store: store)
         )
     }
 }

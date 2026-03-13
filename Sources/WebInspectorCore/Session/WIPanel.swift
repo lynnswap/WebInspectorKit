@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WIInspectorPanelKind: Hashable, Sendable {
+public enum WIPanelKind: Hashable, Sendable {
     case domTree
     case domDetail
     case network
@@ -20,18 +20,18 @@ public enum WIInspectorPanelKind: Hashable, Sendable {
     }
 }
 
-public struct WIInspectorPanelConfiguration: Hashable, Sendable {
+public struct WIPanelConfiguration: Hashable, Sendable {
     public enum Role: Hashable, Sendable {
-        case inspector
+        case builtIn
         case other
     }
 
     public let instanceID: UUID
-    public let kind: WIInspectorPanelKind
+    public let kind: WIPanelKind
     public let role: Role
 
     public init(
-        kind: WIInspectorPanelKind,
+        kind: WIPanelKind,
         role: Role = .other,
         instanceID: UUID = UUID()
     ) {

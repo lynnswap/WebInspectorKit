@@ -1,7 +1,7 @@
 #if canImport(AppKit)
 import AppKit
 
-extension WIDOMInspectorStore {
+extension WIDOMStore {
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
         withFrontendBridge { frontendBridge in
             frontendBridge.setDOMContextMenuProvider(provider)

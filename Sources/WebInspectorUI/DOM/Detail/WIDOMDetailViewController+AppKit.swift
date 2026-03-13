@@ -10,7 +10,7 @@ import SwiftUI
 
 @MainActor
 public final class WIDOMDetailViewController: NSViewController {
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
     private var observationHandles: Set<ObservationHandle> = []
     private var selectedObservationHandles: Set<ObservationHandle> = []
@@ -19,9 +19,9 @@ public final class WIDOMDetailViewController: NSViewController {
     private var renderRefreshCount = 0
     package var onRenderRefreshForTesting: (@MainActor (Int) -> Void)?
 
-    public init(inspector: WIDOMInspectorStore) {
-        self.inspector = inspector
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+    public init(store: WIDOMStore) {
+        self.store = store
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -37,7 +37,7 @@ public final class WIDOMDetailViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let hostingController = NSHostingController(rootView: ElementDetailsMacRootView(inspector: inspector))
+        let hostingController = NSHostingController(rootView: ElementDetailsMacRootView(store: store))
         self.hostingController = hostingController
         addChild(hostingController)
 
@@ -56,23 +56,23 @@ public final class WIDOMDetailViewController: NSViewController {
     }
 
     private func startObservingInspectorState() {
-        inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { [weak self] _ in
+        store.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { [weak self] _ in
             self?.refreshRootView()
         }
         .store(in: &observationHandles)
 
-        inspector.observe(\.errorMessage, options: [.removeDuplicates]) { [weak self] _ in
+        store.observe(\.errorMessage, options: [.removeDuplicates]) { [weak self] _ in
             self?.refreshRootView()
         }
         .store(in: &observationHandles)
 
-        inspector.session.graphStore.observe(\.selectedID, options: [.removeDuplicates]) { [weak self] _ in
+        store.session.graphStore.observe(\.selectedID, options: [.removeDuplicates]) { [weak self] _ in
             self?.reconnectSelectedObservationIfNeeded()
             self?.refreshRootView()
         }
         .store(in: &observationHandles)
 
-        inspector.session.graphStore.observe(\.entriesByID, options: WIObservationOptions.domDetailContent) { [weak self] _ in
+        store.session.graphStore.observe(\.entriesByID, options: WIObservationOptions.domDetailContent) { [weak self] _ in
             self?.reconnectSelectedObservationIfNeeded()
         }
         .store(in: &observationHandles)
@@ -82,13 +82,13 @@ public final class WIDOMDetailViewController: NSViewController {
 
     private func refreshRootView() {
         renderRefreshCount += 1
-        hostingController?.rootView = ElementDetailsMacRootView(inspector: inspector)
+        hostingController?.rootView = ElementDetailsMacRootView(store: store)
         hostingController?.view.layoutSubtreeIfNeeded()
         onRenderRefreshForTesting?(renderRefreshCount)
     }
 
     private func reconnectSelectedObservationIfNeeded() {
-        let selectedEntry = inspector.selectedEntry
+        let selectedEntry = store.selectedEntry
         let selectedStyle = selectedEntry?.style
 
         if observedSelectedEntry === selectedEntry, observedSelectedStyle === selectedStyle {
@@ -135,12 +135,12 @@ private struct ElementDetailsMacRootView: View {
         }
     }
 
-    @Bindable var inspector: WIDOMInspectorStore
+    @Bindable var store: WIDOMStore
     @State private var attributeEditorState: AttributeEditorState?
     @State private var attributeEditorDraft = ""
 
     private var selectedEntry: DOMEntry? {
-        inspector.selectedEntry
+        store.selectedEntry
     }
 
     private var hasSelection: Bool {
@@ -150,7 +150,7 @@ private struct ElementDetailsMacRootView: View {
     var body: some View {
         if hasSelection {
             List {
-                if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
+                if let errorMessage = store.errorMessage, !errorMessage.isEmpty {
                     Section {
                         infoRow(message: errorMessage, color: .orange)
                     }
@@ -194,7 +194,7 @@ private struct ElementDetailsMacRootView: View {
                             attributeEditorState = nil
                         }
                         Button(wiLocalized("save", default: "Save")) {
-                            inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
+                            store.updateAttributeValue(name: state.name, value: attributeEditorDraft)
                             attributeEditorState = nil
                         }
                         .keyboardShortcut(.defaultAction)
@@ -329,7 +329,7 @@ private struct ElementDetailsMacRootView: View {
                         attributeEditorDraft = attribute.value
                     }
                     Button(wiLocalized("dom.element.attributes.delete", default: "Delete Attribute"), role: .destructive) {
-                        inspector.removeAttribute(name: attribute.name)
+                        store.removeAttribute(name: attribute.name)
                     }
                 }
             }
@@ -384,13 +384,13 @@ private struct ElementDetailsMacRootView: View {
 import SwiftUI
 #Preview("DOM Detail Empty (AppKit)") {
     WIAppKitPreviewContainer {
-        WIDOMDetailViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .empty))
+        WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .empty))
     }
 }
 
 #Preview("DOM Detail Selected (AppKit)") {
     WIAppKitPreviewContainer {
-        WIDOMDetailViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected))
+        WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
     }
 }
 #endif

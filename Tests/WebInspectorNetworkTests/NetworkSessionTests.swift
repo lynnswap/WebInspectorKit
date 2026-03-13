@@ -492,7 +492,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
 private final class StubNetworkPageDriver: WINetworkBackend {
     private(set) weak var webView: WKWebView?
     let store = NetworkStore()
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .unsupported,
         failureReason: "stub"

@@ -9,7 +9,7 @@ package extension WIDOMRuntime {
         self.init(
             configuration: configuration,
             graphStore: graphStore,
-            backend: WIInspectorBackendFactory.makeDOMBackend(
+            backend: WIBackendFactory.makeDOMBackend(
                 configuration: configuration,
                 graphStore: graphStore,
                 supportSnapshot: defaultTransportSupportSnapshot
@@ -25,7 +25,7 @@ package extension WINetworkRuntime {
     ) {
         self.init(
             configuration: configuration,
-            backend: WIInspectorBackendFactory.makeNetworkBackend(
+            backend: WIBackendFactory.makeNetworkBackend(
                 configuration: configuration,
                 supportSnapshot: defaultTransportSupportSnapshot
             )
@@ -40,7 +40,7 @@ package extension WINetworkRuntime {
         if defaultTransportSupportSnapshot.isSupported {
             self.init(
                 configuration: configuration,
-                backend: WIInspectorBackendFactory.makeNetworkBackend(
+                backend: WIBackendFactory.makeNetworkBackend(
                     configuration: configuration,
                     supportSnapshot: defaultTransportSupportSnapshot
                 )

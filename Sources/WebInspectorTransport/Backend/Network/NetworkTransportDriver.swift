@@ -127,11 +127,11 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     private var attachTask: Task<Void, Never>?
     private var requestIdentifiers: [RequestKey: Int] = [:]
     private var nextSyntheticRequestIdentifier = 1
-    private let initialSupport: WIInspectorBackendSupport
+    private let initialSupport: WIBackendSupport
 
     init(
         registry: WISharedTransportRegistry = .shared,
-        initialSupport: WIInspectorBackendSupport = WITransportSession().supportSnapshot.inspectorBackendSupport
+        initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
     ) {
         self.registry = registry
         self.initialSupport = initialSupport
@@ -150,8 +150,8 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         lease?.supportSnapshot
     }
 
-    var support: WIInspectorBackendSupport {
-        lease?.supportSnapshot.inspectorBackendSupport
+    var support: WIBackendSupport {
+        lease?.supportSnapshot.backendSupport
             ?? initialSupport
     }
 

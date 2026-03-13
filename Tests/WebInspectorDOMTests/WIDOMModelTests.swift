@@ -23,7 +23,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
 
         try? await session.reloadDocument()
@@ -61,7 +61,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
 
         try? await session.reloadDocument()
@@ -118,7 +118,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let rowIDs = treeRowIDsRecorder(for: inspector)
 
         try? await session.reloadDocument()
@@ -140,7 +140,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
         try? await session.reloadDocument()
@@ -173,7 +173,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
@@ -200,7 +200,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
@@ -239,7 +239,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let errorMessages = errorMessageRecorder(for: inspector)
@@ -278,7 +278,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
@@ -307,7 +307,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
 
@@ -352,7 +352,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
         let webView = makeIsolatedTestWebView()
         let rootIDs = rootNodeIDRecorder(for: graphStore)
         let selectedSnapshots = selectedSnapshotRecorder(for: inspector)
@@ -467,7 +467,7 @@ struct WIDOMModelTests {
                 graphStore: graphStore,
                 backend: driver
             )
-            let inspector = WIDOMInspectorStore(session: session)
+            let inspector = WIDOMStore(session: session)
 
             graphStore.applySnapshot(.init(root: makeDocumentTree()))
             #expect(graphStore.entry(forNodeID: 3) != nil)
@@ -507,7 +507,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
 
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
 
@@ -600,7 +600,7 @@ struct WIDOMModelTests {
             graphStore: graphStore,
             backend: driver
         )
-        let inspector = WIDOMInspectorStore(session: session)
+        let inspector = WIDOMStore(session: session)
 
         graphStore.applySnapshot(.init(root: makeDocumentTree()))
         graphStore.applySelectionSnapshot(
@@ -626,9 +626,9 @@ struct WIDOMModelTests {
 @MainActor
 private func makeInspectorWithFrontendRuntime(
     session: WIDOMRuntime
-) -> (inspector: WIDOMInspectorStore, frontendRuntime: WIDOMFrontendRuntime) {
+) -> (inspector: WIDOMStore, frontendRuntime: WIDOMFrontendRuntime) {
     let frontendRuntime = WIDOMFrontendRuntime(session: session)
-    let inspector = WIDOMInspectorStore(session: session, frontendBridge: frontendRuntime)
+    let inspector = WIDOMStore(session: session, frontendBridge: frontendRuntime)
     return (inspector, frontendRuntime)
 }
 
@@ -636,7 +636,7 @@ private func makeInspectorWithFrontendRuntime(
 private final class StubDOMPageDriver: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .legacy,
         capabilities: [.domDomain]
@@ -1034,7 +1034,7 @@ private func rootNodeIDRecorder(for graphStore: DOMGraphStore) -> ObservationRec
 }
 
 @MainActor
-private func treeRowIDsRecorder(for inspector: WIDOMInspectorStore) -> ObservationRecorder<[Int]> {
+private func treeRowIDsRecorder(for inspector: WIDOMStore) -> ObservationRecorder<[Int]> {
     let recorder = ObservationRecorder<[Int]>()
     recorder.record { didChange in
         inspector.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { _ in
@@ -1046,7 +1046,7 @@ private func treeRowIDsRecorder(for inspector: WIDOMInspectorStore) -> Observati
 
 @MainActor
 private func selectedSnapshotRecorder(
-    for inspector: WIDOMInspectorStore
+    for inspector: WIDOMStore
 ) -> ObservationRecorder<DOMSelectedSnapshot?> {
     let recorder = ObservationRecorder<DOMSelectedSnapshot?>()
     recorder.record { didChange in
@@ -1065,7 +1065,7 @@ private func selectedSnapshotRecorder(
 }
 
 @MainActor
-private func errorMessageRecorder(for inspector: WIDOMInspectorStore) -> ObservationRecorder<String?> {
+private func errorMessageRecorder(for inspector: WIDOMStore) -> ObservationRecorder<String?> {
     let recorder = ObservationRecorder<String?>()
     recorder.record { didChange in
         inspector.observe(\.errorMessage, options: [.removeDuplicates]) { errorMessage in
@@ -1077,7 +1077,7 @@ private func errorMessageRecorder(for inspector: WIDOMInspectorStore) -> Observa
 
 @MainActor
 private func graphProjectionRevisionRecorder(
-    for inspector: WIDOMInspectorStore
+    for inspector: WIDOMStore
 ) -> ObservationRecorder<UInt64> {
     let recorder = ObservationRecorder<UInt64>()
     recorder.record { didChange in

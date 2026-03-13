@@ -10,9 +10,9 @@ import AppKit
 struct WIDOMTreeViewControllerAppKitTests {
     @Test
     func embedsInspectorWebViewForPreview() {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
-        _ = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(inspector)
-        let controller = WIDOMTreeViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+        _ = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(store)
+        let controller = WIDOMTreeViewController(store: store)
 
         controller.loadViewIfNeeded()
         controller.view.layoutSubtreeIfNeeded()
@@ -22,11 +22,11 @@ struct WIDOMTreeViewControllerAppKitTests {
 
     @Test
     func doesNotShowErrorOverlayWhenRecoverableErrorExists() async {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .empty)
-        let controller = WIDOMTreeViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .empty)
+        let controller = WIDOMTreeViewController(store: store)
 
         controller.loadViewIfNeeded()
-        await inspector.reloadInspector()
+        await store.reloadFrontend()
 
         #expect(controller.testShowsErrorLabel == false)
     }
@@ -54,9 +54,9 @@ import UIKit
 struct WIDOMTreeViewControllerUIKitTests {
     @Test
     func embedsInspectorWebViewForPreview() {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .selected)
-        _ = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(inspector)
-        let controller = WIDOMTreeViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+        _ = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(store)
+        let controller = WIDOMTreeViewController(store: store)
 
         controller.loadViewIfNeeded()
         controller.view.layoutIfNeeded()
@@ -66,11 +66,11 @@ struct WIDOMTreeViewControllerUIKitTests {
 
     @Test
     func doesNotShowErrorOverlayWhenRecoverableErrorExists() async {
-        let inspector = WIDOMPreviewFixtures.makeInspector(mode: .empty)
-        let controller = WIDOMTreeViewController(inspector: inspector)
+        let store = WIDOMPreviewFixtures.makeStore(mode: .empty)
+        let controller = WIDOMTreeViewController(store: store)
 
         controller.loadViewIfNeeded()
-        await inspector.reloadInspector()
+        await store.reloadFrontend()
 
         #expect(controller.contentUnavailableConfiguration == nil)
         #expect(controller.navigationItem.prompt == nil)

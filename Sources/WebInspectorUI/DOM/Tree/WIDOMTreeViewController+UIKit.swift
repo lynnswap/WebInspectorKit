@@ -8,7 +8,7 @@ import UIKit
 
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
-    private let inspector: WIDOMInspectorStore
+    private let store: WIDOMStore
     private let showsNavigationControls: Bool
     private var observationHandles: Set<ObservationHandle> = []
     // Keep coalescing here because navigation controls are driven by multiple observed states.
@@ -23,10 +23,10 @@ public final class WIDOMTreeViewController: UIViewController {
         )
     }()
 
-    public init(inspector: WIDOMInspectorStore, showsNavigationControls: Bool = true) {
-        self.inspector = inspector
+    public init(store: WIDOMStore, showsNavigationControls: Bool = true) {
+        self.store = store
         self.showsNavigationControls = showsNavigationControls
-        inspector.setUIBridge(WIDOMPlatformBridge.shared)
+        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -39,7 +39,7 @@ public final class WIDOMTreeViewController: UIViewController {
         super.viewDidLoad()
         title = nil
 
-        let inspectorWebView = inspector.makeInspectorWebView()
+        let inspectorWebView = store.makeFrontendWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(inspectorWebView)
 
@@ -74,29 +74,29 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.selectedEntry != nil
-        let hasPageWebView = inspector.hasPageWebView
+        let hasSelection = store.selectedEntry != nil
+        let hasPageWebView = store.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.store.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.store.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.store.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 guard let self else { return }
                 Task {
-                    await self.inspector.reloadInspector()
+                    await self.store.reloadFrontend()
                 }
             },
             onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
+                self?.store.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -105,35 +105,35 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func observeState() {
-        inspector.observe(
+        store.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        inspector.observe(
+        store.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        inspector.observe(
+        store.observe(
             \.errorMessage,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.updateErrorPresentation()
         }
         .store(in: &observationHandles)
-        inspector.session.graphStore.observe(
+        store.session.graphStore.observe(
             \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        inspector.session.graphStore.observe(
+        store.session.graphStore.observe(
             \.rootID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -153,18 +153,18 @@ public final class WIDOMTreeViewController: UIViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = store.hasPageWebView
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = store.isSelectingElement ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
     }
 
     private func updateErrorPresentation() {
-        guard let errorMessage = inspector.errorMessage,
+        guard let errorMessage = store.errorMessage,
               errorMessage.isEmpty == false,
-              inspector.session.graphStore.rootID == nil else {
+              store.session.graphStore.rootID == nil else {
             contentUnavailableConfiguration = nil
             navigationItem.prompt = nil
             return
@@ -179,12 +179,12 @@ public final class WIDOMTreeViewController: UIViewController {
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        store.toggleSelectionMode()
     }
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode(undoManager: undoManager)
+        store.deleteSelectedNode(undoManager: undoManager)
     }
 }
 
@@ -194,7 +194,7 @@ import SwiftUI
     WIUIKitPreviewContainer {
         UINavigationController(
             rootViewController: WIDOMTreeViewController(
-                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected)
+                store: WIDOMPreviewFixtures.makeStore(mode: .selected)
             )
         )
     }

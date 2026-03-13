@@ -66,7 +66,7 @@ struct DOMFrontendStoreTests {
         _ = session.attach(to: pageWebView)
 
         let store = WIDOMFrontendRuntime(session: session)
-        _ = store.makeInspectorWebView()
+        _ = store.makeFrontendWebView()
         let readyMessageProcessed = AsyncGate()
         store.onReadyMessageProcessedForTesting = {
             Task {
@@ -310,7 +310,7 @@ struct DOMFrontendStoreTests {
 private final class StubDOMFrontendStorePageDriver: WIDOMBackend {
     weak var eventSink: (any WIDOMProtocolEventSink)?
     private(set) weak var webView: WKWebView?
-    let support = WIInspectorBackendSupport(
+    let support = WIBackendSupport(
         availability: .unsupported,
         backendKind: .legacy,
         capabilities: [.domDomain]
