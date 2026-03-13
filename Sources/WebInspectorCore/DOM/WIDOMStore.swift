@@ -60,6 +60,7 @@ public final class WIDOMStore {
     private struct ReloadRequest: Equatable {
         let preserveState: Bool
         let minimumDepth: Int?
+        let requestedDepth: Int
     }
 
     package let session: WIDOMRuntime
@@ -273,7 +274,7 @@ public final class WIDOMStore {
         let outcome = session.attach(to: webView)
         if outcome.shouldReload {
             scheduleBackgroundReload(
-                .init(
+                makeReloadRequest(
                     preserveState: outcome.preserveState,
                     minimumDepth: nil
                 )
@@ -302,12 +303,22 @@ public final class WIDOMStore {
         }
         session.setAutoSnapshot(enabled: enabled)
         if enabled, session.graphStore.rootID == nil {
-            scheduleBackgroundReload(.init(preserveState: false, minimumDepth: nil))
+            scheduleBackgroundReload(
+                makeReloadRequest(
+                    preserveState: false,
+                    minimumDepth: nil
+                )
+            )
         }
     }
 
     public func reloadFrontend(preserveState: Bool = false) async {
-        await awaitReload(.init(preserveState: preserveState, minimumDepth: nil))
+        await awaitReload(
+            makeReloadRequest(
+                preserveState: preserveState,
+                minimumDepth: nil
+            )
+        )
     }
 
     public func updateSnapshotDepth(_ depth: Int) {
@@ -453,10 +464,7 @@ private extension WIDOMStore {
             return
         }
 
-        await reloadInspectorImpl(
-            preserveState: request.preserveState,
-            minimumDepth: request.minimumDepth
-        )
+        await reloadInspectorImpl(request)
     }
 
     private func startBackgroundReloadTask(for request: ReloadRequest) {
@@ -474,10 +482,7 @@ private extension WIDOMStore {
 
         while let request = nextRequest {
             backgroundReloadRequest = request
-            await reloadInspectorImpl(
-                preserveState: request.preserveState,
-                minimumDepth: request.minimumDepth
-            )
+            await reloadInspectorImpl(request)
 
             guard !Task.isCancelled else {
                 break
@@ -499,6 +504,20 @@ private extension WIDOMStore {
         queuedBackgroundReloadRequest = nil
     }
 
+    private func makeReloadRequest(
+        preserveState: Bool,
+        minimumDepth: Int?
+    ) -> ReloadRequest {
+        ReloadRequest(
+            preserveState: preserveState,
+            minimumDepth: minimumDepth,
+            requestedDepth: requestedDocumentDepth(
+                preserveState: preserveState,
+                minimumDepth: minimumDepth
+            )
+        )
+    }
+
     func reloadInspectorImpl(preserveState: Bool) async {
         await reloadInspectorImpl(preserveState: preserveState, minimumDepth: nil)
     }
@@ -513,30 +532,35 @@ private extension WIDOMStore {
     }
 
     func reloadInspectorImpl(preserveState: Bool, minimumDepth: Int?) async {
+        await reloadInspectorImpl(
+            makeReloadRequest(
+                preserveState: preserveState,
+                minimumDepth: minimumDepth
+            )
+        )
+    }
+
+    private func reloadInspectorImpl(_ request: ReloadRequest) async {
         guard session.hasPageWebView else {
             publishRecoverableError("Web view unavailable.")
             return
         }
 
         do {
-            let requestedDepth = requestedDocumentDepth(
-                preserveState: preserveState,
-                minimumDepth: minimumDepth
-            )
             try await session.reloadDocument(
-                preserveState: preserveState,
-                requestedDepth: requestedDepth
+                preserveState: request.preserveState,
+                requestedDepth: request.requestedDepth
             )
             errorMessage = nil
-            if preserveState == false {
+            if request.preserveState == false {
                 seedInitialExpansionState(resetExisting: true)
             } else {
                 seedInitialExpansionStateIfNeeded()
                 expandSelectedEntryAncestorsIfNeeded()
             }
             syncFrontendTreeIfNeeded(
-                preserveState: preserveState,
-                depth: requestedDepth
+                preserveState: request.preserveState,
+                depth: request.requestedDepth
             )
             scheduleStyleRefreshIfNeeded(force: true)
         } catch is CancellationError {
@@ -730,7 +754,12 @@ private extension WIDOMStore {
             self.onDeleteMutationForTesting?(.restored(nodeId: nodeId))
             self.session.rememberPendingSelection(nodeId: nodeId)
             if self.requiresReloadAfterDeleteUndoRedo {
-                self.scheduleBackgroundReload(.init(preserveState: true, minimumDepth: nil))
+                self.scheduleBackgroundReload(
+                    self.makeReloadRequest(
+                        preserveState: true,
+                        minimumDepth: nil
+                    )
+                )
             }
         }
     }
@@ -766,7 +795,12 @@ private extension WIDOMStore {
                 self.session.rememberPendingSelection(nodeId: nil)
             }
             if self.requiresReloadAfterDeleteUndoRedo {
-                self.scheduleBackgroundReload(.init(preserveState: true, minimumDepth: nil))
+                self.scheduleBackgroundReload(
+                    self.makeReloadRequest(
+                        preserveState: true,
+                        minimumDepth: nil
+                    )
+                )
             }
         }
     }

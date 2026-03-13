@@ -627,6 +627,41 @@ struct WIDOMModelTests {
     }
 
     @Test
+    func explicitReloadReRunsAfterSnapshotDepthChangesDuringBackgroundReload() async {
+        let graphStore = DOMGraphStore()
+        let reloadGate = AsyncGate()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            gatedReloadIndices: [1],
+            reloadGate: reloadGate,
+            requiresAttachedWebViewForReload: true
+        )
+        let session = WIDOMRuntime(
+            configuration: .init(),
+            graphStore: graphStore,
+            backend: driver
+        )
+        let inspector = WIDOMStore(session: session)
+        let webView = makeIsolatedTestWebView()
+        let initialDepth = session.configuration.rootBootstrapDepth
+
+        inspector.attach(to: webView)
+        await driver.reloadCounter.wait(untilAtLeast: 1)
+
+        inspector.updateSnapshotDepth(10)
+        let explicitReload = Task { @MainActor in
+            await inspector.reloadFrontend()
+        }
+        await reloadGate.open()
+        await explicitReload.value
+        await driver.reloadCounter.wait(untilAtLeast: 2)
+
+        #expect(await driver.reloadCounter.snapshot() == 2)
+        #expect(driver.reloadRequestedDepths == [initialDepth, 10])
+    }
+
+    @Test
     func detachCancelsPendingBackgroundReloadWithoutLateTreeMutation() async {
         let graphStore = DOMGraphStore()
         let reloadGate = AsyncGate()
