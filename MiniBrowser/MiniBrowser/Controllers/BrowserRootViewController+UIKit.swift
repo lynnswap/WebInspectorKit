@@ -45,14 +45,12 @@ final class BrowserRootViewController: UINavigationController {
         super.viewDidLoad()
         navigationBar.prefersLargeTitles = false
         setNavigationBarHidden(false, animated: false)
-        setToolbarHidden(false, animated: false)
         view.backgroundColor = .systemBackground
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         setNavigationBarHidden(false, animated: false)
-        setToolbarHidden(false, animated: false)
     }
 
     var pageViewControllerForTesting: BrowserPageViewController? {

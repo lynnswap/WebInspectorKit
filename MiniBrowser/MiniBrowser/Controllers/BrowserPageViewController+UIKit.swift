@@ -5,6 +5,11 @@ import WebInspectorKit
 
 @MainActor
 final class BrowserPageViewController: UIViewController {
+    private enum ChromePlacement {
+        case compactToolbar
+        case regularNavigationBar
+    }
+
     private let store: BrowserStore
     private let sessionController: WISessionController
     private let launchConfiguration: BrowserLaunchConfiguration
@@ -13,23 +18,49 @@ final class BrowserPageViewController: UIViewController {
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
-    private let inspectorButtonItem = UIBarButtonItem(
+    private let compactInspectorButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
         style: .plain,
         target: nil,
         action: nil
     )
-    private let backButtonItem = UIBarButtonItem(
+    private let compactBackButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.left"),
         style: .plain,
         target: nil,
         action: nil
     )
-    private let forwardButtonItem = UIBarButtonItem(
+    private let compactForwardButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.right"),
         style: .plain,
         target: nil,
         action: nil
+    )
+    private let regularInspectorButtonItem = UIBarButtonItem(
+        image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
+        style: .plain,
+        target: nil,
+        action: nil
+    )
+    private let regularBackButtonItem = UIBarButtonItem(
+        image: UIImage(systemName: "chevron.left"),
+        style: .plain,
+        target: nil,
+        action: nil
+    )
+    private let regularForwardButtonItem = UIBarButtonItem(
+        image: UIImage(systemName: "chevron.right"),
+        style: .plain,
+        target: nil,
+        action: nil
+    )
+    private lazy var regularNavigationButtonGroup = UIBarButtonItemGroup(
+        barButtonItems: [regularBackButtonItem, regularForwardButtonItem],
+        representativeItem: nil
+    )
+    private lazy var regularInspectorButtonGroup = UIBarButtonItemGroup(
+        barButtonItems: [regularInspectorButtonItem],
+        representativeItem: nil
     )
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
@@ -38,6 +69,7 @@ final class BrowserPageViewController: UIViewController {
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
     private var progressHeightConstraint: NSLayoutConstraint?
+    private var currentChromePlacement: ChromePlacement?
 
     init(
         store: BrowserStore,
@@ -75,12 +107,16 @@ final class BrowserPageViewController: UIViewController {
             self?.renderState()
             self?.maybeAutoPresentInspectorIfNeeded()
         }
+
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
+            self.applyChromePlacement()
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         navigationController?.setNavigationBarHidden(false, animated: false)
-        navigationController?.setToolbarHidden(false, animated: false)
+        applyChromePlacement(force: true)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -148,24 +184,94 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureChrome() {
         navigationItem.largeTitleDisplayMode = .never
+        navigationItem.leftBarButtonItems = nil
+        navigationItem.rightBarButtonItems = nil
 
-        inspectorButtonItem.target = self
-        inspectorButtonItem.action = #selector(handleOpenInspectorAction(_:))
-        inspectorButtonItem.accessibilityIdentifier = "MiniBrowser.openInspectorButton"
-        navigationItem.rightBarButtonItem = nil
+        configureNavigationButtonItem(
+            compactInspectorButtonItem,
+            action: #selector(handleOpenInspectorAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.openInspectorButton.compact"
+        )
+        configureNavigationButtonItem(
+            compactBackButtonItem,
+            action: #selector(handleBackAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.navigation.back.compact"
+        )
+        configureNavigationButtonItem(
+            compactForwardButtonItem,
+            action: #selector(handleForwardAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.navigation.forward.compact"
+        )
+        configureNavigationButtonItem(
+            regularInspectorButtonItem,
+            action: #selector(handleOpenInspectorAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.openInspectorButton.regular"
+        )
+        configureNavigationButtonItem(
+            regularBackButtonItem,
+            action: #selector(handleBackAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.navigation.back.regular"
+        )
+        configureNavigationButtonItem(
+            regularForwardButtonItem,
+            action: #selector(handleForwardAction(_:)),
+            accessibilityIdentifier: "MiniBrowser.navigation.forward.regular"
+        )
 
-        backButtonItem.target = self
-        backButtonItem.action = #selector(handleBackAction(_:))
+        applyChromePlacement(force: true)
+    }
 
-        forwardButtonItem.target = self
-        forwardButtonItem.action = #selector(handleForwardAction(_:))
+    private func configureNavigationButtonItem(
+        _ item: UIBarButtonItem,
+        action: Selector,
+        accessibilityIdentifier: String
+    ) {
+        item.target = self
+        item.action = action
+        item.accessibilityIdentifier = accessibilityIdentifier
+    }
 
-        toolbarItems = [
-            backButtonItem,
-            forwardButtonItem,
-            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-            inspectorButtonItem
-        ]
+    private func applyChromePlacement(force: Bool = false) {
+        let placement = resolvedChromePlacement()
+        guard force || currentChromePlacement != placement else {
+            return
+        }
+
+        currentChromePlacement = placement
+
+        switch placement {
+        case .compactToolbar:
+            navigationItem.leadingItemGroups = []
+            navigationItem.trailingItemGroups = []
+            toolbarItems = [
+                compactBackButtonItem,
+                compactForwardButtonItem,
+                UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+                compactInspectorButtonItem
+            ]
+            navigationController?.setToolbarHidden(false, animated: false)
+        case .regularNavigationBar:
+            toolbarItems = nil
+            navigationItem.leadingItemGroups = [regularNavigationButtonGroup]
+            navigationItem.trailingItemGroups = [regularInspectorButtonGroup]
+            navigationController?.setToolbarHidden(true, animated: false)
+        }
+
+        viewportCoordinator?.updateChromeState()
+    }
+
+    private func resolvedChromePlacement() -> ChromePlacement {
+        traitCollection.horizontalSizeClass == .regular ? .regularNavigationBar : .compactToolbar
+    }
+
+    private func syncNavigationButtonStates() {
+        let canGoBack = store.canGoBack
+        let canGoForward = store.canGoForward
+
+        compactBackButtonItem.isEnabled = canGoBack
+        regularBackButtonItem.isEnabled = canGoBack
+        compactForwardButtonItem.isEnabled = canGoForward
+        regularForwardButtonItem.isEnabled = canGoForward
     }
 
     private func renderState() {
@@ -174,8 +280,7 @@ final class BrowserPageViewController: UIViewController {
         }
 
         navigationItem.title = store.displayTitle
-        backButtonItem.isEnabled = store.canGoBack
-        forwardButtonItem.isEnabled = store.canGoForward
+        syncNavigationButtonStates()
 
         let progressIsVisible = store.isShowingProgress
         progressView.progress = Float(store.estimatedProgress)
@@ -243,6 +348,39 @@ final class BrowserPageViewController: UIViewController {
             logger.error("auto-starting DOM selection mode timed out before page web view became available")
             didAutoStartSelection = false
         }
+    }
+
+    var chromePlacementForTesting: String {
+        switch currentChromePlacement ?? resolvedChromePlacement() {
+        case .compactToolbar:
+            return "compactToolbar"
+        case .regularNavigationBar:
+            return "regularNavigationBar"
+        }
+    }
+
+    var compactBackButtonItemForTesting: UIBarButtonItem {
+        compactBackButtonItem
+    }
+
+    var compactForwardButtonItemForTesting: UIBarButtonItem {
+        compactForwardButtonItem
+    }
+
+    var compactInspectorButtonItemForTesting: UIBarButtonItem {
+        compactInspectorButtonItem
+    }
+
+    var regularBackButtonItemForTesting: UIBarButtonItem {
+        regularBackButtonItem
+    }
+
+    var regularForwardButtonItemForTesting: UIBarButtonItem {
+        regularForwardButtonItem
+    }
+
+    var regularInspectorButtonItemForTesting: UIBarButtonItem {
+        regularInspectorButtonItem
     }
 }
 
