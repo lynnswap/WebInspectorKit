@@ -2,6 +2,7 @@
 import Testing
 import UIKit
 import WebKit
+@testable import WebInspectorCore
 @testable import WebInspectorUI
 
 @MainActor
@@ -69,7 +70,7 @@ struct WIWebViewViewportCoordinatorTests {
 
     @Test
     @available(iOS 26.0, *)
-    func coordinatorAutomaticallyAppliesStandardScrollConfigurationAndViewportInsets() {
+    func coordinatorAutomaticallyAppliesStandardScrollConfigurationAndViewportInsets() throws {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -111,13 +112,82 @@ struct WIWebViewViewportCoordinatorTests {
     }
 
     @Test
-    func viewportSPIBridgeNoOpsWhenSelectorsAreUnavailable() {
+    func viewportSPIBridgeFallbackNoOpsWhenSelectorsAreUnavailable() {
         let plainObject = NSObject()
+        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
+            state: WIWebViewChromeMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            screenScale: 3
+        )
 
+        #expect(
+            WIWebViewViewportSPIBridge.applyContentScrollInsetFallback(
+                resolvedMetrics.contentScrollInsetFallback,
+                to: plainObject,
+                webView: plainObject
+            ) == false
+        )
         WIWebViewViewportSPIBridge.apply(unobscuredSafeAreaInsets: .zero, to: plainObject)
         WIWebViewViewportSPIBridge.apply(obscuredSafeAreaEdges: [.top, .bottom], to: plainObject)
 
         #expect(WIWebViewViewportSPIBridge.inputViewBoundsInWindow(of: plainObject) == nil)
+    }
+
+    @Test
+    func resolvedMetricsDeriveContentScrollInsetFallbackFromSafeAreaDelta() {
+        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
+            state: WIWebViewChromeMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            screenScale: 3
+        )
+
+        #expect(
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
+        )
+    }
+
+    @Test
+    func viewportSPIBridgeContentScrollInsetFallbackAppliesExpectedSelectorsInOrder() {
+        let object = TestViewportSPIObject()
+        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
+            state: WIWebViewChromeMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            screenScale: 3
+        )
+
+        #expect(
+            WIWebViewViewportSPIBridge.applyContentScrollInsetFallback(
+                resolvedMetrics.contentScrollInsetFallback,
+                to: object,
+                webView: object
+            )
+        )
+        #expect(object.contentScrollInsetCalls == [resolvedMetrics.contentScrollInsetFallback])
+        #expect(object.frameOrBoundsMayHaveChangedCallCount == 1)
+        #expect(
+            object.invocationOrder == [
+                WISPISymbols.setContentScrollInsetSelector,
+                WISPISymbols.frameOrBoundsMayHaveChangedSelector
+            ]
+        )
     }
 }
 
@@ -128,5 +198,23 @@ private func makeWindow(rootViewController: UIViewController) -> UIWindow {
     window.makeKeyAndVisible()
     window.layoutIfNeeded()
     return window
+}
+
+private final class TestViewportSPIObject: NSObject {
+    private(set) var contentScrollInsetCalls: [UIEdgeInsets] = []
+    private(set) var frameOrBoundsMayHaveChangedCallCount = 0
+    private(set) var invocationOrder: [String] = []
+
+    @objc(_setContentScrollInset:)
+    func setContentScrollInset(_ insets: UIEdgeInsets) {
+        invocationOrder.append(WISPISymbols.setContentScrollInsetSelector)
+        contentScrollInsetCalls.append(insets)
+    }
+
+    @objc(_frameOrBoundsMayHaveChanged)
+    func frameOrBoundsMayHaveChanged() {
+        invocationOrder.append(WISPISymbols.frameOrBoundsMayHaveChangedSelector)
+        frameOrBoundsMayHaveChangedCallCount += 1
+    }
 }
 #endif

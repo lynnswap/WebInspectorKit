@@ -22,6 +22,11 @@ package enum WISPISymbols {
 
     package static let setUnobscuredSafeAreaInsetsSelector = deobfuscate([":", "Insets", "Area", "Safe", "Unobscured", "set", "_"])
     package static let setObscuredInsetEdgesAffectedBySafeAreaSelector = deobfuscate([":", "Area", "Safe", "By", "Affected", "Edges", "Inset", "Obscured", "set", "_"])
+    package static let setObscuredInsetsInternalSelector = deobfuscate([":", "Internal", "Insets", "Obscured", "set", "_"])
+    package static let setContentScrollInsetSelector = deobfuscate([":", "Inset", "Scroll", "Content", "set", "_"])
+    package static let setContentScrollInsetInternalSelector = deobfuscate([":", "Internal", "Inset", "Scroll", "Content", "set", "_"])
+    package static let frameOrBoundsMayHaveChangedSelector = deobfuscate(["Changed", "Have", "May", "Bounds", "Or", "frame", "_"])
+    package static let automaticallyAdjustsViewLayoutSizesWithObscuredInsetKey = deobfuscate(["Inset", "Obscured", "With", "Sizes", "Layout", "View", "Adjusts", "automatically"])
     package static let inputViewBoundsInWindowSelector = deobfuscate(["Window", "In", "Bounds", "View", "input", "_"])
 
     package static let enableJSHandleSetterNames = [

@@ -97,6 +97,15 @@ public struct WIWebViewChromeResolvedMetrics: Equatable {
         )
         safeAreaAffectedEdges = state.safeAreaAffectedEdges
     }
+
+    var contentScrollInsetFallback: UIEdgeInsets {
+        UIEdgeInsets(
+            top: max(0, obscuredInsets.top - safeAreaInsets.top),
+            left: max(0, obscuredInsets.left - safeAreaInsets.left),
+            bottom: max(0, obscuredInsets.bottom - safeAreaInsets.bottom),
+            right: max(0, obscuredInsets.right - safeAreaInsets.right)
+        )
+    }
 }
 
 @MainActor
@@ -177,15 +186,24 @@ public final class WIWebViewViewportCoordinator: NSObject {
         lastAppliedResolvedMetrics = resolvedMetrics
         if #available(iOS 26.0, *) {
             webView.obscuredContentInsets = resolvedMetrics.obscuredInsets
+            WIWebViewViewportSPIBridge.apply(
+                unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
+                to: webView
+            )
+            WIWebViewViewportSPIBridge.apply(
+                obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges,
+                to: webView
+            )
+        } else {
+            // WebKit-7621.2.5.10.10 bases activeViewLayoutSize on _scrollViewSystemContentInset,
+            // so pre-iOS 26 runtimes stay aligned with layout/restore by applying only the
+            // chrome delta beyond safe area through WKScrollView._setContentScrollInset:.
+            WIWebViewViewportSPIBridge.applyContentScrollInsetFallback(
+                resolvedMetrics.contentScrollInsetFallback,
+                to: webView.scrollView,
+                webView: webView
+            )
         }
-        WIWebViewViewportSPIBridge.apply(
-            unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
-            to: webView
-        )
-        WIWebViewViewportSPIBridge.apply(
-            obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges,
-            to: webView
-        )
     }
 
     public func invalidate() {

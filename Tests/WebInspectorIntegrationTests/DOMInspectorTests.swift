@@ -256,10 +256,15 @@ struct DOMInspectorTests {
                 in: webView
             )
 
-            let snapshot = try? await store.session.captureSnapshot(maxDepth: 5)
-            guard let snapshot,
-                  let contentNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "content") else {
-                Issue.record("target node was not found in transport snapshot")
+            await store.reloadFrontend()
+            #expect(await waitForTreeRowsToLoad(in: store))
+
+            guard let contentNodeID = findNodeId(
+                in: store.session.graphStore,
+                attributeName: "id",
+                attributeValue: "content"
+            ) else {
+                Issue.record("target node was not found in graph store")
                 return
             }
 
