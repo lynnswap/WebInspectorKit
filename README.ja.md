@@ -117,8 +117,8 @@ let container = WIContainerViewController(
 ## テスト
 
 - `swift test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run typecheck`
+- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run test`
+- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run typecheck`
 - `xcodebuild -workspace WebInspectorKit.xcworkspace -scheme MiniBrowser -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' test`（MiniBrowser/UIランタイム連携に影響する変更時に実行）
 
 ## 移行
