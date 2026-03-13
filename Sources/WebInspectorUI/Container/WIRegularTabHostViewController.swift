@@ -97,7 +97,6 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func rebuildLayout() {
-        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         rebuildSegmentedControl(selectedTab: selectedTab)
@@ -106,7 +105,6 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func applySelectedTabProjection() {
-        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         selectSegment(for: selectedTab)

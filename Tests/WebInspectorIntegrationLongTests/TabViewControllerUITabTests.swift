@@ -421,6 +421,44 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func explicitElementTabPreservesSharedRootCacheAcrossSizeClassSwitches() async {
+        var createdCount = 0
+        let elementTab = WITab(
+            panelKind: .domDetail,
+            title: "Element",
+            systemImage: "info.circle"
+        ) { _ in
+            createdCount += 1
+            return UIViewController()
+        }
+        let requestedTabs: [WITab] = [.dom(), elementTab, .network()]
+
+        let controller = WISessionController()
+        let container = WIContainerViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        container.loadViewIfNeeded()
+
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        await Task.yield()
+        let initialElementViewController = container.makeTabRootViewController(for: elementTab)
+
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        await Task.yield()
+        let hiddenElementViewController = container.makeTabRootViewController(for: elementTab)
+
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        await Task.yield()
+        let restoredElementViewController = container.makeTabRootViewController(for: elementTab)
+
+        #expect(createdCount == 1)
+        #expect(initialElementViewController === hiddenElementViewController)
+        #expect(hiddenElementViewController === restoredElementViewController)
+    }
+
+    @Test
     func initialRegularLayoutMapsElementSelectionToDOM() {
         let controller = WISessionController()
         let tabs: [WITab] = [.dom(), .element(), .network()]

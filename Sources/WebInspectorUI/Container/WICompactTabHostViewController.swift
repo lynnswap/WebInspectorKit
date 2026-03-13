@@ -38,6 +38,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     func prepareForRemoval() {
         delegate = nil
         tabObservationHandles.removeAll()
+        // Release UITab closures before another compact host reuses cached roots.
+        setTabs([], animated: false)
     }
 
     var displayedTabIdentifiersForTesting: [String] {
@@ -64,7 +66,6 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func rebuildNativeTabsIfPossible() {
-        renderCache.prune(activeTabs: displayTabs)
         let desiredTabs = displayTabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
         syncNativeSelection(with: model.selectedPanelConfiguration)
@@ -95,7 +96,10 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
 
         let contentViewController = makeTabRootViewController(for: tab) ?? UIViewController()
-        let wrappedViewController = wrappedInNavigationControllerIfNeeded(contentViewController)
+        let wrappedViewController =
+            renderCache.compactWrappedViewController(for: tab)
+            ?? wrappedInNavigationControllerIfNeeded(contentViewController)
+        renderCache.setCompactWrappedViewController(wrappedViewController, for: tab)
         let nativeTab = UITab(
             title: tab.title,
             image: tab.image,
