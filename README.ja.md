@@ -114,13 +114,6 @@ let container = WIContainerViewController(
 )
 ```
 
-## テスト
-
-- `swift test`
-- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run test`
-- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run typecheck`
-- `xcodebuild -workspace WebInspectorKit.xcworkspace -scheme MiniBrowser -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' test`（MiniBrowser/UIランタイム連携に影響する変更時に実行）
-
 ## 移行
 
 breaking change と target 再編の詳細は [`MIGRATION.md`](Docs/MIGRATION.md) を参照してください。

@@ -113,12 +113,6 @@ let container = WIContainerViewController(
 )
 ```
 
-## Testing
-
-- `swift test`
-- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run test`
-- `pnpm --dir Sources/WebInspectorResources/TypeScript/Tests run typecheck`
-
 ## Migration
 
 See [`MIGRATION.md`](Docs/MIGRATION.md) for current breaking changes and target reorganization notes.
