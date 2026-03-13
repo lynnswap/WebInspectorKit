@@ -8,6 +8,15 @@ typedef void (^WITransportRootMessageHandler)(NSString *message);
 typedef void (^WITransportPageMessageHandler)(NSString *message, NSString *targetIdentifier);
 typedef void (^WITransportFatalFailureHandler)(NSString *message);
 
+typedef struct {
+    BOOL found;
+    BOOL usedFallbackRange;
+    NSInteger resolvedOffset;
+    NSUInteger attemptedOffsetCount;
+    NSUInteger validCandidateCount;
+    NSUInteger scannedByteCount;
+} WITransportControllerDiscoveryTestResult;
+
 @interface WITransportBridge : NSObject
 
 @property (nonatomic, copy, nullable) WITransportRootMessageHandler rootMessageHandler;
@@ -29,5 +38,18 @@ typedef void (^WITransportFatalFailureHandler)(NSString *message);
 - (void)detach;
 
 @end
+
+FOUNDATION_EXPORT WITransportControllerDiscoveryTestResult WITransportFindInspectorControllerForTesting(
+    const void *pageProxy,
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset
+);
+
+FOUNDATION_EXPORT WITransportControllerDiscoveryTestResult WITransportRunControllerDiscoveryScenarioForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger secondaryControllerOffset
+);
 
 NS_ASSUME_NONNULL_END

@@ -3,10 +3,14 @@
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
+#import <malloc/malloc.h>
 #import <mach/mach.h>
+#import <algorithm>
+#import <atomic>
 #import <memory>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <vector>
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 namespace WITransportBridgePrivate {
@@ -14,20 +18,13 @@ namespace WITransportBridgePrivate {
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
 using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
 
+static constexpr ptrdiff_t invalidControllerOffset = -1;
 static constexpr ptrdiff_t webPageInspectorControllerOffset = 0x4C0;
 static constexpr size_t frontendRouterStorageIndex = 0;
 static constexpr size_t backendDispatcherStorageIndex = 1;
-static constexpr ptrdiff_t controllerCandidateOffsets[] = {
-    webPageInspectorControllerOffset,
-    webPageInspectorControllerOffset - 0x8,
-    webPageInspectorControllerOffset + 0x8,
-    webPageInspectorControllerOffset - 0x10,
-    webPageInspectorControllerOffset + 0x10,
-    webPageInspectorControllerOffset - 0x18,
-    webPageInspectorControllerOffset + 0x18,
-    webPageInspectorControllerOffset - 0x20,
-    webPageInspectorControllerOffset + 0x20,
-};
+static constexpr ptrdiff_t preferredControllerSearchRadius = 0x100;
+static constexpr size_t fallbackControllerScanBytes = 0x1000;
+static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset };
 
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
 
@@ -61,7 +58,7 @@ static NSError *makeError(ErrorCode code, NSString *description, NSString *detai
     return [NSError errorWithDomain:errorDomain code:code userInfo:userInfo];
 }
 
-static BOOL safeReadPointer(const void *address, void **valueOut)
+static BOOL safeReadWord(const void *address, uintptr_t *valueOut)
 {
     if (!address || !valueOut)
         return NO;
@@ -76,6 +73,36 @@ static BOOL safeReadPointer(const void *address, void **valueOut)
         &bytesRead
     );
     if (result != KERN_SUCCESS || bytesRead != sizeof(rawValue)) {
+        *valueOut = 0;
+        return NO;
+    }
+
+    *valueOut = rawValue;
+    return YES;
+}
+
+struct ControllerResolutionStats {
+    size_t attemptedOffsetCount { 0 };
+    size_t validCandidateCount { 0 };
+    size_t scannedByteCount { 0 };
+    ptrdiff_t resolvedOffset { invalidControllerOffset };
+    bool usedFallbackRange { false };
+    std::vector<ptrdiff_t> candidateOffsets;
+};
+
+struct ControllerResolutionResult {
+    void *controller { nullptr };
+    void *backendDispatcher { nullptr };
+    ControllerResolutionStats stats;
+};
+
+static BOOL safeReadPointer(const void *address, void **valueOut)
+{
+    if (!address || !valueOut)
+        return NO;
+
+    uintptr_t rawValue = 0;
+    if (!safeReadWord(address, &rawValue)) {
         *valueOut = nullptr;
         return NO;
     }
@@ -173,6 +200,8 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
 {
     if (!pageProxy)
         return NO;
+    if (offset < 0)
+        return NO;
 
     auto *slot = reinterpret_cast<uint8_t *>(pageProxy) + offset;
     void *controller = nullptr;
@@ -194,23 +223,223 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
     return YES;
 }
 
+static size_t resolvedControllerScanByteCount(void *pageProxy, bool *usedFallbackRangeOut)
+{
+    bool usedFallbackRange = false;
+    size_t scanByteCount = pageProxy ? malloc_size(pageProxy) : 0;
+    if (!scanByteCount) {
+        scanByteCount = fallbackControllerScanBytes;
+        usedFallbackRange = true;
+    }
+
+    if (usedFallbackRangeOut)
+        *usedFallbackRangeOut = usedFallbackRange;
+    return scanByteCount;
+}
+
+static void appendUniqueCandidateOffset(std::vector<ptrdiff_t>& offsets, ptrdiff_t offset, size_t scanByteCount)
+{
+    if (offset < 0)
+        return;
+
+    size_t normalizedOffset = static_cast<size_t>(offset);
+    if (normalizedOffset + sizeof(void *) > scanByteCount)
+        return;
+    if (normalizedOffset % sizeof(void *) != 0)
+        return;
+    if (std::find(offsets.begin(), offsets.end(), offset) != offsets.end())
+        return;
+
+    offsets.push_back(offset);
+}
+
+static ControllerResolutionResult resolveControllerInPageProxy(
+    void *pageProxy,
+    size_t scanByteCount,
+    bool usedFallbackRange,
+    ptrdiff_t preferredCachedOffset
+)
+{
+    ControllerResolutionResult result;
+    result.stats.scannedByteCount = scanByteCount;
+    result.stats.usedFallbackRange = usedFallbackRange;
+
+    if (!pageProxy || scanByteCount < sizeof(void *))
+        return result;
+
+    if (preferredCachedOffset != invalidControllerOffset) {
+        result.stats.attemptedOffsetCount = 1;
+        if (controllerCandidateAtOffset(pageProxy, preferredCachedOffset, &result.controller, &result.backendDispatcher)) {
+            result.stats.validCandidateCount = 1;
+            result.stats.resolvedOffset = preferredCachedOffset;
+            return result;
+        }
+    }
+
+    std::vector<ptrdiff_t> preferredOffsets;
+    preferredOffsets.reserve((preferredControllerSearchRadius * 2) / sizeof(void *) + 1);
+    for (ptrdiff_t delta = -preferredControllerSearchRadius; delta <= preferredControllerSearchRadius; delta += sizeof(void *))
+        appendUniqueCandidateOffset(preferredOffsets, webPageInspectorControllerOffset + delta, scanByteCount);
+
+    void *uniqueController = nullptr;
+    void *uniqueBackendDispatcher = nullptr;
+    ptrdiff_t uniqueOffset = invalidControllerOffset;
+
+    auto registerCandidate = [&](ptrdiff_t offset, void *controller, void *backendDispatcher) {
+        result.stats.validCandidateCount += 1;
+        result.stats.candidateOffsets.push_back(offset);
+        if (result.stats.validCandidateCount == 1) {
+            uniqueOffset = offset;
+            uniqueController = controller;
+            uniqueBackendDispatcher = backendDispatcher;
+            return;
+        }
+
+        uniqueOffset = invalidControllerOffset;
+        uniqueController = nullptr;
+        uniqueBackendDispatcher = nullptr;
+    };
+
+    for (ptrdiff_t offset : preferredOffsets) {
+        result.stats.attemptedOffsetCount += 1;
+
+        void *candidateController = nullptr;
+        void *candidateBackendDispatcher = nullptr;
+        if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateBackendDispatcher))
+            continue;
+
+        registerCandidate(offset, candidateController, candidateBackendDispatcher);
+    }
+
+    if (result.stats.validCandidateCount != 1) {
+        for (size_t rawOffset = 0; rawOffset + sizeof(void *) <= scanByteCount; rawOffset += sizeof(void *)) {
+            ptrdiff_t offset = static_cast<ptrdiff_t>(rawOffset);
+            if (std::find(preferredOffsets.begin(), preferredOffsets.end(), offset) != preferredOffsets.end())
+                continue;
+
+            result.stats.attemptedOffsetCount += 1;
+
+            void *candidateController = nullptr;
+            void *candidateBackendDispatcher = nullptr;
+            if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateBackendDispatcher))
+                continue;
+
+            registerCandidate(offset, candidateController, candidateBackendDispatcher);
+        }
+    }
+
+    if (result.stats.validCandidateCount == 1) {
+        result.controller = uniqueController;
+        result.backendDispatcher = uniqueBackendDispatcher;
+        result.stats.resolvedOffset = uniqueOffset;
+    }
+
+    return result;
+}
+
+static ControllerResolutionResult resolveControllerInPageProxy(void *pageProxy, ptrdiff_t preferredCachedOffset)
+{
+    bool usedFallbackRange = false;
+    size_t scanByteCount = resolvedControllerScanByteCount(pageProxy, &usedFallbackRange);
+    return resolveControllerInPageProxy(pageProxy, scanByteCount, usedFallbackRange, preferredCachedOffset);
+}
+
+static NSString *controllerResolutionDiagnosticsString(const ControllerResolutionStats& stats)
+{
+    NSMutableArray<NSString *> *candidateOffsets = [NSMutableArray arrayWithCapacity:stats.candidateOffsets.size()];
+    for (ptrdiff_t offset : stats.candidateOffsets)
+        [candidateOffsets addObject:[NSString stringWithFormat:@"%td", offset]];
+
+    return [NSString stringWithFormat:
+        @"page_allocation_size=%zu attempted_offsets=%zu valid_candidates=%zu candidate_offsets=[%@] used_fallback_range=%@ resolved_offset=%td",
+        stats.scannedByteCount,
+        stats.attemptedOffsetCount,
+        stats.validCandidateCount,
+        [candidateOffsets componentsJoinedByString:@","],
+        stats.usedFallbackRange ? @"true" : @"false",
+        stats.resolvedOffset
+    ];
+}
+
+static void freeAllocatedBlocks(std::vector<void *>& allocations)
+{
+    for (auto it = allocations.rbegin(); it != allocations.rend(); ++it)
+        free(*it);
+    allocations.clear();
+}
+
+static void *allocateZeroedBlock(size_t byteCount, std::vector<void *>& allocations)
+{
+    void *block = malloc(byteCount);
+    if (!block)
+        return nullptr;
+
+    memset(block, 0, byteCount);
+    allocations.push_back(block);
+    return block;
+}
+
+static BOOL installSyntheticControllerAtOffset(
+    void *pageBuffer,
+    size_t pageByteCount,
+    NSInteger offset,
+    std::vector<void *>& allocations
+)
+{
+    if (!pageBuffer || offset < 0)
+        return NO;
+
+    size_t normalizedOffset = static_cast<size_t>(offset);
+    if (normalizedOffset + sizeof(void *) > pageByteCount)
+        return NO;
+
+    void *controller = allocateZeroedBlock(sizeof(uintptr_t) * 5, allocations);
+    void *frontendRouter = allocateZeroedBlock(sizeof(uint64_t), allocations);
+    void *backendDispatcher = allocateZeroedBlock(sizeof(uint64_t), allocations);
+    void *agentsBuffer = allocateZeroedBlock(sizeof(uint64_t), allocations);
+    if (!controller || !frontendRouter || !backendDispatcher || !agentsBuffer)
+        return NO;
+
+    auto *controllerWords = reinterpret_cast<uintptr_t *>(controller);
+    controllerWords[0] = reinterpret_cast<uintptr_t>(frontendRouter);
+    controllerWords[1] = reinterpret_cast<uintptr_t>(backendDispatcher);
+    controllerWords[2] = reinterpret_cast<uintptr_t>(agentsBuffer);
+    controllerWords[3] = 1;
+    controllerWords[4] = 1;
+
+    auto *slot = reinterpret_cast<void **>(reinterpret_cast<uint8_t *>(pageBuffer) + normalizedOffset);
+    *slot = controller;
+    return YES;
+}
+
 extern void backendDispatcherDispatch(void *, const WTF::String&) asm("__ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE");
 
-static NSError *selectorFailureError(id inspectorObject, void *pageProxy, void *controller, void *backendDispatcher)
+static NSError *selectorFailureError(
+    id inspectorObject,
+    void *pageProxy,
+    void *controller,
+    void *backendDispatcher,
+    const ControllerResolutionStats& controllerResolutionStats
+)
 {
+    NSString *diagnostics = controllerResolutionDiagnosticsString(controllerResolutionStats);
 #if !TARGET_OS_OSX
     if (!inspectorObject)
-        return makeError(ErrorCodeAttachFailed, @"WKWebView._inspector was unavailable.");
+        return makeError(ErrorCodeAttachFailed, @"WKWebView._inspector was unavailable.", diagnostics);
 #else
     (void)inspectorObject;
 #endif
     if (!pageProxy)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageProxy from WKWebView.");
+        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageProxy from WKWebView.", diagnostics);
     if (!controller)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageInspectorController from WebPageProxy.");
+        return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageInspectorController from WebPageProxy.", diagnostics);
     if (!backendDispatcher)
-        return makeError(ErrorCodeAttachFailed, @"Unable to resolve Inspector::BackendDispatcher from WebPageInspectorController.");
-    return makeError(ErrorCodeAttachFailed, @"Required private selectors or inspector controller state were unavailable.");
+        return makeError(ErrorCodeAttachFailed, @"Unable to resolve Inspector::BackendDispatcher from WebPageInspectorController.", diagnostics);
+    return makeError(
+        ErrorCodeAttachFailed,
+        @"Required private selectors or inspector controller state were unavailable.",
+        diagnostics
+    );
 }
 
 } // namespace WITransportBridgePrivate
@@ -261,6 +490,7 @@ private:
     id _inspector;
     void *_controller;
     void *_backendDispatcher;
+    ptrdiff_t _controllerOffset;
     WITransportBridgePrivate::DisconnectFrontendFn _disconnectFrontend;
     std::unique_ptr<WITransportFrontendChannel> _frontendChannel;
     BOOL _frontendAttached;
@@ -273,6 +503,7 @@ private:
         return nil;
 
     _webView = webView;
+    _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
     return self;
 }
 
@@ -294,20 +525,8 @@ private:
     if (!page)
         return NO;
 
-    for (ptrdiff_t candidateOffset : WITransportBridgePrivate::controllerCandidateOffsets) {
-        void *candidateController = nullptr;
-        void *candidateBackendDispatcher = nullptr;
-        BOOL valid = WITransportBridgePrivate::controllerCandidateAtOffset(
-            page,
-            candidateOffset,
-            &candidateController,
-            &candidateBackendDispatcher
-        );
-        if (valid && candidateController == _controller && candidateBackendDispatcher == _backendDispatcher)
-            return YES;
-    }
-
-    return NO;
+    auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(page, _controllerOffset);
+    return resolution.controller == _controller && resolution.backendDispatcher == _backendDispatcher;
 }
 
 - (void)invalidateAttachmentState
@@ -318,6 +537,7 @@ private:
     _inspector = nil;
     _controller = nullptr;
     _backendDispatcher = nullptr;
+    _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
 }
 
 - (void)dealloc
@@ -361,35 +581,19 @@ private:
 
     _inspector = WITransportBridgePrivate::invokeObjectGetter(self.webView, @"_inspector");
     void *page = WITransportBridgePrivate::pageProxyPointer(self.webView);
-    void *controller = nullptr;
-    void *backendDispatcher = nullptr;
-    NSUInteger nearbyValidCandidateCount = 0;
+    ptrdiff_t preferredCachedOffset = _controllerOffset;
+    if (preferredCachedOffset == WITransportBridgePrivate::invalidControllerOffset)
+        preferredCachedOffset = WITransportBridgePrivate::cachedControllerOffset.load();
 
-    for (ptrdiff_t candidateOffset : WITransportBridgePrivate::controllerCandidateOffsets) {
-        void *candidateController = nullptr;
-        void *candidateBackendDispatcher = nullptr;
-        BOOL valid = WITransportBridgePrivate::controllerCandidateAtOffset(page, candidateOffset, &candidateController, &candidateBackendDispatcher);
-        if (!valid)
-            continue;
-
-        if (candidateOffset == WITransportBridgePrivate::webPageInspectorControllerOffset) {
-            controller = candidateController;
-            backendDispatcher = candidateBackendDispatcher;
-            break;
-        }
-
-        nearbyValidCandidateCount++;
-        if (nearbyValidCandidateCount == 1) {
-            controller = candidateController;
-            backendDispatcher = candidateBackendDispatcher;
-        } else {
-            controller = nullptr;
-            backendDispatcher = nullptr;
-        }
-    }
+    auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(page, preferredCachedOffset);
+    void *controller = resolution.controller;
+    void *backendDispatcher = resolution.backendDispatcher;
 
     _controller = controller;
     _backendDispatcher = backendDispatcher;
+    _controllerOffset = resolution.stats.resolvedOffset;
+    if (_controllerOffset != WITransportBridgePrivate::invalidControllerOffset)
+        WITransportBridgePrivate::cachedControllerOffset.store(_controllerOffset);
 
 #if TARGET_OS_OSX
     BOOL requiresInspectorConnection = NO;
@@ -398,7 +602,15 @@ private:
 #endif
 
     if ((requiresInspectorConnection && !_inspector) || !_controller || !_backendDispatcher) {
-        NSError *transportError = WITransportBridgePrivate::selectorFailureError(_inspector, page, controller, backendDispatcher);
+        NSString *diagnostics = WITransportBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
+        NSLog(@"[WebInspectorTransport] controller resolution failed %@", diagnostics);
+        NSError *transportError = WITransportBridgePrivate::selectorFailureError(
+            _inspector,
+            page,
+            controller,
+            backendDispatcher,
+            resolution.stats
+        );
         if (error)
             *error = transportError;
         [self reportFatalFailure:transportError.localizedDescription];
@@ -582,6 +794,75 @@ private:
 
 @end
 
+WITransportControllerDiscoveryTestResult WITransportFindInspectorControllerForTesting(
+    const void *pageProxy,
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset
+)
+{
+    size_t scanByteCount = pageAllocationSize ? pageAllocationSize : WITransportBridgePrivate::fallbackControllerScanBytes;
+    bool usedFallbackRange = pageAllocationSize == 0;
+    auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(
+        const_cast<void *>(pageProxy),
+        scanByteCount,
+        usedFallbackRange,
+        cachedOffset >= 0 ? cachedOffset : WITransportBridgePrivate::invalidControllerOffset
+    );
+
+    return {
+        .found = resolution.stats.resolvedOffset != WITransportBridgePrivate::invalidControllerOffset,
+        .usedFallbackRange = resolution.stats.usedFallbackRange,
+        .resolvedOffset = resolution.stats.resolvedOffset,
+        .attemptedOffsetCount = resolution.stats.attemptedOffsetCount,
+        .validCandidateCount = resolution.stats.validCandidateCount,
+        .scannedByteCount = resolution.stats.scannedByteCount,
+    };
+}
+
+WITransportControllerDiscoveryTestResult WITransportRunControllerDiscoveryScenarioForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger secondaryControllerOffset
+)
+{
+    size_t scanByteCount = pageAllocationSize ? pageAllocationSize : WITransportBridgePrivate::fallbackControllerScanBytes;
+    std::vector<void *> allocations;
+
+    void *pageBuffer = WITransportBridgePrivate::allocateZeroedBlock(scanByteCount, allocations);
+    if (!pageBuffer) {
+        return {
+            .found = NO,
+            .usedFallbackRange = NO,
+            .resolvedOffset = WITransportBridgePrivate::invalidControllerOffset,
+            .attemptedOffsetCount = 0,
+            .validCandidateCount = 0,
+            .scannedByteCount = 0,
+        };
+    }
+
+    WITransportBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, primaryControllerOffset, allocations);
+    WITransportBridgePrivate::installSyntheticControllerAtOffset(pageBuffer, scanByteCount, secondaryControllerOffset, allocations);
+
+    auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(
+        pageBuffer,
+        scanByteCount,
+        pageAllocationSize == 0,
+        cachedOffset >= 0 ? cachedOffset : WITransportBridgePrivate::invalidControllerOffset
+    );
+
+    WITransportBridgePrivate::freeAllocatedBlocks(allocations);
+
+    return {
+        .found = resolution.stats.resolvedOffset != WITransportBridgePrivate::invalidControllerOffset,
+        .usedFallbackRange = resolution.stats.usedFallbackRange,
+        .resolvedOffset = resolution.stats.resolvedOffset,
+        .attemptedOffsetCount = resolution.stats.attemptedOffsetCount,
+        .validCandidateCount = resolution.stats.validCandidateCount,
+        .scannedByteCount = resolution.stats.scannedByteCount,
+    };
+}
+
 #else
 
 @implementation WITransportBridge {
@@ -638,5 +919,45 @@ private:
 }
 
 @end
+
+WITransportControllerDiscoveryTestResult WITransportFindInspectorControllerForTesting(
+    const void *pageProxy,
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset
+)
+{
+    (void)pageProxy;
+    (void)pageAllocationSize;
+    (void)cachedOffset;
+    return {
+        .found = NO,
+        .usedFallbackRange = NO,
+        .resolvedOffset = -1,
+        .attemptedOffsetCount = 0,
+        .validCandidateCount = 0,
+        .scannedByteCount = 0,
+    };
+}
+
+WITransportControllerDiscoveryTestResult WITransportRunControllerDiscoveryScenarioForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger secondaryControllerOffset
+)
+{
+    (void)pageAllocationSize;
+    (void)cachedOffset;
+    (void)primaryControllerOffset;
+    (void)secondaryControllerOffset;
+    return {
+        .found = NO,
+        .usedFallbackRange = NO,
+        .resolvedOffset = -1,
+        .attemptedOffsetCount = 0,
+        .validCandidateCount = 0,
+        .scannedByteCount = 0,
+    };
+}
 
 #endif
