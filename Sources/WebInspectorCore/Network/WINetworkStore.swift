@@ -20,6 +20,7 @@ public final class WINetworkStore {
 
     isolated deinit {
         selectedEntryFetchTask?.cancel()
+        session.detach()
     }
 
     public var store: NetworkStore {

@@ -130,6 +130,10 @@ final class DOMLegacyPageDriver: NSObject, WIDOMBackend, PageAgent {
         ) else {
             throw WebInspectorCoreError.serializationFailed
         }
+        try Task.checkCancellation()
+        guard webView != nil else {
+            throw CancellationError()
+        }
         applySnapshot(snapshot, preserveState: preserveState)
     }
 

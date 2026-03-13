@@ -586,6 +586,88 @@ struct WIDOMModelTests {
         #expect(recoveredSnapshot?.nodeID == 7)
     }
 
+    @Test
+    func attachBackgroundReloadCoalescesMatchingExplicitReload() async {
+        let graphStore = DOMGraphStore()
+        let reloadGate = AsyncGate()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            gatedReloadIndices: [1],
+            reloadGate: reloadGate,
+            requiresAttachedWebViewForReload: true
+        )
+        let session = WIDOMRuntime(
+            configuration: .init(),
+            graphStore: graphStore,
+            backend: driver
+        )
+        let inspector = WIDOMStore(session: session)
+        let webView = makeIsolatedTestWebView()
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let rowIDs = treeRowIDsRecorder(for: inspector)
+
+        inspector.attach(to: webView)
+        await driver.reloadCounter.wait(untilAtLeast: 1)
+
+        let explicitReload = Task { @MainActor in
+            await inspector.reloadFrontend()
+        }
+
+        await reloadGate.open()
+        await explicitReload.value
+
+        let loadedRootID = await rootIDs.next(where: { $0 != nil })
+        let loadedRowIDs = await rowIDs.next(where: { $0.isEmpty == false })
+
+        #expect(loadedRootID == 1)
+        #expect(loadedRowIDs.isEmpty == false)
+        #expect(await driver.reloadCounter.snapshot() == 1)
+        #expect(driver.reloadRequestedDepths.count == 1)
+    }
+
+    @Test
+    func detachCancelsPendingBackgroundReloadWithoutLateTreeMutation() async {
+        let graphStore = DOMGraphStore()
+        let reloadGate = AsyncGate()
+        let driver = StubDOMPageDriver(
+            graphStore: graphStore,
+            rootSnapshot: .init(root: makeDocumentTree()),
+            gatedReloadIndices: [1],
+            reloadGate: reloadGate,
+            requiresAttachedWebViewForReload: true
+        )
+        let session = WIDOMRuntime(
+            configuration: .init(),
+            graphStore: graphStore,
+            backend: driver
+        )
+        let inspector = WIDOMStore(session: session)
+        let webView = makeIsolatedTestWebView()
+        let rootIDs = rootNodeIDRecorder(for: graphStore)
+        let rowIDs = treeRowIDsRecorder(for: inspector)
+
+        inspector.attach(to: webView)
+        await driver.reloadCounter.wait(untilAtLeast: 1)
+
+        inspector.detach()
+        #expect(graphStore.rootID == nil)
+        #expect(inspector.treeRows.isEmpty)
+
+        await reloadGate.open()
+        for _ in 0..<8 {
+            await Task.yield()
+        }
+
+        let observedRootIDs = await rootIDs.snapshot()
+        let observedRowIDs = await rowIDs.snapshot()
+
+        #expect(graphStore.rootID == nil)
+        #expect(inspector.treeRows.isEmpty)
+        #expect(observedRootIDs.contains(where: { $0 != nil }) == false)
+        #expect(observedRowIDs.contains(where: { $0.isEmpty == false }) == false)
+    }
+
 #if canImport(AppKit)
     @Test
     func copySelectionFallsBackToSystemPasteboardWithoutUIBridge() async {
@@ -651,6 +733,7 @@ private final class StubDOMPageDriver: WIDOMBackend {
     private var pendingSelectedNodeID: Int?
     private let gatedReloadIndices: Set<Int>
     private let reloadGate: AsyncGate?
+    private let requiresAttachedWebViewForReload: Bool
 
     private(set) var requestedParentNodeIDs: [Int] = []
     private(set) var highlightedNodeIDs: [Int] = []
@@ -675,7 +758,8 @@ private final class StubDOMPageDriver: WIDOMBackend {
         selectionCopyTextResult: String = "",
         matchedStylesError: (any Error)? = nil,
         gatedReloadIndices: Set<Int> = [],
-        reloadGate: AsyncGate? = nil
+        reloadGate: AsyncGate? = nil,
+        requiresAttachedWebViewForReload: Bool = false
     ) {
         self.graphStore = graphStore
         self.reloadSnapshots = reloadSnapshots ?? [rootSnapshot]
@@ -685,6 +769,7 @@ private final class StubDOMPageDriver: WIDOMBackend {
         self.matchedStylesError = matchedStylesError
         self.gatedReloadIndices = gatedReloadIndices
         self.reloadGate = reloadGate
+        self.requiresAttachedWebViewForReload = requiresAttachedWebViewForReload
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration) {
@@ -709,6 +794,10 @@ private final class StubDOMPageDriver: WIDOMBackend {
         _ = requestedDepth
         if gatedReloadIndices.contains(reloadIndex) {
             await reloadGate?.wait()
+        }
+        try Task.checkCancellation()
+        guard !requiresAttachedWebViewForReload || webView != nil else {
+            throw CancellationError()
         }
         let snapshot = reloadSnapshots[min(reloadRequestedDepths.count - 1, reloadSnapshots.count - 1)]
         if preserveState == false {

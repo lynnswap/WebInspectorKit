@@ -207,6 +207,10 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
     func reloadDocument(preserveState: Bool) async throws {
         let requestedDepth = preserveState ? configuration.fullReloadDepth : configuration.rootBootstrapDepth
         let root = try await fetchDocumentTree(maxDepth: requestedDepth, hydrateUnknownChildren: false)
+        try Task.checkCancellation()
+        guard webView != nil else {
+            throw CancellationError()
+        }
         applyDocument(root: root, preserveState: preserveState)
     }
 
@@ -216,6 +220,10 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
             requestedDepth ?? 0
         )
         let root = try await fetchDocumentTree(maxDepth: resolvedDepth, hydrateUnknownChildren: false)
+        try Task.checkCancellation()
+        guard webView != nil else {
+            throw CancellationError()
+        }
         applyDocument(root: root, preserveState: preserveState)
     }
 
