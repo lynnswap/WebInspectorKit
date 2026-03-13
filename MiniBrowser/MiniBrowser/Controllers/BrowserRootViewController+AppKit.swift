@@ -18,7 +18,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     private let pageViewController: BrowserPageViewController?
     private var storeObserverID: UUID?
     private weak var installedToolbar: NSToolbar?
-    private weak var navigationControl: NSSegmentedControl?
+    private weak var navigationItemGroup: NSToolbarItemGroup?
 
     private(set) var toolbarInstallationCountForTesting = 0
 
@@ -101,12 +101,16 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     }
 
     @objc
-    private func handleNavigationSegment(_ sender: NSSegmentedControl) {
-        defer {
-            sender.selectedSegment = -1
+    private func handleNavigationSegment(_ sender: Any?) {
+        guard let itemGroup = sender as? NSToolbarItemGroup else {
+            return
         }
 
-        switch sender.selectedSegment {
+        defer {
+            itemGroup.selectedIndex = -1
+        }
+
+        switch itemGroup.selectedIndex {
         case 0:
             store.goBack()
         case 1:
@@ -150,25 +154,28 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
 
         switch itemIdentifier {
         case ToolbarItemIdentifier.navigation:
-            let control = NSSegmentedControl(
+            let item = NSToolbarItemGroup(
+                itemIdentifier: itemIdentifier,
                 images: [
                     NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back") ?? NSImage(),
                     NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Forward") ?? NSImage()
                 ],
-                trackingMode: .momentary,
+                selectionMode: NSToolbarItemGroup.SelectionMode.momentary,
+                labels: nil,
                 target: self,
                 action: #selector(handleNavigationSegment(_:))
             )
-            control.segmentStyle = .separated
-            control.setEnabled(store.canGoBack, forSegment: 0)
-            control.setEnabled(store.canGoForward, forSegment: 1)
-            navigationControl = control
-
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.controlRepresentation = NSToolbarItemGroup.ControlRepresentation.expanded
+            item.isNavigational = true
             item.label = "Navigation"
             item.paletteLabel = "Navigation"
             item.toolTip = "Navigate"
-            item.view = control
+            item.selectedIndex = -1
+            if item.subitems.count >= 2 {
+                item.subitems[0].isEnabled = store.canGoBack
+                item.subitems[1].isEnabled = store.canGoForward
+            }
+            navigationItemGroup = item
             return item
         case ToolbarItemIdentifier.inspector:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -194,6 +201,9 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         toolbar.autosavesConfiguration = false
+        if #available(macOS 13.0, *) {
+            toolbar.centeredItemIdentifiers = []
+        }
 
         window.toolbar = toolbar
         window.toolbarStyle = .unified
@@ -224,8 +234,10 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
 
         view.layer?.backgroundColor = (store.underPageBackgroundColor ?? .windowBackgroundColor).cgColor
         view.window?.title = store.displayTitle
-        navigationControl?.setEnabled(store.canGoBack, forSegment: 0)
-        navigationControl?.setEnabled(store.canGoForward, forSegment: 1)
+        if let navigationItemGroup, navigationItemGroup.subitems.count >= 2 {
+            navigationItemGroup.subitems[0].isEnabled = store.canGoBack
+            navigationItemGroup.subitems[1].isEnabled = store.canGoForward
+        }
         view.window?.toolbar?.validateVisibleItems()
     }
 }
