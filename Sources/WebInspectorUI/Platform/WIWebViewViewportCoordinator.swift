@@ -133,6 +133,10 @@ public final class WIWebViewViewportCoordinator: NSObject {
         lastAppliedResolvedMetrics
     }
 
+    var hasObservationViewForTesting: Bool {
+        observationView != nil
+    }
+
     public init(
         hostViewController: UIViewController,
         webView: WKWebView,
@@ -161,6 +165,11 @@ public final class WIWebViewViewportCoordinator: NSObject {
             return
         }
 
+        guard let hostView = hostViewController.view else {
+            return
+        }
+        installObservationViewIfPossible(in: hostView)
+
         applyScrollViewConfiguration(to: webView.scrollView)
         hostViewController.setContentScrollView(webView.scrollView)
 
@@ -173,8 +182,8 @@ public final class WIWebViewViewportCoordinator: NSObject {
         var effectiveMetrics = metrics
         effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
 
-        let screenScale = hostViewController.view.window?.screen.scale
-            ?? hostViewController.view.traitCollection.displayScale
+        let screenScale = hostView.window?.screen.scale
+            ?? hostView.traitCollection.displayScale
         let resolvedMetrics = WIWebViewChromeResolvedMetrics(
             state: effectiveMetrics,
             screenScale: screenScale
@@ -236,7 +245,15 @@ public final class WIWebViewViewportCoordinator: NSObject {
     }
 
     private func installObservationViewIfPossible() {
-        guard observationView == nil, let hostView = hostViewController?.viewIfLoaded else {
+        guard let hostView = hostViewController?.viewIfLoaded else {
+            return
+        }
+
+        installObservationViewIfPossible(in: hostView)
+    }
+
+    private func installObservationViewIfPossible(in hostView: UIView) {
+        guard observationView == nil else {
             return
         }
 

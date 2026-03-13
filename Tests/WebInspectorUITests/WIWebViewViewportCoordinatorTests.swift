@@ -112,6 +112,39 @@ struct WIWebViewViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorInstallsObservationViewWhenHostViewLoadsAfterInitialization() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let coordinator = WIWebViewViewportCoordinator(
+            hostViewController: hostViewController,
+            webView: webView
+        )
+        #expect(coordinator.hasObservationViewForTesting == false)
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor)
+        ])
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setToolbarHidden(false, animated: false)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        coordinator.handleViewDidAppear()
+
+        #expect(coordinator.hasObservationViewForTesting == true)
+        #expect(coordinator.resolvedMetricsForTesting != nil)
+    }
+
+    @Test
     func viewportSPIBridgeFallbackNoOpsWhenSelectorsAreUnavailable() {
         let plainObject = NSObject()
         let resolvedMetrics = WIWebViewChromeResolvedMetrics(
