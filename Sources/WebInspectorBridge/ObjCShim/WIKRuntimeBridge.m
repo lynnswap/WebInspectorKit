@@ -39,6 +39,15 @@
     return @(function(target, selector));
 }
 
++ (BOOL)setBoolValueOnTarget:(NSObject *)target key:(NSString *)key value:(BOOL)value {
+    @try {
+        [target setValue:@(value) forKey:key];
+        return YES;
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+}
+
 + (BOOL)invokeVoidOnTarget:(NSObject *)target selectorName:(NSString *)selectorName {
     SEL selector = NSSelectorFromString(selectorName);
     if (![target respondsToSelector:selector]) {

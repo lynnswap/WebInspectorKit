@@ -11,6 +11,8 @@
 !.swiftpm/xcode/xcshareddata/xcschemes/
 .swiftpm/xcode/xcshareddata/xcschemes/*
 !.swiftpm/xcode/xcshareddata/xcschemes/WebInspectorTransport.xcscheme
+# Keep the sample app scheme local-only.
+/MiniBrowser/MiniBrowser.xcodeproj/xcshareddata/xcschemes/MiniBrowser.xcscheme
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json
