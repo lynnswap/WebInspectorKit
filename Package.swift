@@ -42,9 +42,6 @@ let package = Package(
         .target(
             name: "WebInspectorResources",
             path: "Sources/WebInspectorResources",
-            exclude: [
-                "TypeScript/Tests"
-            ],
             resources: [
                 .process("Resources")
             ],

@@ -4,8 +4,8 @@ import {
     cancelElementSelection,
     consumePendingSelectionPath,
     startElementSelection
-} from "../Runtime/DOMAgent/dom-agent-selection";
-import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
+} from "@wi-ts/Runtime/DOMAgent/dom-agent-selection";
+import { inspector } from "@wi-ts/Runtime/DOMAgent/dom-agent-state";
 
 function resetInspectorState() {
     inspector.map = new Map();

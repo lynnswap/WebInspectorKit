@@ -139,6 +139,13 @@ public final class WISessionController {
     package func removePanelConfigurationObserver(_ id: UUID) {
         panelConfigurationObservers.removeValue(forKey: id)
     }
+
+    isolated deinit {
+        navigationRebindTask?.cancel()
+        pageLoadingObservation?.cancel()
+        domStore.detach()
+        networkStore.detach()
+    }
 }
 
 private extension WISessionController {

@@ -5,8 +5,8 @@ import {
     enableAutoSnapshot,
     setAutoSnapshotOptions,
     triggerSnapshotUpdate
-} from "../Runtime/DOMAgent/dom-agent-snapshot";
-import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
+} from "@wi-ts/Runtime/DOMAgent/dom-agent-snapshot";
+import { inspector } from "@wi-ts/Runtime/DOMAgent/dom-agent-state";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;

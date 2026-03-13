@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
-import * as domAgentSnapshot from "../Runtime/DOMAgent/dom-agent-snapshot";
+import { inspector } from "@wi-ts/Runtime/DOMAgent/dom-agent-state";
+import * as domAgentSnapshot from "@wi-ts/Runtime/DOMAgent/dom-agent-snapshot";
 import {
     collectStyleSheetsWithScope,
     matchedStylesForNode
-} from "../Runtime/DOMAgent/dom-agent-styles";
+} from "@wi-ts/Runtime/DOMAgent/dom-agent-styles";
 
 function resetInspectorState(): void {
     inspector.map = new Map();

@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     DOMTreeUpdater,
     setReloadHandler
-} from "../UI/DOMTree/dom-tree-updates";
-import { renderState, treeState } from "../UI/DOMTree/dom-tree-state";
-import type { DOMEventEntry, DOMNode } from "../UI/DOMTree/dom-tree-types";
+} from "@wi-ts/UI/DOMTree/dom-tree-updates";
+import { renderState, treeState } from "@wi-ts/UI/DOMTree/dom-tree-state";
+import type { DOMEventEntry, DOMNode } from "@wi-ts/UI/DOMTree/dom-tree-types";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
