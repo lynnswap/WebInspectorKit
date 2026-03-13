@@ -11,11 +11,6 @@ final class BrowserPageViewController: UIViewController {
     private let inspectorCoordinator = BrowserInspectorCoordinator()
     private let logger = Logger(subsystem: "MiniBrowser", category: "BrowserPageViewController")
 
-    private let topChromeContainerView = UIView()
-    private let bottomChromeContainerView = UIView()
-    private let navigationBar = UINavigationBar()
-    private let navigationItemModel = UINavigationItem(title: "")
-    private let toolbar = UIToolbar()
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
     private let inspectorButtonItem = UIBarButtonItem(
@@ -42,11 +37,7 @@ final class BrowserPageViewController: UIViewController {
     private var storeObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
-    private var bottomChromeMode: BrowserBottomChromeMode = .normal
-
     private var progressHeightConstraint: NSLayoutConstraint?
-    private var topChromeBottomConstraint: NSLayoutConstraint?
-    private var bottomChromeTopConstraint: NSLayoutConstraint?
 
     init(
         store: BrowserStore,
@@ -76,13 +67,19 @@ final class BrowserPageViewController: UIViewController {
         configureChrome()
         viewportCoordinator = BrowserViewportStateCoordinator(hostView: view, webView: store.webView)
         viewportCoordinator?.onInputMetricsChanged = { [weak self] in
-            self?.handleViewportInputMetricsChanged()
+            self?.applyViewportState()
         }
 
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
             self?.maybeAutoPresentInspectorIfNeeded()
         }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.setNavigationBarHidden(false, animated: false)
+        navigationController?.setToolbarHidden(false, animated: false)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -127,30 +124,10 @@ final class BrowserPageViewController: UIViewController {
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
 
-        topChromeContainerView.translatesAutoresizingMaskIntoConstraints = false
-        topChromeContainerView.backgroundColor = .clear
-        topChromeContainerView.clipsToBounds = false
-        view.addSubview(topChromeContainerView)
-
-        navigationBar.translatesAutoresizingMaskIntoConstraints = false
-        navigationBar.prefersLargeTitles = false
-        topChromeContainerView.addSubview(navigationBar)
-
         progressView.translatesAutoresizingMaskIntoConstraints = false
         progressView.trackTintColor = .clear
-        topChromeContainerView.addSubview(progressView)
-
-        bottomChromeContainerView.translatesAutoresizingMaskIntoConstraints = false
-        bottomChromeContainerView.backgroundColor = .clear
-        bottomChromeContainerView.clipsToBounds = false
-        view.addSubview(bottomChromeContainerView)
-
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        bottomChromeContainerView.addSubview(toolbar)
-
+        view.addSubview(progressView)
         progressHeightConstraint = progressView.heightAnchor.constraint(equalToConstant: 0)
-        topChromeBottomConstraint = topChromeContainerView.bottomAnchor.constraint(equalTo: navigationBar.bottomAnchor)
-        bottomChromeTopConstraint = bottomChromeContainerView.topAnchor.constraint(equalTo: toolbar.topAnchor)
 
         var constraints = [
             webView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -158,33 +135,11 @@ final class BrowserPageViewController: UIViewController {
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            topChromeContainerView.topAnchor.constraint(equalTo: view.topAnchor),
-            topChromeContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            topChromeContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-
-            navigationBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            navigationBar.leadingAnchor.constraint(equalTo: topChromeContainerView.leadingAnchor),
-            navigationBar.trailingAnchor.constraint(equalTo: topChromeContainerView.trailingAnchor),
-
-            progressView.bottomAnchor.constraint(equalTo: topChromeContainerView.bottomAnchor),
-            progressView.leadingAnchor.constraint(equalTo: topChromeContainerView.leadingAnchor),
-            progressView.trailingAnchor.constraint(equalTo: topChromeContainerView.trailingAnchor),
-
-            bottomChromeContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            bottomChromeContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            bottomChromeContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            toolbar.leadingAnchor.constraint(equalTo: bottomChromeContainerView.leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: bottomChromeContainerView.trailingAnchor),
-            toolbar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progressView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ]
 
-        if let topChromeBottomConstraint {
-            constraints.append(topChromeBottomConstraint)
-        }
-        if let bottomChromeTopConstraint {
-            constraints.append(bottomChromeTopConstraint)
-        }
         if let progressHeightConstraint {
             constraints.append(progressHeightConstraint)
         }
@@ -202,31 +157,12 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureChrome() {
-        let navigationAppearance = UINavigationBarAppearance()
-        navigationAppearance.configureWithTransparentBackground()
-        navigationAppearance.shadowColor = .clear
-        navigationAppearance.backgroundColor = .clear
-        navigationBar.standardAppearance = navigationAppearance
-        navigationBar.scrollEdgeAppearance = navigationAppearance
-        navigationBar.compactAppearance = navigationAppearance
-        navigationBar.compactScrollEdgeAppearance = navigationAppearance
-        navigationBar.isTranslucent = true
+        navigationItem.largeTitleDisplayMode = .never
 
-        navigationItemModel.title = store.displayTitle
         inspectorButtonItem.target = self
         inspectorButtonItem.action = #selector(handleOpenInspectorAction(_:))
         inspectorButtonItem.accessibilityIdentifier = "MiniBrowser.openInspectorButton"
-        navigationItemModel.rightBarButtonItems = [inspectorButtonItem]
-        navigationBar.setItems([navigationItemModel], animated: false)
-
-        let toolbarAppearance = UIToolbarAppearance()
-        toolbarAppearance.configureWithTransparentBackground()
-        toolbarAppearance.shadowColor = .clear
-        toolbarAppearance.backgroundColor = .clear
-        toolbar.standardAppearance = toolbarAppearance
-        toolbar.compactAppearance = toolbarAppearance
-        toolbar.scrollEdgeAppearance = toolbarAppearance
-        toolbar.isTranslucent = true
+        navigationItem.rightBarButtonItem = inspectorButtonItem
 
         backButtonItem.target = self
         backButtonItem.action = #selector(handleBackAction(_:))
@@ -234,11 +170,11 @@ final class BrowserPageViewController: UIViewController {
         forwardButtonItem.target = self
         forwardButtonItem.action = #selector(handleForwardAction(_:))
 
-        toolbar.setItems([
+        toolbarItems = [
             backButtonItem,
             forwardButtonItem,
             UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-        ], animated: false)
+        ]
     }
 
     private func renderState() {
@@ -246,7 +182,7 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        navigationItemModel.title = store.displayTitle
+        navigationItem.title = store.displayTitle
         backButtonItem.isEnabled = store.canGoBack
         forwardButtonItem.isEnabled = store.canGoForward
 
@@ -260,31 +196,6 @@ final class BrowserPageViewController: UIViewController {
         if launchConfiguration.shouldShowDiagnostics {
             diagnosticsPanel.update(with: store)
         }
-
-        applyViewportState()
-    }
-
-    private func handleViewportInputMetricsChanged() {
-        updateBottomChromeMode()
-        applyViewportState()
-    }
-
-    private func updateBottomChromeMode() {
-        let nextMode: BrowserBottomChromeMode
-        if (viewportCoordinator?.keyboardOverlapHeight() ?? 0) > 0 {
-            nextMode = .hiddenForKeyboard
-        } else {
-            nextMode = .normal
-        }
-
-        guard nextMode != bottomChromeMode else {
-            return
-        }
-
-        bottomChromeMode = nextMode
-        let shouldHideBottomChrome = nextMode == .hiddenForKeyboard
-        bottomChromeContainerView.isHidden = shouldHideBottomChrome
-        toolbar.isHidden = shouldHideBottomChrome
     }
 
     private func applyViewportState() {
@@ -292,22 +203,11 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        updateBottomChromeMode()
-        view.layoutIfNeeded()
-
-        let topChromeHeight = topChromeContainerView.frame.maxY
-        let bottomChromeHeight: CGFloat
-        if bottomChromeMode == .normal {
-            bottomChromeHeight = max(0, view.bounds.maxY - bottomChromeContainerView.frame.minY)
-        } else {
-            bottomChromeHeight = 0
-        }
-
         let state = viewportCoordinator.makeViewportState(
             safeAreaInsets: view.safeAreaInsets,
-            topChromeHeight: topChromeHeight,
-            bottomChromeHeight: bottomChromeHeight,
-            bottomChromeMode: bottomChromeMode
+            topChromeHeight: view.safeAreaInsets.top,
+            bottomChromeHeight: view.safeAreaInsets.bottom,
+            bottomChromeMode: .normal
         )
         viewportCoordinator.applyViewportState(state)
     }

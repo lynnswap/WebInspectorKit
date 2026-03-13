@@ -51,8 +51,7 @@ final class BrowserViewportStateCoordinator: NSObject {
 
         lastAppliedViewportMetrics = metrics
         webView.obscuredContentInsets = metrics.obscuredInsets
-        webView.scrollView.contentInset = metrics.obscuredInsets
-        webView.wi_setPrivateUnobscuredSafeAreaInsetsIfAvailable(metrics.safeAreaInsets)
+        webView.wi_setPrivateUnobscuredSafeAreaInsetsIfAvailable(metrics.unobscuredSafeAreaInsets)
         webView.wi_setPrivateObscuredSafeAreaEdgesIfAvailable(metrics.safeAreaAffectedEdges)
     }
 
@@ -113,11 +112,18 @@ final class BrowserViewportStateCoordinator: NSObject {
 struct BrowserViewportMetrics: Equatable {
     let safeAreaInsets: UIEdgeInsets
     let obscuredInsets: UIEdgeInsets
+    let unobscuredSafeAreaInsets: UIEdgeInsets
     let safeAreaAffectedEdges: UIRectEdge
 
     init(state: BrowserViewportState, screenScale: CGFloat) {
         safeAreaInsets = state.safeAreaInsets.wi_roundedToPixel(screenScale)
         obscuredInsets = state.finalObscuredInsets.wi_roundedToPixel(screenScale)
+        unobscuredSafeAreaInsets = UIEdgeInsets(
+            top: max(0, safeAreaInsets.top - obscuredInsets.top),
+            left: max(0, safeAreaInsets.left - obscuredInsets.left),
+            bottom: max(0, safeAreaInsets.bottom - obscuredInsets.bottom),
+            right: max(0, safeAreaInsets.right - obscuredInsets.right)
+        )
         safeAreaAffectedEdges = state.safeAreaAffectedEdges
     }
 }
