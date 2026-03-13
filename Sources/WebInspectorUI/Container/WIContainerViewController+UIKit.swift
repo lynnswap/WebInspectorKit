@@ -75,6 +75,7 @@ public final class WIContainerViewController: UIViewController {
     public private(set) var sessionController: WISessionController
 
     private var requestedTabs: [WITab]
+    private let synthesizedCompactElementTab = WITab.element()
     private let renderCache = WIUIKitTabRenderCache()
     private var sessionObservationHandles: Set<ObservationHandle> = []
     private var panelConfigurationObserverID: UUID?
@@ -190,7 +191,7 @@ public final class WIContainerViewController: UIViewController {
     }
 
     var resolvedTabIDsForTesting: [String] {
-        requestedTabs.map(\.identifier)
+        displayTabsForCurrentState().map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -246,9 +247,9 @@ public final class WIContainerViewController: UIViewController {
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
-        renderCache.prune(activeTabs: requestedTabs)
-
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
+        let displayTabs = displayTabsForCurrentState()
+        renderCache.prune(activeTabs: displayTabs)
 
         if activeHostKind == .compact, targetHostKind == .regular {
             // Compact UITab closures retain wrapped controllers; drop only compact caches
@@ -257,11 +258,11 @@ public final class WIContainerViewController: UIViewController {
         }
 
         if forceHostReplacement || activeHostKind != targetHostKind {
-            installHost(of: targetHostKind)
+            installHost(of: targetHostKind, tabs: displayTabs)
         }
     }
 
-    private func installHost(of kind: HostKind) {
+    private func installHost(of kind: HostKind, tabs: [WITab]) {
         if let activeHost {
             activeHost.prepareForRemoval()
             activeHost.willMove(toParent: nil)
@@ -274,13 +275,13 @@ public final class WIContainerViewController: UIViewController {
         case .compact:
             host = WICompactTabHostViewController(
                 model: sessionController,
-                tabs: requestedTabs,
+                tabs: tabs,
                 renderCache: renderCache
             )
         case .regular:
             host = WIRegularTabHostViewController(
                 model: sessionController,
-                tabs: requestedTabs,
+                tabs: tabs,
                 renderCache: renderCache
             )
         }
@@ -302,6 +303,26 @@ public final class WIContainerViewController: UIViewController {
 
     private func handleHorizontalSizeClassChange() {
         rebuildLayout()
+    }
+
+    private func displayTabsForCurrentState() -> [WITab] {
+        guard effectiveHorizontalSizeClass == .compact else {
+            return requestedTabs.filter { $0.panelKind != .domDetail }
+        }
+
+        let hasDOMTab = requestedTabs.contains { $0.panelKind == .domTree }
+        let hasElementTab = requestedTabs.contains { $0.panelKind == .domDetail }
+        guard hasDOMTab, hasElementTab == false else {
+            return requestedTabs
+        }
+
+        var compactTabs = requestedTabs
+        if let domIndex = compactTabs.firstIndex(where: { $0.panelKind == .domTree }) {
+            compactTabs.insert(synthesizedCompactElementTab, at: domIndex + 1)
+        } else {
+            compactTabs.append(synthesizedCompactElementTab)
+        }
+        return compactTabs
     }
 
     func makeTabRootViewController(for tab: WITab) -> UIViewController? {

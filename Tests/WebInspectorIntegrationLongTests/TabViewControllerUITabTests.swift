@@ -28,7 +28,8 @@ struct TabViewControllerUITabTests {
 
         #expect(container.activeHostKindForTesting == "compact")
         #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
-        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "wi_network"])
+        #expect(controller.panelConfigurations.map(\.identifier) == ["wi_dom", "wi_network"])
     }
 
     @Test
@@ -48,6 +49,7 @@ struct TabViewControllerUITabTests {
         #expect(container.activeHostViewControllerForTesting is WIRegularTabHostViewController)
         #expect(container.activeHostViewControllerForTesting is UINavigationController)
         #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(controller.panelConfigurations.map(\.identifier) == ["wi_dom", "wi_network"])
     }
 
     @Test
@@ -68,7 +70,8 @@ struct TabViewControllerUITabTests {
 
         #expect(container.activeHostKindForTesting == "compact")
         #expect(container.activeHostViewControllerForTesting is WICompactTabHostViewController)
-        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "wi_network"])
+        #expect(controller.panelConfigurations.map(\.identifier) == ["wi_dom", "wi_network"])
     }
 
     @Test
@@ -84,7 +87,8 @@ struct TabViewControllerUITabTests {
         container.loadViewIfNeeded()
         configureSizeClass(.regular, for: container, requestedTabs: [.dom(), .element(), custom, .network()])
 
-        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_element", "custom", "wi_network"])
+        #expect(container.resolvedTabIDsForTesting == ["wi_dom", "custom", "wi_network"])
+        #expect(controller.panelConfigurations.map(\.identifier) == ["wi_dom", "wi_element", "custom", "wi_network"])
 
         guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
             Issue.record("Expected regular host")
@@ -123,7 +127,7 @@ struct TabViewControllerUITabTests {
     @Test
     func compactToRegularMapsElementSelectionToDOM() {
         let controller = WISessionController()
-        let tabs: [WITab] = [.dom(), .element(), .network()]
+        let tabs: [WITab] = [.dom(), .network()]
         let container = WIContainerViewController(
             controller,
             webView: nil,
@@ -133,13 +137,14 @@ struct TabViewControllerUITabTests {
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: tabs)
 
-        let elementPanel = controller.panelConfigurations.first(where: { $0.identifier == WITab.elementTabID })
-        controller.setSelectedPanelFromUI(elementPanel)
+        controller.setSelectedPanelFromUI(WITab.element().configuration)
         #expect(controller.selectedPanelConfiguration?.identifier == WITab.elementTabID)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
 
         configureSizeClass(.regular, for: container, requestedTabs: tabs)
 
         #expect(controller.selectedPanelConfiguration?.identifier == WITab.domTabID)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
     }
 
     @Test
@@ -161,6 +166,7 @@ struct TabViewControllerUITabTests {
 
         #expect(controller.selectedPanelConfiguration?.identifier == WITab.networkTabID)
         #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
+        #expect(controller.panelConfigurations.map(\.identifier) == ["wi_dom", "wi_network"])
     }
 
     @Test
@@ -194,6 +200,41 @@ struct TabViewControllerUITabTests {
         compactHost.tabBarController(compactHost, didSelectTab: networkTab, previousTab: domTab)
 
         #expect(controller.selectedPanelConfiguration?.identifier == "wi_network")
+    }
+
+    @Test
+    func compactHostSelectionUpdatesControllerSelectionForSyntheticElementTab() {
+        let controller = WISessionController()
+        let container = WIContainerViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        container.viewWillAppear(false)
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+
+        guard
+            let domTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.domTabID }),
+            let elementTab = compactHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.elementTabID })
+        else {
+            Issue.record("Expected DOM and Element tabs")
+            return
+        }
+
+        #expect(compactHost.tabBarController(compactHost, shouldSelectTab: elementTab))
+        compactHost.selectedTab = elementTab
+        compactHost.tabBarController(compactHost, didSelectTab: elementTab, previousTab: domTab)
+
+        #expect(controller.selectedPanelConfiguration?.identifier == WITab.elementTabID)
+        #expect(controller.selectedPanelConfiguration?.kind == .domDetail)
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
     }
 
     @Test
@@ -248,7 +289,8 @@ struct TabViewControllerUITabTests {
             return
         }
 
-        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
     }
 
     @Test
@@ -410,12 +452,15 @@ struct TabViewControllerUITabTests {
         )
         container.loadViewIfNeeded()
         #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.resolvedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
 
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
         #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.resolvedTabIDsForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
 
         configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
         #expect(controller.panelConfigurations.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(container.resolvedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
     }
 
     @Test

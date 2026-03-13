@@ -347,6 +347,13 @@ private extension WISessionController {
         if identifierMatches.count == 1, let identifierMatch = identifierMatches.first {
             return identifierMatch
         }
+        if requestedPanelConfiguration.kind == .domDetail {
+            let hasDOMTreePanel = panelConfigurations.contains { $0.kind == .domTree }
+            let hasDOMDetailPanel = panelConfigurations.contains { $0.kind == .domDetail }
+            if hasDOMTreePanel, hasDOMDetailPanel == false {
+                return requestedPanelConfiguration
+            }
+        }
         return nil
     }
 
