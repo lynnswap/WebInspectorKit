@@ -90,13 +90,11 @@ final class WINetworkCompactViewController: UINavigationController, UINavigation
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Compact Host (UIKit)") {
-    WIUIKitPreviewContainer {
-        let store = WINetworkPreviewFixtures.makeStore(mode: .detail)
-        return WINetworkCompactViewController(
-            store: store,
-            queryModel: WINetworkQueryState(store: store)
-        )
-    }
+    let store = WINetworkPreviewFixtures.makeStore(mode: .detail)
+    return WINetworkCompactViewController(
+        store: store,
+        queryModel: WINetworkQueryState(store: store)
+    )
 }
 #endif
 #endif

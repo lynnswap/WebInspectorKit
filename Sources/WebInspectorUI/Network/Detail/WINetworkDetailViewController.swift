@@ -752,14 +752,12 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Detail (UIKit)") {
-    WIUIKitPreviewContainer {
-        guard let context = WINetworkPreviewFixtures.makeDetailContext() else {
-            return UIViewController()
-        }
-        return UINavigationController(
-            rootViewController: WINetworkDetailViewController(store: context.store)
-        )
+    guard let context = WINetworkPreviewFixtures.makeDetailContext() else {
+        return UIViewController()
     }
+    return UINavigationController(
+        rootViewController: WINetworkDetailViewController(store: context.store)
+    )
 }
 #endif
 #endif

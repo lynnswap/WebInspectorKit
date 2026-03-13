@@ -191,13 +191,11 @@ public final class WIDOMTreeViewController: UIViewController {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Tree (UIKit)") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: WIDOMTreeViewController(
-                store: WIDOMPreviewFixtures.makeStore(mode: .selected)
-            )
+    UINavigationController(
+        rootViewController: WIDOMTreeViewController(
+            store: WIDOMPreviewFixtures.makeStore(mode: .selected)
         )
-    }
+    )
 }
 #endif
 

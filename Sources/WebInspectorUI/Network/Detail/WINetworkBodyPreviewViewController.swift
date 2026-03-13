@@ -600,31 +600,27 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Body Preview Object Tree (UIKit)") {
-    WIUIKitPreviewContainer {
-        guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: false) else {
-            return UIViewController()
-        }
-        let preview = WINetworkBodyPreviewViewController(
-            entry: context.entry,
-            store: context.store,
-            bodyState: context.body
-        )
-        return UINavigationController(rootViewController: preview)
+    guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: false) else {
+        return UIViewController()
     }
+    let preview = WINetworkBodyPreviewViewController(
+        entry: context.entry,
+        store: context.store,
+        bodyState: context.body
+    )
+    return UINavigationController(rootViewController: preview)
 }
 
 #Preview("Network Body Preview Text (UIKit)") {
-    WIUIKitPreviewContainer {
-        guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: true) else {
-            return UIViewController()
-        }
-        let preview = WINetworkBodyPreviewViewController(
-            entry: context.entry,
-            store: context.store,
-            bodyState: context.body
-        )
-        return UINavigationController(rootViewController: preview)
+    guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: true) else {
+        return UIViewController()
     }
+    let preview = WINetworkBodyPreviewViewController(
+        entry: context.entry,
+        store: context.store,
+        bodyState: context.body
+    )
+    return UINavigationController(rootViewController: preview)
 }
 #endif
 #endif

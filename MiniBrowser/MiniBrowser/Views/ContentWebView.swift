@@ -10,7 +10,7 @@ struct ContentWebView: View {
     }
     
     var body: some View {
-        PreviewWebViewRepresentable(webView: model.webView)
+        BrowserWebViewRepresentable(webView: model.webView)
             .ignoresSafeArea(.container,edges: .top)
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {

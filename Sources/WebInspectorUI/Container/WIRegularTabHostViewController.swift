@@ -250,14 +250,12 @@ final class WIRegularTabHostViewController: UINavigationController {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Regular Tab Host (UIKit)") {
-    WIUIKitPreviewContainer {
-        let session = WISessionPreviewFixtures.makeSessionController()
-        let tabs: [WITab] = [.dom(), .network()]
-        session.configurePanels(tabs.map(\.configuration))
-        let host = WIRegularTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedPanelFromUI(tabs.first?.configuration)
-        return host
-    }
+    let session = WISessionPreviewFixtures.makeSessionController()
+    let tabs: [WITab] = [.dom(), .network()]
+    session.configurePanels(tabs.map(\.configuration))
+    let host = WIRegularTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
+    session.setSelectedPanelFromUI(tabs.first?.configuration)
+    return host
 }
 #endif
 #endif

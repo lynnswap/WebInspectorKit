@@ -43,9 +43,7 @@ public final class WIDOMViewController: NSSplitViewController {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Root (AppKit)") {
-    WIAppKitPreviewContainer {
-        WIDOMViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
-    }
+    WIDOMViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
 }
 #endif
 

@@ -254,14 +254,12 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Compact Tab Host (UIKit)") {
-    WIUIKitPreviewContainer {
-        let session = WISessionPreviewFixtures.makeSessionController()
-        let tabs: [WITab] = [.dom(), .element(), .network()]
-        session.configurePanels(tabs.map(\.configuration))
-        let host = WICompactTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedPanelFromUI(tabs.first?.configuration)
-        return host
-    }
+    let session = WISessionPreviewFixtures.makeSessionController()
+    let tabs: [WITab] = [.dom(), .element(), .network()]
+    session.configurePanels(tabs.map(\.configuration))
+    let host = WICompactTabHostViewController(model: session, tabs: tabs, renderCache: WIUIKitTabRenderCache())
+    session.setSelectedPanelFromUI(tabs.first?.configuration)
+    return host
 }
 #endif
 #endif

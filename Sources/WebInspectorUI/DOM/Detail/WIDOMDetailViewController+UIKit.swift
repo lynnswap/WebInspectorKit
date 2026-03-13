@@ -1375,33 +1375,27 @@ private struct KeyboardToolbarView: View {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Detail Empty (UIKit)") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: WIDOMDetailViewController(
-                store: WIDOMPreviewFixtures.makeStore(mode: .empty)
-            )
+    UINavigationController(
+        rootViewController: WIDOMDetailViewController(
+            store: WIDOMPreviewFixtures.makeStore(mode: .empty)
         )
-    }
+    )
 }
 
 #Preview("DOM Detail Selected (UIKit)") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: WIDOMDetailViewController(
-                store: WIDOMPreviewFixtures.makeStore(mode: .selected)
-            )
+    UINavigationController(
+        rootViewController: WIDOMDetailViewController(
+            store: WIDOMPreviewFixtures.makeStore(mode: .selected)
         )
-    }
+    )
 }
 
 #Preview("DOM Detail Editable Attributes (UIKit)") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: WIDOMDetailViewController(
-                store: WIDOMPreviewFixtures.makeStore(mode: .selectedEditableAttributes)
-            )
+    UINavigationController(
+        rootViewController: WIDOMDetailViewController(
+            store: WIDOMPreviewFixtures.makeStore(mode: .selectedEditableAttributes)
         )
-    }
+    )
 }
 #endif
 

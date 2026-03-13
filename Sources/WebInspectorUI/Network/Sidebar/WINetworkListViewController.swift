@@ -327,13 +327,11 @@ private func statusIndicatorConfiguration(for item: NetworkEntry) -> UICellAcces
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network List (UIKit)") {
-    WIUIKitPreviewContainer {
-        UINavigationController(
-            rootViewController: WINetworkListViewController(
-                store: WINetworkPreviewFixtures.makeStore(mode: .root)
-            )
+    UINavigationController(
+        rootViewController: WINetworkListViewController(
+            store: WINetworkPreviewFixtures.makeStore(mode: .root)
         )
-    }
+    )
 }
 #endif
 #endif

@@ -204,9 +204,7 @@ public final class WIDOMTreeViewController: NSViewController {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Tree (AppKit)") {
-    WIAppKitPreviewContainer {
-        WIDOMTreeViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
-    }
+    WIDOMTreeViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
 }
 #endif
 

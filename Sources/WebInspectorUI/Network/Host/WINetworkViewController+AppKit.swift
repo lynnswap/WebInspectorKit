@@ -458,15 +458,11 @@ private func decodedBodyText(from body: NetworkBody) -> String? {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Root (AppKit)") {
-    WIAppKitPreviewContainer {
-        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .root))
-    }
+    WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .root))
 }
 
 #Preview("Network Root Long Title (AppKit)") {
-    WIAppKitPreviewContainer {
-        WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .rootLongTitle))
-    }
+    WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .rootLongTitle))
 }
 #endif
 

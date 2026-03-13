@@ -342,11 +342,9 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Root (UIKit)") {
-    WIUIKitPreviewContainer {
-        let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
-        WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(store)
-        return WIDOMViewController(store: store)
-    }
+    let store = WIDOMPreviewFixtures.makeStore(mode: .selected)
+    WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(store)
+    return WIDOMViewController(store: store)
 }
 #endif
 

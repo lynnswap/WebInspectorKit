@@ -383,15 +383,11 @@ private struct ElementDetailsMacRootView: View {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Detail Empty (AppKit)") {
-    WIAppKitPreviewContainer {
-        WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .empty))
-    }
+    WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .empty))
 }
 
 #Preview("DOM Detail Selected (AppKit)") {
-    WIAppKitPreviewContainer {
-        WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
-    }
+    WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
 }
 #endif
 

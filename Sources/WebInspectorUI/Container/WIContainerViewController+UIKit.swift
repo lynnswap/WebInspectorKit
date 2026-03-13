@@ -350,17 +350,15 @@ extension WIRegularTabHostViewController: WIUIKitTabHost {}
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Tab Container (UIKit)") {
-    WIUIKitPreviewContainer {
-        let session = WISessionPreviewFixtures.makeSessionController()
-        let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.domStore)
-        WIDOMPreviewFixtures.applySampleSelection(to: session.domStore, mode: .selected)
-        WINetworkPreviewFixtures.applySampleData(to: session.networkStore, mode: .detail)
-        return WIContainerViewController(
-            session,
-            webView: previewWebView,
-            tabs: [.dom(), .network()]
-        )
-    }
+    let session = WISessionPreviewFixtures.makeSessionController()
+    let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.domStore)
+    WIDOMPreviewFixtures.applySampleSelection(to: session.domStore, mode: .selected)
+    WINetworkPreviewFixtures.applySampleData(to: session.networkStore, mode: .detail)
+    return WIContainerViewController(
+        session,
+        webView: previewWebView,
+        tabs: [.dom(), .network()]
+    )
 }
 #endif
 
