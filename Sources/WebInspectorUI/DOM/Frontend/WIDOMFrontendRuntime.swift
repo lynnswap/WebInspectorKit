@@ -3,6 +3,9 @@ import OSLog
 import WebInspectorCore
 import WebInspectorResources
 import WebKit
+#if canImport(AppKit)
+import AppKit
+#endif
 
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMFrontendRuntime")
 
@@ -118,6 +121,12 @@ package final class WIDOMFrontendRuntime: NSObject, WIDOMFrontendBridge {
     package func updateConfiguration(_ configuration: DOMConfiguration) {
         self.configuration = configuration
     }
+
+#if canImport(AppKit)
+    package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
+        webView?.domContextMenuProvider = provider
+    }
+#endif
 
     private func applyConfigurationToInspector() async {
         guard let webView else {

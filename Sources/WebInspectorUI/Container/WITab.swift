@@ -4,12 +4,10 @@ import WebInspectorResources
 
 #if canImport(UIKit)
 import UIKit
-import WebInspectorResources
 public typealias WIPlatformImage = UIImage
 public typealias WIPlatformViewController = UIViewController
 #elseif canImport(AppKit)
 import AppKit
-import WebInspectorResources
 public typealias WIPlatformImage = NSImage
 public typealias WIPlatformViewController = NSViewController
 #endif
@@ -209,6 +207,46 @@ public final class WITab: NSObject {
             title: fallbackTitle,
             image: systemImage(named: fallbackSystemImage, accessibilityDescription: fallbackTitle),
             panelConfiguration: panelConfiguration
+        )
+    }
+}
+
+public extension WITab {
+    static func dom(
+        title: String? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            panelKind: .domTree,
+            title: title ?? wiLocalized("inspector.tab.dom"),
+            systemImage: systemImage ?? "chevron.left.forwardslash.chevron.right",
+            role: .builtIn
+        )
+    }
+
+#if canImport(UIKit)
+    static func element(
+        title: String? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            panelKind: .domDetail,
+            title: title ?? wiLocalized("inspector.tab.element"),
+            systemImage: systemImage ?? "info.circle",
+            role: .builtIn
+        )
+    }
+#endif
+
+    static func network(
+        title: String? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            panelKind: .network,
+            title: title ?? wiLocalized("inspector.tab.network"),
+            systemImage: systemImage ?? "waveform.path.ecg.rectangle",
+            role: .builtIn
         )
     }
 }

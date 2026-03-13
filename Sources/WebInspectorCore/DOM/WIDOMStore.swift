@@ -139,6 +139,14 @@ public final class WIDOMStore {
         return inspectorWebView
     }
 
+#if canImport(AppKit)
+    package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
+        withFrontendBridge { frontendBridge in
+            frontendBridge.setDOMContextMenuProvider(provider)
+        }
+    }
+#endif
+
     func withFrontendBridge(_ body: (any WIDOMFrontendBridge) -> Void) {
         guard let frontendBridge else {
             return
@@ -324,6 +332,15 @@ public final class WIDOMStore {
         removeAttributeImpl(name: name)
     }
 }
+
+#if DEBUG
+@_spi(PreviewSupport)
+public extension WIDOMStore {
+    func wiAttachPreviewPageWebView(_ webView: WKWebView) {
+        attach(to: webView)
+    }
+}
+#endif
 
 extension WIDOMStore: WIDOMFrontendBridgeDelegate {
     package func domFrontendDidReceiveRecoverableError(_ message: String) {

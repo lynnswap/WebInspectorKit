@@ -175,6 +175,15 @@ package final class WINetworkRuntime {
 
 #if DEBUG
 extension WINetworkRuntime {
+    func wiApplyPreviewBatch(_ payload: NSDictionary) {
+        guard let batch = NetworkEventBatch.decode(from: payload) else {
+            return
+        }
+        store.applyNetworkBatch(batch)
+    }
+}
+
+extension WINetworkRuntime {
     package func testBackendTypeName() -> String {
         String(describing: type(of: backend))
     }

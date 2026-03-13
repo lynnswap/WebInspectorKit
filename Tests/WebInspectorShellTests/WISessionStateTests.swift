@@ -119,6 +119,11 @@ struct WISessionStateTests {
         #expect(observedValue == expectedNetworkID)
     }
 
+    private func makeTestWebView() -> WKWebView {
+        makeIsolatedTestWebView()
+    }
+
+#if canImport(AppKit)
     @Test
     func macOSNativeLoadingStateTriggersTransportRebindHooks() async {
         await withWebKitTestIsolation {
@@ -168,10 +173,6 @@ struct WISessionStateTests {
         }
     }
 
-    private func makeTestWebView() -> WKWebView {
-        makeIsolatedTestWebView()
-    }
-
     private func loadHTML(_ html: String, in webView: WKWebView) async {
         let delegate = NavigationDelegate()
         webView.navigationDelegate = delegate
@@ -181,6 +182,7 @@ struct WISessionStateTests {
             webView.loadHTMLString(html, baseURL: URL(string: "https://example.com/"))
         }
     }
+#endif
 
     private func selectTab(_ identifier: String, in controller: WISessionController) {
         let panel = controller.panelConfigurations.first(where: { $0.identifier == identifier })
@@ -189,6 +191,7 @@ struct WISessionStateTests {
     }
 }
 
+#if canImport(AppKit)
 @MainActor
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {
     var continuation: CheckedContinuation<Void, Never>?
@@ -412,3 +415,4 @@ private final class RebindNetworkPageDriver: WINetworkBackend {
         }
     }
 }
+#endif

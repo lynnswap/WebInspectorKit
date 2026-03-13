@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import WebKit
+import WebInspectorCore
 
 private let spiRuntimeLogger = Logger(subsystem: "WebInspectorKit", category: "SPIRuntime")
 
@@ -18,6 +19,35 @@ package enum WIBridgeMode: String, Sendable {
             return 1
         case .privateFull:
             return 2
+        }
+    }
+}
+
+package extension WIBridgeMode {
+    func domBackendSupport() -> WIBackendSupport {
+        WIBackendSupport(
+            availability: .supported,
+            backendKind: inspectorBackendKind,
+            capabilities: [.domDomain]
+        )
+    }
+
+    func networkBackendSupport() -> WIBackendSupport {
+        WIBackendSupport(
+            availability: .supported,
+            backendKind: inspectorBackendKind,
+            capabilities: [.networkDomain]
+        )
+    }
+
+    private var inspectorBackendKind: WIBackendKind {
+        switch self {
+        case .privateCore:
+            .privateCore
+        case .privateFull:
+            .privateFull
+        case .legacyJSON:
+            .legacy
         }
     }
 }

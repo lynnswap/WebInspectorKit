@@ -88,6 +88,15 @@ public final class WINetworkStore {
     }
 }
 
+#if DEBUG
+@_spi(PreviewSupport)
+extension WINetworkStore {
+    package func wiApplyPreviewBatch(_ payload: NSDictionary) {
+        session.wiApplyPreviewBatch(payload)
+    }
+}
+#endif
+
 private extension WINetworkStore {
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
         selectedEntryObservationHandles.removeAll()
