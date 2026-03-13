@@ -1,13 +1,12 @@
 #if os(macOS)
 import AppKit
-import SwiftUI
 import WebInspectorKit
 import WebKit
 import XCTest
 @testable import MiniBrowser
 
 @MainActor
-final class BrowserViewModelInspectorRegressionTests: XCTestCase {
+final class BrowserStoreInspectorRegressionTests: XCTestCase {
     private var retainedWindows: [NSWindow] = []
     private var retainedInspectors: [WISessionController] = []
     private var temporaryDirectories: [URL] = []
@@ -61,10 +60,10 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
             """
         )
 
-        let model = BrowserViewModel(url: initialURL)
+        let model = BrowserStore(url: initialURL)
         let sessionController = WISessionController()
         retainedInspectors.append(sessionController)
-        let browserWindow = makeBrowserWindow(model: model)
+        let (browserWindow, _) = makeBrowserWindow(model: model, sessionController: sessionController)
 
         browserWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -121,10 +120,10 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
-        let model = BrowserViewModel(url: initialURL)
+        let model = BrowserStore(url: initialURL)
         let sessionController = WISessionController()
         retainedInspectors.append(sessionController)
-        let browserWindow = makeBrowserWindow(model: model)
+        let (browserWindow, _) = makeBrowserWindow(model: model, sessionController: sessionController)
 
         browserWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -198,10 +197,31 @@ final class BrowserViewModelInspectorRegressionTests: XCTestCase {
             tabs: [.network()]
         )
     }
+
+    func testBrowserWindowInstallsToolbarOnceAfterWindowAttachment() async throws {
+        let initialURL = try XCTUnwrap(URL(string: "about:blank"))
+        let model = BrowserStore(url: initialURL)
+        let sessionController = WISessionController()
+        retainedInspectors.append(sessionController)
+        let placeholderController = NSViewController()
+        placeholderController.view = NSView()
+        let (browserWindow, browserController) = makeBrowserWindow(
+            model: model,
+            sessionController: sessionController,
+            contentViewController: placeholderController
+        )
+
+        browserController.forceWindowAttachmentForTesting(in: browserWindow)
+        browserController.forceWindowAttachmentForTesting(in: browserWindow)
+
+        let toolbarInstalled = browserWindow.toolbar != nil
+        XCTAssertTrue(toolbarInstalled, "The MiniBrowser window did not install its NSToolbar after attaching to a window.")
+        XCTAssertEqual(browserController.toolbarInstallationCountForTesting, 1)
+    }
 }
 
 @MainActor
-private extension BrowserViewModelInspectorRegressionTests {
+private extension BrowserStoreInspectorRegressionTests {
     func assertInspectorAttachBehaviorAcrossHTTPSNavigation(
         tabs: [WITab]
     ) async throws {
@@ -209,10 +229,10 @@ private extension BrowserViewModelInspectorRegressionTests {
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
-        let model = BrowserViewModel(url: initialURL)
+        let model = BrowserStore(url: initialURL)
         let sessionController = WISessionController()
         retainedInspectors.append(sessionController)
-        let browserWindow = makeBrowserWindow(model: model)
+        let (browserWindow, _) = makeBrowserWindow(model: model, sessionController: sessionController)
 
         browserWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -276,42 +296,38 @@ private extension BrowserViewModelInspectorRegressionTests {
         )
     }
 
-    func makeBrowserWindow(model: BrowserViewModel) -> NSWindow {
-        let controller = NSHostingController(rootView: ContentWebView(model: model))
+    func makeBrowserWindow(
+        model: BrowserStore,
+        sessionController: WISessionController,
+        contentViewController: NSViewController? = nil
+    ) -> (NSWindow, BrowserRootViewController) {
+        let controller = BrowserRootViewController(
+            store: model,
+            sessionController: sessionController,
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: model.currentURL ?? URL(string: "about:blank")!),
+            contentViewController: contentViewController
+        )
         let window = NSWindow(contentViewController: controller)
         window.setContentSize(NSSize(width: 1024, height: 768))
         window.styleMask = [.titled, .closable, .resizable]
         window.title = "MiniBrowser Test Host"
         retainedWindows.append(window)
-        return window
+        return (window, controller)
     }
 
     func presentInspectorWindow(
-        model: BrowserViewModel,
+        model: BrowserStore,
         sessionController: WISessionController,
         tabs: [WITab],
         parentWindow: NSWindow
     ) {
-        let container = WIContainerViewController(
-            sessionController,
-            webView: model.webView,
+        let didPresent = BrowserInspectorCoordinator().present(
+            from: parentWindow,
+            browserStore: model,
+            sessionController: sessionController,
             tabs: tabs
         )
-        let window = NSWindow(contentViewController: container)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.title = "Web Inspector"
-        window.setContentSize(NSSize(width: 960, height: 720))
-        window.minSize = NSSize(width: 640, height: 480)
-
-        let parentFrame = parentWindow.frame
-        let origin = NSPoint(
-            x: parentFrame.midX - (window.frame.width / 2),
-            y: parentFrame.midY - (window.frame.height / 2)
-        )
-        window.setFrameOrigin(origin)
-        retainedWindows.append(window)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        XCTAssertTrue(didPresent, "The inspector coordinator failed to present the inspector window.")
     }
 
     func makeTemporaryHTMLURL(named name: String, html: String) throws -> URL {
@@ -342,7 +358,7 @@ private extension BrowserViewModelInspectorRegressionTests {
     }
 
     func assertWebContentStaysAlive(
-        model: BrowserViewModel,
+        model: BrowserStore,
         duration: Duration,
         pollInterval: Duration = .milliseconds(100)
     ) async -> Bool {
