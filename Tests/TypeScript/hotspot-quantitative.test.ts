@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     setAutoSnapshotOptions,
     triggerSnapshotUpdate
-} from "../Runtime/DOMAgent/dom-agent-snapshot";
-import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
+} from "@wi-ts/Runtime/DOMAgent/dom-agent-snapshot";
+import { inspector } from "@wi-ts/Runtime/DOMAgent/dom-agent-state";
 import {
     NetworkLoggingMode,
     bodyCache,
@@ -13,8 +13,8 @@ import {
     queuedEvents,
     setThrottleOptions,
     trackedRequests
-} from "../Runtime/NetworkAgent/network-agent-utils";
-import { installFetchPatch } from "../Runtime/NetworkAgent/network-agent-http";
+} from "@wi-ts/Runtime/NetworkAgent/network-agent-utils";
+import { installFetchPatch } from "@wi-ts/Runtime/NetworkAgent/network-agent-http";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;

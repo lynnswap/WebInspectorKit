@@ -4,9 +4,9 @@ import {
     createPlaceholderNode,
     indexNode,
     mergeNodeWithSource,
-} from "../UI/DOMTree/dom-tree-model";
-import { renderState, treeState } from "../UI/DOMTree/dom-tree-state";
-import type { DOMNode } from "../UI/DOMTree/dom-tree-types";
+} from "@wi-ts/UI/DOMTree/dom-tree-model";
+import { renderState, treeState } from "@wi-ts/UI/DOMTree/dom-tree-state";
+import type { DOMNode } from "@wi-ts/UI/DOMTree/dom-tree-types";
 
 function makeNode(id: number, children: DOMNode[] = [], childCount = children.length): DOMNode {
     return {

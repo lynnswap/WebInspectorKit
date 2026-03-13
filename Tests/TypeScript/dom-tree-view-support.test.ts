@@ -7,12 +7,12 @@ import {
     selectNode,
     processPendingNodeRenders,
     scheduleNodeRender
-} from "../UI/DOMTree/dom-tree-view-support";
-import { dispatchMessageFromBackend } from "../UI/DOMTree/dom-tree-protocol";
-import { registerProtocolHandlers, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
-import { protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
-import { TEXT_CONTENT_ATTRIBUTE } from "../UI/DOMTree/dom-tree-types";
-import type { DOMNode } from "../UI/DOMTree/dom-tree-types";
+} from "@wi-ts/UI/DOMTree/dom-tree-view-support";
+import { dispatchMessageFromBackend } from "@wi-ts/UI/DOMTree/dom-tree-protocol";
+import { registerProtocolHandlers, setSnapshot } from "@wi-ts/UI/DOMTree/dom-tree-snapshot";
+import { protocolState, renderState, treeState } from "@wi-ts/UI/DOMTree/dom-tree-state";
+import { TEXT_CONTENT_ATTRIBUTE } from "@wi-ts/UI/DOMTree/dom-tree-types";
+import type { DOMNode } from "@wi-ts/UI/DOMTree/dom-tree-types";
 
 function makeNode(id: number): DOMNode {
     return {

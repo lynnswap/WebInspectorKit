@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { applyMutationBundlesFromBuffer } from "../UI/DOMTree/dom-tree-buffer-transport";
-import { applyMutationBuffer } from "../UI/DOMTree/dom-tree-snapshot";
+import { applyMutationBundlesFromBuffer } from "@wi-ts/UI/DOMTree/dom-tree-buffer-transport";
+import { applyMutationBuffer } from "@wi-ts/UI/DOMTree/dom-tree-snapshot";
 
 describe("dom-tree-buffer-transport", () => {
     beforeEach(() => {

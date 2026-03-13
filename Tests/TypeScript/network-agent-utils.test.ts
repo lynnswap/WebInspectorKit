@@ -10,13 +10,13 @@ import {
     serializeRequestBody,
     setThrottleOptions,
     shouldCaptureNetworkBodies
-} from "../Runtime/NetworkAgent/network-agent-utils";
+} from "@wi-ts/Runtime/NetworkAgent/network-agent-utils";
 import {
     configureNetwork,
     getBody,
     getBodyForHandle,
     installNetworkObserver
-} from "../Runtime/NetworkAgent/network-agent-core";
+} from "@wi-ts/Runtime/NetworkAgent/network-agent-core";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;

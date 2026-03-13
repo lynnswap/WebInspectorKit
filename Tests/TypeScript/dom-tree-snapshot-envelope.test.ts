@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
-import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
-import type { SerializedNodeEnvelope } from "../UI/DOMTree/dom-tree-types";
+import { setSnapshot } from "@wi-ts/UI/DOMTree/dom-tree-snapshot";
+import { dom, renderState, treeState } from "@wi-ts/UI/DOMTree/dom-tree-state";
+import type { SerializedNodeEnvelope } from "@wi-ts/UI/DOMTree/dom-tree-types";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;

@@ -19,11 +19,14 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "baseUrl": ".",
+    "paths": {
+      "@wi-ts/*": ["../../Sources/WebInspectorResources/TypeScript/*"]
+    }
   },
   "include": [
-    "../**/*.ts",
-    "./**/*.ts",
-    "./vitest.config.ts"
+    "../../Sources/WebInspectorResources/TypeScript/**/*.ts",
+    "./**/*.ts"
   ]
 }
