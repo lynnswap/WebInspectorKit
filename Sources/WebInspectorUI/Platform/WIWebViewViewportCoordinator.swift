@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import Combine
 import UIKit
 import WebKit
 
@@ -128,6 +129,8 @@ public final class WIWebViewViewportCoordinator: NSObject {
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedResolvedMetrics: WIWebViewChromeResolvedMetrics?
     private var observationView: ViewportObservationView?
+    private var webViewStateCancellables: Set<AnyCancellable> = []
+    private var appliedViewportUpdateCount = 0
 
     var resolvedMetricsForTesting: WIWebViewChromeResolvedMetrics? {
         lastAppliedResolvedMetrics
@@ -135,6 +138,10 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     var hasObservationViewForTesting: Bool {
         observationView != nil
+    }
+
+    var appliedViewportUpdateCountForTesting: Int {
+        appliedViewportUpdateCount
     }
 
     public init(
@@ -150,6 +157,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
         super.init()
         installObservationViewIfPossible()
         observeKeyboardNotifications()
+        observeWebViewStateIfPossible()
     }
 
     deinit {
@@ -193,6 +201,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
         }
 
         lastAppliedResolvedMetrics = resolvedMetrics
+        appliedViewportUpdateCount += 1
         if #available(iOS 26.0, *) {
             webView.obscuredContentInsets = resolvedMetrics.obscuredInsets
             WIWebViewViewportSPIBridge.apply(
@@ -217,6 +226,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     public func invalidate() {
         NotificationCenter.default.removeObserver(self)
+        webViewStateCancellables.removeAll()
         observationView?.onViewportGeometryChanged = nil
         observationView?.removeFromSuperview()
         observationView = nil
@@ -277,6 +287,35 @@ public final class WIWebViewViewportCoordinator: NSObject {
         self.observationView = observationView
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
+    }
+
+    private func observeWebViewStateIfPossible() {
+        guard let webView else {
+            return
+        }
+
+        webView.publisher(for: \.isLoading, options: [.new])
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleObservedWebViewStateChange()
+            }
+            .store(in: &webViewStateCancellables)
+
+        webView.publisher(for: \.url, options: [.new])
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleObservedWebViewStateChange()
+            }
+            .store(in: &webViewStateCancellables)
+    }
+
+    private func handleObservedWebViewStateChange() {
+        lastAppliedResolvedMetrics = nil
+        updateChromeState()
+    }
+
+    func handleObservedWebViewStateChangeForTesting() {
+        handleObservedWebViewStateChange()
     }
 
     private func keyboardOverlapHeight() -> CGFloat {
