@@ -162,7 +162,7 @@ final class BrowserPageViewController: UIViewController {
         inspectorButtonItem.target = self
         inspectorButtonItem.action = #selector(handleOpenInspectorAction(_:))
         inspectorButtonItem.accessibilityIdentifier = "MiniBrowser.openInspectorButton"
-        navigationItem.rightBarButtonItem = inspectorButtonItem
+        navigationItem.rightBarButtonItem = nil
 
         backButtonItem.target = self
         backButtonItem.action = #selector(handleBackAction(_:))
@@ -173,7 +173,8 @@ final class BrowserPageViewController: UIViewController {
         toolbarItems = [
             backButtonItem,
             forwardButtonItem,
-            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+            UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+            inspectorButtonItem
         ]
     }
 

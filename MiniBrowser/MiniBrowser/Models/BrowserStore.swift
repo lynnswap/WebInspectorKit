@@ -34,7 +34,7 @@ private let logger = Logger(
     var lastNavigationErrorDescription: String?
     var didFinishNavigationCount = 0
 
-#if os(iOS)
+#if canImport(UIKit)
     private var refreshControl: UIRefreshControl?
 #endif
 
@@ -65,16 +65,16 @@ private let logger = Logger(
         currentURL = url
 
         let configuration = WKWebViewConfiguration()
-#if os(iOS)
+#if canImport(UIKit)
         configuration.allowsPictureInPictureMediaPlayback = true
         configuration.allowsInlineMediaPlayback = true
 #endif
         configuration.allowsAirPlayForMediaPlayback = true
 
         webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.scrollView.contentInsetAdjustmentBehavior = .always
         webView.isInspectable = true
-#if os(iOS)
+#if canImport(UIKit)
+        webView.scrollView.contentInsetAdjustmentBehavior = .always
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1"
 #else
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15"
@@ -82,14 +82,14 @@ private let logger = Logger(
         webView.allowsBackForwardNavigationGestures = true
 
         super.init()
-#if os(iOS)
+#if canImport(UIKit)
         configureRefreshControl()
-#endif
         webView.scrollView.topEdgeEffect.isHidden = false
         webView.scrollView.topEdgeEffect.style = .soft
         webView.scrollView.bottomEdgeEffect.isHidden = false
         webView.scrollView.bottomEdgeEffect.style = .soft
-
+#endif
+        
         webView.navigationDelegate = self
         webView.uiDelegate = self
 
@@ -199,7 +199,7 @@ private let logger = Logger(
         }
     }
 
-#if os(iOS)
+#if canImport(UIKit)
     private func configureRefreshControl() {
         let control = UIRefreshControl()
         control.addTarget(self, action: #selector(handleRefreshControl), for: .valueChanged)
@@ -223,7 +223,7 @@ private let logger = Logger(
 extension BrowserStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         logger.debug("\(#function) decide navigation policy (action)")
-#if os(macOS)
+#if canImport(AppKit)
         if navigationAction.navigationType == .linkActivated,
            navigationAction.modifierFlags.contains(.command),
            let url = navigationAction.request.url,
@@ -257,7 +257,7 @@ extension BrowserStore: WKNavigationDelegate {
         isLoading = false
         estimatedProgress = .zero
         lastNavigationErrorDescription = navigationError.localizedDescription
-#if os(iOS)
+#if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
         notifyStateObservers()
@@ -266,7 +266,7 @@ extension BrowserStore: WKNavigationDelegate {
         logger.debug("\(#function) navigation failed")
         isLoading = false
         lastNavigationErrorDescription = navigationError.localizedDescription
-#if os(iOS)
+#if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
         notifyStateObservers()
@@ -287,7 +287,7 @@ extension BrowserStore: WKNavigationDelegate {
         estimatedProgress = .zero
         lastNavigationErrorDescription = nil
         didFinishNavigationCount += 1
-#if os(iOS)
+#if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
         notifyStateObservers()
@@ -304,7 +304,7 @@ extension BrowserStore: WKUIDelegate {
         return nil
     }
 
-#if os(iOS)
+#if canImport(UIKit)
     func webView(
         _ webView: WKWebView,
         contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
@@ -354,7 +354,7 @@ extension BrowserStore: WKUIDelegate {
 }
 
 private extension BrowserStore {
-#if os(iOS)
+#if canImport(UIKit)
     @MainActor
     func presentJavaScriptAlert(message: String, webView: WKWebView) async {
         guard let presenter = findPresenter(for: webView) else {
