@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import WebKit
+import WebInspectorCore
 
 private let jsBufferTransportLogger = Logger(subsystem: "WebInspectorKit", category: "JSBufferTransport")
 

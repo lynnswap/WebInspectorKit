@@ -1,10 +1,21 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
+import WebInspectorCore
 
 enum WIWebViewViewportSPIBridge {
+    private static let setUnobscuredSafeAreaInsetsSelector = NSSelectorFromString(
+        WISPISymbols.setUnobscuredSafeAreaInsetsSelector
+    )
+    private static let setObscuredInsetEdgesAffectedBySafeAreaSelector = NSSelectorFromString(
+        WISPISymbols.setObscuredInsetEdgesAffectedBySafeAreaSelector
+    )
+    private static let inputViewBoundsInWindowSelector = NSSelectorFromString(
+        WISPISymbols.inputViewBoundsInWindowSelector
+    )
+
     static func apply(unobscuredSafeAreaInsets insets: UIEdgeInsets, to object: NSObject) {
-        let selector = NSSelectorFromString("_setUnobscuredSafeAreaInsets:")
+        let selector = Self.setUnobscuredSafeAreaInsetsSelector
         guard object.responds(to: selector) else {
             return
         }
@@ -15,7 +26,7 @@ enum WIWebViewViewportSPIBridge {
     }
 
     static func apply(obscuredSafeAreaEdges edges: UIRectEdge, to object: NSObject) {
-        let selector = NSSelectorFromString("_setObscuredInsetEdgesAffectedBySafeArea:")
+        let selector = Self.setObscuredInsetEdgesAffectedBySafeAreaSelector
         guard object.responds(to: selector) else {
             return
         }
@@ -26,7 +37,7 @@ enum WIWebViewViewportSPIBridge {
     }
 
     static func inputViewBoundsInWindow(of object: NSObject) -> CGRect? {
-        let selector = NSSelectorFromString("_inputViewBoundsInWindow")
+        let selector = Self.inputViewBoundsInWindowSelector
         guard object.responds(to: selector) else {
             return nil
         }
