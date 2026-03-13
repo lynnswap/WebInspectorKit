@@ -85,19 +85,8 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        viewportCoordinator?.handleViewDidAppear()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        viewportCoordinator?.updateChromeState()
-    }
-
-    override func viewSafeAreaInsetsDidChange() {
-        super.viewSafeAreaInsetsDidChange()
-        viewportCoordinator?.updateChromeState()
     }
 
     @objc

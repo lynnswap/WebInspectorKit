@@ -69,7 +69,7 @@ struct WIWebViewViewportCoordinatorTests {
 
     @Test
     @available(iOS 26.0, *)
-    func coordinatorAppliesStandardScrollConfigurationAndViewportInsets() {
+    func coordinatorAutomaticallyAppliesStandardScrollConfigurationAndViewportInsets() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -96,8 +96,8 @@ struct WIWebViewViewportCoordinatorTests {
             hostViewController: hostViewController,
             webView: webView
         )
-        coordinator.handleViewDidAppear()
-        coordinator.updateChromeState()
+        navigationController.view.layoutIfNeeded()
+        hostViewController.view.layoutIfNeeded()
 
         let resolved = try #require(coordinator.resolvedMetricsForTesting)
         #expect(webView.scrollView.contentInsetAdjustmentBehavior == .always)

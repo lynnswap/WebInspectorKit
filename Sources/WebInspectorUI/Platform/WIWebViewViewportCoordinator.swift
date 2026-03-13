@@ -118,6 +118,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     private var keyboardFrameInScreen: CGRect = .null
     private var lastAppliedResolvedMetrics: WIWebViewChromeResolvedMetrics?
+    private var observationView: ViewportObservationView?
 
     var resolvedMetricsForTesting: WIWebViewChromeResolvedMetrics? {
         lastAppliedResolvedMetrics
@@ -134,6 +135,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
         self.configuration = configuration
         self.metricsProvider = metricsProvider
         super.init()
+        installObservationViewIfPossible()
         observeKeyboardNotifications()
     }
 
@@ -188,6 +190,9 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     public func invalidate() {
         NotificationCenter.default.removeObserver(self)
+        observationView?.onViewportGeometryChanged = nil
+        observationView?.removeFromSuperview()
+        observationView = nil
 
         guard let hostViewController, let webView else {
             return
@@ -210,6 +215,33 @@ public final class WIWebViewViewportCoordinator: NSObject {
             scrollView.bottomEdgeEffect.isHidden = configuration.bottomEdgeEffectHidden
             scrollView.bottomEdgeEffect.style = configuration.bottomEdgeEffectStyle.uiKitStyle
         }
+    }
+
+    private func installObservationViewIfPossible() {
+        guard observationView == nil, let hostView = hostViewController?.viewIfLoaded else {
+            return
+        }
+
+        let observationView = ViewportObservationView()
+        observationView.onViewportGeometryChanged = { [weak self] in
+            self?.updateChromeState()
+        }
+        observationView.translatesAutoresizingMaskIntoConstraints = false
+        observationView.isUserInteractionEnabled = false
+        observationView.backgroundColor = .clear
+        hostView.addSubview(observationView)
+        hostView.sendSubviewToBack(observationView)
+
+        NSLayoutConstraint.activate([
+            observationView.topAnchor.constraint(equalTo: hostView.topAnchor),
+            observationView.leadingAnchor.constraint(equalTo: hostView.leadingAnchor),
+            observationView.trailingAnchor.constraint(equalTo: hostView.trailingAnchor),
+            observationView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor)
+        ])
+
+        self.observationView = observationView
+        observationView.setNeedsLayout()
+        observationView.layoutIfNeeded()
     }
 
     private func keyboardOverlapHeight() -> CGFloat {
@@ -290,6 +322,26 @@ public final class WIWebViewViewportCoordinator: NSObject {
             keyboardFrameInScreen = .null
         }
         updateChromeState()
+    }
+}
+
+@MainActor
+private final class ViewportObservationView: UIView {
+    var onViewportGeometryChanged: (() -> Void)?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onViewportGeometryChanged?()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        onViewportGeometryChanged?()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onViewportGeometryChanged?()
     }
 }
 
