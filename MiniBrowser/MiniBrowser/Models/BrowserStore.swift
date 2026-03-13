@@ -74,7 +74,6 @@ private let logger = Logger(
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isInspectable = true
 #if canImport(UIKit)
-        webView.scrollView.contentInsetAdjustmentBehavior = .always
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1"
 #else
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15"
@@ -84,10 +83,6 @@ private let logger = Logger(
         super.init()
 #if canImport(UIKit)
         configureRefreshControl()
-        webView.scrollView.topEdgeEffect.isHidden = false
-        webView.scrollView.topEdgeEffect.style = .soft
-        webView.scrollView.bottomEdgeEffect.isHidden = false
-        webView.scrollView.bottomEdgeEffect.style = .soft
 #endif
         
         webView.navigationDelegate = self

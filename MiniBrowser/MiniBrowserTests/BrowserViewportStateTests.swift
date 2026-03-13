@@ -1,5 +1,6 @@
-#if os(iOS)
+#if canImport(UIKit)
 import UIKit
+import WebInspectorKit
 import XCTest
 @testable import MiniBrowser
 

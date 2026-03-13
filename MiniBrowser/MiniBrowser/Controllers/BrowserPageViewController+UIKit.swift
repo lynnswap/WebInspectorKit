@@ -33,7 +33,7 @@ final class BrowserPageViewController: UIViewController {
     )
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
-    private var viewportCoordinator: BrowserViewportStateCoordinator?
+    private var viewportCoordinator: WIWebViewViewportCoordinator?
     private var storeObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
@@ -56,6 +56,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     isolated deinit {
+        viewportCoordinator?.invalidate()
         if let storeObserverID {
             store.removeStateObserver(storeObserverID)
         }
@@ -65,10 +66,10 @@ final class BrowserPageViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        viewportCoordinator = BrowserViewportStateCoordinator(hostView: view, webView: store.webView)
-        viewportCoordinator?.onInputMetricsChanged = { [weak self] in
-            self?.applyViewportState()
-        }
+        viewportCoordinator = WIWebViewViewportCoordinator(
+            hostViewController: self,
+            webView: store.webView
+        )
 
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
@@ -84,19 +85,19 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        applyViewportState()
+        viewportCoordinator?.handleViewDidAppear()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        applyViewportState()
+        viewportCoordinator?.updateChromeState()
     }
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        applyViewportState()
+        viewportCoordinator?.updateChromeState()
     }
 
     @objc
@@ -197,20 +198,6 @@ final class BrowserPageViewController: UIViewController {
         if launchConfiguration.shouldShowDiagnostics {
             diagnosticsPanel.update(with: store)
         }
-    }
-
-    private func applyViewportState() {
-        guard let viewportCoordinator, isViewLoaded else {
-            return
-        }
-
-        let state = viewportCoordinator.makeViewportState(
-            safeAreaInsets: view.safeAreaInsets,
-            topChromeHeight: view.safeAreaInsets.top,
-            bottomChromeHeight: view.safeAreaInsets.bottom,
-            bottomChromeMode: .normal
-        )
-        viewportCoordinator.applyViewportState(state)
     }
 
     private func maybeAutoPresentInspectorIfNeeded() {
