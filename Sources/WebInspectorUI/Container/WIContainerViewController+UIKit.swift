@@ -14,6 +14,7 @@ private protocol WIUIKitTabHost where Self: UIViewController {
 final class WIUIKitTabRenderCache {
     private var rootViewControllerByTabID: [ObjectIdentifier: UIViewController] = [:]
     private var compactTabByTabID: [ObjectIdentifier: UITab] = [:]
+    private var compactWrappedViewControllerByTabID: [ObjectIdentifier: UIViewController] = [:]
     private var modelTabIDByCompactTabID: [ObjectIdentifier: ObjectIdentifier] = [:]
 
     func rootViewController(for tab: WITab) -> UIViewController? {
@@ -37,6 +38,14 @@ final class WIUIKitTabRenderCache {
         modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] = tabID
     }
 
+    func compactWrappedViewController(for tab: WITab) -> UIViewController? {
+        compactWrappedViewControllerByTabID[ObjectIdentifier(tab)]
+    }
+
+    func setCompactWrappedViewController(_ viewController: UIViewController, for tab: WITab) {
+        compactWrappedViewControllerByTabID[ObjectIdentifier(tab)] = viewController
+    }
+
     func modelTab(for compactTab: UITab, among tabs: [WITab]) -> WITab? {
         guard let modelTabID = modelTabIDByCompactTabID[ObjectIdentifier(compactTab)] else {
             return nil
@@ -44,10 +53,17 @@ final class WIUIKitTabRenderCache {
         return tabs.first(where: { ObjectIdentifier($0) == modelTabID })
     }
 
-    func prune(activeTabs: [WITab]) {
-        let activeTabIDs = Set(activeTabs.map { ObjectIdentifier($0) })
-        rootViewControllerByTabID = rootViewControllerByTabID.filter { activeTabIDs.contains($0.key) }
-        compactTabByTabID = compactTabByTabID.filter { activeTabIDs.contains($0.key) }
+    func prune(rootTabs: [WITab], compactTabs: [WITab], compactWrappedTabs: [WITab]) {
+        let retainedRootTabIDs = Set(rootTabs.map(ObjectIdentifier.init))
+        rootViewControllerByTabID = rootViewControllerByTabID.filter { retainedRootTabIDs.contains($0.key) }
+
+        let retainedCompactTabIDs = Set(compactTabs.map(ObjectIdentifier.init))
+        compactTabByTabID = compactTabByTabID.filter { retainedCompactTabIDs.contains($0.key) }
+
+        let retainedCompactWrappedTabIDs = Set(compactWrappedTabs.map(ObjectIdentifier.init))
+        compactWrappedViewControllerByTabID = compactWrappedViewControllerByTabID.filter {
+            retainedCompactWrappedTabIDs.contains($0.key)
+        }
 
         let activeCompactTabIDs = Set(compactTabByTabID.values.map { ObjectIdentifier($0) })
         modelTabIDByCompactTabID = modelTabIDByCompactTabID.filter { activeCompactTabIDs.contains($0.key) }
@@ -56,11 +72,7 @@ final class WIUIKitTabRenderCache {
     func resetAll() {
         rootViewControllerByTabID.removeAll()
         compactTabByTabID.removeAll()
-        modelTabIDByCompactTabID.removeAll()
-    }
-
-    func resetCompactTabs() {
-        compactTabByTabID.removeAll()
+        compactWrappedViewControllerByTabID.removeAll()
         modelTabIDByCompactTabID.removeAll()
     }
 }
@@ -75,6 +87,7 @@ public final class WIContainerViewController: UIViewController {
     public private(set) var sessionController: WISessionController
 
     private var requestedTabs: [WITab]
+    private let synthesizedCompactElementTab = WITab.element()
     private let renderCache = WIUIKitTabRenderCache()
     private var sessionObservationHandles: Set<ObservationHandle> = []
     private var panelConfigurationObserverID: UUID?
@@ -190,7 +203,7 @@ public final class WIContainerViewController: UIViewController {
     }
 
     var resolvedTabIDsForTesting: [String] {
-        requestedTabs.map(\.identifier)
+        displayTabsForCurrentState().map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -246,22 +259,20 @@ public final class WIContainerViewController: UIViewController {
     }
 
     private func rebuildLayout(forceHostReplacement: Bool = false) {
-        renderCache.prune(activeTabs: requestedTabs)
-
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
-
-        if activeHostKind == .compact, targetHostKind == .regular {
-            // Compact UITab closures retain wrapped controllers; drop only compact caches
-            // so regular host can reuse the shared root cache without cross-stack leakage.
-            renderCache.resetCompactTabs()
-        }
+        let displayTabs = displayTabsForCurrentState()
+        renderCache.prune(
+            rootTabs: retainedRootTabs(for: displayTabs, targetHostKind: targetHostKind),
+            compactTabs: retainedCompactTabs(for: displayTabs, targetHostKind: targetHostKind),
+            compactWrappedTabs: retainedCompactWrappedTabs(for: displayTabs, targetHostKind: targetHostKind)
+        )
 
         if forceHostReplacement || activeHostKind != targetHostKind {
-            installHost(of: targetHostKind)
+            installHost(of: targetHostKind, tabs: displayTabs)
         }
     }
 
-    private func installHost(of kind: HostKind) {
+    private func installHost(of kind: HostKind, tabs: [WITab]) {
         if let activeHost {
             activeHost.prepareForRemoval()
             activeHost.willMove(toParent: nil)
@@ -274,13 +285,13 @@ public final class WIContainerViewController: UIViewController {
         case .compact:
             host = WICompactTabHostViewController(
                 model: sessionController,
-                tabs: requestedTabs,
+                tabs: tabs,
                 renderCache: renderCache
             )
         case .regular:
             host = WIRegularTabHostViewController(
                 model: sessionController,
-                tabs: requestedTabs,
+                tabs: tabs,
                 renderCache: renderCache
             )
         }
@@ -302,6 +313,72 @@ public final class WIContainerViewController: UIViewController {
 
     private func handleHorizontalSizeClassChange() {
         rebuildLayout()
+    }
+
+    private func displayTabsForCurrentState() -> [WITab] {
+        guard effectiveHorizontalSizeClass == .compact else {
+            return requestedTabs.filter { $0.panelKind != .domDetail }
+        }
+
+        guard shouldSynthesizeCompactElementTab else {
+            return requestedTabs
+        }
+
+        var compactTabs = requestedTabs
+        if let domIndex = compactTabs.firstIndex(where: { $0.panelKind == .domTree }) {
+            compactTabs.insert(synthesizedCompactElementTab, at: domIndex + 1)
+        } else {
+            compactTabs.append(synthesizedCompactElementTab)
+        }
+        return compactTabs
+    }
+
+    private var hiddenExplicitElementTabsForCaching: [WITab] {
+        requestedTabs.filter { $0.panelKind == .domDetail }
+    }
+
+    private var shouldSynthesizeCompactElementTab: Bool {
+        let hasDOMTab = requestedTabs.contains { $0.panelKind == .domTree }
+        let hasElementTab = requestedTabs.contains { $0.panelKind == .domDetail }
+        return hasDOMTab && hasElementTab == false
+    }
+
+    private func retainedCompactTabs(for displayTabs: [WITab], targetHostKind: HostKind) -> [WITab] {
+        switch targetHostKind {
+        case .compact:
+            return displayTabs
+        case .regular:
+            return []
+        }
+    }
+
+    private func retainedCompactWrappedTabs(for displayTabs: [WITab], targetHostKind: HostKind) -> [WITab] {
+        switch targetHostKind {
+        case .compact:
+            return displayTabs
+        case .regular:
+            return hiddenExplicitElementTabsForCaching
+        }
+    }
+
+    private func retainedRootTabs(for displayTabs: [WITab], targetHostKind: HostKind) -> [WITab] {
+        var retainedTabs = requestedTabs
+        var retainedTabIDs = Set(retainedTabs.map(ObjectIdentifier.init))
+
+        for tab in displayTabs where retainedTabIDs.contains(ObjectIdentifier(tab)) == false {
+            retainedTabs.append(tab)
+            retainedTabIDs.insert(ObjectIdentifier(tab))
+        }
+
+        // Keep hidden Element tabs alive across size-class switches so UIKit can
+        // reuse their cached stacks when compact mode becomes active again.
+        for tab in retainedCompactWrappedTabs(for: displayTabs, targetHostKind: targetHostKind)
+            where retainedTabIDs.contains(ObjectIdentifier(tab)) == false {
+            retainedTabs.append(tab)
+            retainedTabIDs.insert(ObjectIdentifier(tab))
+        }
+
+        return retainedTabs
     }
 
     func makeTabRootViewController(for tab: WITab) -> UIViewController? {

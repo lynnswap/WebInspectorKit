@@ -6,7 +6,7 @@ import WebInspectorCore
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
     private let model: WISessionController
-    private let requestedTabs: [WITab]
+    private let displayTabs: [WITab]
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
@@ -14,7 +14,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     private let placeholderViewController: UIViewController
 
     private var tabs: [WITab] {
-        requestedTabs.filter { $0.panelKind != .domDetail }
+        displayTabs
     }
 
     private lazy var segmentedControl: UISegmentedControl = {
@@ -26,7 +26,7 @@ final class WIRegularTabHostViewController: UINavigationController {
 
     init(model: WISessionController, tabs: [WITab], renderCache: WIUIKitTabRenderCache) {
         self.model = model
-        requestedTabs = tabs
+        displayTabs = tabs
         self.renderCache = renderCache
         let placeholder = UIViewController()
         placeholder.navigationItem.title = ""
@@ -97,7 +97,6 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func rebuildLayout() {
-        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         rebuildSegmentedControl(selectedTab: selectedTab)
@@ -106,7 +105,6 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func applySelectedTabProjection() {
-        renderCache.prune(activeTabs: tabs)
         normalizeModelSelectionToDisplayedTabIfNeeded()
         let selectedTab = selectedTabForDisplay()
         selectSegment(for: selectedTab)

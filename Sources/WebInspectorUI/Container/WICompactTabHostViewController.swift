@@ -6,14 +6,14 @@ import WebInspectorCore
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
     private let model: WISessionController
-    private let requestedTabs: [WITab]
+    private let displayTabs: [WITab]
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
     init(model: WISessionController, tabs: [WITab], renderCache: WIUIKitTabRenderCache) {
         self.model = model
-        requestedTabs = tabs
+        displayTabs = tabs
         self.renderCache = renderCache
         super.init(nibName: nil, bundle: nil)
     }
@@ -38,6 +38,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     func prepareForRemoval() {
         delegate = nil
         tabObservationHandles.removeAll()
+        // Release UITab closures before another compact host reuses cached roots.
+        setTabs([], animated: false)
     }
 
     var displayedTabIdentifiersForTesting: [String] {
@@ -64,8 +66,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func rebuildNativeTabsIfPossible() {
-        renderCache.prune(activeTabs: requestedTabs)
-        let desiredTabs = requestedTabs.map { makeNativeTab(for: $0) }
+        let desiredTabs = displayTabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
         syncNativeSelection(with: model.selectedPanelConfiguration)
     }
@@ -95,7 +96,10 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
 
         let contentViewController = makeTabRootViewController(for: tab) ?? UIViewController()
-        let wrappedViewController = wrappedInNavigationControllerIfNeeded(contentViewController)
+        let wrappedViewController =
+            renderCache.compactWrappedViewController(for: tab)
+            ?? wrappedInNavigationControllerIfNeeded(contentViewController)
+        renderCache.setCompactWrappedViewController(wrappedViewController, for: tab)
         let nativeTab = UITab(
             title: tab.title,
             image: tab.image,
@@ -159,25 +163,25 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         from requestedPanelConfiguration: WIPanelConfiguration?
     ) -> WITab? {
         guard let requestedPanelConfiguration else {
-            return requestedTabs.first
+            return displayTabs.first
         }
-        if let exactMatch = requestedTabs.first(where: { $0.configuration == requestedPanelConfiguration }) {
+        if let exactMatch = displayTabs.first(where: { $0.configuration == requestedPanelConfiguration }) {
             return exactMatch
         }
-        let identifierMatches = requestedTabs.filter {
+        let identifierMatches = displayTabs.filter {
             $0.configuration.identifier == requestedPanelConfiguration.identifier
         }
         if identifierMatches.count == 1, let identifierMatch = identifierMatches.first {
             return identifierMatch
         }
-        return requestedTabs.first
+        return displayTabs.first
     }
 
     private func resolveModelTab(for nativeTab: UITab) -> WITab? {
-        if let exactMatch = renderCache.modelTab(for: nativeTab, among: requestedTabs) {
+        if let exactMatch = renderCache.modelTab(for: nativeTab, among: displayTabs) {
             return exactMatch
         }
-        let identifierMatches = requestedTabs.filter { $0.identifier == nativeTab.identifier }
+        let identifierMatches = displayTabs.filter { $0.identifier == nativeTab.identifier }
         if identifierMatches.count == 1 {
             return identifierMatches.first
         }
