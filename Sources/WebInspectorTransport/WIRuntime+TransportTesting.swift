@@ -31,22 +31,4 @@ package extension WINetworkRuntime {
             )
         )
     }
-
-    convenience init(
-        configuration: NetworkConfiguration = .init(),
-        bodyFetcher: any NetworkBodyFetching,
-        defaultTransportSupportSnapshot: WITransportSupportSnapshot
-    ) {
-        if defaultTransportSupportSnapshot.isSupported {
-            self.init(
-                configuration: configuration,
-                backend: WIBackendFactory.makeNetworkBackend(
-                    configuration: configuration,
-                    supportSnapshot: defaultTransportSupportSnapshot
-                )
-            )
-        } else {
-            self.init(configuration: configuration, bodyFetcher: bodyFetcher)
-        }
-    }
 }

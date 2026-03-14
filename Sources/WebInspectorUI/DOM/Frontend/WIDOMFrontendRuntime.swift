@@ -431,14 +431,6 @@ private extension WIDOMFrontendRuntime {
                     }
                     return
                 }
-
-                let fallbackJSON = outcome.responseJSON
-                    ?? protocolRouter.fallbackJSONResponse(forObjectResponse: responseObject)
-                guard let responseJSON = fallbackJSON else {
-                    return
-                }
-                inspectorLogger.debug("retrying protocol response dispatch with JSON fallback")
-                _ = await dispatchToFrontend(message: responseJSON)
                 return
             }
             guard let responseJSON = outcome.responseJSON else {

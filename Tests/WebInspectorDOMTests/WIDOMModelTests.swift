@@ -755,7 +755,7 @@ private final class StubDOMPageDriver: WIDOMBackend {
     private(set) weak var webView: WKWebView?
     let support = WIBackendSupport(
         availability: .unsupported,
-        backendKind: .legacy,
+        backendKind: .unsupported,
         capabilities: [.domDomain]
     )
 

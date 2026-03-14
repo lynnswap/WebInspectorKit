@@ -112,9 +112,6 @@ final class DOMProtocolRouter {
         }
     }
 
-    func fallbackJSONResponse(forObjectResponse responseObject: [String: Any]) -> String? {
-        fallbackJSONResponseImpl(forObjectResponse: responseObject)
-    }
 }
 
 private extension DOMProtocolRouter {
@@ -337,14 +334,6 @@ private extension DOMProtocolRouter {
         )
     }
 
-    func fallbackJSONResponseImpl(forObjectResponse responseObject: [String: Any]) -> String? {
-        let identifier = parseIdentifierValue(responseObject["id"]) ?? 0
-        if let errorMessage = extractErrorMessage(from: responseObject["error"]) {
-            return makeJSONResponse(id: identifier, result: nil, errorMessage: errorMessage)
-        }
-        return makeJSONResponse(id: identifier, result: responseObject["result"], errorMessage: nil)
-    }
-
     func jsonValue(from value: Any?) -> JSONValue? {
         guard let value else {
             return .null
@@ -371,9 +360,6 @@ private extension DOMProtocolRouter {
         }
 
         if let dictionary = resolved as? [String: Any] {
-            if isSerializedNodeEnvelope(dictionary), let fallback = dictionary["fallback"] {
-                return jsonValue(from: fallback)
-            }
             var converted: [String: JSONValue] = [:]
             converted.reserveCapacity(dictionary.count)
             for (key, value) in dictionary {
@@ -424,13 +410,6 @@ private extension DOMProtocolRouter {
             return dictionary["message"] as? String
         }
         return nil
-    }
-
-    func isSerializedNodeEnvelope(_ dictionary: [String: Any]) -> Bool {
-        guard let type = dictionary["type"] as? String else {
-            return false
-        }
-        return type == "serialized-node-envelope"
     }
 
     func unwrapOptional(_ value: Any) -> Any {
@@ -485,10 +464,6 @@ private extension DOMProtocolRouter.JSONValue {
 extension DOMProtocolRouter {
     func testMakeJSONResponse(id: Int, result: Any?, errorMessage: String?) -> String? {
         makeJSONResponse(id: id, result: result, errorMessage: errorMessage)
-    }
-
-    func testFallbackJSONResponse(forObjectResponse responseObject: [String: Any]) -> String? {
-        fallbackJSONResponse(forObjectResponse: responseObject)
     }
 }
 #endif

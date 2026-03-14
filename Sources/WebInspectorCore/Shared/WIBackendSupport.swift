@@ -3,9 +3,6 @@ import Foundation
 public enum WIBackendKind: String, Sendable {
     case nativeInspectorIOS
     case nativeInspectorMacOS
-    case privateCore
-    case privateFull
-    case legacy
     case unsupported
 }
 

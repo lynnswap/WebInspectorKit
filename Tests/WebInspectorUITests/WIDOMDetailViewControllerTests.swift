@@ -162,7 +162,7 @@ private final class AppKitDetailRecoveryPageDriver: WIDOMBackend {
     private(set) weak var webView: WKWebView?
     let support = WIBackendSupport(
         availability: .unsupported,
-        backendKind: .legacy,
+        backendKind: .unsupported,
         capabilities: [.domDomain]
     )
 
@@ -566,7 +566,7 @@ private final class UIKitDetailRecoveryPageDriver: WIDOMBackend {
     private(set) weak var webView: WKWebView?
     let support = WIBackendSupport(
         availability: .unsupported,
-        backendKind: .legacy,
+        backendKind: .unsupported,
         capabilities: [.domDomain]
     )
 

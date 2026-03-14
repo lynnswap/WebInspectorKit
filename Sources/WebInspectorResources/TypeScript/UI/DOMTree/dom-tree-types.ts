@@ -1,9 +1,6 @@
 /**
  * Core type definitions for DOMTreeView module.
  */
-import { WI_DOM_SNAPSHOT_SCHEMA_VERSION } from "../../Contracts/agent-contract";
-
-export const DOM_SNAPSHOT_SCHEMA_VERSION = WI_DOM_SNAPSHOT_SCHEMA_VERSION;
 
 // =============================================================================
 // Node Types
@@ -69,19 +66,9 @@ export interface RawNodeDescriptor {
     isRendered?: boolean;
 }
 
-/** Private serialized node envelope payload */
-export interface SerializedNodeEnvelope {
-    type?: "serialized-node-envelope";
-    schemaVersion?: number;
-    node?: unknown;
-    fallback?: RawNodeDescriptor | DOMSnapshotEnvelopePayload | null;
-    selectedNodeId?: number | null;
-    selectedNodePath?: number[] | null;
-}
-
-/** Snapshot payload shape used by protocol and private envelope fallback */
+/** Snapshot payload shape used by protocol */
 export interface DOMSnapshotEnvelopePayload {
-    root?: RawNodeDescriptor | SerializedNodeEnvelope | null;
+    root?: RawNodeDescriptor | null;
     selectedNodeId?: number | null;
     selectedNodePath?: number[] | null;
 }
@@ -319,7 +306,7 @@ export interface SelectorPathResponse {
 export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
-    snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
+    snapshot?: string | RawNodeDescriptor | DOMSnapshotEnvelopePayload | null;
     events?: ProtocolMessage[];
     bundle?: string | MutationBundle;
     preserveState?: boolean;

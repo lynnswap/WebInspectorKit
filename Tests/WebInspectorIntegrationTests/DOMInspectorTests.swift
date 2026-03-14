@@ -191,17 +191,11 @@ struct DOMInspectorTests {
     }
 
     @Test
-    func reloadInspectorLoadsTreeRowsWhenTransportIsUnsupported() async {
+    func reloadInspectorPublishesErrorWhenTransportIsUnsupported() async {
         await withWebKitTestIsolation {
             let controller = WISessionController(
-                domSession: WIDOMRuntime(
-                    configuration: .init(),
-                    defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-                ),
-                networkSession: WINetworkRuntime(
-                    configuration: .init(),
-                    defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-                )
+                domSession: WIDOMRuntime(configuration: .init()),
+                networkSession: WINetworkRuntime(configuration: .init())
             )
             let store = controller.domStore
             let webView = makeTestWebView()
@@ -222,10 +216,10 @@ struct DOMInspectorTests {
 
             await store.reloadFrontend()
 
-            #expect(await waitForTreeRowsToLoad(in: store))
-            #expect(store.backendSupport.isSupported)
-            #expect(store.treeRows.count > 0)
-            #expect(store.session.graphStore.rootID != nil)
+            #expect(store.backendSupport.isSupported == false)
+            #expect(store.treeRows.isEmpty)
+            #expect(store.session.graphStore.rootID == nil)
+            #expect(store.errorMessage?.isEmpty == false)
         }
     }
 
@@ -278,72 +272,6 @@ struct DOMInspectorTests {
         }
     }
 
-    @Test
-    func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async {
-        await withWebKitTestIsolation {
-            let controller = makeLegacyController()
-            let store = controller.domStore
-            let webView = makeTestWebView()
-            let undoManager = UndoManager()
-            let deleteEvents = AsyncValueQueue<WIDOMStore.DeleteMutationEvent>()
-            let html = """
-            <html>
-                <body>
-                    <div id="first">First</div>
-                    <div id="second">Second</div>
-                </body>
-            </html>
-            """
-
-            store.attach(to: webView)
-            await loadHTML(html, in: webView)
-            await store.reloadFrontend()
-            #expect(await waitForTreeRowsToLoad(in: store))
-            store.onDeleteMutationForTesting = { event in
-                Task {
-                    await deleteEvents.push(event)
-                }
-            }
-
-            guard let firstNodeID = findNodeId(
-                in: store.session.graphStore,
-                attributeName: "id",
-                attributeValue: "first"
-            ),
-            let secondNodeID = findNodeId(
-                in: store.session.graphStore,
-                attributeName: "id",
-                attributeValue: "second"
-            )
-            else {
-                Issue.record("target nodes were not found in graph store")
-                return
-            }
-
-            store.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-            let firstDelete = await deleteEvents.next()
-            #expect(firstDelete == .removed(nodeId: firstNodeID))
-            #expect(await domNodeExists(withID: "first", in: webView) == false)
-
-            store.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
-            let secondDelete = await deleteEvents.next()
-            #expect(secondDelete == .removed(nodeId: secondNodeID))
-            #expect(await domNodeExists(withID: "second", in: webView) == false)
-
-            undoManager.undo()
-            let secondRestore = await deleteEvents.next()
-            #expect(secondRestore == .restored(nodeId: secondNodeID))
-            #expect(await domNodeExists(withID: "second", in: webView))
-            #expect(await domNodeExists(withID: "first", in: webView) == false)
-
-            undoManager.undo()
-            let firstRestore = await deleteEvents.next()
-            #expect(firstRestore == .restored(nodeId: firstNodeID))
-            #expect(await domNodeExists(withID: "first", in: webView))
-            #expect(await domNodeExists(withID: "second", in: webView) == true)
-        }
-    }
-
     private func makeTestWebView() -> WKWebView {
         makeIsolatedTestWebView()
     }
@@ -373,19 +301,6 @@ struct DOMInspectorTests {
         )
     }
 
-    private func makeLegacyController() -> WISessionController {
-        WISessionController(
-            domSession: WIDOMRuntime(
-                configuration: .init(),
-                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-            ),
-            networkSession: WINetworkRuntime(
-                configuration: .init(),
-                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-            )
-        )
-    }
-
     private func loadHTML(_ html: String, in webView: WKWebView) async {
         let navigationDelegate = NavigationDelegate()
         webView.navigationDelegate = navigationDelegate
@@ -394,16 +309,6 @@ struct DOMInspectorTests {
             navigationDelegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: nil)
         }
-    }
-
-    private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
-            "return document.getElementById(identifier) !== null;",
-            arguments: ["identifier": id],
-            in: nil,
-            contentWorld: .page
-        )
-        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
 
     private func findNodeId(
@@ -483,15 +388,6 @@ private func waitForTreeRowsToLoad(
     return store.treeRows.isEmpty == false && store.session.graphStore.rootID != nil
 }
 
-
-private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
-    WITransportSupportSnapshot(
-        availability: .unsupported,
-        backendKind: .unsupported,
-        capabilities: [],
-        failureReason: "unsupported for test"
-    )
-}
 
 @MainActor
 private final class NoopBodyFetcher: NetworkBodyFetching {

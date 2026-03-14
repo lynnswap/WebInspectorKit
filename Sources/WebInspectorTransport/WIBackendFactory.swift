@@ -8,16 +8,10 @@ package enum WIBackendFactory {
         supportSnapshot: WITransportSupportSnapshot? = nil
     ) -> any WIDOMBackend {
         let resolvedSupport = supportSnapshot ?? WITransportSession().supportSnapshot
-        if resolvedSupport.isSupported {
-            return DOMTransportDriver(
-                configuration: configuration,
-                graphStore: graphStore,
-                initialSupport: resolvedSupport.backendSupport
-            )
-        }
-        return DOMLegacyPageDriver(
+        return DOMTransportDriver(
             configuration: configuration,
-            graphStore: graphStore
+            graphStore: graphStore,
+            initialSupport: resolvedSupport.backendSupport
         )
     }
 
@@ -26,11 +20,8 @@ package enum WIBackendFactory {
         supportSnapshot: WITransportSupportSnapshot? = nil
     ) -> any WINetworkBackend {
         let resolvedSupport = supportSnapshot ?? WITransportSession().supportSnapshot
-        if resolvedSupport.isSupported {
-            return NetworkTransportDriver(
-                initialSupport: resolvedSupport.backendSupport
-            )
-        }
-        return NetworkLegacyPageDriver()
+        return NetworkTransportDriver(
+            initialSupport: resolvedSupport.backendSupport
+        )
     }
 }

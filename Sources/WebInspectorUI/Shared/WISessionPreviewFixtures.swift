@@ -25,7 +25,7 @@ private final class PreviewNetworkBackend: WINetworkBackend {
     let store = NetworkStore()
     let support = WIBackendSupport(
         availability: .supported,
-        backendKind: .legacy,
+        backendKind: .nativeInspectorIOS,
         capabilities: [.networkDomain]
     )
 

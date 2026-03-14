@@ -1,7 +1,6 @@
 import {inspector, type AnyNode, type SelectionState} from "./dom-agent-state";
 import {computeNodePath} from "./dom-agent-dom-core";
 import {clearHighlight, highlightSelectionNode} from "./dom-agent-overlay";
-import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
 
 type SelectionResult = {
     cancelled: boolean;
@@ -9,56 +8,6 @@ type SelectionResult = {
 };
 
 type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
-
-function isASCIIWhitespaceTextNode(node: AnyNode | null) {
-    return !!node
-        && node.nodeType === Node.TEXT_NODE
-        && typeof node.nodeValue === "string"
-        && /^[\t\n\f\r ]*$/.test(node.nodeValue);
-}
-
-function inspectorCompatibleChildIndex(parent: ParentNode, child: AnyNode) {
-    var visibleIndex = 0;
-    for (var index = 0; index < parent.childNodes.length; index += 1) {
-        var sibling = parent.childNodes[index] as AnyNode;
-        if (isASCIIWhitespaceTextNode(sibling)) {
-            continue;
-        }
-        if (sibling === child) {
-            return visibleIndex;
-        }
-        visibleIndex += 1;
-    }
-    return -1;
-}
-
-function computeInspectorCompatibleNodePath(node: AnyNode | null) {
-    if (!node) {
-        return null;
-    }
-    var root = document.documentElement || document.body;
-    if (!root) {
-        return null;
-    }
-    var current: AnyNode | null = node;
-    var path: number[] = [];
-    while (current && current !== root) {
-        var parent = current.parentNode;
-        if (!parent) {
-            return null;
-        }
-        var index = inspectorCompatibleChildIndex(parent, current);
-        if (index < 0) {
-            return null;
-        }
-        path.unshift(index);
-        current = parent as AnyNode | null;
-    }
-    if (current !== root) {
-        return null;
-    }
-    return path;
-}
 
 function normalizeSelectionTarget(target: AnyNode | null) {
     var current = target;
@@ -165,7 +114,6 @@ export function startElementSelection() {
         };
         inspector.selectionState = state;
 
-        suppressSnapshotAutoUpdate("selection");
         enableSelectionCursor();
         installWindowClickBlocker();
 
@@ -193,7 +141,6 @@ export function startElementSelection() {
             restoreSelectionCursor();
             scheduleWindowClickBlockerRelease();
             inspector.selectionState = null;
-            resumeSnapshotAutoUpdate("selection");
             resolve(payload);
         }
 
@@ -211,7 +158,7 @@ export function startElementSelection() {
                 cancelSelection();
                 return;
             }
-            var path = computeInspectorCompatibleNodePath(node) || computeNodePath(node);
+            var path = computeNodePath(node);
             if (!path) {
                 cancelSelection();
                 return;
