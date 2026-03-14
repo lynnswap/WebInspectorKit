@@ -203,3 +203,17 @@ package struct WITransportPageTargetChange: Sendable {
     let targetIdentifier: String?
     let reason: String
 }
+
+package enum WITransportPageTargetLifecycleKind: Sendable, Equatable {
+    case created
+    case committedProvisional
+    case destroyed
+}
+
+package struct WITransportPageTargetLifecycleEvent: Sendable, Equatable {
+    let kind: WITransportPageTargetLifecycleKind
+    let targetIdentifier: String
+    let oldTargetIdentifier: String?
+    let targetType: String
+    let isProvisional: Bool
+}

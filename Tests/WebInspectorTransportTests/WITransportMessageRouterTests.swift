@@ -186,6 +186,68 @@ struct WITransportMessageRouterTests {
     }
 
     @Test
+    func pageTargetLifecycleStreamIncludesProvisionalCreation() async throws {
+        let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
+        let stream = await router.pageTargetLifecycles(bufferingLimit: 4)
+        let iterator = IteratorBox(stream: stream)
+
+        await router.handleIncomingRootMessage(
+            Self.jsonString([
+                "method": "Target.targetCreated",
+                "params": [
+                    "targetInfo": [
+                        "targetId": "page-provisional",
+                        "type": "page",
+                        "isProvisional": true,
+                    ],
+                ],
+            ])
+        )
+
+        let event = try await Self.nextValue(from: iterator)
+        #expect(event?.kind == .created)
+        #expect(event?.targetIdentifier == "page-provisional")
+        #expect(event?.targetType == "page")
+        #expect(event?.isProvisional == true)
+    }
+
+    @Test
+    func explicitTargetPageCommandsDoNotRequireCurrentPageTarget() async throws {
+        let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
+        let recorder = PageDispatchRecorder()
+
+        await router.connect(
+            rootDispatcher: { _ in },
+            pageDispatcher: { [router, recorder] message, targetIdentifier, _ in
+                await recorder.record(targetIdentifier: targetIdentifier)
+                let identifier = try Self.identifier(from: message)
+                Task {
+                    await router.handleIncomingPageMessage(
+                        Self.jsonString([
+                            "id": identifier,
+                            "result": ["targetIdentifier": targetIdentifier],
+                        ]),
+                        targetIdentifier: targetIdentifier
+                    )
+                }
+            }
+        )
+
+        let response = try JSONDecoder().decode(
+            TargetEcho.self,
+            from: try await router.send(
+                scope: .page,
+                method: "Network.enable",
+                parametersData: nil,
+                targetIdentifierOverride: "page-provisional"
+            )
+        )
+
+        #expect(response.targetIdentifier == "page-provisional")
+        #expect(await recorder.snapshot() == ["page-provisional"])
+    }
+
+    @Test
     func eventSubscriptionsSkipNonMatchingMethods() async throws {
         let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
         let stream = await router.events(

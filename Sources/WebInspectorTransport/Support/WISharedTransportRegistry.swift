@@ -138,6 +138,7 @@ package final class WISharedTransportRegistry {
         private var domIngressTask: Task<Void, Error>?
         private var networkIngressReady = false
         private var domIngressReady = false
+        private var networkEnabledTargetIdentifiers: Set<String> = []
         var onNetworkIngressReadyForTesting: (@MainActor () -> Void)?
         var onDOMIngressReadyForTesting: (@MainActor () -> Void)?
 
@@ -226,6 +227,7 @@ package final class WISharedTransportRegistry {
                 networkIngressReady = false
                 networkEventTask?.cancel()
                 networkEventTask = nil
+                networkEnabledTargetIdentifiers.removeAll()
             }
         }
 
@@ -256,6 +258,7 @@ package final class WISharedTransportRegistry {
             domIngressTask = nil
             networkIngressReady = false
             domIngressReady = false
+            networkEnabledTargetIdentifiers.removeAll()
             networkEventTask?.cancel()
             networkEventTask = nil
             domEventTask?.cancel()
@@ -291,14 +294,14 @@ package final class WISharedTransportRegistry {
                 pageTargetLifecycleSubscriptionPending = false
             }
 
-            let pageTargetChangeStream = await self.transportSession.pageTargetChangeStream()
+            let pageTargetLifecycleStream = await self.transportSession.pageTargetLifecycleStream()
 
             pageTargetLifecycleTask = Task { @MainActor [weak self] in
                 guard let self else {
                     return
                 }
 
-                for await event in pageTargetChangeStream {
+                for await event in pageTargetLifecycleStream {
                     if Task.isCancelled {
                         break
                     }
@@ -326,12 +329,12 @@ package final class WISharedTransportRegistry {
                     return
                 }
                 try await self.ensureAttached()
-                _ = try await self.transportSession.page.send(WITransportCommands.Network.Enable())
                 let stream = await self.transportSession.eventStream(
                     scope: .page,
                     methods: WISharedTransportRegistry.networkEventMethods,
                     bufferingLimit: nil
                 )
+                try await self.enableNetworkDomainOnCurrentTargetIfNeeded()
                 self.networkIngressReady = true
                 self.startNetworkEventLoop(with: stream)
                 self.onNetworkIngressReadyForTesting?()
@@ -363,18 +366,18 @@ package final class WISharedTransportRegistry {
                     return
                 }
                 try await self.ensureAttached()
-                do {
-                    _ = try await self.transportSession.page.send(WITransportCommands.DOM.Enable())
-                } catch let error as WITransportError {
-                    guard self.shouldIgnoreMissingDOMEnable(error) else {
-                        throw error
-                    }
-                }
                 let stream = await self.transportSession.eventStream(
                     scope: .page,
                     methods: WISharedTransportRegistry.domEventMethods,
                     bufferingLimit: nil
                 )
+                do {
+                    try await self.enableDOMDomainOnCurrentTargetIfNeeded()
+                } catch let error as WITransportError {
+                    guard self.shouldIgnoreMissingDOMEnable(error) else {
+                        throw error
+                    }
+                }
                 self.domIngressReady = true
                 self.startDOMEventLoop(with: stream)
                 self.onDOMIngressReadyForTesting?()
@@ -413,6 +416,7 @@ package final class WISharedTransportRegistry {
                 }
 
                 self.networkIngressReady = false
+                self.networkEnabledTargetIdentifiers.removeAll()
                 self.networkEventTask = nil
                 self.restartNetworkIngressIfNeeded()
             }
@@ -473,11 +477,18 @@ package final class WISharedTransportRegistry {
             }
         }
 
-        private func handlePageTargetLifecycleEvent(_ event: WITransportPageTargetChange) async {
-            _ = event
+        private func handlePageTargetLifecycleEvent(_ event: WITransportPageTargetLifecycleEvent) async {
+            guard event.targetType == "page" else {
+                return
+            }
+
+            if event.kind == .destroyed {
+                networkEnabledTargetIdentifiers.remove(event.targetIdentifier)
+            }
+
             if !networkConsumers.isEmpty {
                 do {
-                    _ = try await self.transportSession.page.send(WITransportCommands.Network.Enable())
+                    try await self.handleNetworkPageTargetLifecycleEvent(event)
                 } catch {
                     guard shouldIgnorePageTargetLifecycleError(error) else {
                         return
@@ -487,7 +498,7 @@ package final class WISharedTransportRegistry {
 
             if !domConsumers.isEmpty {
                 do {
-                    _ = try await self.transportSession.page.send(WITransportCommands.DOM.Enable())
+                    try await self.handleDOMPageTargetLifecycleEvent(event)
                 } catch let error as WITransportError {
                     guard shouldIgnoreMissingDOMEnable(error) || shouldIgnorePageTargetLifecycleError(error) else {
                         return
@@ -498,6 +509,70 @@ package final class WISharedTransportRegistry {
                     }
                 }
             }
+        }
+
+        private func handleNetworkPageTargetLifecycleEvent(
+            _ event: WITransportPageTargetLifecycleEvent
+        ) async throws {
+            switch event.kind {
+            case .created, .committedProvisional:
+                try await enableNetworkDomainIfNeeded(on: event.targetIdentifier)
+            case .destroyed:
+                try await enableNetworkDomainOnCurrentTargetIfNeeded()
+            }
+        }
+
+        private func handleDOMPageTargetLifecycleEvent(
+            _ event: WITransportPageTargetLifecycleEvent
+        ) async throws {
+            switch event.kind {
+            case .created:
+                guard !event.isProvisional else {
+                    return
+                }
+                try await enableDOMDomainOnCurrentTargetIfNeeded(matching: event.targetIdentifier)
+            case .committedProvisional:
+                try await enableDOMDomainOnCurrentTargetIfNeeded(matching: event.targetIdentifier)
+            case .destroyed:
+                try await enableDOMDomainOnCurrentTargetIfNeeded()
+            }
+        }
+
+        private func enableNetworkDomainOnCurrentTargetIfNeeded() async throws {
+            if let targetIdentifier = await transportSession.currentPageTargetIdentifier() {
+                try await enableNetworkDomainIfNeeded(on: targetIdentifier)
+                return
+            }
+
+            _ = try await transportSession.page.send(WITransportCommands.Network.Enable())
+        }
+
+        private func enableNetworkDomainIfNeeded(on targetIdentifier: String) async throws {
+            guard networkEnabledTargetIdentifiers.contains(targetIdentifier) == false else {
+                return
+            }
+
+            _ = try await transportSession.sendPage(
+                WITransportCommands.Network.Enable(),
+                targetIdentifier: targetIdentifier
+            )
+            networkEnabledTargetIdentifiers.insert(targetIdentifier)
+        }
+
+        private func enableDOMDomainOnCurrentTargetIfNeeded(
+            matching expectedTargetIdentifier: String? = nil
+        ) async throws {
+            guard let targetIdentifier = await transportSession.currentPageTargetIdentifier() else {
+                return
+            }
+            if let expectedTargetIdentifier, expectedTargetIdentifier != targetIdentifier {
+                return
+            }
+
+            _ = try await transportSession.sendPage(
+                WITransportCommands.DOM.Enable(),
+                targetIdentifier: targetIdentifier
+            )
         }
 
         private func publish(

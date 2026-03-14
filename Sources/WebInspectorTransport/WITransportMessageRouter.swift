@@ -51,6 +51,7 @@ actor WITransportMessageRouter {
 
     private var subscriptions: [UUID: EventSubscription] = [:]
     private var pageTargetChangeSubscriptions: [UUID: AsyncStream<WITransportPageTargetChange>.Continuation] = [:]
+    private var pageTargetLifecycleSubscriptions: [UUID: AsyncStream<WITransportPageTargetLifecycleEvent>.Continuation] = [:]
     private var backlogs: [WITransportTargetScope: [WITransportEventEnvelope]] = [:]
     private var currentPageTargetIdentifier: String?
     private var committedPageTargetIdentifier: String?
@@ -112,6 +113,10 @@ actor WITransportMessageRouter {
             continuation.finish()
         }
         pageTargetChangeSubscriptions.removeAll()
+        for continuation in pageTargetLifecycleSubscriptions.values {
+            continuation.finish()
+        }
+        pageTargetLifecycleSubscriptions.removeAll()
         backlogs.removeAll()
 
         log("router disconnected")
@@ -173,12 +178,38 @@ actor WITransportMessageRouter {
         }
     }
 
+    func pageTargetLifecycles(bufferingLimit: Int?) -> AsyncStream<WITransportPageTargetLifecycleEvent> {
+        let limit = max(1, bufferingLimit ?? configuration.eventBufferLimit)
+        return AsyncStream(bufferingPolicy: .bufferingNewest(limit)) { continuation in
+            let identifier = UUID()
+            pageTargetLifecycleSubscriptions[identifier] = continuation
+            continuation.onTermination = { _ in
+                Task {
+                    await self.removePageTargetLifecycleSubscription(identifier)
+                }
+            }
+        }
+    }
+
     func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> Data {
+        try await send(scope: scope, method: method, parametersData: parametersData, targetIdentifierOverride: nil)
+    }
+
+    func send(
+        scope: WITransportTargetScope,
+        method: String,
+        parametersData: Data?,
+        targetIdentifierOverride: String?
+    ) async throws -> Data {
         switch scope {
         case .root:
             return try await sendRootCommand(method: method, parametersData: parametersData)
         case .page:
-            return try await sendPageCommand(method: method, parametersData: parametersData)
+            return try await sendPageCommand(
+                method: method,
+                parametersData: parametersData,
+                targetIdentifierOverride: targetIdentifierOverride
+            )
         }
     }
 
@@ -231,6 +262,10 @@ actor WITransportMessageRouter {
             paramsObject: parsed.paramsObject
         )
     }
+
+    func currentPageTargetIdentifierSnapshot() -> String? {
+        currentPageTargetIdentifier
+    }
 }
 
 private extension WITransportMessageRouter {
@@ -274,11 +309,16 @@ private extension WITransportMessageRouter {
         }
     }
 
-    func sendPageCommand(method: String, parametersData: Data?) async throws -> Data {
+    func sendPageCommand(
+        method: String,
+        parametersData: Data?,
+        targetIdentifierOverride: String?
+    ) async throws -> Data {
         guard let pageDispatcher else {
             throw WITransportError.notAttached
         }
-        guard let targetIdentifier = currentPageTargetIdentifier else {
+        let resolvedTargetIdentifier = targetIdentifierOverride ?? currentPageTargetIdentifier
+        guard let targetIdentifier = resolvedTargetIdentifier else {
             throw WITransportError.pageTargetUnavailable
         }
 
@@ -430,6 +470,13 @@ private extension WITransportMessageRouter {
                 creationOrder: nextTargetOrder()
             )
             refreshPreferredPageTarget(reason: "targetCreated")
+            emitPageTargetLifecycleEvent(
+                .created,
+                targetIdentifier: targetIdentifier,
+                oldTargetIdentifier: nil,
+                targetType: targetType,
+                isProvisional: isProvisional == true
+            )
             return
         }
 
@@ -472,16 +519,31 @@ private extension WITransportMessageRouter {
 
             committedPageTargetIdentifier = newTargetIdentifier
             refreshPreferredPageTarget(reason: "didCommitProvisionalTarget")
+            emitPageTargetLifecycleEvent(
+                .committedProvisional,
+                targetIdentifier: newTargetIdentifier,
+                oldTargetIdentifier: stringValue(params["oldTargetId"]),
+                targetType: knownTargets[newTargetIdentifier]?.type ?? "page",
+                isProvisional: false
+            )
             return
         }
 
         if method == "Target.targetDestroyed",
            let targetIdentifier = stringValue(params["targetId"]) {
+            let target = knownTargets[targetIdentifier]
             if committedPageTargetIdentifier == targetIdentifier {
                 committedPageTargetIdentifier = nil
             }
             knownTargets.removeValue(forKey: targetIdentifier)
             refreshPreferredPageTarget(reason: "targetDestroyed")
+            emitPageTargetLifecycleEvent(
+                .destroyed,
+                targetIdentifier: targetIdentifier,
+                oldTargetIdentifier: nil,
+                targetType: target?.type ?? "page",
+                isProvisional: target?.isProvisional ?? false
+            )
         }
     }
 
@@ -514,6 +576,10 @@ private extension WITransportMessageRouter {
         pageTargetChangeSubscriptions.removeValue(forKey: identifier)
     }
 
+    func removePageTargetLifecycleSubscription(_ identifier: UUID) {
+        pageTargetLifecycleSubscriptions.removeValue(forKey: identifier)
+    }
+
     private func preferredTarget(ofType type: String) -> KnownTarget? {
         let nonProvisionalTargets = knownTargets.values.filter { $0.type == type && !$0.isProvisional }
 
@@ -539,6 +605,26 @@ private extension WITransportMessageRouter {
         pageTargetWaiters.removeAll()
         for waiter in waiters {
             waiter.resume()
+        }
+    }
+
+    func emitPageTargetLifecycleEvent(
+        _ kind: WITransportPageTargetLifecycleKind,
+        targetIdentifier: String,
+        oldTargetIdentifier: String?,
+        targetType: String,
+        isProvisional: Bool
+    ) {
+        let event = WITransportPageTargetLifecycleEvent(
+            kind: kind,
+            targetIdentifier: targetIdentifier,
+            oldTargetIdentifier: oldTargetIdentifier,
+            targetType: targetType,
+            isProvisional: isProvisional
+        )
+
+        for continuation in pageTargetLifecycleSubscriptions.values {
+            continuation.yield(event)
         }
     }
 
