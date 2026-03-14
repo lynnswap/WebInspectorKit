@@ -469,6 +469,7 @@ private extension WITransportMessageRouter {
                 isProvisional: isProvisional == true,
                 creationOrder: nextTargetOrder()
             )
+            refreshPreferredPageTarget(reason: "targetCreated")
             emitPageTargetLifecycleEvent(
                 .created,
                 targetIdentifier: targetIdentifier,
@@ -476,7 +477,6 @@ private extension WITransportMessageRouter {
                 targetType: targetType,
                 isProvisional: isProvisional == true
             )
-            refreshPreferredPageTarget(reason: "targetCreated")
             return
         }
 
@@ -517,6 +517,8 @@ private extension WITransportMessageRouter {
                 )
             }
 
+            committedPageTargetIdentifier = newTargetIdentifier
+            refreshPreferredPageTarget(reason: "didCommitProvisionalTarget")
             emitPageTargetLifecycleEvent(
                 .committedProvisional,
                 targetIdentifier: newTargetIdentifier,
@@ -524,14 +526,17 @@ private extension WITransportMessageRouter {
                 targetType: knownTargets[newTargetIdentifier]?.type ?? "page",
                 isProvisional: false
             )
-            committedPageTargetIdentifier = newTargetIdentifier
-            refreshPreferredPageTarget(reason: "didCommitProvisionalTarget")
             return
         }
 
         if method == "Target.targetDestroyed",
            let targetIdentifier = stringValue(params["targetId"]) {
             let target = knownTargets[targetIdentifier]
+            if committedPageTargetIdentifier == targetIdentifier {
+                committedPageTargetIdentifier = nil
+            }
+            knownTargets.removeValue(forKey: targetIdentifier)
+            refreshPreferredPageTarget(reason: "targetDestroyed")
             emitPageTargetLifecycleEvent(
                 .destroyed,
                 targetIdentifier: targetIdentifier,
@@ -539,11 +544,6 @@ private extension WITransportMessageRouter {
                 targetType: target?.type ?? "page",
                 isProvisional: target?.isProvisional ?? false
             )
-            if committedPageTargetIdentifier == targetIdentifier {
-                committedPageTargetIdentifier = nil
-            }
-            knownTargets.removeValue(forKey: targetIdentifier)
-            refreshPreferredPageTarget(reason: "targetDestroyed")
         }
     }
 

@@ -475,6 +475,46 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func domIngressEnablesCommittedProvisionalTargetImmediatelyAfterCommit() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let webView = makeIsolatedTestWebView()
+
+        let lease = registry.acquireLease(for: webView)
+        let consumerID = UUID()
+        lease.addDOMConsumer(consumerID) { _ in }
+
+        try await lease.ensureDOMEventIngress()
+        #expect(backend.sentPageTargets.filter { $0.method == "DOM.enable" }.map(\.targetIdentifier) == ["page-A"])
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-A",
+                "newTargetId": "page-B",
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "DOM.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        lease.removeDOMConsumer(consumerID)
+        lease.release()
+    }
+
+    @Test
     func destroyedTargetClearsNetworkEnableStateForReusedIdentifier() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
@@ -524,6 +564,48 @@ struct WISharedTransportRegistryTests {
         })
 
         lease.removeNetworkConsumer(consumerID)
+        lease.release()
+    }
+
+    @Test
+    func destroyedCurrentTargetReenablesDOMOnFallbackTargetImmediately() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let webView = makeIsolatedTestWebView()
+
+        let lease = registry.acquireLease(for: webView)
+        let consumerID = UUID()
+        lease.addDOMConsumer(consumerID) { _ in }
+
+        try await lease.ensureDOMEventIngress()
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": false,
+                ],
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "DOM.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        backend.emitRootEvent(
+            method: "Target.targetDestroyed",
+            params: [
+                "targetId": "page-B",
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "DOM.enable" }.map(\.targetIdentifier) == ["page-A", "page-B", "page-A"]
+        })
+
+        lease.removeDOMConsumer(consumerID)
         lease.release()
     }
 
