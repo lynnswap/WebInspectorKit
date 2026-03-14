@@ -46,11 +46,9 @@ struct NetworkSessionTests {
     func macOSNativeTransportUsesTransportDriver() {
         let session = WINetworkRuntime(
             configuration: .init(),
-            defaultTransportSupportSnapshot: .init(
-                availability: .supported,
+            defaultTransportSupportSnapshot: .supported(
                 backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .networkDomain],
-                failureReason: nil
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .networkDomain]
             )
         )
 

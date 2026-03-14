@@ -60,11 +60,7 @@ private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBa
 
     init(configuration: WITransportConfiguration, reason: String) {
         _ = configuration
-        supportSnapshot = WITransportSupportSnapshot(
-            availability: .unsupported,
-            backendKind: .unsupported,
-            failureReason: reason
-        )
+        supportSnapshot = .unsupported(reason: reason)
     }
 
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
