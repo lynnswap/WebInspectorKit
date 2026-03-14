@@ -13,22 +13,18 @@ protocol DOMSelectionBridging: AnyObject {
 
 @MainActor
 final class DOMSelectionBridge: DOMSelectionBridging {
-    private let runtime: WISPIRuntime
+    private static let selectionWorld = WKContentWorld.world(name: "com.lynnswap.WebInspectorKit.selection")
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
-    private let bridgeWorld: WKContentWorld
 
     init(
-        runtime: WISPIRuntime = .shared,
         controllerStateRegistry: WIUserContentControllerStateRegistry = .shared
     ) {
-        self.runtime = runtime
         self.controllerStateRegistry = controllerStateRegistry
-        bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
 
     func installIfNeeded(on webView: WKWebView) async throws {
         let controller = webView.configuration.userContentController
-        let scriptSource = try WebInspectorScripts.domAgent()
+        let scriptSource = try WebInspectorScripts.domSelectionAgent()
 
         if controllerStateRegistry.domBridgeScriptInstalled(on: controller) == false {
             controller.addUserScript(
@@ -36,7 +32,7 @@ final class DOMSelectionBridge: DOMSelectionBridging {
                     source: scriptSource,
                     injectionTime: .atDocumentStart,
                     forMainFrameOnly: true,
-                    in: bridgeWorld
+                    in: Self.selectionWorld
                 )
             )
             controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
@@ -45,16 +41,16 @@ final class DOMSelectionBridge: DOMSelectionBridging {
         _ = try await webView.evaluateJavaScript(
             scriptSource,
             in: nil,
-            contentWorld: bridgeWorld
+            contentWorld: Self.selectionWorld
         )
     }
 
     func beginSelection(on webView: WKWebView) async throws -> DOMSelectionModeResult {
         let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorDOM.startSelection()",
+            "return window.webInspectorDOMSelection.startSelection()",
             arguments: [:],
             in: nil,
-            contentWorld: bridgeWorld
+            contentWorld: Self.selectionWorld
         )
         let data = try serializePayload(rawResult)
         return try JSONDecoder().decode(DOMSelectionModeResult.self, from: data)
@@ -62,22 +58,25 @@ final class DOMSelectionBridge: DOMSelectionBridging {
 
     func cancelSelection(on webView: WKWebView) async {
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorDOM.cancelSelection()",
-            contentWorld: bridgeWorld
+            "window.webInspectorDOMSelection.cancelSelection()",
+            contentWorld: Self.selectionWorld
         )
     }
 
     func resolveSelectedNodePath(on webView: WKWebView, maxDepth: Int) async throws -> [Int]? {
         let rawResult = try await webView.callAsyncJavaScript(
             """
-            if (!window.webInspectorDOM || typeof window.webInspectorDOM.consumePendingSelectionPath !== "function") {
+            if (
+                !window.webInspectorDOMSelection
+                || typeof window.webInspectorDOMSelection.consumePendingSelectionPath !== "function"
+            ) {
                 return null;
             }
-            return window.webInspectorDOM.consumePendingSelectionPath();
+            return window.webInspectorDOMSelection.consumePendingSelectionPath();
             """,
             arguments: ["maxDepth": max(1, maxDepth)],
             in: nil,
-            contentWorld: bridgeWorld
+            contentWorld: Self.selectionWorld
         )
 
         if let values = rawResult as? [Int] {

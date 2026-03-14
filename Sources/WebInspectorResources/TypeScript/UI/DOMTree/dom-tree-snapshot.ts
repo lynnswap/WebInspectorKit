@@ -11,13 +11,11 @@
 import {
     DOMEventEntry,
     DOMNode,
-    DOM_SNAPSHOT_SCHEMA_VERSION,
     DOMSnapshot,
     DOMSnapshotEnvelopePayload,
     MutationBundle,
     RawNodeDescriptor,
     RequestDocumentOptions,
-    SerializedNodeEnvelope,
 } from "./dom-tree-types";
 import {
     dom,
@@ -62,142 +60,6 @@ import {
 } from "./dom-tree-view-support";
 import { applyMutationBundlesFromBuffer } from "./dom-tree-buffer-transport";
 
-function readNumber(value: unknown): number | undefined {
-    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-    return typeof value === "string" ? value : undefined;
-}
-
-function makeDescriptorFromSerializedNode(serializedNode: unknown): RawNodeDescriptor | null {
-    if (!serializedNode || typeof serializedNode !== "object") {
-        return null;
-    }
-
-    const node = serializedNode as Node & {
-        attributes?: NamedNodeMap;
-        childNodes?: NodeListOf<ChildNode>;
-        localName?: string;
-        nodeValue?: string | null;
-        publicId?: string;
-        systemId?: string;
-        name?: string;
-        value?: string;
-    };
-
-    const descriptor: RawNodeDescriptor = {
-        nodeType: readNumber((node as { nodeType?: number }).nodeType),
-        nodeName: readString((node as { nodeName?: string }).nodeName) ?? "",
-        localName: readString(node.localName) ?? readString((node as { nodeName?: string }).nodeName)?.toLowerCase() ?? "",
-        nodeValue: readString(node.nodeValue) ?? "",
-        childNodeCount: node.childNodes ? node.childNodes.length : 0,
-        children: [],
-    };
-
-    if (node.attributes && node.attributes.length) {
-        const rawAttributes: string[] = [];
-        for (let index = 0; index < node.attributes.length; index += 1) {
-            const attribute = node.attributes.item(index);
-            if (!attribute) {
-                continue;
-            }
-            rawAttributes.push(attribute.name, attribute.value);
-        }
-        if (rawAttributes.length) {
-            descriptor.attributes = rawAttributes;
-        }
-    }
-
-    if (descriptor.nodeType === Node.DOCUMENT_TYPE_NODE) {
-        descriptor.publicId = readString(node.publicId) ?? "";
-        descriptor.systemId = readString(node.systemId) ?? "";
-    } else if (descriptor.nodeType === Node.ATTRIBUTE_NODE) {
-        descriptor.name = readString(node.name) ?? "";
-        descriptor.value = readString(node.value) ?? "";
-    } else if (descriptor.nodeType === Node.DOCUMENT_NODE) {
-        descriptor.documentURL = document.URL || "";
-    }
-
-    const rawChildren = node.childNodes ? Array.from(node.childNodes) : [];
-    for (const child of rawChildren) {
-        const childDescriptor = makeDescriptorFromSerializedNode(child);
-        if (childDescriptor) {
-            descriptor.children = descriptor.children || [];
-            descriptor.children.push(childDescriptor);
-        }
-    }
-
-    return descriptor;
-}
-
-function applyIdentifierHints(
-    target: RawNodeDescriptor | null | undefined,
-    fallback: RawNodeDescriptor | null | undefined
-): void {
-    if (!target || !fallback) {
-        return;
-    }
-
-    if (typeof fallback.nodeId === "number") {
-        target.nodeId = fallback.nodeId;
-    } else if (typeof fallback.id === "number") {
-        target.id = fallback.id;
-    }
-
-    if (typeof fallback.childNodeCount === "number") {
-        target.childNodeCount = fallback.childNodeCount;
-    } else if (typeof fallback.childCount === "number") {
-        target.childCount = fallback.childCount;
-    }
-
-    const targetChildren = Array.isArray(target.children) ? target.children : [];
-    const fallbackChildren = Array.isArray(fallback.children) ? fallback.children : [];
-    const max = Math.min(targetChildren.length, fallbackChildren.length);
-    for (let index = 0; index < max; index += 1) {
-        applyIdentifierHints(targetChildren[index], fallbackChildren[index]);
-    }
-}
-
-function mergeSerializedRootWithFallback(
-    serialized: RawNodeDescriptor | null | undefined,
-    fallback: RawNodeDescriptor | null | undefined
-): RawNodeDescriptor | null {
-    if (!serialized && !fallback) {
-        return null;
-    }
-    if (!serialized) {
-        return fallback || null;
-    }
-    if (!fallback) {
-        return serialized;
-    }
-
-    const merged: RawNodeDescriptor = {
-        ...fallback,
-        ...serialized,
-    };
-
-    const serializedChildren = Array.isArray(serialized.children) ? serialized.children : [];
-    const fallbackChildren = Array.isArray(fallback.children) ? fallback.children : [];
-    const childCount = Math.max(serializedChildren.length, fallbackChildren.length);
-
-    if (childCount > 0) {
-        const children: RawNodeDescriptor[] = [];
-        for (let index = 0; index < childCount; index += 1) {
-            const mergedChild = mergeSerializedRootWithFallback(serializedChildren[index], fallbackChildren[index]);
-            if (mergedChild) {
-                children.push(mergedChild);
-            }
-        }
-        merged.children = children;
-    } else if (Array.isArray(merged.children) && !merged.children.length) {
-        delete merged.children;
-    }
-
-    return merged;
-}
-
 function normalizeSnapshotEnvelopePayload(payload: unknown): DOMSnapshotEnvelopePayload | null {
     if (!payload || typeof payload !== "object") {
         return null;
@@ -220,54 +82,12 @@ function normalizeSnapshotEnvelopePayload(payload: unknown): DOMSnapshotEnvelope
     };
 }
 
-function resolveSerializedNodeEnvelope(envelope: SerializedNodeEnvelope): DOMSnapshotEnvelopePayload | null {
-    const fallbackSnapshot = normalizeSnapshotEnvelopePayload(envelope.fallback as unknown)
-        || (envelope.fallback && typeof envelope.fallback === "object"
-            ? { root: envelope.fallback as RawNodeDescriptor, selectedNodeId: null, selectedNodePath: null }
-            : null);
-    const schemaVersion = readNumber((envelope as { schemaVersion?: unknown }).schemaVersion);
-    if (schemaVersion != null && schemaVersion !== DOM_SNAPSHOT_SCHEMA_VERSION) {
-        return fallbackSnapshot;
-    }
-    const convertedRoot = makeDescriptorFromSerializedNode(envelope.node);
-    if (!convertedRoot) {
-        return fallbackSnapshot;
-    }
-
-    const fallbackRoot = fallbackSnapshot?.root as RawNodeDescriptor | undefined;
-    if (fallbackRoot) {
-        applyIdentifierHints(convertedRoot, fallbackRoot);
-    }
-    const mergedRoot = mergeSerializedRootWithFallback(convertedRoot, fallbackRoot);
-    if (!mergedRoot) {
-        return fallbackSnapshot;
-    }
-
-    return {
-        root: mergedRoot,
-        selectedNodeId:
-            typeof envelope.selectedNodeId === "number"
-                ? envelope.selectedNodeId
-                : fallbackSnapshot?.selectedNodeId ?? null,
-        selectedNodePath:
-            Array.isArray(envelope.selectedNodePath)
-                ? envelope.selectedNodePath
-                : fallbackSnapshot?.selectedNodePath ?? null,
-    };
-}
-
 function resolveNodeDescriptor(payload: unknown): RawNodeDescriptor | null {
     if (!payload) {
         return null;
     }
     if (typeof payload !== "object") {
         return null;
-    }
-
-    const maybeEnvelope = payload as SerializedNodeEnvelope;
-    if (maybeEnvelope.type === "serialized-node-envelope") {
-        const resolved = resolveSerializedNodeEnvelope(maybeEnvelope);
-        return (resolved?.root as RawNodeDescriptor | null) ?? null;
     }
 
     const maybeSnapshot = normalizeSnapshotEnvelopePayload(payload);
@@ -282,19 +102,6 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
     const parsed = safeParseJSON<unknown>(payload);
     if (!parsed || typeof parsed !== "object") {
         return null;
-    }
-
-    const maybeEnvelope = parsed as SerializedNodeEnvelope;
-    if (maybeEnvelope.type === "serialized-node-envelope") {
-        const resolved = resolveSerializedNodeEnvelope(maybeEnvelope);
-        if (!resolved) {
-            return null;
-        }
-        return {
-            root: (resolved.root as unknown as DOMNode) || null,
-            selectedNodeId: resolved.selectedNodeId ?? undefined,
-            selectedNodePath: resolved.selectedNodePath ?? undefined,
-        };
     }
 
     const snapshotPayload = normalizeSnapshotEnvelopePayload(parsed);
@@ -322,7 +129,7 @@ export async function requestDocument(options: RequestDocumentOptions = {}): Pro
     try {
         const result = await sendCommand<unknown>("DOM.getDocument", { depth });
         if (result != null) {
-            setSnapshot(result as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string, { preserveState });
+            setSnapshot(result as DOMSnapshotEnvelopePayload | string, { preserveState });
         }
     } catch (error) {
         reportInspectorError("DOM.getDocument", error);
@@ -358,7 +165,7 @@ export function applyMutationBundle(bundle: string | MutationBundle | null | und
 
     if (parsed.kind === "snapshot") {
         if (parsed.snapshot) {
-            setSnapshot(parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string, { preserveState });
+            setSnapshot(parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | string, { preserveState });
         }
         return;
     }
@@ -403,7 +210,7 @@ export function applyMutationBuffer(bufferName: string): boolean {
 
 /** Set the document snapshot */
 export function setSnapshot(
-    payload: { root?: RawNodeDescriptor } | string | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null | undefined,
+    payload: { root?: RawNodeDescriptor } | string | DOMSnapshotEnvelopePayload | null | undefined,
     options: { preserveState?: boolean } = {}
 ): void {
     try {
@@ -532,7 +339,7 @@ export function setSnapshot(
 
 /** Apply a subtree update */
 export function applySubtree(
-    payload: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null | undefined
+    payload: string | RawNodeDescriptor | DOMSnapshotEnvelopePayload | null | undefined
 ): void {
     try {
         ensureDomElements();

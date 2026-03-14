@@ -845,9 +845,9 @@ private extension WIDOMStore {
 
     var requiresReloadAfterDeleteUndoRedo: Bool {
         switch session.backendSupport.backendKind {
-        case .legacy, .unsupported:
+        case .unsupported:
             true
-        case .nativeInspectorIOS, .nativeInspectorMacOS, .privateCore, .privateFull:
+        case .nativeInspectorIOS, .nativeInspectorMacOS:
             false
         }
     }

@@ -29,37 +29,17 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func defaultSessionUsesLegacyFallbackWhenTransportIsUnsupported() async {
-        await withWebKitTestIsolation {
-            let session = WINetworkRuntime(
-                configuration: .init(),
-                defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-            )
-            let webView = makeIsolatedTestWebView()
-            session.attach(pageWebView: webView)
-            await loadHTML("<html><body><p>legacy network</p></body></html>", in: webView)
-            #expect(await waitForLegacyNetworkBootstrap(in: webView))
-
-            #expect(session.backendSupport.isSupported)
-            #expect(session.testPageAgentTypeName() == "NetworkLegacyPageDriver")
-            #expect(session.transportCapabilities == [.networkDomain])
-
-            let body = await session.fetchBody(ref: nil, handle: "token" as NSString, role: .response)
-            #expect(body?.full == "token")
-        }
-    }
-
-    @Test
-    func bodyFetcherInitializerChoosesLegacyDriverWhenTransportIsUnsupported() {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
-        let session = WINetworkRuntime(
-            configuration: .init(),
-            bodyFetcher: fetcher,
-            defaultTransportSupportSnapshot: unsupportedTransportSnapshot()
-        )
+    func unavailableSessionDoesNotFallbackToLegacyNetworkBridge() async {
+        let session = WINetworkRuntime(configuration: .init())
+        let webView = makeIsolatedTestWebView()
+        session.attach(pageWebView: webView)
 
         #expect(session.backendSupport.isSupported == false)
-        #expect(session.testPageAgentTypeName() == "WINetworkBodyFetchingBackend")
+        #expect(session.testPageAgentTypeName() == "WINetworkUnavailableBackend")
+        #expect(session.transportCapabilities.isEmpty)
+
+        let body = await session.fetchBody(ref: "request-1", handle: nil, role: .response)
+        #expect(body == nil)
     }
 
     @Test
@@ -362,35 +342,6 @@ struct NetworkSessionTests {
         )
     }
 
-    private func loadHTML(_ html: String, in webView: WKWebView) async {
-        let navigationDelegate = NavigationDelegate()
-        webView.navigationDelegate = navigationDelegate
-
-        await withCheckedContinuation { continuation in
-            navigationDelegate.continuation = continuation
-            webView.loadHTMLString(html, baseURL: nil)
-        }
-    }
-
-    private func waitForLegacyNetworkBootstrap(in webView: WKWebView) async -> Bool {
-        let raw = try? await webView.evaluateJavaScript(
-            """
-            (() => ({
-                bootstrapReady: typeof window.__wiBootstrapNetworkAuthToken === "function",
-                handlerReady: Boolean(window.webkit?.messageHandlers?.webInspectorNetworkEvents),
-                agentReady: Boolean(window.webInspectorNetworkAgent?.__installed)
-            }))();
-            """,
-            in: nil,
-            contentWorld: .page
-        )
-        let payload = raw as? NSDictionary
-        let bootstrapReady = (payload?["bootstrapReady"] as? Bool) ?? ((payload?["bootstrapReady"] as? NSNumber)?.boolValue ?? false)
-        let handlerReady = (payload?["handlerReady"] as? Bool) ?? ((payload?["handlerReady"] as? NSNumber)?.boolValue ?? false)
-        let agentReady = (payload?["agentReady"] as? Bool) ?? ((payload?["agentReady"] as? NSNumber)?.boolValue ?? false)
-        return bootstrapReady && handlerReady && agentReady
-    }
-
     private func fetchStateRecorder(
         for body: NetworkBody
     ) -> ObservationRecorder<String> {
@@ -420,34 +371,6 @@ struct NetworkSessionTests {
         case nil:
             "nil"
         }
-    }
-}
-
-@MainActor
-private final class NavigationDelegate: NSObject, WKNavigationDelegate {
-    var continuation: CheckedContinuation<Void, Never>?
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        _ = webView
-        _ = navigation
-        continuation?.resume()
-        continuation = nil
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        _ = webView
-        _ = navigation
-        _ = error
-        continuation?.resume()
-        continuation = nil
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        _ = webView
-        _ = navigation
-        _ = error
-        continuation?.resume()
-        continuation = nil
     }
 }
 
@@ -523,13 +446,4 @@ private final class StubNetworkPageDriver: WINetworkBackend {
     func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         .bodyUnavailable
     }
-}
-
-private func unsupportedTransportSnapshot() -> WITransportSupportSnapshot {
-    WITransportSupportSnapshot(
-        availability: .unsupported,
-        backendKind: .unsupported,
-        capabilities: [],
-        failureReason: "unsupported for test"
-    )
 }

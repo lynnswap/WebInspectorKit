@@ -91,7 +91,7 @@ describe("dom-agent-selection", () => {
         await selectionPromise;
     });
 
-    it("stores inspector-compatible selection paths that ignore whitespace-only text nodes", async () => {
+    it("stores raw child-index selection paths for transport recovery", async () => {
         document.body.innerHTML = "<main id=\"root\">\n  <div id=\"target\">hello</div>\n  <span id=\"other\">later</span>\n</main>";
         const target = document.getElementById("target") as HTMLElement;
         installBoundingRect(target);
@@ -107,10 +107,10 @@ describe("dom-agent-selection", () => {
         await selectionPromise;
 
         expect(Array.isArray(inspector.pendingSelectionPath)).toBe(true);
-        expect(inspector.pendingSelectionPath?.at(-1)).toBe(0);
+        expect(inspector.pendingSelectionPath).toEqual([1, 0, 1]);
     });
 
-    it("stores nested inspector-compatible paths across whitespace-only siblings", async () => {
+    it("stores nested raw child-index paths across whitespace-only siblings", async () => {
         document.body.innerHTML = [
             "<main id=\"root\">",
             "  <section id=\"section\">",
@@ -132,7 +132,7 @@ describe("dom-agent-selection", () => {
 
         await selectionPromise;
 
-        expect(inspector.pendingSelectionPath).toEqual([1, 0, 0, 0]);
+        expect(inspector.pendingSelectionPath).toEqual([1, 0, 1, 1]);
     });
 
     it("consumes the pending selection path only once", async () => {
@@ -150,7 +150,7 @@ describe("dom-agent-selection", () => {
 
         await selectionPromise;
 
-        expect(consumePendingSelectionPath()).toEqual([1, 0, 0]);
+        expect(consumePendingSelectionPath()).toEqual([1, 0, 1]);
         expect(consumePendingSelectionPath()).toBeNull();
     });
 });

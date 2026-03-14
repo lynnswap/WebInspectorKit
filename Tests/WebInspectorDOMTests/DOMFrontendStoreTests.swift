@@ -312,7 +312,7 @@ private final class StubDOMFrontendStorePageDriver: WIDOMBackend {
     private(set) weak var webView: WKWebView?
     let support = WIBackendSupport(
         availability: .unsupported,
-        backendKind: .legacy,
+        backendKind: .unsupported,
         capabilities: [.domDomain]
     )
     private(set) var requestedChildNodeIDs: [Int] = []

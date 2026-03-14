@@ -24,16 +24,12 @@ declare global {
     }
 
     interface WebKitBridge {
-        createJSHandle?: (value: unknown) => unknown;
-        serializeNode?: (node: Node) => unknown;
-        buffers?: Record<string, unknown>;
         messageHandlers: WebInspectorMessageHandlers;
     }
 
     interface Window {
-        webInspectorDOM?: Record<string, unknown>;
+        webInspectorDOMSelection?: Record<string, unknown>;
         webInspectorDOMFrontend?: WebInspectorDOMFrontend;
-        webInspectorNetworkAgent?: Record<string, unknown>;
         webkit?: WebKitBridge;
     }
 

@@ -1,85 +1,24 @@
-import {
-    captureDOM,
-    captureDOMEnvelope,
-    captureDOMSubtree,
-    captureDOMSubtreeEnvelope,
-    createNodeHandle
-} from "./DOMAgent/dom-agent-dom-core";
-import {clearHighlight, highlightDOMNode, highlightDOMNodeHandle} from "./DOMAgent/dom-agent-overlay";
-import {cancelElementSelection, consumePendingSelectionPath, startElementSelection} from "./DOMAgent/dom-agent-selection";
-import {
-    configureAutoSnapshot,
-    disableAutoSnapshot,
-    enableAutoSnapshotIfSupported,
-    triggerSnapshotUpdate
-} from "./DOMAgent/dom-agent-snapshot";
-import {
-    debugStatus,
-    outerHTMLForNode,
-    redoRemoveNode,
-    removeNodeHandleWithUndo,
-    removeNodeWithUndo,
-    removeAttributeForHandle,
-    removeAttributeForNode,
-    removeNodeHandle,
-    removeNode,
-    selectorPathForNode,
-    setAttributeForHandle,
-    setAttributeForNode,
-    undoRemoveNode,
-    xpathForNode
-} from "./DOMAgent/dom-agent-dom-utils";
-import {matchedStylesForNode, stylesForNode} from "./DOMAgent/dom-agent-styles";
+import { clearHighlight } from "./DOMAgent/dom-agent-overlay";
+import { cancelElementSelection, consumePendingSelectionPath, startElementSelection } from "./DOMAgent/dom-agent-selection";
+
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();
-    disableAutoSnapshot();
 }
 
-if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
-    var webInspectorDOM = {
-        captureSnapshot: captureDOM,
-        captureSnapshotEnvelope: captureDOMEnvelope,
-        captureSubtree: captureDOMSubtree,
-        captureSubtreeEnvelope: captureDOMSubtreeEnvelope,
+if (!(window.webInspectorDOMSelection && window.webInspectorDOMSelection.__installed)) {
+    var webInspectorDOMSelection = {
         startSelection: startElementSelection,
         cancelSelection: cancelElementSelection,
         consumePendingSelectionPath: consumePendingSelectionPath,
-        highlightNode: highlightDOMNode,
-        highlightNodeHandle: highlightDOMNodeHandle,
         clearHighlight: clearHighlight,
-        configureAutoSnapshot: configureAutoSnapshot,
-        disableAutoSnapshot: disableAutoSnapshot,
         detach: detachInspector,
-        triggerSnapshotUpdate: triggerSnapshotUpdate,
-        outerHTMLForNode: outerHTMLForNode,
-        selectorPathForNode: selectorPathForNode,
-        xpathForNode: xpathForNode,
-        matchedStylesForNode: matchedStylesForNode,
-        stylesForNode: stylesForNode,
-        createNodeHandle: createNodeHandle,
-        removeNode: removeNode,
-        removeNodeHandle: removeNodeHandle,
-        removeNodeWithUndo: removeNodeWithUndo,
-        removeNodeHandleWithUndo: removeNodeHandleWithUndo,
-        undoRemoveNode: undoRemoveNode,
-        redoRemoveNode: redoRemoveNode,
-        setAttributeForNode: setAttributeForNode,
-        setAttributeForHandle: setAttributeForHandle,
-        removeAttributeForNode: removeAttributeForNode,
-        removeAttributeForHandle: removeAttributeForHandle,
-        debugStatus: debugStatus,
         __installed: true
     };
-    Object.defineProperty(window, "webInspectorDOM", {
-        value: Object.freeze(webInspectorDOM),
+
+    Object.defineProperty(window, "webInspectorDOMSelection", {
+        value: Object.freeze(webInspectorDOMSelection),
         writable: false,
         configurable: false
     });
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", enableAutoSnapshotIfSupported, {once: true});
-    } else {
-        enableAutoSnapshotIfSupported();
-    }
 }

@@ -376,7 +376,7 @@ private final class PreviewDOMBackend: WIDOMBackend {
 
     let support = WIBackendSupport(
         availability: .supported,
-        backendKind: .legacy,
+        backendKind: .nativeInspectorIOS,
         capabilities: [.domDomain]
     )
 
