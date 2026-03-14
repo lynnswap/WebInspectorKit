@@ -57,17 +57,14 @@ struct WITransportSessionTests {
     @Test
     func attachRefreshesSupportSnapshotFromResolvedBackendMode() async throws {
         let backend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
+            supportSnapshot: .supported(
                 backendKind: .macOSNativeInspector,
                 capabilities: [.rootMessaging],
                 failureReason: "preflight snapshot"
             ),
-            supportSnapshotAfterAttach: WITransportSupportSnapshot(
-                availability: .supported,
+            supportSnapshotAfterAttach: .supported(
                 backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-                failureReason: nil
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
             )
         )
         let session = WITransportSession(
@@ -87,11 +84,9 @@ struct WITransportSessionTests {
     @Test
     func compatibilityResponseAllowsDOMEnableWithoutSendingPageMessage() async throws {
         let backend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
+            supportSnapshot: .supported(
                 backendKind: .iOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
-                failureReason: nil
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain]
             ),
             compatibilityResponseProvider: { scope, method in
                 guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
@@ -115,11 +110,9 @@ struct WITransportSessionTests {
     @Test
     func compatibilityResponseAllowsCSSEnableWithoutSendingPageMessage() async throws {
         let backend = FakeSessionBackend(
-            supportSnapshot: WITransportSupportSnapshot(
-                availability: .supported,
+            supportSnapshot: .supported(
                 backendKind: .iOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
-                failureReason: nil
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain]
             ),
             compatibilityResponseProvider: { scope, method in
                 guard scope == .page, method == TestCSSEnable.method else {
@@ -138,6 +131,30 @@ struct WITransportSessionTests {
         _ = try await session.page.send(TestCSSEnable())
 
         #expect(backend.sentPageMessageCount == 0)
+    }
+
+    @Test
+    func supportedSnapshotFactoryPreservesBackendCapabilitiesAndFailureReason() {
+        let snapshot = WITransportSupportSnapshot.supported(
+            backendKind: .iOSNativeInspector,
+            capabilities: [.rootMessaging, .domDomain],
+            failureReason: "preflight snapshot"
+        )
+
+        #expect(snapshot.availability == .supported)
+        #expect(snapshot.backendKind == .iOSNativeInspector)
+        #expect(snapshot.capabilities == [.rootMessaging, .domDomain])
+        #expect(snapshot.failureReason == "preflight snapshot")
+    }
+
+    @Test
+    func unsupportedSnapshotFactoryClearsCapabilitiesAndUsesUnsupportedBackendKind() {
+        let snapshot = WITransportSupportSnapshot.unsupported(reason: "backend unavailable")
+
+        #expect(snapshot.availability == .unsupported)
+        #expect(snapshot.backendKind == .unsupported)
+        #expect(snapshot.capabilities.isEmpty)
+        #expect(snapshot.failureReason == "backend unavailable")
     }
 }
 
@@ -158,16 +175,14 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
     private(set) var sentPageMessageCount = 0
 
     init(
-        supportSnapshot: WITransportSupportSnapshot = WITransportSupportSnapshot(
-            availability: .supported,
-            backendKind: .unsupported,
-            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-            failureReason: nil
-        ),
+        supportSnapshot: WITransportSupportSnapshot? = nil,
         supportSnapshotAfterAttach: WITransportSupportSnapshot? = nil,
         compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)? = nil
     ) {
-        self.supportSnapshot = supportSnapshot
+        self.supportSnapshot = supportSnapshot ?? .supported(
+            backendKind: Self.defaultSupportedBackendKind,
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
+        )
         self.supportSnapshotAfterAttach = supportSnapshotAfterAttach
         self.compatibilityResponseProvider = compatibilityResponseProvider
     }
@@ -205,5 +220,13 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
 
     func emitFatalFailure(_ message: String) {
         messageHandlers?.handleFatalFailure(message)
+    }
+
+    private static var defaultSupportedBackendKind: WITransportBackendKind {
+#if os(macOS)
+        .macOSNativeInspector
+#else
+        .iOSNativeInspector
+#endif
     }
 }

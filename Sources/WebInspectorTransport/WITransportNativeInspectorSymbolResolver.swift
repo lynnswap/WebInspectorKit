@@ -505,12 +505,14 @@ struct WITransportAttachSymbolResolution: Sendable {
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
-        WITransportSupportSnapshot(
-            availability: isSupported ? .supported : .unsupported,
-            backendKind: backendKind,
-            capabilities: isSupported ? [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain] : [],
-            failureReason: failureReason
-        )
+        if isSupported {
+            .supported(
+                backendKind: backendKind,
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
+            )
+        } else {
+            .unsupported(reason: failureReason ?? "inspector backend unavailable")
+        }
     }
 
     var isSupported: Bool {
@@ -559,11 +561,7 @@ struct WITransportAttachSymbolResolution: Sendable {
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
-        WITransportSupportSnapshot(
-            availability: .unsupported,
-            backendKind: backendKind,
-            failureReason: failureReason
-        )
+        .unsupported(reason: failureReason ?? "WebInspectorTransport is only available on iOS and macOS.")
     }
 
     var isSupported: Bool { false }

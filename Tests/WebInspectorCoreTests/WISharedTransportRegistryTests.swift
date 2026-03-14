@@ -853,11 +853,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         let targetIdentifier: String
     }
 
-    var supportSnapshot = WITransportSupportSnapshot(
-        availability: .supported,
+    var supportSnapshot = WITransportSupportSnapshot.supported(
         backendKind: .macOSNativeInspector,
-        capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
-        failureReason: nil
+        capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
     )
 
     private(set) var attachCallCount = 0

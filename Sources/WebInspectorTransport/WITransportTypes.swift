@@ -6,7 +6,7 @@ public enum WITransportTargetScope: String, Sendable {
     case page
 }
 
-public enum WITransportBackendKind: String, Sendable {
+package enum WITransportBackendKind: String, Sendable {
     case iOSNativeInspector
     case macOSNativeInspector
     case unsupported
@@ -35,11 +35,11 @@ public struct WITransportSupportSnapshot: Sendable {
     }
 
     public let availability: Availability
-    public let backendKind: WITransportBackendKind
+    package let backendKind: WITransportBackendKind
     public let capabilities: Set<WITransportCapability>
     public let failureReason: String?
 
-    public init(
+    private init(
         availability: Availability,
         backendKind: WITransportBackendKind,
         capabilities: Set<WITransportCapability> = [],
@@ -49,6 +49,29 @@ public struct WITransportSupportSnapshot: Sendable {
         self.backendKind = backendKind
         self.capabilities = capabilities
         self.failureReason = failureReason
+    }
+
+    package static func supported(
+        backendKind: WITransportBackendKind,
+        capabilities: Set<WITransportCapability> = [],
+        failureReason: String? = nil
+    ) -> Self {
+        precondition(backendKind != .unsupported, "Use unsupported(reason:) for unsupported transport snapshots.")
+        return Self(
+            availability: .supported,
+            backendKind: backendKind,
+            capabilities: capabilities,
+            failureReason: failureReason
+        )
+    }
+
+    package static func unsupported(reason: String) -> Self {
+        Self(
+            availability: .unsupported,
+            backendKind: .unsupported,
+            capabilities: [],
+            failureReason: reason
+        )
     }
 
     public var isSupported: Bool {
