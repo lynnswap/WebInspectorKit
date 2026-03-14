@@ -159,10 +159,7 @@ private extension WISessionController {
     var usesNavigationAwareRebind: Bool {
 #if os(macOS)
         lifecycle == .active
-            && (
-                domStore.backendSupport.backendKind == .nativeInspectorMacOS
-                    || networkStore.backendSupport.backendKind == .nativeInspectorMacOS
-            )
+            && domStore.backendSupport.backendKind == .nativeInspectorMacOS
 #else
         false
 #endif
@@ -229,7 +226,7 @@ private extension WISessionController {
 
     func prepareForNavigationRebindIfNeeded() {
         let runtimeState = currentRuntimeAttachmentState()
-        guard runtimeState.domEnabled || runtimeState.networkEnabled else {
+        guard runtimeState.domEnabled else {
             return
         }
 
@@ -237,9 +234,6 @@ private extension WISessionController {
         navigationRebindTask = nil
         if runtimeState.domEnabled {
             domStore.session.prepareForNavigationReconnect()
-        }
-        if runtimeState.networkEnabled {
-            networkStore.session.prepareForNavigationReconnect()
         }
         navigationRebindPrepared = true
         scheduleNavigationRebindResume()
@@ -289,9 +283,6 @@ private extension WISessionController {
             }
 
             let runtimeState = self.currentRuntimeAttachmentState()
-            if runtimeState.networkEnabled {
-                self.networkStore.session.resumeAfterNavigationReconnect(to: webView)
-            }
             guard runtimeState.domEnabled else {
                 self.navigationRebindPrepared = false
                 return
@@ -368,9 +359,18 @@ private extension WISessionController {
         if navigationRebindPrepared, connectedPageWebView?.isLoading == true {
             if runtimeState.domEnabled {
                 domStore.session.prepareForNavigationReconnect()
+            } else {
+                domStore.suspend()
             }
-            if runtimeState.networkEnabled {
-                networkStore.session.prepareForNavigationReconnect()
+
+            if let webView = connectedPageWebView {
+                if runtimeState.networkEnabled {
+                    networkStore.attach(to: webView)
+                } else {
+                    networkStore.suspend()
+                }
+            } else if runtimeState.networkEnabled == false || lifecycle != .disconnected {
+                networkStore.suspend()
             }
             domStore.setAutoSnapshotEnabled(runtimeState.domEnabled && runtimeState.domAutoSnapshotEnabled)
             networkStore.setMode(runtimeState.networkEnabled ? runtimeState.networkMode : .buffering)

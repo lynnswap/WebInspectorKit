@@ -125,7 +125,7 @@ struct WISessionStateTests {
 
 #if canImport(AppKit)
     @Test
-    func macOSNativeLoadingStateTriggersTransportRebindHooks() async {
+    func macOSNativeLoadingStateRebindsDOMWhileKeepingNetworkAttached() async {
         await withWebKitTestIsolation {
             let clock = TestClock()
             let domDriver = RebindDOMPageDriver()
@@ -151,7 +151,6 @@ struct WISessionStateTests {
             await clock.sleep(untilSuspendedBy: 1)
             clock.advance(by: .milliseconds(20))
             await domDriver.resumeCounter.wait(untilAtLeast: 1)
-            await networkDriver.resumeCounter.wait(untilAtLeast: 1)
 
             let domPrepareBaseline = domDriver.prepareForNavigationReconnectCallCount
             let domResumeBaseline = domDriver.resumeAfterNavigationReconnectCallCount
@@ -163,13 +162,13 @@ struct WISessionStateTests {
             await clock.sleep(untilSuspendedBy: 1)
             clock.advance(by: .milliseconds(20))
             await domDriver.resumeCounter.wait(untilAtLeast: domResumeBaseline + 1)
-            await networkDriver.resumeCounter.wait(untilAtLeast: networkResumeBaseline + 1)
 
             #expect(domDriver.prepareForNavigationReconnectCallCount == domPrepareBaseline + 1)
             #expect(domDriver.resumeAfterNavigationReconnectCallCount >= domResumeBaseline + 1)
             #expect(domDriver.reloadDocumentCallCount >= domReloadBaseline + 1)
-            #expect(networkDriver.prepareForNavigationReconnectCallCount == networkPrepareBaseline + 1)
-            #expect(networkDriver.resumeAfterNavigationReconnectCallCount >= networkResumeBaseline + 1)
+            #expect(networkDriver.prepareForNavigationReconnectCallCount == networkPrepareBaseline)
+            #expect(networkDriver.resumeAfterNavigationReconnectCallCount == networkResumeBaseline)
+            #expect(networkDriver.webView === webView)
         }
     }
 

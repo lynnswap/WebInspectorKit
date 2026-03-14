@@ -193,6 +193,38 @@ package extension WITransportSession {
         }
         return await router.pageTargetChanges(bufferingLimit: bufferingLimit)
     }
+
+    func pageTargetLifecycleStream(
+        bufferingLimit: Int? = nil
+    ) async -> AsyncStream<WITransportPageTargetLifecycleEvent> {
+        guard let router else {
+            return AsyncStream { continuation in
+                continuation.finish()
+            }
+        }
+        return await router.pageTargetLifecycles(bufferingLimit: bufferingLimit)
+    }
+
+    func currentPageTargetIdentifier() async -> String? {
+        guard let router else {
+            return nil
+        }
+        return await router.currentPageTargetIdentifierSnapshot()
+    }
+
+    func sendPage<C: WITransportPageCommand>(
+        _ command: sending C,
+        targetIdentifier: String
+    ) async throws -> C.Response {
+        let parametersData = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
+        let data = try await send(
+            scope: .page,
+            method: C.method,
+            parametersData: parametersData,
+            targetIdentifierOverride: targetIdentifier
+        )
+        return try decodeTransportResponse(C.Response.self, from: data)
+    }
 }
 
 private extension WITransportSession {
@@ -218,6 +250,15 @@ private extension WITransportSession {
     }
 
     func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> Data {
+        try await send(scope: scope, method: method, parametersData: parametersData, targetIdentifierOverride: nil)
+    }
+
+    func send(
+        scope: WITransportTargetScope,
+        method: String,
+        parametersData: Data?,
+        targetIdentifierOverride: String?
+    ) async throws -> Data {
         guard let router, let backend else {
             throw WITransportError.notAttached
         }
@@ -226,7 +267,12 @@ private extension WITransportSession {
             return compatibilityResponse
         }
 
-        return try await router.send(scope: scope, method: method, parametersData: parametersData)
+        return try await router.send(
+            scope: scope,
+            method: method,
+            parametersData: parametersData,
+            targetIdentifierOverride: targetIdentifierOverride
+        )
     }
 
     func log(_ message: String) {
@@ -278,6 +324,36 @@ private extension WITransportSession {
             Task {
                 await router.disconnect()
             }
+        }
+    }
+
+    func encodeTransportParameters<Parameters: Encodable>(
+        _ parameters: Parameters,
+        emptyType: Parameters.Type
+    ) throws -> Data? {
+        if emptyType == WIEmptyTransportParameters.self {
+            return nil
+        }
+
+        do {
+            let data = try JSONEncoder().encode(parameters)
+            if data == Data("{}".utf8) {
+                return nil
+            }
+            return data
+        } catch {
+            throw WITransportError.invalidCommandEncoding(error.localizedDescription)
+        }
+    }
+
+    func decodeTransportResponse<Response: Decodable>(
+        _ type: Response.Type,
+        from data: Data
+    ) throws -> Response {
+        do {
+            return try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw WITransportError.invalidResponse(error.localizedDescription)
         }
     }
 

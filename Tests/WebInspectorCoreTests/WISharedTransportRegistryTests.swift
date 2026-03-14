@@ -193,6 +193,61 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func networkTransportDriverCapturesRequestsFromPrewarmedProvisionalTargetBeforeCommit() async {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A"]
+        })
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-early",
+                "timestamp": 1.0,
+                "type": "Document",
+                "request": [
+                    "url": "https://example.org/",
+                    "method": "GET",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-B"
+        )
+
+        #expect(await waitForCondition {
+            driver.store.entries.contains {
+                $0.sessionID == "page-B"
+                    && $0.url == "https://example.org/"
+                    && $0.method == "GET"
+            }
+        })
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func registryDetachesTransportOnlyAfterLastLeaseIsReleased() async throws {
         let backend = FakeRegistryBackend()
         let registry = makeRegistry(using: backend)
@@ -370,6 +425,102 @@ struct WISharedTransportRegistryTests {
 
         #expect(await waitForCondition {
             backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        lease.removeNetworkConsumer(consumerID)
+        lease.release()
+    }
+
+    @Test
+    func networkIngressPrewarmsProvisionalPageTargetWithoutDuplicatingCommitEnable() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let webView = makeIsolatedTestWebView()
+
+        let lease = registry.acquireLease(for: webView)
+        let consumerID = UUID()
+        lease.addNetworkConsumer(consumerID) { _ in }
+
+        try await lease.ensureNetworkEventIngress()
+        #expect(backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A"])
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-A",
+                "newTargetId": "page-B",
+            ]
+        )
+
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"])
+
+        lease.removeNetworkConsumer(consumerID)
+        lease.release()
+    }
+
+    @Test
+    func destroyedTargetClearsNetworkEnableStateForReusedIdentifier() async throws {
+        let backend = FakeRegistryBackend()
+        let registry = makeRegistry(using: backend)
+        let webView = makeIsolatedTestWebView()
+
+        let lease = registry.acquireLease(for: webView)
+        let consumerID = UUID()
+        lease.addNetworkConsumer(consumerID) { _ in }
+
+        try await lease.ensureNetworkEventIngress()
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B"]
+        })
+
+        backend.emitRootEvent(
+            method: "Target.targetDestroyed",
+            params: [
+                "targetId": "page-B",
+            ]
+        )
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        #expect(await waitForCondition {
+            backend.sentPageTargets.filter { $0.method == "Network.enable" }.map(\.targetIdentifier) == ["page-A", "page-B", "page-B"]
         })
 
         lease.removeNetworkConsumer(consumerID)
@@ -973,7 +1124,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         return nil
     }
 
-    func emitPageEvent(method: String, params: [String: Any]) {
+    func emitPageEvent(method: String, params: [String: Any], targetIdentifier: String = "page-A") {
         guard JSONSerialization.isValidJSONObject(params),
               let data = try? JSONSerialization.data(withJSONObject: params),
               let paramsString = String(data: data, encoding: .utf8)
@@ -984,7 +1135,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
 
         messageHandlers?.handlePageMessage(
             #"{"method":"\#(method)","params":\#(paramsString)}"#,
-            "page-A"
+            targetIdentifier
         )
         Task {
             await sharedTransportStateChanges.push(())
