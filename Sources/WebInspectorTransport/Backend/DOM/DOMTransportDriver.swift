@@ -745,6 +745,9 @@ private extension DOMTransportDriver {
     }
 
     func handle(_ envelope: WITransportEventEnvelope) {
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) {
+            forwardProtocolEvent(envelope)
+        }
         guard let update = eventTranslator.translate(envelope, nodeDescriptor: nodeDescriptor(from:)) else {
             return
         }
@@ -769,7 +772,6 @@ private extension DOMTransportDriver {
         nodes: [WITransportDOMNode],
         envelope: WITransportEventEnvelope
     ) {
-        forwardProtocolEvent(envelope)
         finishChildNodeRequests(for: parentNodeID, with: nodes)
         guard let parentEntry = entry(for: parentNodeID) else {
             return
@@ -783,7 +785,6 @@ private extension DOMTransportDriver {
     }
 
     func handleInspect(nodeID: Int, envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
         guard let token = activeSelectionToken() else {
             return
         }
@@ -848,19 +849,22 @@ private extension DOMTransportDriver {
     }
 
     func handleMutation(_ event: DOMGraphMutationEvent, envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
         graphStore?.applyMutationBundle(.init(events: [event]))
         restorePendingSelectionIfPossible()
         invalidateStyleIfNeeded(for: event)
     }
 
     func handleStyleSheetChanged(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) == false {
+            forwardProtocolEvent(envelope)
+        }
         invalidateStyleForCurrentSelection(reason: .styleSheetChanged)
     }
 
     func handleMediaQueryResultChanged(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) == false {
+            forwardProtocolEvent(envelope)
+        }
         invalidateStyleForCurrentSelection(reason: .mediaQueryChanged)
     }
 
@@ -1867,6 +1871,22 @@ private extension DOMTransportDriver {
             current = resolved.parent
         }
         return false
+    }
+
+    func shouldForwardEnvelopeBeforeDecode(_ method: String) -> Bool {
+        switch method {
+        case "DOM.setChildNodes",
+             "DOM.inspect",
+             "DOM.childNodeInserted",
+             "DOM.childNodeRemoved",
+             "DOM.childNodeCountUpdated",
+             "DOM.attributeModified",
+             "DOM.attributeRemoved",
+             "DOM.characterDataModified":
+            true
+        default:
+            false
+        }
     }
 
     func forwardProtocolEvent(_ envelope: WITransportEventEnvelope) {
