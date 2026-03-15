@@ -5,47 +5,6 @@ import WebKit
 
 @MainActor
 final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTransportCapabilityProviding {
-    private struct SetChildNodesParams: Decodable {
-        let parentId: Int
-        let nodes: [WITransportDOMNode]
-    }
-
-    private struct InspectParams: Decodable {
-        let nodeId: Int
-    }
-
-    private struct ChildNodeInsertedParams: Decodable {
-        let parentNodeId: Int
-        let previousNodeId: Int?
-        let node: WITransportDOMNode
-    }
-
-    private struct ChildNodeRemovedParams: Decodable {
-        let parentNodeId: Int
-        let nodeId: Int
-    }
-
-    private struct ChildNodeCountUpdatedParams: Decodable {
-        let nodeId: Int
-        let childNodeCount: Int
-    }
-
-    private struct AttributeModifiedParams: Decodable {
-        let nodeId: Int
-        let name: String
-        let value: String
-    }
-
-    private struct AttributeRemovedParams: Decodable {
-        let nodeId: Int
-        let name: String
-    }
-
-    private struct CharacterDataModifiedParams: Decodable {
-        let nodeId: Int
-        let characterData: String
-    }
-
     private struct SelectionUpdate {
         let requiredDepth: Int
         let payload: DOMSelectionSnapshotPayload
@@ -134,6 +93,8 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     private let registry: WISharedTransportRegistry
     private let logger = Logger(subsystem: "WebInspectorKit", category: "DOMTransportDriver")
+    private let transportClient = DOMTransportClient()
+    private let eventTranslator = DOMTransportEventTranslator()
     private let eventConsumerIdentifier = UUID()
     private let selectionBridge: (any DOMSelectionBridging)?
     private weak var graphStore: DOMGraphStore?
@@ -243,9 +204,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
     }
 
     func styles(nodeId: Int, maxMatchedRules: Int) async throws -> DOMNodeStylePayload {
-        let lease = try activeLease()
-        try await lease.ensureAttached()
-        try await lease.ensureCSSDomainReady()
+        let lease = try await transportClient.preparedCSSLease(from: lease)
 
         async let inlineResponse = inlineStylesResult(nodeId: nodeId, lease: lease)
         async let matchedResponse = matchedStylesResult(nodeId: nodeId, lease: lease)
@@ -294,9 +253,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
             pendingSelectionRecoveryPathArmed = true
             return result
         }
-        let lease = try activeLease()
-        try await lease.ensureAttached()
-        try await lease.ensureDOMEventIngress()
+        let lease = try await transportClient.preparedDOMEventLease(from: lease)
 
         if selectionRequest != nil {
             await cancelSelectionMode()
@@ -330,7 +287,10 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
         selectionTask = nil
         finishSelectionRequest(result: .success(.init(cancelled: true, requiredDepth: 0)))
         do {
-            _ = try await activeLease().sendPage(EngineDOMSetInspectModeEnabled(enabled: false))
+            _ = try await transportClient.sendPage(
+                EngineDOMSetInspectModeEnabled(enabled: false),
+                using: lease
+            )
         } catch {
             // Best effort.
         }
@@ -338,7 +298,10 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func highlight(nodeId: Int) async {
         do {
-            _ = try await activeLease().sendPage(EngineDOMHighlightNode(nodeId: nodeId))
+            _ = try await transportClient.sendPage(
+                EngineDOMHighlightNode(nodeId: nodeId),
+                using: lease
+            )
         } catch {
             logger.debug("highlight failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -346,7 +309,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func hideHighlight() async {
         do {
-            _ = try await activeLease().sendPage(EngineDOMHideHighlight())
+            _ = try await transportClient.sendPage(EngineDOMHideHighlight(), using: lease)
         } catch {
             logger.debug("hide highlight failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -354,7 +317,10 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func removeNode(nodeId: Int) async {
         do {
-            _ = try await activeLease().sendPage(EngineDOMRemoveNode(nodeId: nodeId))
+            _ = try await transportClient.sendPage(
+                EngineDOMRemoveNode(nodeId: nodeId),
+                using: lease
+            )
         } catch {
             logger.debug("remove node failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -362,8 +328,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func removeNodeWithUndo(nodeId: Int) async -> Int? {
         do {
-            let lease = try activeLease()
-            try await lease.ensureAttached()
+            let lease = try await transportClient.preparedDOMEventLease(from: lease)
             _ = try await lease.sendPage(EngineDOMMarkUndoableState())
             _ = try await lease.sendPage(EngineDOMRemoveNode(nodeId: nodeId))
 
@@ -383,7 +348,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
             return false
         }
         do {
-            _ = try await activeLease().sendPage(EngineDOMUndo())
+            _ = try await transportClient.sendPage(EngineDOMUndo(), using: lease)
             undoStack.removeLast()
             redoStack.append(undoToken)
             return true
@@ -399,7 +364,7 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
             return false
         }
         do {
-            _ = try await activeLease().sendPage(EngineDOMRedo())
+            _ = try await transportClient.sendPage(EngineDOMRedo(), using: lease)
             redoStack.removeLast()
             undoStack.append(undoToken)
             return true
@@ -411,8 +376,9 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func setAttribute(nodeId: Int, name: String, value: String) async {
         do {
-            _ = try await activeLease().sendPage(
-                EngineDOMSetAttributeValue(nodeId: nodeId, name: name, value: value)
+            _ = try await transportClient.sendPage(
+                EngineDOMSetAttributeValue(nodeId: nodeId, name: name, value: value),
+                using: lease
             )
         } catch {
             logger.debug("set attribute failed: \(error.localizedDescription, privacy: .public)")
@@ -421,8 +387,9 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
 
     func removeAttribute(nodeId: Int, name: String) async {
         do {
-            _ = try await activeLease().sendPage(
-                EngineDOMRemoveAttribute(nodeId: nodeId, name: name)
+            _ = try await transportClient.sendPage(
+                EngineDOMRemoveAttribute(nodeId: nodeId, name: name),
+                using: lease
             )
         } catch {
             logger.debug("remove attribute failed: \(error.localizedDescription, privacy: .public)")
@@ -432,8 +399,9 @@ final class DOMTransportDriver: NSObject, WIDOMBackend, PageAgent, InspectorTran
     func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         switch kind {
         case .html:
-            let response = try await activeLease().sendPage(
-                WITransportCommands.DOM.GetOuterHTML(nodeId: nodeId)
+            let response = try await transportClient.sendPage(
+                WITransportCommands.DOM.GetOuterHTML(nodeId: nodeId),
+                using: lease
             )
             return response.outerHTML
 
@@ -577,10 +545,7 @@ private extension DOMTransportDriver {
     }
 
     func activeLease() throws -> WISharedTransportRegistry.Lease {
-        guard let lease else {
-            throw WebInspectorCoreError.scriptUnavailable
-        }
-        return lease
+        try transportClient.resolvedLease(from: lease)
     }
 
     func installSelectionRequest(
@@ -645,10 +610,7 @@ private extension DOMTransportDriver {
         maxDepth: Int,
         hydrateUnknownChildren: Bool
     ) async throws -> WITransportDOMNode {
-        let lease = try activeLease()
-        try await lease.ensureAttached()
-        try await lease.ensureDOMEventIngress()
-        try await lease.ensureCSSDomainReady()
+        let lease = try await transportClient.preparedDOMSnapshotLease(from: lease)
 
         let requestedDepth = max(1, maxDepth)
         let rootResponse = try await lease.sendPage(
@@ -757,10 +719,7 @@ private extension DOMTransportDriver {
     }
 
     func requestChildNodePayloads(parentNodeId: Int) async throws -> [WITransportDOMNode] {
-        let lease = try activeLease()
-        try await lease.ensureAttached()
-        try await lease.ensureDOMEventIngress()
-        try await lease.ensureCSSDomainReady()
+        let lease = try await transportClient.preparedDOMSnapshotLease(from: lease)
 
         return try await withCheckedThrowingContinuation { continuation in
             childNodeContinuations[parentNodeId, default: []].append(continuation)
@@ -786,52 +745,46 @@ private extension DOMTransportDriver {
     }
 
     func handle(_ envelope: WITransportEventEnvelope) {
-        switch envelope.method {
-        case "DOM.setChildNodes":
-            handleSetChildNodes(envelope)
-        case "DOM.inspect":
-            handleInspect(envelope)
-        case "DOM.documentUpdated":
-            handleDocumentUpdated()
-        case "DOM.childNodeInserted",
-             "DOM.childNodeRemoved",
-             "DOM.childNodeCountUpdated",
-             "DOM.attributeModified",
-             "DOM.attributeRemoved",
-             "DOM.characterDataModified":
-            handleMutation(envelope)
-        case "CSS.styleSheetChanged":
-            handleStyleSheetChanged(envelope)
-        case "CSS.mediaQueryResultChanged":
-            handleMediaQueryResultChanged(envelope)
-        default:
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) {
+            forwardProtocolEvent(envelope)
+        }
+        guard let update = eventTranslator.translate(envelope, nodeDescriptor: nodeDescriptor(from:)) else {
             return
+        }
+        switch update {
+        case .setChildNodes(let parentNodeID, let nodes):
+            handleSetChildNodes(parentNodeID: parentNodeID, nodes: nodes, envelope: envelope)
+        case .inspect(let nodeID):
+            handleInspect(nodeID: nodeID, envelope: envelope)
+        case .documentUpdated:
+            handleDocumentUpdated()
+        case .mutation(let event):
+            handleMutation(event, envelope: envelope)
+        case .styleSheetChanged:
+            handleStyleSheetChanged(envelope)
+        case .mediaQueryResultChanged:
+            handleMediaQueryResultChanged(envelope)
         }
     }
 
-    func handleSetChildNodes(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
-        guard let params = try? envelope.decodeParams(SetChildNodesParams.self) else {
-            return
-        }
-
-        finishChildNodeRequests(for: params.parentId, with: params.nodes)
-        guard let parentEntry = entry(for: params.parentId) else {
+    func handleSetChildNodes(
+        parentNodeID: Int,
+        nodes: [WITransportDOMNode],
+        envelope: WITransportEventEnvelope
+    ) {
+        finishChildNodeRequests(for: parentNodeID, with: nodes)
+        guard let parentEntry = entry(for: parentNodeID) else {
             return
         }
         graphStore?.applyMutationBundle(
             .init(events: [
-                .setChildNodes(parentNodeID: parentEntry.id.nodeID, nodes: params.nodes.map(nodeDescriptor(from:))),
+                .setChildNodes(parentNodeID: parentEntry.id.nodeID, nodes: nodes.map(nodeDescriptor(from:))),
             ])
         )
         invalidateStyleIfNeeded(changedNodeID: parentEntry.id.nodeID)
     }
 
-    func handleInspect(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
-        guard let params = try? envelope.decodeParams(InspectParams.self) else {
-            return
-        }
+    func handleInspect(nodeID: Int, envelope: WITransportEventEnvelope) {
         guard let token = activeSelectionToken() else {
             return
         }
@@ -845,7 +798,7 @@ private extension DOMTransportDriver {
             }
 
             do {
-                let selectionUpdate = try await self.makeSelectionUpdate(for: params.nodeId)
+                let selectionUpdate = try await self.makeSelectionUpdate(for: nodeID)
                 _ = try? await self.activeLease().sendPage(
                     EngineDOMSetInspectModeEnabled(enabled: false)
                 )
@@ -895,24 +848,23 @@ private extension DOMTransportDriver {
         }
     }
 
-    func handleMutation(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
-        guard let event = mutationEvent(for: envelope) else {
-            return
-        }
-
+    func handleMutation(_ event: DOMGraphMutationEvent, envelope: WITransportEventEnvelope) {
         graphStore?.applyMutationBundle(.init(events: [event]))
         restorePendingSelectionIfPossible()
         invalidateStyleIfNeeded(for: event)
     }
 
     func handleStyleSheetChanged(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) == false {
+            forwardProtocolEvent(envelope)
+        }
         invalidateStyleForCurrentSelection(reason: .styleSheetChanged)
     }
 
     func handleMediaQueryResultChanged(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(envelope)
+        if shouldForwardEnvelopeBeforeDecode(envelope.method) == false {
+            forwardProtocolEvent(envelope)
+        }
         invalidateStyleForCurrentSelection(reason: .mediaQueryChanged)
     }
 
@@ -1000,74 +952,6 @@ private extension DOMTransportDriver {
         }
 
         return deepest
-    }
-
-    func mutationEvent(for envelope: WITransportEventEnvelope) -> DOMGraphMutationEvent? {
-        switch envelope.method {
-        case "DOM.childNodeInserted":
-            guard let params = try? envelope.decodeParams(ChildNodeInsertedParams.self) else {
-                return nil
-            }
-            return .childNodeInserted(
-                parentNodeID: params.parentNodeId,
-                previousNodeID: params.previousNodeId,
-                node: nodeDescriptor(from: params.node)
-            )
-
-        case "DOM.childNodeRemoved":
-            guard let params = try? envelope.decodeParams(ChildNodeRemovedParams.self) else {
-                return nil
-            }
-            return .childNodeRemoved(parentNodeID: params.parentNodeId, nodeID: params.nodeId)
-
-        case "DOM.childNodeCountUpdated":
-            guard let params = try? envelope.decodeParams(ChildNodeCountUpdatedParams.self) else {
-                return nil
-            }
-            return .childNodeCountUpdated(
-                nodeID: params.nodeId,
-                childCount: params.childNodeCount,
-                layoutFlags: nil,
-                isRendered: nil
-            )
-
-        case "DOM.attributeModified":
-            guard let params = try? envelope.decodeParams(AttributeModifiedParams.self) else {
-                return nil
-            }
-            return .attributeModified(
-                nodeID: params.nodeId,
-                name: params.name,
-                value: params.value,
-                layoutFlags: nil,
-                isRendered: nil
-            )
-
-        case "DOM.attributeRemoved":
-            guard let params = try? envelope.decodeParams(AttributeRemovedParams.self) else {
-                return nil
-            }
-            return .attributeRemoved(
-                nodeID: params.nodeId,
-                name: params.name,
-                layoutFlags: nil,
-                isRendered: nil
-            )
-
-        case "DOM.characterDataModified":
-            guard let params = try? envelope.decodeParams(CharacterDataModifiedParams.self) else {
-                return nil
-            }
-            return .characterDataModified(
-                nodeID: params.nodeId,
-                value: params.characterData,
-                layoutFlags: nil,
-                isRendered: nil
-            )
-
-        default:
-            return nil
-        }
     }
 
     private func makeSelectionUpdate(for nodeId: Int) async throws -> SelectionUpdate {
@@ -1987,6 +1871,22 @@ private extension DOMTransportDriver {
             current = resolved.parent
         }
         return false
+    }
+
+    func shouldForwardEnvelopeBeforeDecode(_ method: String) -> Bool {
+        switch method {
+        case "DOM.setChildNodes",
+             "DOM.inspect",
+             "DOM.childNodeInserted",
+             "DOM.childNodeRemoved",
+             "DOM.childNodeCountUpdated",
+             "DOM.attributeModified",
+             "DOM.attributeRemoved",
+             "DOM.characterDataModified":
+            true
+        default:
+            false
+        }
     }
 
     func forwardProtocolEvent(_ envelope: WITransportEventEnvelope) {

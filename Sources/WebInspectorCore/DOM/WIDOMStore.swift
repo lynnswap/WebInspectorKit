@@ -57,12 +57,6 @@ public final class WIDOMStore {
         let nodeID: Int
     }
 
-    private struct ReloadRequest: Equatable {
-        let preserveState: Bool
-        let minimumDepth: Int?
-        let requestedDepth: Int
-    }
-
     package let session: WIDOMRuntime
 
     public private(set) var errorMessage: String?
@@ -83,9 +77,7 @@ public final class WIDOMStore {
     @ObservationIgnored private var suppressNextSelectedIDRefresh = false
     @ObservationIgnored private var frontendSelectionRecoveryTask: Task<Void, Never>?
     @ObservationIgnored private var frontendSelectionRecoveryKey: FrontendSelectionRecoveryKey?
-    @ObservationIgnored private var backgroundReloadTask: Task<Void, Never>?
-    @ObservationIgnored private var backgroundReloadRequest: ReloadRequest?
-    @ObservationIgnored private var queuedBackgroundReloadRequest: ReloadRequest?
+    @ObservationIgnored private let inspectorCoordinator = DOMInspectorCoordinator()
     @ObservationIgnored private let frontendBridge: (any WIDOMFrontendBridge)?
     @ObservationIgnored private var uiBridge: (any WIDOMUIBridge)?
     package var onDeleteMutationForTesting: (@MainActor (DeleteMutationEvent) -> Void)?
@@ -111,10 +103,7 @@ public final class WIDOMStore {
         pendingDeleteTask?.cancel()
         styleRefreshTask?.cancel()
         frontendSelectionRecoveryTask?.cancel()
-        backgroundReloadTask?.cancel()
-        backgroundReloadTask = nil
-        backgroundReloadRequest = nil
-        queuedBackgroundReloadRequest = nil
+        inspectorCoordinator.cancelReloads()
         session.detach()
         clearDeleteUndoHistory()
     }
@@ -435,80 +424,27 @@ private extension WIDOMStore {
         }
     }
 
-    private func scheduleBackgroundReload(_ request: ReloadRequest) {
-        if backgroundReloadRequest == request || queuedBackgroundReloadRequest == request {
-            return
-        }
-
-        guard backgroundReloadTask != nil else {
-            startBackgroundReloadTask(for: request)
-            return
-        }
-
-        queuedBackgroundReloadRequest = request
-    }
-
-    private func awaitReload(_ request: ReloadRequest) async {
-        if backgroundReloadRequest == request || queuedBackgroundReloadRequest == request {
-            if let backgroundReloadTask {
-                await backgroundReloadTask.value
-            }
-            return
-        }
-
-        if let backgroundReloadTask {
-            await backgroundReloadTask.value
-        }
-
-        guard !Task.isCancelled else {
-            return
-        }
-
-        await reloadInspectorImpl(request)
-    }
-
-    private func startBackgroundReloadTask(for request: ReloadRequest) {
-        backgroundReloadRequest = request
-        backgroundReloadTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-            await self.runBackgroundReloadLoop(startingWith: request)
+    private func scheduleBackgroundReload(_ request: DOMReloadRequest) {
+        inspectorCoordinator.scheduleReload(request) { [weak self] request in
+            await self?.reloadInspectorImpl(request)
         }
     }
 
-    private func runBackgroundReloadLoop(startingWith initialRequest: ReloadRequest) async {
-        var nextRequest: ReloadRequest? = initialRequest
-
-        while let request = nextRequest {
-            backgroundReloadRequest = request
-            await reloadInspectorImpl(request)
-
-            guard !Task.isCancelled else {
-                break
-            }
-
-            nextRequest = queuedBackgroundReloadRequest
-            queuedBackgroundReloadRequest = nil
+    private func awaitReload(_ request: DOMReloadRequest) async {
+        await inspectorCoordinator.awaitReload(request) { [weak self] request in
+            await self?.reloadInspectorImpl(request)
         }
-
-        backgroundReloadTask = nil
-        backgroundReloadRequest = nil
-        queuedBackgroundReloadRequest = nil
     }
 
     private func cancelBackgroundReload() {
-        backgroundReloadTask?.cancel()
-        backgroundReloadTask = nil
-        backgroundReloadRequest = nil
-        queuedBackgroundReloadRequest = nil
+        inspectorCoordinator.cancelReloads()
     }
 
     private func makeReloadRequest(
         preserveState: Bool,
         minimumDepth: Int?
-    ) -> ReloadRequest {
-        ReloadRequest(
+    ) -> DOMReloadRequest {
+        DOMReloadRequest(
             preserveState: preserveState,
             minimumDepth: minimumDepth,
             requestedDepth: requestedDocumentDepth(
@@ -540,7 +476,7 @@ private extension WIDOMStore {
         )
     }
 
-    private func reloadInspectorImpl(_ request: ReloadRequest) async {
+    private func reloadInspectorImpl(_ request: DOMReloadRequest) async {
         guard session.hasPageWebView else {
             publishRecoverableError("Web view unavailable.")
             return

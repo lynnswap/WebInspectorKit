@@ -1,8 +1,8 @@
 import Testing
 import WebKit
 import WebInspectorTestSupport
-@testable import WebInspectorUI
 @testable import WebInspectorCore
+@testable import WebInspectorTransport
 
 @MainActor
 @Suite(.serialized, .webKitIsolated)
