@@ -119,7 +119,7 @@ package final class WINetworkRuntime {
             return
         }
 
-        guard let locator = body.deferredLocator else {
+        guard body.deferredLocator != nil else {
             body.markFailed(.unavailable)
             return
         }
@@ -135,17 +135,21 @@ package final class WINetworkRuntime {
                 return
             }
 
-            let fetchResult = await backend.fetchBodyResult(locator: locator, role: role)
-
-            guard !Task.isCancelled else {
-                self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
-                return
-            }
-
             guard self.body(for: entry, role: role) === body else {
                 return
             }
             guard self.hasAttachedPageWebView else {
+                self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
+                return
+            }
+            guard let locator = body.deferredLocator else {
+                body.markFailed(.unavailable)
+                return
+            }
+
+            let fetchResult = await backend.fetchBodyResult(locator: locator, role: role)
+
+            guard !Task.isCancelled else {
                 self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
                 return
             }

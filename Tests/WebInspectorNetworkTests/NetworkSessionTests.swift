@@ -96,6 +96,52 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func requestBodyIfNeededRereadsDeferredLocatorBeforeDispatchingFetch() async {
+        let fetcher = StubNetworkBodyFetcher { _, role in
+            NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "request-body",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let session = WINetworkRuntime(bodyFetcher: fetcher)
+        let webView = makeIsolatedTestWebView()
+        session.attach(pageWebView: webView)
+
+        let entry = makeEntry()
+        let body = NetworkBody(
+            kind: .text,
+            preview: "request-preview",
+            full: nil,
+            size: nil,
+            isBase64Encoded: false,
+            isTruncated: true,
+            summary: nil,
+            deferredLocator: .networkRequest(id: "request-ref", targetIdentifier: "page-provisional"),
+            formEntries: [],
+            fetchState: .inline,
+            role: .request
+        )
+        entry.requestBody = body
+        let states = fetchStateRecorder(for: body)
+
+        session.requestBodyIfNeeded(for: entry, role: .request)
+        body.rebindDeferredTarget(from: "page-provisional", to: "page-committed")
+
+        let fetched = await states.next(where: { $0 == "full" })
+        #expect(fetched == "full")
+        #expect(fetcher.fetchRequestIDs == ["request-ref"])
+        #expect(fetcher.fetchTargetIdentifiers == ["page-committed"])
+    }
+
+    @Test
     func requestBodyIfNeededSkipsWhenSessionIsDetached() async {
         let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("fetchBody should not run while detached")
@@ -373,6 +419,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
     private let onFetch: @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
     private let supportedRoles: Set<NetworkBody.Role>
     private(set) var fetchRequestIDs: [String?] = []
+    private(set) var fetchTargetIdentifiers: [String?] = []
 
     init(
         supportedRoles: Set<NetworkBody.Role> = Set(NetworkBody.Role.allCases),
@@ -401,6 +448,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
 
     func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         fetchRequestIDs.append(locator.requestID)
+        fetchTargetIdentifiers.append(locator.targetIdentifier)
         return await onFetch(locator, role)
     }
 }
@@ -450,6 +498,17 @@ private extension NetworkDeferredBodyLocator {
         case .networkRequest(let requestID, _):
             requestID
         case .pageResource, .opaqueHandle:
+            nil
+        }
+    }
+
+    var targetIdentifier: String? {
+        switch self {
+        case .networkRequest(_, let targetIdentifier):
+            targetIdentifier
+        case .pageResource(let targetIdentifier, _, _):
+            targetIdentifier
+        case .opaqueHandle:
             nil
         }
     }
