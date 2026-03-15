@@ -197,13 +197,26 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
 
         func appendResources(
             from subtree: WITransportFrameResourceTree,
-            parentSessionID: String
+            parentSessionID: String,
+            parentTargetIdentifier: String?
         ) {
+            let scopedTargetIdentifiers = Set(
+                subtree.resources.compactMap { resource in
+                    normalizeScopeID(resource.targetId)
+                }
+            )
+            let subtreeTargetIdentifier: String?
+            if scopedTargetIdentifiers.count == 1 {
+                subtreeTargetIdentifier = scopedTargetIdentifiers.first ?? parentTargetIdentifier
+            } else {
+                subtreeTargetIdentifier = parentTargetIdentifier
+            }
+            let subtreeSessionID = subtreeTargetIdentifier.map(defaultSessionID) ?? parentSessionID
             let frameID = normalizeScopeID(subtree.frame.id)
             seeds.append(
                 NetworkEntrySeed(
                     kind: .historical,
-                    sessionID: parentSessionID,
+                    sessionID: subtreeSessionID,
                     requestID: allocateRequestID(),
                     url: subtree.frame.url,
                     method: "UNKNOWN",
@@ -214,7 +227,7 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
                     requestType: WITransportPageResourceType.document.rawValue,
                     phase: .completed,
                     responseBody: responseBodyLocator(
-                        targetIdentifier: defaultTargetIdentifier,
+                        targetIdentifier: subtreeTargetIdentifier,
                         frameID: frameID,
                         url: subtree.frame.url
                     )
@@ -237,8 +250,9 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
             )
 
             for resource in subtree.resources {
-                let ownerSessionID = normalizeScopeID(resource.targetId) ?? parentSessionID
-                let resolvedTargetIdentifier = normalizeScopeID(resource.targetId) ?? defaultTargetIdentifier
+                let resourceTargetIdentifier = normalizeScopeID(resource.targetId)
+                let ownerSessionID = resourceTargetIdentifier.map(defaultSessionID) ?? subtreeSessionID
+                let resolvedTargetIdentifier = resourceTargetIdentifier ?? subtreeTargetIdentifier
                 let isFailed = (resource.failed ?? false) || (resource.canceled ?? false)
                 seeds.append(
                     NetworkEntrySeed(
@@ -279,13 +293,18 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
             }
 
             for childFrame in subtree.childFrames ?? [] {
-                appendResources(from: childFrame, parentSessionID: parentSessionID)
+                appendResources(
+                    from: childFrame,
+                    parentSessionID: subtreeSessionID,
+                    parentTargetIdentifier: subtreeTargetIdentifier
+                )
             }
         }
 
         appendResources(
             from: result.response.frameTree,
-            parentSessionID: defaultSessionID(capturedTargetIdentifier)
+            parentSessionID: defaultSessionID(capturedTargetIdentifier),
+            parentTargetIdentifier: defaultTargetIdentifier
         )
         return NetworkBootstrapLoad(seeds: seeds)
     }

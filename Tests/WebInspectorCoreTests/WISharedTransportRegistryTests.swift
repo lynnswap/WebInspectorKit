@@ -1193,6 +1193,99 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func networkTransportDriverPropagatesFallbackChildFrameSessionFromTargetScopedResources() async throws {
+        let backend = FakeRegistryBackend(
+            pageResultProvider: { method, payload in
+                switch method {
+                case WITransportCommands.Page.GetResourceTree.method:
+                    return makeResourceTreeResultPayload(
+                        mainURL: "https://example.com/",
+                        resources: [],
+                        childFrames: [
+                            [
+                                "frame": [
+                                    "id": "frame-child",
+                                    "parentId": "frame-main",
+                                    "loaderId": "loader-child",
+                                    "url": "https://example.com/frame.html",
+                                    "securityOrigin": "https://example.com",
+                                    "mimeType": "text/html",
+                                ],
+                                "resources": [
+                                    makeFrameResourcePayload(
+                                        url: "https://example.com/frame-script.js",
+                                        type: "Script",
+                                        mimeType: "text/javascript",
+                                        targetId: "page-child"
+                                    ),
+                                ],
+                            ],
+                        ]
+                    )
+                case WITransportCommands.Page.GetResourceContent.method:
+                    let params = payload["params"] as? [String: Any]
+                    let frameID = params?["frameId"] as? String
+                    let url = params?["url"] as? String
+                    guard frameID == "frame-child",
+                          url == "https://example.com/frame.html" else {
+                        return nil
+                    }
+                    return [
+                        "content": "<html>child target</html>",
+                        "base64Encoded": false,
+                    ]
+                default:
+                    return nil
+                }
+            },
+            pageTargetedResultProvider: { method, payload, targetIdentifier in
+                guard method == WITransportCommands.Page.GetResourceContent.method,
+                      targetIdentifier == "page-child" else {
+                    return nil
+                }
+                let params = payload["params"] as? [String: Any]
+                let frameID = params?["frameId"] as? String
+                let url = params?["url"] as? String
+                guard frameID == "frame-child",
+                      url == "https://example.com/frame.html" else {
+                    return nil
+                }
+                return [
+                    "content": "<html>child target</html>",
+                    "base64Encoded": false,
+                ]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        let entry = try #require(driver.store.entries.first { $0.url == "https://example.com/frame.html" })
+        #expect(entry.sessionID == "page-child")
+
+        let locator = try #require(entry.responseBody?.deferredLocator)
+        let fetched = await driver.fetchBodyResult(locator: locator, role: .response)
+
+        guard case .fetched(let body) = fetched else {
+            Issue.record("Expected fallback child frame document body to be fetched from its child target")
+            return
+        }
+
+        #expect(body.full == "<html>child target</html>")
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Page.GetResourceContent.method
+                    && $0.targetIdentifier == "page-child"
+            }
+        )
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func networkTransportDriverFetchesBootstrappedChildFrameBodyWhenSnapshotProvidesExactTarget() async throws {
         var backend: FakeRegistryBackend!
         backend = FakeRegistryBackend(
