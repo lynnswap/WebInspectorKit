@@ -152,13 +152,12 @@ public final class NetworkBody {
     public var isBase64Encoded: Bool
     public var isTruncated: Bool
     public var summary: String?
-    public var reference: String?
-    public var handle: AnyObject?
     public var formEntries: [FormEntry]
     public var fetchState: FetchState
     public var role: Role
+    package var deferredLocator: NetworkDeferredBodyLocator?
 
-    public init(
+    public convenience init(
         kind: Kind = .text,
         preview: String?,
         full: String? = nil,
@@ -166,8 +165,34 @@ public final class NetworkBody {
         isBase64Encoded: Bool = false,
         isTruncated: Bool = false,
         summary: String? = nil,
-        reference: String? = nil,
-        handle: AnyObject? = nil,
+        formEntries: [FormEntry] = [],
+        fetchState: FetchState? = nil,
+        role: Role = .response
+    ) {
+        self.init(
+            kind: kind,
+            preview: preview,
+            full: full,
+            size: size,
+            isBase64Encoded: isBase64Encoded,
+            isTruncated: isTruncated,
+            summary: summary,
+            deferredLocator: nil,
+            formEntries: formEntries,
+            fetchState: fetchState,
+            role: role
+        )
+    }
+
+    package init(
+        kind: Kind = .text,
+        preview: String?,
+        full: String? = nil,
+        size: Int? = nil,
+        isBase64Encoded: Bool = false,
+        isTruncated: Bool = false,
+        summary: String? = nil,
+        deferredLocator: NetworkDeferredBodyLocator? = nil,
         formEntries: [FormEntry] = [],
         fetchState: FetchState? = nil,
         role: Role = .response
@@ -181,15 +206,12 @@ public final class NetworkBody {
         self.isBase64Encoded = isBase64Encoded
         self.isTruncated = isTruncated
         self.summary = summary
-        self.reference = reference
-        self.handle = handle
+        self.deferredLocator = deferredLocator
         self.formEntries = formEntries
         self.role = role
-        let hasReference = reference?.isEmpty == false
-        let hasHandle = handle != nil
         if let fetchState {
             self.fetchState = fetchState
-        } else if resolvedFull == nil && (hasReference || hasHandle) {
+        } else if resolvedFull == nil && deferredLocator != nil {
             self.fetchState = .inline
         } else {
             self.fetchState = .full
@@ -213,10 +235,16 @@ public final class NetworkBody {
         let rawSize = dictionary["size"]
         let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
         let summary = dictionary["summary"] as? String
-        let reference = dictionary["ref"] as? String
-        let handle = dictionary["handle"] as AnyObject?
         let formEntries = (dictionary["formEntries"] as? [NSDictionary] ?? [])
             .compactMap(FormEntry.init(dictionary:))
+        let deferredLocator: NetworkDeferredBodyLocator?
+        if let reference = dictionary["ref"] as? String, !reference.isEmpty {
+            deferredLocator = .networkRequest(id: reference, targetIdentifier: nil)
+        } else if let handle = dictionary["handle"] as AnyObject? {
+            deferredLocator = .opaqueHandle(handle)
+        } else {
+            deferredLocator = nil
+        }
 
         self.init(
             kind: kind,
@@ -226,8 +254,7 @@ public final class NetworkBody {
             isBase64Encoded: base64,
             isTruncated: truncated,
             summary: summary,
-            reference: reference,
-            handle: handle,
+            deferredLocator: deferredLocator,
             formEntries: formEntries
         )
     }
@@ -265,11 +292,20 @@ public final class NetworkBody {
             isBase64Encoded: isBase64,
             isTruncated: payload.truncated,
             summary: payload.summary,
-            reference: payload.ref,
-            handle: payload.handle,
+            deferredLocator: makeDeferredLocator(from: payload),
             formEntries: entries,
             role: role
         )
+    }
+
+    package static func makeDeferredLocator(from payload: NetworkBodyPayload) -> NetworkDeferredBodyLocator? {
+        if let ref = payload.ref, !ref.isEmpty {
+            return .networkRequest(id: ref, targetIdentifier: nil)
+        }
+        if let handle = payload.handle {
+            return .opaqueHandle(handle)
+        }
+        return nil
     }
 
     public var displayText: String? {
@@ -281,6 +317,10 @@ public final class NetworkBody {
             return true
         }
         return false
+    }
+
+    public var hasDeferredContent: Bool {
+        deferredLocator != nil
     }
 
     public func markFetching() {
@@ -303,5 +343,51 @@ public final class NetworkBody {
         self.isTruncated = isTruncated
         self.size = size ?? fullBody.count
         fetchState = .full
+    }
+
+    package func rebindDeferredTarget(
+        from previousTargetIdentifier: String?,
+        to targetIdentifier: String?
+    ) {
+        switch deferredLocator {
+        case .pageResource(let currentTargetIdentifier, let frameID, let url)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            deferredLocator = .pageResource(
+                targetIdentifier: targetIdentifier,
+                frameID: frameID,
+                url: url
+            )
+        case .networkRequest(let requestID, let currentTargetIdentifier)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            deferredLocator = .networkRequest(
+                id: requestID,
+                targetIdentifier: targetIdentifier
+            )
+        default:
+            return
+        }
+    }
+
+    package func defaultDeferredNetworkRequestTarget(_ targetIdentifier: String?) {
+        guard case .networkRequest(let requestID, nil)? = deferredLocator else {
+            return
+        }
+        deferredLocator = .networkRequest(
+            id: requestID,
+            targetIdentifier: targetIdentifier
+        )
+    }
+
+    package func adoptDeferredNetworkRequestTarget(from other: NetworkBody) {
+        guard case .networkRequest(let requestID, let currentTargetIdentifier)? = deferredLocator,
+              case .networkRequest(_, let incomingTargetIdentifier)? = other.deferredLocator,
+              let incomingTargetIdentifier,
+              currentTargetIdentifier != incomingTargetIdentifier else {
+            return
+        }
+        deferredLocator = .networkRequest(
+            id: requestID,
+            targetIdentifier: incomingTargetIdentifier
+        )
     }
 }

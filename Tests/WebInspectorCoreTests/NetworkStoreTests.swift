@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WebInspectorTestSupport
 @testable import WebInspectorCore
@@ -124,6 +125,31 @@ struct NetworkStoreTests {
 
         let entry = try #require(store.entry(forRequestID: 500, sessionID: "resource-session"))
         #expect(entry.method == "GET")
+    }
+
+    @Test
+    func decodedDeferredBodiesInheritSessionTargetIdentifierWhenAvailable() throws {
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 77,
+            "url": "https://example.com/upload",
+            "method": "POST",
+            "body": [
+                "kind": "text",
+                "truncated": true,
+                "ref": "request-77"
+            ],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: "page-child")
+
+        let locator = try #require(payload.requestBody?.deferredLocator)
+        switch locator {
+        case .networkRequest(let requestID, let targetIdentifier):
+            #expect(requestID == "request-77")
+            #expect(targetIdentifier == "page-child")
+        case .pageResource, .opaqueHandle:
+            Issue.record("Expected a network request locator")
+        }
     }
 
     @Test
@@ -338,6 +364,83 @@ struct NetworkStoreTests {
         #expect(store.entry(forRequestID: 2, sessionID: nil)?.requestID == 2)
         #expect(store.entry(forRequestID: 3, sessionID: nil)?.requestID == 3)
 
+    }
+
+    @Test
+    func applySeedsReturnsOnlyEntriesThatRemainAfterPruning() {
+        let store = NetworkStore()
+        store.maxEntries = 1
+
+        let inserted = store.applySeeds([
+            NetworkEntrySeed(
+                kind: .stable,
+                sessionID: "page-A",
+                requestID: 1,
+                url: "https://example.com/one.js",
+                method: "UNKNOWN",
+                startTimestamp: 0,
+                mimeType: "text/javascript",
+                requestType: "Script",
+                phase: .completed
+            ),
+            NetworkEntrySeed(
+                kind: .stable,
+                sessionID: "page-A",
+                requestID: 2,
+                url: "https://example.com/two.js",
+                method: "UNKNOWN",
+                startTimestamp: 0,
+                mimeType: "text/javascript",
+                requestType: "Script",
+                phase: .completed
+            ),
+        ])
+
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.requestID == 2)
+        #expect(inserted.count == 1)
+        #expect(inserted.first === store.entries.first)
+        #expect(inserted.first?.url == "https://example.com/two.js")
+    }
+
+    @Test
+    func bootstrapInFlightEntryRebasesSyntheticStartTimeOnLateResponseAndFinish() throws {
+        let store = NetworkStore()
+        let inserted = store.applySeeds([
+            NetworkEntrySeed(
+                kind: .stable,
+                sessionID: "page-A",
+                requestID: 41,
+                url: "https://example.com/inflight.js",
+                method: "UNKNOWN",
+                startTimestamp: Date().timeIntervalSince1970,
+                mimeType: "text/javascript",
+                requestType: "Script",
+                phase: .pending
+            ),
+        ])
+        let entry = try #require(inserted.first)
+        let response = try NetworkTestHelpers.decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 41,
+            "url": "https://example.com/inflight.js",
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "text/javascript",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 5_000.0, wallMs: 1_700_000_005_000.0)
+        ], sessionID: "page-A")
+        let finished = try NetworkTestHelpers.decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 41,
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 5_250.0, wallMs: 1_700_000_005_250.0)
+        ], sessionID: "page-A")
+
+        store.applyEvent(response)
+        store.applyEvent(finished)
+
+        #expect(entry.startTimestamp == 5.0)
+        #expect(entry.endTimestamp == 5.25)
+        #expect(entry.duration == 0.25)
     }
 
     @Test

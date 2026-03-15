@@ -51,9 +51,8 @@ private final class PreviewNetworkBackend: WINetworkBackend {
         return false
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        _ = ref
-        _ = handle
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        _ = locator
         _ = role
         return .bodyUnavailable
     }

@@ -707,7 +707,7 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
         }
         .store(in: &observationHandles)
 
-        body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState, \.reference]) {
+        body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState]) {
             [weak self, weak body] in
             guard let self, let body else { return }
             self.updateBodySecondaryText(makeSecondaryText(body))

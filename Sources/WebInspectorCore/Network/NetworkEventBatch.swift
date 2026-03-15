@@ -296,13 +296,16 @@ package struct HTTPNetworkEvent: NetworkEventProtocol {
         }
 
         if let body = payload.body {
+            let deferredTargetIdentifier = sessionID == "page" || sessionID.isEmpty ? nil : sessionID
             switch kind {
             case .requestWillBeSent:
                 self.requestBody = NetworkBody.from(payload: body, role: .request)
+                self.requestBody?.defaultDeferredNetworkRequestTarget(deferredTargetIdentifier)
                 self.responseBody = nil
             case .loadingFinished:
                 self.requestBody = nil
                 self.responseBody = NetworkBody.from(payload: body, role: .response)
+                self.responseBody?.defaultDeferredNetworkRequestTarget(deferredTargetIdentifier)
             default:
                 self.requestBody = nil
                 self.responseBody = nil

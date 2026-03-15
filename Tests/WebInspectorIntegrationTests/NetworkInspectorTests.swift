@@ -23,7 +23,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: "resp_ref",
+            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -36,7 +36,6 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
-            reference: "resp_ref",
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -60,7 +59,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: "req_ref",
+            deferredLocator: .networkRequest(id: "req_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .request
@@ -73,7 +72,6 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: "req_ref",
             formEntries: [],
             fetchState: .full,
             role: .request
@@ -96,8 +94,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: nil,
-            handle: NSObject(),
+            deferredLocator: .opaqueHandle(NSObject()),
             formEntries: [],
             fetchState: nil,
             role: .response
@@ -109,14 +106,14 @@ struct NetworkInspectorTests {
 
     @Test
     func selectingEntryFetchesSelectedBodiesWhenAttached() async throws {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            switch ref {
+        let fetcher = StubNetworkBodyFetcher { locator, role in
+            switch locator.requestID {
             case "req_ref":
-                return self.makeFetchedBody(full: "resolved request", reference: ref, role: role)
+                return self.makeFetchedBody(full: "resolved request", role: role)
             case "resp_ref":
-                return self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
+                return self.makeFetchedBody(full: "resolved response", role: role)
             default:
-                Issue.record("unexpected body ref: \(ref ?? "nil")")
+                Issue.record("unexpected body locator")
                 return nil
             }
         }
@@ -136,16 +133,16 @@ struct NetworkInspectorTests {
         _ = await requestBodyStates.next(where: { $0 == "full" })
         _ = await responseBodyStates.next(where: { $0 == "full" })
 
-        #expect(fetcher.fetchRefs.count == 2)
-        #expect(Set(fetcher.fetchRefs.compactMap { $0 }) == Set(["req_ref", "resp_ref"]))
+        #expect(fetcher.fetchRequestIDs.count == 2)
+        #expect(Set(fetcher.fetchRequestIDs.compactMap { $0 }) == Set(["req_ref", "resp_ref"]))
         #expect(entry.requestBody?.full == "resolved request")
         #expect(entry.responseBody?.full == "resolved response")
     }
 
     @Test
     func selectingEntryWhileDetachedWaitsForAttachBeforeFetching() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            self.makeFetchedBody(full: "resolved response", reference: ref, role: role)
+        let fetcher = StubNetworkBodyFetcher { _, role in
+            self.makeFetchedBody(full: "resolved response", role: role)
         }
         let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let entry = makeEntry()
@@ -154,7 +151,7 @@ struct NetworkInspectorTests {
 
         store.selectEntry(entry)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
         #expect(body.fetchState == .inline)
 
         let webView = makeIsolatedTestWebView()
@@ -162,15 +159,15 @@ struct NetworkInspectorTests {
         store.attach(to: webView)
 
         _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchRefs == ["resp_ref"])
+        #expect(fetcher.fetchRequestIDs == ["resp_ref"])
         #expect(body.fetchState == .full)
         #expect(body.full == "resolved response")
     }
 
     @Test
     func selectedEntryBodyAppearanceTriggersFetch() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            self.makeFetchedBody(full: "late body", reference: ref, role: role)
+        let fetcher = StubNetworkBodyFetcher { _, role in
+            self.makeFetchedBody(full: "late body", role: role)
         }
         let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
@@ -179,14 +176,14 @@ struct NetworkInspectorTests {
 
         store.selectEntry(entry)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
 
         let body = makeBody(reference: "late-ref", role: .response)
         let bodyStates = fetchStateRecorder(for: body)
         entry.responseBody = body
 
         _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchRefs == ["late-ref"])
+        #expect(fetcher.fetchRequestIDs == ["late-ref"])
         #expect(body.fetchState == .full)
         #expect(body.full == "late body")
     }
@@ -196,14 +193,14 @@ struct NetworkInspectorTests {
         let slowFetchStarted = AsyncGate()
         let releaseSlowFetch = AsyncGate()
         let slowFetchFinished = AsyncGate()
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            if ref == "slow-ref" {
+        let fetcher = StubNetworkBodyFetcher { locator, role in
+            if locator.requestID == "slow-ref" {
                 await slowFetchStarted.open()
                 await releaseSlowFetch.wait()
                 await slowFetchFinished.open()
-                return self.makeFetchedBody(full: "slow body", reference: ref, role: role)
+                return self.makeFetchedBody(full: "slow body", role: role)
             }
-            return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
+            return self.makeFetchedBody(full: "fast body", role: role)
         }
         let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
         let webView = makeIsolatedTestWebView()
@@ -237,7 +234,7 @@ struct NetworkInspectorTests {
 
     @Test
     func detachClearsSelectedEntrySoReattachDoesNotFetchStaleBody() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
+        let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("reattach should not fetch cleared selection")
             return nil
         }
@@ -251,7 +248,7 @@ struct NetworkInspectorTests {
         let webView = makeIsolatedTestWebView()
         store.attach(to: webView)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
         #expect(body.fetchState == .inline)
     }
 
@@ -545,7 +542,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: reference,
+            deferredLocator: .networkRequest(id: reference, targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: role
@@ -554,7 +551,6 @@ struct NetworkInspectorTests {
 
     private func makeFetchedBody(
         full: String,
-        reference: String?,
         role: NetworkBody.Role
     ) -> NetworkBody {
         NetworkBody(
@@ -565,7 +561,6 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
-            reference: reference,
             formEntries: [],
             fetchState: .full,
             role: role
@@ -673,22 +668,33 @@ private func displayEntryRecorder(
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
-    private(set) var fetchRefs: [String?] = []
+    private let onFetch: @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
+    private(set) var fetchRequestIDs: [String?] = []
 
     init(
-        onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+        onFetch: @escaping @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = { ref, handle, role in
-            guard let body = await onFetch(ref, handle, role) else {
+        self.onFetch = { locator, role in
+            guard let body = await onFetch(locator, role) else {
                 return .bodyUnavailable
             }
             return .fetched(body)
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        fetchRefs.append(ref)
-        return await onFetch(ref, handle, role)
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        fetchRequestIDs.append(locator.requestID)
+        return await onFetch(locator, role)
+    }
+}
+
+private extension NetworkDeferredBodyLocator {
+    var requestID: String? {
+        switch self {
+        case .networkRequest(let requestID, _):
+            requestID
+        case .pageResource, .opaqueHandle:
+            nil
+        }
     }
 }

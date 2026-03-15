@@ -42,6 +42,8 @@ public final class WINetworkStore {
         if let selectedEntry {
             session.cancelBodyFetches(for: selectedEntry)
         }
+        selectedEntryObservationHandles.removeAll()
+        selectedEntry = nil
         session.suspend()
         isAttachedToPage = false
     }

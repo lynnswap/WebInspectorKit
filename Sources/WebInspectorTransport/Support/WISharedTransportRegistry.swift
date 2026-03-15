@@ -74,6 +74,27 @@ package final class WISharedTransportRegistry {
             try await entry.sendPage(command)
         }
 
+        package func sendPageCapturingCurrentTarget<C: WITransportPageCommand>(
+            _ command: C
+        ) async throws -> (targetIdentifier: String, response: C.Response) {
+            try await entry.sendPageCapturingCurrentTarget(command)
+        }
+
+        package func sendPage<C: WITransportPageCommand>(
+            _ command: C,
+            targetIdentifier: String
+        ) async throws -> C.Response {
+            try await entry.sendPage(command, targetIdentifier: targetIdentifier)
+        }
+
+        package func currentPageTargetIdentifier() async -> String? {
+            await entry.currentPageTargetIdentifier()
+        }
+
+        package func pageTargetIdentifiers() async -> [String] {
+            await entry.pageTargetIdentifiers()
+        }
+
         package func sendRoot<C: WITransportRootCommand>(_ command: C) async throws -> C.Response {
             try await entry.sendRoot(command)
         }
@@ -163,6 +184,9 @@ package final class WISharedTransportRegistry {
             if supportSnapshot.capabilities.contains(.pageTargetRouting) {
                 mapped.insert(.pageTargetRouting)
             }
+            if supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
+                mapped.insert(.networkBootstrapSnapshot)
+            }
 
             return mapped
         }
@@ -205,6 +229,29 @@ package final class WISharedTransportRegistry {
         func sendPage<C: WITransportPageCommand>(_ command: sending C) async throws -> C.Response {
             try await ensureAttached()
             return try await transportSession.page.send(command)
+        }
+
+        func sendPageCapturingCurrentTarget<C: WITransportPageCommand>(
+            _ command: sending C
+        ) async throws -> (targetIdentifier: String, response: C.Response) {
+            try await ensureAttached()
+            return try await transportSession.sendPageCapturingCurrentTarget(command)
+        }
+
+        func sendPage<C: WITransportPageCommand>(
+            _ command: sending C,
+            targetIdentifier: String
+        ) async throws -> C.Response {
+            try await ensureAttached()
+            return try await transportSession.sendPage(command, targetIdentifier: targetIdentifier)
+        }
+
+        func currentPageTargetIdentifier() async -> String? {
+            await transportSession.currentPageTargetIdentifier()
+        }
+
+        func pageTargetIdentifiers() async -> [String] {
+            await transportSession.pageTargetIdentifiers()
         }
 
         func sendRoot<C: WITransportRootCommand>(_ command: sending C) async throws -> C.Response {

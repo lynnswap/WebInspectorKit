@@ -10,7 +10,10 @@ package enum WINetworkBodyFetchResult {
 @MainActor
 package protocol NetworkBodyFetching: AnyObject {
     func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult
+    func fetchBodyResult(
+        locator: NetworkDeferredBodyLocator,
+        role: NetworkBody.Role
+    ) async -> WINetworkBodyFetchResult
 }
 
 package extension NetworkBodyFetching {

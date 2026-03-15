@@ -10,6 +10,7 @@ public enum WIBackendCapability: String, Hashable, Sendable {
     case domDomain
     case networkDomain
     case pageTargetRouting
+    case networkBootstrapSnapshot
 }
 
 public struct WIBackendSupport: Sendable {

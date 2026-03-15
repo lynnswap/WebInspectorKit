@@ -13,6 +13,7 @@ struct WITransportNativeInspectorSymbolResolverTests {
         #expect(resolution.connectFrontendAddress != 0)
         #expect(resolution.disconnectFrontendAddress != 0)
         #expect(resolution.supportSnapshot.isSupported)
+        #expect(resolution.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot))
         #if os(iOS)
         #expect(resolution.backendKind == .iOSNativeInspector)
         #elseif os(macOS)

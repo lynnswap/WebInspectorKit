@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebInspectorKit
 @testable import WebInspectorUI
 @testable import WebInspectorCore
 @testable import WebInspectorCore
@@ -94,6 +95,55 @@ struct NetworkInspectorAppKitTests {
 
         controller = nil
         #expect(weakController == nil)
+    }
+
+    @Test
+    func networkContainerCloseResetsStoreState() throws {
+        let container = WINetworkContainerViewController()
+        let window = NSWindow(contentViewController: container)
+        container.loadViewIfNeeded()
+        try applyRequestStart(
+            to: container.store,
+            requestID: 301,
+            url: "https://example.com/close-reset.json",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+        let selectedEntry = try #require(container.store.store.entries.first)
+        container.store.selectEntry(selectedEntry)
+
+        #expect(container.store.store.entries.count == 1)
+        #expect(container.store.selectedEntry?.id == selectedEntry.id)
+
+        window.orderOut(nil)
+        window.contentViewController = nil
+        container.viewDidDisappear()
+
+        #expect(container.store.store.entries.isEmpty)
+        #expect(container.store.selectedEntry == nil)
+        #expect(container.sessionController.networkStore.session.mode == .stopped)
+    }
+
+    @Test
+    func standaloneNetworkViewCloseDoesNotResetOwnedStore() throws {
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
+        let controller = WINetworkViewController(store: store, queryModel: queryModel)
+        let window = NSWindow(contentViewController: controller)
+        controller.loadViewIfNeeded()
+        try applyRequestStart(
+            to: store,
+            requestID: 302,
+            url: "https://example.com/pure-view.json",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        window.orderOut(nil)
+        window.contentViewController = nil
+        controller.viewDidDisappear()
+
+        #expect(store.store.entries.count == 1)
     }
 
     private func applyRequestStart(
