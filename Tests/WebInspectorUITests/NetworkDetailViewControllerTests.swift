@@ -247,7 +247,7 @@ struct NetworkDetailViewControllerTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: reference),
+            deferredLocator: .networkRequest(id: reference, targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .response

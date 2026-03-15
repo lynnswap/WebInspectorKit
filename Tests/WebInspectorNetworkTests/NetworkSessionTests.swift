@@ -38,7 +38,7 @@ struct NetworkSessionTests {
         #expect(session.testPageAgentTypeName() == "WINetworkUnavailableBackend")
         #expect(session.transportCapabilities.isEmpty)
 
-        let body = await session.fetchBody(locator: .networkRequest(id: "request-1"), role: .response)
+        let body = await session.fetchBody(locator: .networkRequest(id: "request-1", targetIdentifier: nil), role: .response)
         #expect(body == nil)
     }
 
@@ -329,7 +329,7 @@ struct NetworkSessionTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: reference),
+            deferredLocator: .networkRequest(id: reference, targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: role
@@ -447,7 +447,7 @@ private final class StubNetworkPageDriver: WINetworkBackend {
 private extension NetworkDeferredBodyLocator {
     var requestID: String? {
         switch self {
-        case .networkRequest(let requestID):
+        case .networkRequest(let requestID, _):
             requestID
         case .pageResource, .opaqueHandle:
             nil

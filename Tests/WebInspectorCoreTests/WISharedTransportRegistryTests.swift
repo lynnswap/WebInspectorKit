@@ -140,11 +140,98 @@ struct WISharedTransportRegistryTests {
             backend.sentPageMethods.contains("Network.enable")
         })
 
-        let body = await session.fetchBody(locator: .networkRequest(id: "request-1"), role: .request)
+        let body = await session.fetchBody(locator: .networkRequest(id: "request-1", targetIdentifier: nil), role: .request)
 
         #expect(body?.role == .request)
         #expect(body?.full == "name=value")
         #expect(backend.sentPageMethods.contains("Network.getRequestPostData"))
+
+        session.detach()
+    }
+
+    @Test
+    func networkTransportDriverFetchesDeferredRequestBodiesFromOwningTarget() async {
+        let backend = FakeRegistryBackend(
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetRequestPostData.method,
+                      targetIdentifier == "page-child" else {
+                    return nil
+                }
+                return ["postData": "targeted=value"]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let session = WINetworkRuntime(
+            configuration: .init(),
+            backend: driver
+        )
+        let webView = makeIsolatedTestWebView()
+
+        session.attach(pageWebView: webView)
+
+        #expect(await waitForCondition {
+            backend.sentPageMethods.contains("Network.enable")
+        })
+
+        let body = await session.fetchBody(
+            locator: .networkRequest(id: "request-1", targetIdentifier: "page-child"),
+            role: .request
+        )
+
+        #expect(body?.role == .request)
+        #expect(body?.full == "targeted=value")
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetRequestPostData.method
+                    && $0.targetIdentifier == "page-child"
+            }
+        )
+
+        session.detach()
+    }
+
+    @Test
+    func networkTransportDriverFetchesDeferredResponseBodiesFromOwningTarget() async {
+        let backend = FakeRegistryBackend(
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetResponseBody.method,
+                      targetIdentifier == "page-child" else {
+                    return nil
+                }
+                return [
+                    "body": "targeted-response",
+                    "base64Encoded": false,
+                ]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let session = WINetworkRuntime(
+            configuration: .init(),
+            backend: driver
+        )
+        let webView = makeIsolatedTestWebView()
+
+        session.attach(pageWebView: webView)
+
+        #expect(await waitForCondition {
+            backend.sentPageMethods.contains("Network.enable")
+        })
+
+        let body = await session.fetchBody(
+            locator: .networkRequest(id: "request-2", targetIdentifier: "page-child"),
+            role: .response
+        )
+
+        #expect(body?.role == .response)
+        #expect(body?.full == "targeted-response")
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetResponseBody.method
+                    && $0.targetIdentifier == "page-child"
+            }
+        )
 
         session.detach()
     }
@@ -1375,6 +1462,195 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func networkTransportDriverUsesCurrentPageTargetForStableRequestBodiesWhenPayloadTargetIsMissing() async throws {
+        var backend: FakeRegistryBackend!
+        backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageResultProvider: { method, _ in
+                switch method {
+                case WITransportCommands.Network.GetBootstrapSnapshot.method:
+                    return makeBootstrapSnapshotResultPayload(
+                        resources: [
+                            makeBootstrapResourcePayload(
+                                bootstrapRowID: "post-request-current-target",
+                                rawRequestID: "request-post-current-target",
+                                ownerSessionID: "page",
+                                frameID: "frame-main",
+                                targetIdentifier: nil,
+                                url: "https://example.com/upload-current-target",
+                                method: "POST",
+                                requestType: "Fetch",
+                                mimeType: "application/json",
+                                phase: "completed"
+                            ),
+                        ]
+                    )
+                default:
+                    return nil
+                }
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetRequestPostData.method,
+                      targetIdentifier == "page-A" else {
+                    return nil
+                }
+                return ["postData": #"{"currentTarget":true}"#]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        let entry = try #require(driver.store.entries.first { $0.url == "https://example.com/upload-current-target" })
+        let locator = try #require(entry.requestBody?.deferredLocator)
+        let fetched = await driver.fetchBodyResult(locator: locator, role: .request)
+
+        guard case .fetched(let body) = fetched else {
+            Issue.record("Expected stable request body to use the current page target when payload target is missing")
+            return
+        }
+
+        #expect(body.full == #"{"currentTarget":true}"#)
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetRequestPostData.method
+                    && $0.targetIdentifier == "page-A"
+            }
+        )
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverUsesOwnerSessionForStableRequestBodiesWhenPayloadTargetIsMissing() async throws {
+        var backend: FakeRegistryBackend!
+        backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageResultProvider: { method, _ in
+                switch method {
+                case WITransportCommands.Network.GetBootstrapSnapshot.method:
+                    return makeBootstrapSnapshotResultPayload(
+                        resources: [
+                            makeBootstrapResourcePayload(
+                                bootstrapRowID: "post-request-owner-session",
+                                rawRequestID: "request-post-owner-session",
+                                ownerSessionID: "page-child",
+                                frameID: "frame-child",
+                                targetIdentifier: nil,
+                                url: "https://example.com/upload-owner-session",
+                                method: "POST",
+                                requestType: "Fetch",
+                                mimeType: "application/json",
+                                phase: "completed"
+                            ),
+                        ]
+                    )
+                default:
+                    return nil
+                }
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetRequestPostData.method,
+                      targetIdentifier == "page-child" else {
+                    return nil
+                }
+                return ["postData": #"{"ownerSession":true}"#]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        let entry = try #require(driver.store.entries.first { $0.url == "https://example.com/upload-owner-session" })
+        let locator = try #require(entry.requestBody?.deferredLocator)
+        let fetched = await driver.fetchBodyResult(locator: locator, role: .request)
+
+        guard case .fetched(let body) = fetched else {
+            Issue.record("Expected stable request body to use owner session when payload target is missing")
+            return
+        }
+
+        #expect(body.full == #"{"ownerSession":true}"#)
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetRequestPostData.method
+                    && $0.targetIdentifier == "page-child"
+            }
+        )
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverUsesCapturedTargetForStableRequestBodiesWhenOwnerSessionIsEmpty() async throws {
+        var backend: FakeRegistryBackend!
+        backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageResultProvider: { method, _ in
+                switch method {
+                case WITransportCommands.Network.GetBootstrapSnapshot.method:
+                    return makeBootstrapSnapshotResultPayload(
+                        resources: [
+                            makeBootstrapResourcePayload(
+                                bootstrapRowID: "post-request-empty-owner",
+                                rawRequestID: "request-post-empty-owner",
+                                ownerSessionID: "",
+                                frameID: "frame-main",
+                                targetIdentifier: nil,
+                                url: "https://example.com/upload-empty-owner",
+                                method: "POST",
+                                requestType: "Fetch",
+                                mimeType: "application/json",
+                                phase: "completed"
+                            ),
+                        ]
+                    )
+                default:
+                    return nil
+                }
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetRequestPostData.method,
+                      targetIdentifier == "page-A" else {
+                    return nil
+                }
+                return ["postData": #"{"emptyOwner":true}"#]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        let entry = try #require(driver.store.entries.first { $0.url == "https://example.com/upload-empty-owner" })
+        let locator = try #require(entry.requestBody?.deferredLocator)
+        let fetched = await driver.fetchBodyResult(locator: locator, role: .request)
+
+        guard case .fetched(let body) = fetched else {
+            Issue.record("Expected stable request body to use captured target when owner session is empty")
+            return
+        }
+
+        #expect(body.full == #"{"emptyOwner":true}"#)
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetRequestPostData.method
+                    && $0.targetIdentifier == "page-A"
+            }
+        )
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func networkTransportDriverReusesBootstrappedChildFrameDocumentAcrossTargetSessions() async {
         var backend: FakeRegistryBackend!
         backend = FakeRegistryBackend(
@@ -1534,6 +1810,89 @@ struct WISharedTransportRegistryTests {
                 && entry.statusCode == 200
                 && entry.encodedBodyLength == 64
         })
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverUpdatesRequestBodyTargetAcrossStableCrossTargetRebinds() async throws {
+        var backend: FakeRegistryBackend!
+        backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageResultProvider: { method, _ in
+                guard method == WITransportCommands.Network.GetBootstrapSnapshot.method else {
+                    return nil
+                }
+                return makeBootstrapSnapshotResultPayload(
+                    resources: [
+                        makeBootstrapResourcePayload(
+                            bootstrapRowID: "target-swap-request-body",
+                            rawRequestID: "request-target-swap-request-body",
+                            ownerSessionID: "page-provisional",
+                            frameID: "frame-main",
+                            targetIdentifier: "page-provisional",
+                            url: "https://example.com/swap-request-body",
+                            method: "POST",
+                            requestType: "Fetch",
+                            mimeType: "application/json",
+                            phase: "inFlight"
+                        ),
+                    ]
+                )
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportCommands.Network.GetRequestPostData.method,
+                      targetIdentifier == "page-committed" else {
+                    return nil
+                }
+                return ["postData": #"{"committed":true}"#]
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-target-swap-request-body",
+                "timestamp": 12.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/swap-request-body",
+                    "method": "POST",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+
+        let entry = try #require(
+            await waitForCondition {
+                driver.store.entries.contains {
+                    $0.url == "https://example.com/swap-request-body"
+                        && $0.sessionID == "page-committed"
+                }
+            } ? driver.store.entries.first { $0.url == "https://example.com/swap-request-body" } : nil
+        )
+        let locator = try #require(entry.requestBody?.deferredLocator)
+        let fetched = await driver.fetchBodyResult(locator: locator, role: .request)
+
+        guard case .fetched(let body) = fetched else {
+            Issue.record("Expected cross-target stable request body to adopt the authoritative target from requestWillBeSent")
+            return
+        }
+
+        #expect(body.full == #"{"committed":true}"#)
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportCommands.Network.GetRequestPostData.method
+                    && $0.targetIdentifier == "page-committed"
+            }
+        )
 
         driver.detachPageWebView(preparing: .stopped)
     }

@@ -150,8 +150,15 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             self.requestType = requestType
         }
         if let requestBody = payload.requestBody {
-            self.requestBody = requestBody
-            self.requestBody?.role = .request
+            if let existingRequestBody = self.requestBody,
+               existingRequestBody.hasDeferredContent,
+               requestBody.hasDeferredContent {
+                existingRequestBody.role = .request
+                existingRequestBody.adoptDeferredNetworkRequestTarget(from: requestBody)
+            } else {
+                self.requestBody = requestBody
+                self.requestBody?.role = .request
+            }
         }
         if let requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size {
             self.requestBodyBytesSent = requestBodyBytesSent
@@ -273,16 +280,18 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     package func rebindDeferredBodyTargets(
-        from previousSessionID: String,
-        to sessionID: String
+        previousRequestTargetIdentifier: String?,
+        requestTargetIdentifier: String?,
+        previousResponseTargetIdentifier: String?,
+        responseTargetIdentifier: String?
     ) {
-        requestBody?.rebindDeferredPageResourceTarget(
-            from: previousSessionID,
-            to: sessionID
+        requestBody?.rebindDeferredTarget(
+            from: previousRequestTargetIdentifier,
+            to: requestTargetIdentifier
         )
-        responseBody?.rebindDeferredPageResourceTarget(
-            from: previousSessionID,
-            to: sessionID
+        responseBody?.rebindDeferredTarget(
+            from: previousResponseTargetIdentifier,
+            to: responseTargetIdentifier
         )
     }
 

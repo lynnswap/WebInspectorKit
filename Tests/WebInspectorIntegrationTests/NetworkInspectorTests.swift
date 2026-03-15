@@ -23,7 +23,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: "resp_ref"),
+            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -59,7 +59,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: "req_ref"),
+            deferredLocator: .networkRequest(id: "req_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .request
@@ -542,7 +542,7 @@ struct NetworkInspectorTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: reference),
+            deferredLocator: .networkRequest(id: reference, targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: role
@@ -691,7 +691,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
 private extension NetworkDeferredBodyLocator {
     var requestID: String? {
         switch self {
-        case .networkRequest(let requestID):
+        case .networkRequest(let requestID, _):
             requestID
         case .pageResource, .opaqueHandle:
             nil

@@ -82,17 +82,31 @@ public final class NetworkStore {
     package func moveEntrySession(
         requestID: Int,
         from previousSessionID: String,
-        to sessionID: String
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
     ) -> NetworkEntry? {
-        guard previousSessionID != sessionID else {
+        let targetsChanged = previousRequestTargetIdentifier != requestTargetIdentifier
+            || previousResponseTargetIdentifier != responseTargetIdentifier
+        guard previousSessionID != sessionID || targetsChanged else {
             return entry(forRequestID: requestID, sessionID: sessionID)
         }
         guard let entry = entry(forRequestID: requestID, sessionID: previousSessionID) else {
             return nil
         }
+        entry.rebindDeferredBodyTargets(
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
+        if previousSessionID == sessionID {
+            return entry
+        }
         let previousBucketKey = sessionKey(for: previousSessionID)
         sessionBuckets[previousBucketKey]?.remove(requestID: requestID)
-        entry.rebindDeferredBodyTargets(from: previousSessionID, to: sessionID)
         entry.moveSession(to: sessionID)
         bucket(for: sessionID).set(entry, requestID: requestID)
         return entry
@@ -108,16 +122,53 @@ public final class NetworkStore {
 
     package func updateEntrySession(
         _ entry: NetworkEntry,
-        to sessionID: String
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
     ) {
-        guard entry.sessionID != sessionID else {
+        let previousSessionID = entry.sessionID
+        let targetsChanged = previousRequestTargetIdentifier != requestTargetIdentifier
+            || previousResponseTargetIdentifier != responseTargetIdentifier
+        guard previousSessionID != sessionID || targetsChanged else {
             return
         }
-        let previousBucketKey = sessionKey(for: entry.sessionID)
+        entry.rebindDeferredBodyTargets(
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
+        if previousSessionID == sessionID {
+            return
+        }
+        let previousBucketKey = sessionKey(for: previousSessionID)
         sessionBuckets[previousBucketKey]?.remove(requestID: entry.requestID)
-        entry.rebindDeferredBodyTargets(from: entry.sessionID, to: sessionID)
         entry.moveSession(to: sessionID)
         bucket(for: sessionID).set(entry, requestID: entry.requestID)
+    }
+
+    package func updateEntrySession(
+        requestID: Int,
+        from previousSessionID: String,
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
+    ) {
+        guard let entry = entry(forRequestID: requestID, sessionID: previousSessionID) else {
+            return
+        }
+        updateEntrySession(
+            entry,
+            to: sessionID,
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
     }
 
     func applyBatchedInsertions(_ batch: NetworkEventBatch) {

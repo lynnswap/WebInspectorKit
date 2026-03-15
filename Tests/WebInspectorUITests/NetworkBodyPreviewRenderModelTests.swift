@@ -91,7 +91,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: summary,
-            deferredLocator: .networkRequest(id: "resp_ref"),
+            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -116,7 +116,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: "resp_ref"),
+            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
             formEntries: [],
             fetchState: .inline,
             role: .response

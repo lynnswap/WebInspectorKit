@@ -239,7 +239,7 @@ public final class NetworkBody {
             .compactMap(FormEntry.init(dictionary:))
         let deferredLocator: NetworkDeferredBodyLocator?
         if let reference = dictionary["ref"] as? String, !reference.isEmpty {
-            deferredLocator = .networkRequest(id: reference)
+            deferredLocator = .networkRequest(id: reference, targetIdentifier: nil)
         } else if let handle = dictionary["handle"] as AnyObject? {
             deferredLocator = .opaqueHandle(handle)
         } else {
@@ -300,7 +300,7 @@ public final class NetworkBody {
 
     package static func makeDeferredLocator(from payload: NetworkBodyPayload) -> NetworkDeferredBodyLocator? {
         if let ref = payload.ref, !ref.isEmpty {
-            return .networkRequest(id: ref)
+            return .networkRequest(id: ref, targetIdentifier: nil)
         }
         if let handle = payload.handle {
             return .opaqueHandle(handle)
@@ -345,18 +345,49 @@ public final class NetworkBody {
         fetchState = .full
     }
 
-    package func rebindDeferredPageResourceTarget(
-        from previousTargetIdentifier: String,
-        to targetIdentifier: String
+    package func rebindDeferredTarget(
+        from previousTargetIdentifier: String?,
+        to targetIdentifier: String?
     ) {
-        guard case .pageResource(let currentTargetIdentifier, let frameID, let url)? = deferredLocator,
-              currentTargetIdentifier == previousTargetIdentifier else {
+        switch deferredLocator {
+        case .pageResource(let currentTargetIdentifier, let frameID, let url)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            deferredLocator = .pageResource(
+                targetIdentifier: targetIdentifier,
+                frameID: frameID,
+                url: url
+            )
+        case .networkRequest(let requestID, let currentTargetIdentifier)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            deferredLocator = .networkRequest(
+                id: requestID,
+                targetIdentifier: targetIdentifier
+            )
+        default:
             return
         }
-        deferredLocator = .pageResource(
-            targetIdentifier: targetIdentifier,
-            frameID: frameID,
-            url: url
+    }
+
+    package func defaultDeferredNetworkRequestTarget(_ targetIdentifier: String?) {
+        guard case .networkRequest(let requestID, nil)? = deferredLocator else {
+            return
+        }
+        deferredLocator = .networkRequest(
+            id: requestID,
+            targetIdentifier: targetIdentifier
+        )
+    }
+
+    package func adoptDeferredNetworkRequestTarget(from other: NetworkBody) {
+        guard case .networkRequest(let requestID, let currentTargetIdentifier)? = deferredLocator,
+              case .networkRequest(_, let incomingTargetIdentifier)? = other.deferredLocator,
+              let incomingTargetIdentifier,
+              currentTargetIdentifier != incomingTargetIdentifier else {
+            return
+        }
+        deferredLocator = .networkRequest(
+            id: requestID,
+            targetIdentifier: incomingTargetIdentifier
         )
     }
 }

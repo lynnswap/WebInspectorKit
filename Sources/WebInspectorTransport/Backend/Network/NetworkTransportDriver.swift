@@ -114,12 +114,20 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             try await lease.ensureAttached()
             try await lease.ensureNetworkEventIngress()
             switch locator {
-            case .networkRequest(let requestID):
+            case .networkRequest(let requestID, let targetIdentifier):
                 switch role {
                 case .request:
-                    let response = try await lease.sendPage(
-                        WITransportCommands.Network.GetRequestPostData(requestId: requestID)
-                    )
+                    let response: WITransportCommands.Network.GetRequestPostData.Response
+                    if let targetIdentifier {
+                        response = try await lease.sendPage(
+                            WITransportCommands.Network.GetRequestPostData(requestId: requestID),
+                            targetIdentifier: targetIdentifier
+                        )
+                    } else {
+                        response = try await lease.sendPage(
+                            WITransportCommands.Network.GetRequestPostData(requestId: requestID)
+                        )
+                    }
                     guard !response.postData.isEmpty else {
                         return .bodyUnavailable
                     }
@@ -138,9 +146,17 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
                         )
                     )
                 case .response:
-                    let response = try await lease.sendPage(
-                        WITransportCommands.Network.GetResponseBody(requestId: requestID)
-                    )
+                    let response: WITransportCommands.Network.GetResponseBody.Response
+                    if let targetIdentifier {
+                        response = try await lease.sendPage(
+                            WITransportCommands.Network.GetResponseBody(requestId: requestID),
+                            targetIdentifier: targetIdentifier
+                        )
+                    } else {
+                        response = try await lease.sendPage(
+                            WITransportCommands.Network.GetResponseBody(requestId: requestID)
+                        )
+                    }
                     return .fetched(
                         NetworkBody(
                             kind: response.base64Encoded ? .binary : .text,
@@ -160,10 +176,17 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
                 guard role == .response else {
                     return .bodyUnavailable
                 }
-                let response = try await lease.sendPage(
-                    WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url),
-                    targetIdentifier: targetIdentifier
-                )
+                let response: WITransportCommands.Page.GetResourceContent.Response
+                if let targetIdentifier {
+                    response = try await lease.sendPage(
+                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url),
+                        targetIdentifier: targetIdentifier
+                    )
+                } else {
+                    response = try await lease.sendPage(
+                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url)
+                    )
+                }
                 return .fetched(
                     NetworkBody(
                         kind: response.base64Encoded ? .binary : .text,
@@ -414,6 +437,7 @@ private extension NetworkTransportDriver {
                 rawRequestID: params.requestId,
                 url: params.request.url,
                 requestType: params.type,
+                targetIdentifier: normalizedScopeID(targetIdentifier),
                 store: store
            ) {
             store.applyEvent(
@@ -432,7 +456,8 @@ private extension NetworkTransportDriver {
                     rawRequestID: params.requestId,
                     timestamp: params.timestamp,
                     metrics: nil,
-                    includeResponseBodyPlaceholder: false
+                    includeResponseBodyPlaceholder: false,
+                    targetIdentifier: normalizedScopeID(targetIdentifier)
                 )
             )
             resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
@@ -443,6 +468,7 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: params.request.url,
             requestType: params.type,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
             store: store
         )
 
@@ -468,7 +494,8 @@ private extension NetworkTransportDriver {
                 requestBody: makeRequestBody(
                     postData: params.request.postData,
                     method: params.request.method,
-                    requestID: params.requestId
+                    requestID: params.requestId,
+                    targetIdentifier: normalizedScopeID(targetIdentifier)
                 ),
                 requestBodyBytesSent: params.request.postData?.utf8.count,
                 responseBody: nil,
@@ -484,6 +511,7 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: params.response.url,
             requestType: params.type,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
             store: store
         ) else {
             return
@@ -507,11 +535,16 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: nil,
             requestType: nil,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
             store: store
         ) else {
             return
         }
         let entry = store.entry(requestID: requestID, sessionID: sessionID)
+        let knownTargetIdentifiers = resolver.knownTargetIdentifiers(
+            sessionID: sessionID,
+            rawRequestID: params.requestId
+        )
         resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
 
         store.applyEvent(
@@ -521,7 +554,8 @@ private extension NetworkTransportDriver {
                 rawRequestID: params.requestId,
                 timestamp: params.timestamp,
                 metrics: params.metrics,
-                includeResponseBodyPlaceholder: entry?.responseBody?.hasDeferredContent != true
+                includeResponseBodyPlaceholder: entry?.responseBody?.hasDeferredContent != true,
+                targetIdentifier: knownTargetIdentifiers?.response ?? normalizedScopeID(targetIdentifier)
             )
         )
     }
@@ -533,6 +567,7 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: nil,
             requestType: nil,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
             store: store
         ) else {
             return
@@ -573,6 +608,7 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: params.url,
             requestType: "websocket",
+            targetIdentifier: normalizedScopeID(targetIdentifier),
             store: store
         )
 
@@ -827,7 +863,8 @@ private extension NetworkTransportDriver {
         rawRequestID: String,
         timestamp: TimeInterval,
         metrics: LoadingFinishedParams.Metrics?,
-        includeResponseBodyPlaceholder: Bool
+        includeResponseBodyPlaceholder: Bool,
+        targetIdentifier: String?
     ) -> HTTPNetworkEvent {
         HTTPNetworkEvent(
             kind: .loadingFinished,
@@ -858,7 +895,7 @@ private extension NetworkTransportDriver {
                     isBase64Encoded: false,
                     isTruncated: true,
                     summary: nil,
-                    deferredLocator: .networkRequest(id: rawRequestID),
+                    deferredLocator: .networkRequest(id: rawRequestID, targetIdentifier: targetIdentifier),
                     formEntries: [],
                     fetchState: .inline,
                     role: .response
@@ -868,7 +905,12 @@ private extension NetworkTransportDriver {
         )
     }
 
-    func makeRequestBody(postData: String?, method: String, requestID: String) -> NetworkBody? {
+    func makeRequestBody(
+        postData: String?,
+        method: String,
+        requestID: String,
+        targetIdentifier: String?
+    ) -> NetworkBody? {
         if let postData, !postData.isEmpty {
             return NetworkBody(
                 kind: .text,
@@ -896,7 +938,7 @@ private extension NetworkTransportDriver {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: requestID),
+            deferredLocator: .networkRequest(id: requestID, targetIdentifier: targetIdentifier),
             formEntries: [],
             fetchState: .inline,
             role: .request

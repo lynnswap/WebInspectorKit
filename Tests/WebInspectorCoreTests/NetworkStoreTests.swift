@@ -128,6 +128,31 @@ struct NetworkStoreTests {
     }
 
     @Test
+    func decodedDeferredBodiesInheritSessionTargetIdentifierWhenAvailable() throws {
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 77,
+            "url": "https://example.com/upload",
+            "method": "POST",
+            "body": [
+                "kind": "text",
+                "truncated": true,
+                "ref": "request-77"
+            ],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: "page-child")
+
+        let locator = try #require(payload.requestBody?.deferredLocator)
+        switch locator {
+        case .networkRequest(let requestID, let targetIdentifier):
+            #expect(requestID == "request-77")
+            #expect(targetIdentifier == "page-child")
+        case .pageResource, .opaqueHandle:
+            Issue.record("Expected a network request locator")
+        }
+    }
+
+    @Test
     func websocketHandshakeAndErrorEventsAreApplied() throws {
         let store = NetworkStore()
         let createdCandidate = WSNetworkEvent(dictionary: [

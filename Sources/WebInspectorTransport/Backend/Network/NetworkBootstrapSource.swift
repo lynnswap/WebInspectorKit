@@ -38,18 +38,26 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
             WITransportCommands.Network.GetBootstrapSnapshot()
         )
         let capturedTargetIdentifier = result.targetIdentifier
+        let syntheticDefaultSessionID = defaultSessionID(nil)
         let now = Date().timeIntervalSince1970
         let seedsAndBindings = result.response.resources.map { resource -> (NetworkEntrySeed, NetworkContinuationBinding?) in
+            let normalizedOwnerSessionID = normalizeScopeID(resource.ownerSessionID)
             let resolvedFrameID = normalizeScopeID(resource.bodyFetchDescriptor?.frameId)
                 ?? normalizeScopeID(resource.frameID)
-            let resolvedOwnerSessionID = normalizeScopeID(resource.ownerSessionID)
+            let resolvedOwnerSessionID = normalizedOwnerSessionID
                 ?? normalizeScopeID(resource.targetIdentifier)
                 ?? defaultSessionID(capturedTargetIdentifier)
             let resolvedTargetIdentifier = normalizeScopeID(resource.bodyFetchDescriptor?.targetIdentifier)
                 ?? normalizeScopeID(resource.targetIdentifier)
-                ?? (resolvedOwnerSessionID == defaultSessionID(capturedTargetIdentifier)
+                ?? ((resolvedOwnerSessionID == defaultSessionID(capturedTargetIdentifier)
+                    || resolvedOwnerSessionID == syntheticDefaultSessionID)
                     ? normalizeScopeID(capturedTargetIdentifier)
-                    : resolvedOwnerSessionID)
+                    : normalizedOwnerSessionID)
+            let resolvedRequestTargetIdentifier = normalizeScopeID(resource.targetIdentifier)
+                ?? ((resolvedOwnerSessionID == defaultSessionID(capturedTargetIdentifier)
+                    || resolvedOwnerSessionID == syntheticDefaultSessionID)
+                    ? normalizeScopeID(capturedTargetIdentifier)
+                    : normalizedOwnerSessionID)
             let requestID = allocateRequestID()
             let responseBodyLocator: NetworkDeferredBodyLocator?
             if resource.phase != .failed,
@@ -107,7 +115,8 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
                 phase: phase,
                 requestBody: makeDeferredRequestBody(
                     method: resource.method,
-                    rawRequestID: normalizeScopeID(resource.rawRequestID)
+                    rawRequestID: normalizeScopeID(resource.rawRequestID),
+                    targetIdentifier: resolvedRequestTargetIdentifier
                 ),
                 responseBody: responseBodyLocator.map {
                     NetworkBody(
@@ -133,6 +142,8 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
                     allowsCrossTargetRebind: true,
                     canonicalRequestID: requestID,
                     sessionID: resolvedOwnerSessionID,
+                    requestTargetIdentifier: resolvedRequestTargetIdentifier,
+                    responseTargetIdentifier: resolvedTargetIdentifier,
                     rawRequestID: rawRequestID,
                     url: resource.url,
                     requestType: resource.requestType
@@ -282,7 +293,8 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
 
 private func makeDeferredRequestBody(
     method: String,
-    rawRequestID: String?
+    rawRequestID: String?,
+    targetIdentifier: String?
 ) -> NetworkBody? {
     guard let rawRequestID, requestMethodMayCarryBody(method) else {
         return nil
@@ -295,7 +307,7 @@ private func makeDeferredRequestBody(
         isBase64Encoded: false,
         isTruncated: true,
         summary: nil,
-        deferredLocator: .networkRequest(id: rawRequestID),
+        deferredLocator: .networkRequest(id: rawRequestID, targetIdentifier: targetIdentifier),
         formEntries: [],
         fetchState: .inline,
         role: .request

@@ -90,10 +90,18 @@ package final class NetworkTimelineResolver {
         rawRequestID: String,
         url: String,
         requestType: String?,
+        targetIdentifier: String?,
         store: NetworkStore
     ) -> Int {
         let key = RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)
-        if let existing = exactBindings[key] {
+        if var existing = exactBindings[key] {
+            syncTargetsIfNeeded(
+                binding: &existing,
+                sessionID: sessionID,
+                targetIdentifier: targetIdentifier,
+                store: store
+            )
+            exactBindings[key] = existing
             return existing.canonicalRequestID
         }
         if let rebound = rebindStableContinuation(
@@ -101,6 +109,7 @@ package final class NetworkTimelineResolver {
             rawRequestID: rawRequestID,
             url: url,
             requestType: requestType,
+            targetIdentifier: targetIdentifier,
             store: store
         ) {
             return rebound.canonicalRequestID
@@ -112,6 +121,8 @@ package final class NetworkTimelineResolver {
             allowsCrossTargetRebind: false,
             canonicalRequestID: canonicalRequestID,
             sessionID: sessionID,
+            requestTargetIdentifier: targetIdentifier,
+            responseTargetIdentifier: targetIdentifier,
             rawRequestID: rawRequestID,
             url: url,
             requestType: requestType
@@ -124,10 +135,18 @@ package final class NetworkTimelineResolver {
         rawRequestID: String,
         url: String?,
         requestType: String?,
+        targetIdentifier: String?,
         store: NetworkStore
     ) -> Int? {
         let key = RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)
-        if let exact = exactBindings[key] {
+        if var exact = exactBindings[key] {
+            syncTargetsIfNeeded(
+                binding: &exact,
+                sessionID: sessionID,
+                targetIdentifier: targetIdentifier,
+                store: store
+            )
+            exactBindings[key] = exact
             return exact.canonicalRequestID
         }
         return rebindStableContinuation(
@@ -135,6 +154,7 @@ package final class NetworkTimelineResolver {
             rawRequestID: rawRequestID,
             url: url,
             requestType: requestType,
+            targetIdentifier: targetIdentifier,
             store: store
         )?.canonicalRequestID
     }
@@ -144,6 +164,16 @@ package final class NetworkTimelineResolver {
         rawRequestID: String
     ) -> Int? {
         exactBindings[RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)]?.canonicalRequestID
+    }
+
+    package func knownTargetIdentifiers(
+        sessionID: String,
+        rawRequestID: String
+    ) -> (request: String?, response: String?)? {
+        guard let binding = exactBindings[RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)] else {
+            return nil
+        }
+        return (binding.requestTargetIdentifier, binding.responseTargetIdentifier)
     }
 
     package func complete(
@@ -168,6 +198,7 @@ private extension NetworkTimelineResolver {
         rawRequestID: String,
         url: String,
         requestType: String?,
+        targetIdentifier: String?,
         store: NetworkStore
     ) -> NetworkContinuationBinding? {
         rebindStableContinuation(
@@ -175,6 +206,7 @@ private extension NetworkTimelineResolver {
             rawRequestID: rawRequestID,
             url: url as String?,
             requestType: requestType,
+            targetIdentifier: targetIdentifier,
             store: store
         )
     }
@@ -184,6 +216,7 @@ private extension NetworkTimelineResolver {
         rawRequestID: String,
         url: String?,
         requestType: String?,
+        targetIdentifier: String?,
         store: NetworkStore
     ) -> NetworkContinuationBinding? {
         let candidates = exactBindings.values.filter { binding in
@@ -211,11 +244,43 @@ private extension NetworkTimelineResolver {
         _ = store.moveEntrySession(
             requestID: binding.canonicalRequestID,
             from: binding.sessionID,
-            to: sessionID
+            to: sessionID,
+            previousRequestTargetIdentifier: binding.requestTargetIdentifier,
+            requestTargetIdentifier: targetIdentifier ?? binding.requestTargetIdentifier,
+            previousResponseTargetIdentifier: binding.responseTargetIdentifier,
+            responseTargetIdentifier: targetIdentifier ?? binding.responseTargetIdentifier
         )
         binding.sessionID = sessionID
+        binding.requestTargetIdentifier = targetIdentifier ?? binding.requestTargetIdentifier
+        binding.responseTargetIdentifier = targetIdentifier ?? binding.responseTargetIdentifier
         let reboundKey = RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)
         exactBindings[reboundKey] = binding
         return binding
+    }
+
+    func syncTargetsIfNeeded(
+        binding: inout NetworkContinuationBinding,
+        sessionID: String,
+        targetIdentifier: String?,
+        store: NetworkStore
+    ) {
+        let resolvedRequestTargetIdentifier = targetIdentifier ?? binding.requestTargetIdentifier
+        let resolvedResponseTargetIdentifier = targetIdentifier ?? binding.responseTargetIdentifier
+        guard binding.requestTargetIdentifier != resolvedRequestTargetIdentifier
+                || binding.responseTargetIdentifier != resolvedResponseTargetIdentifier else {
+            return
+        }
+
+        store.updateEntrySession(
+            requestID: binding.canonicalRequestID,
+            from: sessionID,
+            to: sessionID,
+            previousRequestTargetIdentifier: binding.requestTargetIdentifier,
+            requestTargetIdentifier: resolvedRequestTargetIdentifier,
+            previousResponseTargetIdentifier: binding.responseTargetIdentifier,
+            responseTargetIdentifier: resolvedResponseTargetIdentifier
+        )
+        binding.requestTargetIdentifier = resolvedRequestTargetIdentifier
+        binding.responseTargetIdentifier = resolvedResponseTargetIdentifier
     }
 }
