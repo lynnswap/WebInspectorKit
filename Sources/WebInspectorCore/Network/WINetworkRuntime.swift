@@ -153,6 +153,9 @@ package final class WINetworkRuntime {
                 self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
                 return
             }
+            guard self.body(for: entry, role: role) === body else {
+                return
+            }
 
             switch fetchResult {
             case .fetched(let fetched):

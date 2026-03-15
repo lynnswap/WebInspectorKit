@@ -1908,6 +1908,112 @@ struct WISharedTransportRegistryTests {
     }
 
     @Test
+    func networkTransportDriverMatchesRedirectedStableContinuationByPreviousURL() async {
+        let backend = FakeRegistryBackend(
+            capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
+            pageResultProvider: { method, _ in
+                guard method == WITransportCommands.Network.GetBootstrapSnapshot.method else {
+                    return nil
+                }
+                return makeBootstrapSnapshotResultPayload(
+                    resources: [
+                        makeBootstrapResourcePayload(
+                            bootstrapRowID: "redirect-rebind",
+                            rawRequestID: "request-redirect-rebind",
+                            ownerSessionID: "page-provisional",
+                            frameID: "frame-main",
+                            targetIdentifier: "page-provisional",
+                            url: "https://example.com/original.js",
+                            method: "GET",
+                            requestType: "Script",
+                            mimeType: "text/javascript",
+                            phase: "inFlight"
+                        ),
+                    ]
+                )
+            }
+        )
+        let registry = makeRegistry(using: backend)
+        let driver = NetworkTransportDriver(registry: registry)
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-redirect-rebind",
+                "timestamp": 12.0,
+                "type": "Script",
+                "request": [
+                    "url": "https://example.com/final.js",
+                    "method": "GET",
+                    "headers": [:],
+                ],
+                "redirectResponse": [
+                    "url": "https://example.com/original.js",
+                    "status": 302,
+                    "statusText": "Found",
+                    "headers": [
+                        "Location": "https://example.com/final.js",
+                    ],
+                    "mimeType": "text/javascript",
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+        backend.emitPageEvent(
+            method: "Network.responseReceived",
+            params: [
+                "requestId": "request-redirect-rebind",
+                "timestamp": 13.0,
+                "type": "Script",
+                "response": [
+                    "url": "https://example.com/final.js",
+                    "status": 200,
+                    "statusText": "OK",
+                    "headers": [:],
+                    "mimeType": "text/javascript",
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+        backend.emitPageEvent(
+            method: "Network.loadingFinished",
+            params: [
+                "requestId": "request-redirect-rebind",
+                "timestamp": 14.0,
+                "metrics": [
+                    "responseBodyBytesReceived": 64,
+                    "responseBodyDecodedSize": 64,
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+
+        #expect(await waitForCondition {
+            let originalMatches = driver.store.entries.filter { $0.url == "https://example.com/original.js" }
+            let finalMatches = driver.store.entries.filter { $0.url == "https://example.com/final.js" }
+            guard let originalEntry = originalMatches.first,
+                  let finalEntry = finalMatches.first else {
+                return false
+            }
+            return originalMatches.count == 1
+                && finalMatches.count == 1
+                && originalEntry.sessionID == "page-committed"
+                && originalEntry.phase == .completed
+                && originalEntry.statusCode == 302
+                && finalEntry.sessionID == "page-committed"
+                && finalEntry.phase == .completed
+                && finalEntry.statusCode == 200
+                && finalEntry.encodedBodyLength == 64
+        })
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func networkTransportDriverUpdatesRequestBodyTargetAcrossStableCrossTargetRebinds() async throws {
         var backend: FakeRegistryBackend!
         backend = FakeRegistryBackend(

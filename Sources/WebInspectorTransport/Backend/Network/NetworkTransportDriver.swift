@@ -435,7 +435,7 @@ private extension NetworkTransportDriver {
            let previousRequestID = resolver.resolveEvent(
                 sessionID: sessionID,
                 rawRequestID: params.requestId,
-                url: params.request.url,
+                url: redirectResponse.url,
                 requestType: params.type,
                 targetIdentifier: normalizedScopeID(targetIdentifier),
                 store: store

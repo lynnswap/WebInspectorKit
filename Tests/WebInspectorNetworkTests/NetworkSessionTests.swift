@@ -252,6 +252,60 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func requestBodyIfNeededIgnoresLateFetchForReplacedBody() async {
+        let fetchStarted = AsyncGate()
+        let releaseFetch = AsyncGate()
+        let fetchFinished = AsyncGate()
+        let fetcher = StubNetworkBodyFetcher { _, role in
+            await fetchStarted.open()
+            await releaseFetch.wait()
+            defer {
+                Task {
+                    await fetchFinished.open()
+                }
+            }
+            return NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "late-body",
+                size: 9,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let session = WINetworkRuntime(bodyFetcher: fetcher)
+        let webView = makeIsolatedTestWebView()
+        session.attach(pageWebView: webView)
+
+        let entry = makeEntry()
+        let originalBody = makeBody(reference: "resp_ref", role: .response)
+        entry.responseBody = originalBody
+        let states = fetchStateRecorder(for: originalBody)
+
+        session.requestBodyIfNeeded(for: entry, role: .response)
+
+        let started = await states.next(where: { $0 == "fetching" })
+        #expect(started == "fetching")
+        await fetchStarted.wait()
+
+        let replacementBody = makeBody(reference: "replacement-ref", role: .response)
+        entry.responseBody = replacementBody
+
+        await releaseFetch.open()
+        await fetchFinished.wait()
+
+        #expect(entry.responseBody === replacementBody)
+        #expect(replacementBody.fetchState == .inline)
+        #expect(replacementBody.full == nil)
+        #expect(entry.decodedBodyLength == nil)
+        #expect(originalBody.full == nil)
+    }
+
+    @Test
     func requestBodyIfNeededSkipsNonInlineBodies() async {
         let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("fetchBody should not run for non-inline bodies")
