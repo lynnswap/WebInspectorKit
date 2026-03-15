@@ -134,6 +134,99 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func pageGetResourceTreeDecodesFrameTreePayload() async throws {
+        let backend = FakeSessionBackend(
+            compatibilityResponseProvider: { scope, method in
+                guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
+                    return nil
+                }
+                return Data(
+                    #"""
+                    {
+                      "frameTree": {
+                        "frame": {
+                          "id": "frame-main",
+                          "loaderId": "loader-main",
+                          "url": "https://example.com/",
+                          "securityOrigin": "https://example.com",
+                          "mimeType": "text/html"
+                        },
+                        "resources": [
+                          {
+                            "url": "https://example.com/app.js",
+                            "type": "Script",
+                            "mimeType": "text/javascript"
+                          }
+                        ]
+                      }
+                    }
+                    """#.utf8
+                )
+            }
+        )
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+        let response = try await session.page.send(WITransportCommands.Page.GetResourceTree())
+
+        #expect(response.frameTree.frame.id == "frame-main")
+        #expect(response.frameTree.frame.url == "https://example.com/")
+        #expect(response.frameTree.resources.count == 1)
+        #expect(response.frameTree.resources.first?.type == .script)
+        #expect(response.frameTree.resources.first?.mimeType == "text/javascript")
+        #expect(backend.sentPageMessageCount == 0)
+    }
+
+    @Test
+    func pageGetResourceTreeFallsBackUnknownResourceTypesToOther() async throws {
+        let backend = FakeSessionBackend(
+            compatibilityResponseProvider: { scope, method in
+                guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
+                    return nil
+                }
+                return Data(
+                    #"""
+                    {
+                      "frameTree": {
+                        "frame": {
+                          "id": "frame-main",
+                          "loaderId": "loader-main",
+                          "url": "https://example.com/",
+                          "securityOrigin": "https://example.com",
+                          "mimeType": "text/html"
+                        },
+                        "resources": [
+                          {
+                            "url": "https://example.com/unknown.bin",
+                            "type": "Preload",
+                            "mimeType": "application/octet-stream"
+                          }
+                        ]
+                      }
+                    }
+                    """#.utf8
+                )
+            }
+        )
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+        let response = try await session.page.send(WITransportCommands.Page.GetResourceTree())
+
+        #expect(response.frameTree.resources.count == 1)
+        #expect(response.frameTree.resources.first?.type == .other)
+        #expect(response.frameTree.resources.first?.mimeType == "application/octet-stream")
+    }
+
+    @Test
     func supportedSnapshotFactoryPreservesBackendCapabilitiesAndFailureReason() {
         let snapshot = WITransportSupportSnapshot.supported(
             backendKind: .iOSNativeInspector,

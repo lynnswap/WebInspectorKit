@@ -13,7 +13,7 @@ import WebInspectorTestSupport
 struct NetworkDetailViewControllerTests {
     @Test
     func detailViewReflectsModelDrivenFetchForSelectedResponseBody() async throws {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -22,7 +22,6 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -48,7 +47,7 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async throws {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -57,7 +56,6 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -85,7 +83,7 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func detailViewUpdatesWhenResponseHeadersAndBodyAppear() async throws {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -94,7 +92,6 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -155,7 +152,7 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func previewViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -164,7 +161,6 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -197,7 +193,7 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func previewViewDoesNotFetchOnLoadWithoutModelSelection() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -206,7 +202,6 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -252,7 +247,7 @@ struct NetworkDetailViewControllerTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: reference,
+            deferredLocator: .networkRequest(id: reference),
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -310,23 +305,23 @@ private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
+    private let onFetch: @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
     private(set) var fetchCount = 0
 
     init(
-        onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+        onFetch: @escaping @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = { ref, handle, role in
-            guard let body = await onFetch(ref, handle, role) else {
+        self.onFetch = { locator, role in
+            guard let body = await onFetch(locator, role) else {
                 return .bodyUnavailable
             }
             return .fetched(body)
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
         fetchCount += 1
-        return await onFetch(ref, handle, role)
+        return await onFetch(locator, role)
     }
 }
 #endif

@@ -212,6 +212,38 @@ package extension WITransportSession {
         return await router.currentPageTargetIdentifierSnapshot()
     }
 
+    func pageTargetIdentifiers() async -> [String] {
+        guard let router else {
+            return []
+        }
+        return await router.pageTargetIdentifiersSnapshot()
+    }
+
+    func sendPageCapturingCurrentTarget<C: WITransportPageCommand>(
+        _ command: sending C
+    ) async throws -> (targetIdentifier: String, response: C.Response) {
+        let parametersData = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
+
+        guard let router, let backend else {
+            throw WITransportError.notAttached
+        }
+
+        if let compatibilityResponse = backend.compatibilityResponse(scope: .page, method: C.method) {
+            guard let targetIdentifier = await router.currentPageTargetIdentifierSnapshot() else {
+                throw WITransportError.pageTargetUnavailable
+            }
+            let response = try decodeTransportResponse(C.Response.self, from: compatibilityResponse)
+            return (targetIdentifier, response)
+        }
+
+        let result = try await router.sendPageCommandCapturingCurrentTarget(
+            method: C.method,
+            parametersData: parametersData
+        )
+        let response = try decodeTransportResponse(C.Response.self, from: result.data)
+        return (result.targetIdentifier, response)
+    }
+
     func sendPage<C: WITransportPageCommand>(
         _ command: sending C,
         targetIdentifier: String

@@ -38,7 +38,7 @@ struct NetworkSessionTests {
         #expect(session.testPageAgentTypeName() == "WINetworkUnavailableBackend")
         #expect(session.transportCapabilities.isEmpty)
 
-        let body = await session.fetchBody(ref: "request-1", handle: nil, role: .response)
+        let body = await session.fetchBody(locator: .networkRequest(id: "request-1"), role: .response)
         #expect(body == nil)
     }
 
@@ -64,7 +64,7 @@ struct NetworkSessionTests {
 
     @Test
     func requestBodyIfNeededFetchesInlineBodyWhenAttached() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { locator, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -73,7 +73,6 @@ struct NetworkSessionTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -93,12 +92,12 @@ struct NetworkSessionTests {
         let fetched = await states.next(where: { $0 == "full" })
         #expect(fetched == "full")
         #expect(body.full == "body")
-        #expect(fetcher.fetchRefs == ["resp_ref"])
+        #expect(fetcher.fetchRequestIDs == ["resp_ref"])
     }
 
     @Test
     func requestBodyIfNeededSkipsWhenSessionIsDetached() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
+        let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("fetchBody should not run while detached")
             return nil
         }
@@ -109,13 +108,13 @@ struct NetworkSessionTests {
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
         #expect(body.fetchState == .inline)
     }
 
     @Test
     func requestBodyIfNeededDoesNotRetryFailedBody() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
+        let fetcher = StubNetworkBodyFetcher { _, _ in nil }
         let session = WINetworkRuntime(bodyFetcher: fetcher)
         let webView = makeIsolatedTestWebView()
         session.attach(pageWebView: webView)
@@ -129,16 +128,16 @@ struct NetworkSessionTests {
 
         let failed = await states.next(where: { $0 == "failed:unavailable" })
         #expect(failed == "failed:unavailable")
-        #expect(fetcher.fetchRefs.count == 1)
+        #expect(fetcher.fetchRequestIDs.count == 1)
 
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        #expect(fetcher.fetchRefs.count == 1)
+        #expect(fetcher.fetchRequestIDs.count == 1)
     }
 
     @Test
     func requestBodyIfNeededMarksUnavailableWhenBodyFetcherCannotRestoreAgent() async {
-        let fetcher = StubNetworkBodyFetcher(resultOnFetch: { _, _, _ in
+        let fetcher = StubNetworkBodyFetcher(resultOnFetch: { _, _ in
             .agentUnavailable
         })
         let session = WINetworkRuntime(bodyFetcher: fetcher)
@@ -154,7 +153,7 @@ struct NetworkSessionTests {
 
         let failed = await states.next(where: { $0 == "failed:unavailable" })
         #expect(failed == "failed:unavailable")
-        #expect(fetcher.fetchRefs == ["resp_ref"])
+        #expect(fetcher.fetchRequestIDs == ["resp_ref"])
     }
 
     @Test
@@ -162,7 +161,7 @@ struct NetworkSessionTests {
         let fetchStarted = AsyncGate()
         let releaseFetch = AsyncGate()
         let fetchFinished = AsyncGate()
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+        let fetcher = StubNetworkBodyFetcher { _, role in
             await fetchStarted.open()
             await releaseFetch.wait()
             defer {
@@ -173,12 +172,11 @@ struct NetworkSessionTests {
             return NetworkBody(
                 kind: .text,
                 preview: nil,
-                full: "late-\(ref ?? "nil")",
+                full: "late-body",
                 size: nil,
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
-                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
@@ -209,7 +207,7 @@ struct NetworkSessionTests {
 
     @Test
     func requestBodyIfNeededSkipsNonInlineBodies() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
+        let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("fetchBody should not run for non-inline bodies")
             return nil
         }
@@ -234,7 +232,7 @@ struct NetworkSessionTests {
         entry.responseBody = failedBody
         session.requestBodyIfNeeded(for: entry, role: .response)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
         #expect(fetchingBody.fetchState == .fetching)
         #expect(fullBody.fetchState == .full)
         #expect(failedBody.fetchState == .failed(.unavailable))
@@ -242,7 +240,7 @@ struct NetworkSessionTests {
 
     @Test
     func requestBodyIfNeededMarksUnavailableWhenReferenceAndHandleAreMissing() async {
-        let fetcher = StubNetworkBodyFetcher { _, _, _ in
+        let fetcher = StubNetworkBodyFetcher { _, _ in
             Issue.record("fetchBody should not run without reference or handle")
             return nil
         }
@@ -259,8 +257,7 @@ struct NetworkSessionTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: nil,
-            handle: nil,
+            deferredLocator: nil,
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -272,14 +269,14 @@ struct NetworkSessionTests {
 
         let failed = await states.next(where: { $0 == "failed:unavailable" })
         #expect(failed == "failed:unavailable")
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
     }
 
     @Test
     func requestBodyIfNeededKeepsInlinePreviewWhenDeferredRequestLoadingIsUnsupported() async {
         let fetcher = StubNetworkBodyFetcher(
             supportedRoles: [.response]
-        ) { _, _, _ in
+        ) { _, _ in
             Issue.record("fetchBody should not run for unsupported request-body loading")
             return nil
         }
@@ -296,8 +293,7 @@ struct NetworkSessionTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: nil,
-            handle: nil,
+            deferredLocator: nil,
             formEntries: [],
             fetchState: .inline,
             role: .request
@@ -306,7 +302,7 @@ struct NetworkSessionTests {
 
         session.requestBodyIfNeeded(for: entry, role: .request)
 
-        #expect(fetcher.fetchRefs.isEmpty)
+        #expect(fetcher.fetchRequestIDs.isEmpty)
         #expect(body.fetchState == .inline)
         #expect(body.preview == "request-preview")
         #expect(body.full == nil)
@@ -333,7 +329,7 @@ struct NetworkSessionTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: reference,
+            deferredLocator: .networkRequest(id: reference),
             formEntries: [],
             fetchState: .inline,
             role: role
@@ -374,17 +370,17 @@ struct NetworkSessionTests {
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
+    private let onFetch: @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
     private let supportedRoles: Set<NetworkBody.Role>
-    private(set) var fetchRefs: [String?] = []
+    private(set) var fetchRequestIDs: [String?] = []
 
     init(
         supportedRoles: Set<NetworkBody.Role> = Set(NetworkBody.Role.allCases),
-        onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
+        onFetch: @escaping @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> NetworkBody?
     ) {
         self.supportedRoles = supportedRoles
-        self.onFetch = { ref, handle, role in
-            guard let body = await onFetch(ref, handle, role) else {
+        self.onFetch = { locator, role in
+            guard let body = await onFetch(locator, role) else {
                 return .bodyUnavailable
             }
             return .fetched(body)
@@ -393,7 +389,7 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
 
     init(
         supportedRoles: Set<NetworkBody.Role> = Set(NetworkBody.Role.allCases),
-        resultOnFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> WINetworkBodyFetchResult
+        resultOnFetch: @escaping @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
     ) {
         self.supportedRoles = supportedRoles
         self.onFetch = resultOnFetch
@@ -403,9 +399,9 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         supportedRoles.contains(role)
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        fetchRefs.append(ref)
-        return await onFetch(ref, handle, role)
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        fetchRequestIDs.append(locator.requestID)
+        return await onFetch(locator, role)
     }
 }
 
@@ -441,7 +437,20 @@ private final class StubNetworkPageDriver: WINetworkBackend {
         clearCount += 1
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        .bodyUnavailable
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        _ = locator
+        _ = role
+        return .bodyUnavailable
+    }
+}
+
+private extension NetworkDeferredBodyLocator {
+    var requestID: String? {
+        switch self {
+        case .networkRequest(let requestID):
+            requestID
+        case .pageResource, .opaqueHandle:
+            nil
+        }
     }
 }

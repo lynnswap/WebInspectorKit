@@ -62,6 +62,64 @@ public final class NetworkStore {
         flushPendingResourceTimingEvents()
     }
 
+    @discardableResult
+    package func applySeeds(_ seeds: [NetworkEntrySeed]) -> [NetworkEntry] {
+        guard isRecording else { return [] }
+        guard !seeds.isEmpty else { return [] }
+
+        var insertedEntries: [NetworkEntry] = []
+        insertedEntries.reserveCapacity(seeds.count)
+        for seed in seeds {
+            let entry = NetworkEntry(seed: seed)
+            appendEntry(entry)
+            insertedEntries.append(entry)
+        }
+
+        return insertedEntries.filter(entryIsTracked)
+    }
+
+    @discardableResult
+    package func moveEntrySession(
+        requestID: Int,
+        from previousSessionID: String,
+        to sessionID: String
+    ) -> NetworkEntry? {
+        guard previousSessionID != sessionID else {
+            return entry(forRequestID: requestID, sessionID: sessionID)
+        }
+        guard let entry = entry(forRequestID: requestID, sessionID: previousSessionID) else {
+            return nil
+        }
+        let previousBucketKey = sessionKey(for: previousSessionID)
+        sessionBuckets[previousBucketKey]?.remove(requestID: requestID)
+        entry.rebindDeferredBodyTargets(from: previousSessionID, to: sessionID)
+        entry.moveSession(to: sessionID)
+        bucket(for: sessionID).set(entry, requestID: requestID)
+        return entry
+    }
+
+    package func containsEntry(requestID: Int, sessionID: String?) -> Bool {
+        entry(forRequestID: requestID, sessionID: sessionID) != nil
+    }
+
+    package func entry(requestID: Int, sessionID: String?) -> NetworkEntry? {
+        entry(forRequestID: requestID, sessionID: sessionID)
+    }
+
+    package func updateEntrySession(
+        _ entry: NetworkEntry,
+        to sessionID: String
+    ) {
+        guard entry.sessionID != sessionID else {
+            return
+        }
+        let previousBucketKey = sessionKey(for: entry.sessionID)
+        sessionBuckets[previousBucketKey]?.remove(requestID: entry.requestID)
+        entry.rebindDeferredBodyTargets(from: entry.sessionID, to: sessionID)
+        entry.moveSession(to: sessionID)
+        bucket(for: sessionID).set(entry, requestID: entry.requestID)
+    }
+
     func applyBatchedInsertions(_ batch: NetworkEventBatch) {
         guard isRecording else { return }
 
@@ -181,7 +239,8 @@ public final class NetworkStore {
     private func handleStart(_ event: HTTPNetworkEvent) {
         let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
-        if bucket.entry(for: requestID) != nil {
+        if let existingEntry = bucket.entry(for: requestID) {
+            existingEntry.applyStartPayload(event)
             return
         }
         appendEntry(NetworkEntry(startPayload: event))
@@ -297,6 +356,16 @@ public final class NetworkStore {
         bucket.set(entry, requestID: entry.requestID)
     }
 
+    private func entryIsTracked(_ entry: NetworkEntry) -> Bool {
+        let key = sessionKey(for: entry.sessionID)
+        guard let bucket = sessionBuckets[key],
+              bucket.entry(for: entry.requestID) === entry
+        else {
+            return false
+        }
+        return entries.contains { $0 === entry }
+    }
+
     private func bucket(for sessionID: String?) -> SessionBucket {
         let key = sessionKey(for: sessionID)
         if let existing = sessionBuckets[key] {
@@ -353,5 +422,9 @@ private final class SessionBucket {
 
     func set(_ entry: NetworkEntry, requestID: Int) {
         entriesByRequestID[requestID] = WeakEntry(value: entry)
+    }
+
+    func remove(requestID: Int) {
+        entriesByRequestID.removeValue(forKey: requestID)
     }
 }

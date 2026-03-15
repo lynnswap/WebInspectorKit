@@ -266,6 +266,37 @@ actor WITransportMessageRouter {
     func currentPageTargetIdentifierSnapshot() -> String? {
         currentPageTargetIdentifier
     }
+
+    func pageTargetIdentifiersSnapshot() -> [String] {
+        knownTargets.values
+            .filter { $0.type == "page" }
+            .sorted { lhs, rhs in
+                if lhs.identifier == currentPageTargetIdentifier {
+                    return true
+                }
+                if rhs.identifier == currentPageTargetIdentifier {
+                    return false
+                }
+                return lhs.creationOrder > rhs.creationOrder
+            }
+            .map(\.identifier)
+    }
+
+    func sendPageCommandCapturingCurrentTarget(
+        method: String,
+        parametersData: Data?
+    ) async throws -> (targetIdentifier: String, data: Data) {
+        guard let targetIdentifier = currentPageTargetIdentifier else {
+            throw WITransportError.pageTargetUnavailable
+        }
+
+        let data = try await sendPageCommand(
+            method: method,
+            parametersData: parametersData,
+            targetIdentifierOverride: targetIdentifier
+        )
+        return (targetIdentifier, data)
+    }
 }
 
 private extension WITransportMessageRouter {

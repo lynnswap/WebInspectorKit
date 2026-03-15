@@ -15,7 +15,6 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
-            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -41,7 +40,6 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
-            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -67,7 +65,6 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
-            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -94,7 +91,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: summary,
-            reference: "resp_ref",
+            deferredLocator: .networkRequest(id: "resp_ref"),
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -119,7 +116,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            reference: "resp_ref",
+            deferredLocator: .networkRequest(id: "resp_ref"),
             formEntries: [],
             fetchState: .inline,
             role: .response

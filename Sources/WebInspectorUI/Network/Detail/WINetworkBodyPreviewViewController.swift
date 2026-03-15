@@ -216,7 +216,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
                 \.isBase64Encoded,
                 \.isTruncated,
                 \.summary,
-                \.reference,
                 \.formEntries,
                 \.fetchState
             ]

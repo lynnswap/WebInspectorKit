@@ -15,4 +15,5 @@ package enum InspectorTransportCapability: String, Hashable, Sendable {
     case domDomain
     case networkDomain
     case pageTargetRouting
+    case networkBootstrapSnapshot
 }

@@ -69,12 +69,14 @@ package final class WINetworkRuntime {
     package func suspend() {
         cancelAllBodyFetches()
         mode = .stopped
+        backend.setMode(.stopped)
         backend.detachPageWebView(preparing: .stopped)
     }
 
     package func detach() {
         cancelAllBodyFetches()
         mode = .stopped
+        backend.setMode(.stopped)
         backend.detachPageWebView(preparing: .stopped)
         lastPageWebView = nil
     }
@@ -94,8 +96,8 @@ package final class WINetworkRuntime {
         cancelBodyFetch(for: BodyFetchKey(entryID: entry.id, role: .response), entry: entry)
     }
 
-    package func fetchBody(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
-        switch await backend.fetchBodyResult(ref: ref, handle: handle, role: role) {
+    package func fetchBody(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> NetworkBody? {
+        switch await backend.fetchBodyResult(locator: locator, role: role) {
         case .fetched(let body):
             return body
         case .agentUnavailable, .bodyUnavailable:
@@ -117,11 +119,7 @@ package final class WINetworkRuntime {
             return
         }
 
-        let bodyRef = body.reference
-        let bodyHandle = body.handle
-        let hasReference = bodyRef?.isEmpty == false
-        let hasHandle = bodyHandle != nil
-        guard hasReference || hasHandle else {
+        guard let locator = body.deferredLocator else {
             body.markFailed(.unavailable)
             return
         }
@@ -137,7 +135,7 @@ package final class WINetworkRuntime {
                 return
             }
 
-            let fetchResult = await backend.fetchBodyResult(ref: bodyRef, handle: bodyHandle, role: role)
+            let fetchResult = await backend.fetchBodyResult(locator: locator, role: role)
 
             guard !Task.isCancelled else {
                 self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
@@ -289,9 +287,8 @@ private final class WINetworkUnavailableBackend: WINetworkBackend {
         store.clear()
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        _ = ref
-        _ = handle
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        _ = locator
         _ = role
         return .agentUnavailable
     }
@@ -337,7 +334,7 @@ private final class WINetworkBodyFetchingBackend: WINetworkBackend {
         bodyFetcher.supportsDeferredLoading(for: role)
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        await bodyFetcher.fetchBodyResult(ref: ref, handle: handle, role: role)
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+        await bodyFetcher.fetchBodyResult(locator: locator, role: role)
     }
 }

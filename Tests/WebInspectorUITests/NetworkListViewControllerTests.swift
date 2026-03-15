@@ -79,6 +79,57 @@ struct NetworkListViewControllerTests {
         #expect(coordinator.item.isSelected == false)
     }
 
+    @Test
+    func listViewDisplaysBootstrappedResourcesWithoutLiveEvents() async {
+        let store = WINetworkStore(session: WINetworkRuntime())
+        let queryModel = WINetworkQueryState(store: store)
+        let viewController = WINetworkListViewController(
+            store: store,
+            queryModel: queryModel
+        )
+        let snapshotRevisions = AsyncValueQueue<UInt64>()
+        viewController.onSnapshotAppliedForTesting = { revision in
+            Task {
+                await snapshotRevisions.push(revision)
+            }
+        }
+        let host = UINavigationController(rootViewController: viewController)
+        let window = makeWindow(rootViewController: host)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        _ = await snapshotRevisions.next()
+
+        store.store.applySeeds([
+            NetworkEntrySeed(
+                kind: .stable,
+                sessionID: "bootstrapped-page",
+                requestID: 9001,
+                url: "https://example.com/bootstrapped.json",
+                method: "UNKNOWN",
+                startTimestamp: 0,
+                mimeType: "application/json",
+                requestType: "Fetch",
+                phase: .completed
+            ),
+        ])
+
+        while viewController.collectionView.numberOfItems(inSection: 0) != 1 {
+            _ = await snapshotRevisions.next()
+        }
+
+        #expect(queryModel.displayEntries.count == 1)
+        #expect(queryModel.displayEntries.first?.url == "https://example.com/bootstrapped.json")
+        #expect(
+            listCellText(
+                in: viewController.collectionView,
+                at: IndexPath(item: 0, section: 0)
+            ) == "bootstrapped.json"
+        )
+    }
+
     private func makeResourceTimingBatchPayload(
         seq: Int,
         requestID: Int

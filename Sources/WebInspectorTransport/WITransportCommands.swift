@@ -2,8 +2,160 @@ import Foundation
 
 public enum WITransportCommands {
     public enum Target {}
+    public enum Page {}
     public enum Network {}
     public enum DOM {}
+}
+
+public enum WITransportPageResourceType: String, Decodable, Sendable {
+    case document = "Document"
+    case styleSheet = "StyleSheet"
+    case image = "Image"
+    case font = "Font"
+    case script = "Script"
+    case xhr = "XHR"
+    case fetch = "Fetch"
+    case ping = "Ping"
+    case beacon = "Beacon"
+    case webSocket = "WebSocket"
+    case eventSource = "EventSource"
+    case other = "Other"
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = Self(rawValue: rawValue) ?? .other
+    }
+}
+
+public struct WITransportFrame: Decodable, Sendable {
+    public let id: String
+    public let parentId: String?
+    public let loaderId: String
+    public let name: String?
+    public let url: String
+    public let securityOrigin: String
+    public let mimeType: String
+
+    public init(
+        id: String,
+        parentId: String? = nil,
+        loaderId: String,
+        name: String? = nil,
+        url: String,
+        securityOrigin: String,
+        mimeType: String
+    ) {
+        self.id = id
+        self.parentId = parentId
+        self.loaderId = loaderId
+        self.name = name
+        self.url = url
+        self.securityOrigin = securityOrigin
+        self.mimeType = mimeType
+    }
+}
+
+public struct WITransportFrameResource: Decodable, Sendable {
+    public let url: String
+    public let type: WITransportPageResourceType
+    public let mimeType: String
+    public let failed: Bool?
+    public let canceled: Bool?
+    public let sourceMapURL: String?
+    public let targetId: String?
+
+    public init(
+        url: String,
+        type: WITransportPageResourceType,
+        mimeType: String,
+        failed: Bool? = nil,
+        canceled: Bool? = nil,
+        sourceMapURL: String? = nil,
+        targetId: String? = nil
+    ) {
+        self.url = url
+        self.type = type
+        self.mimeType = mimeType
+        self.failed = failed
+        self.canceled = canceled
+        self.sourceMapURL = sourceMapURL
+        self.targetId = targetId
+    }
+}
+
+public struct WITransportFrameResourceTree: Decodable, Sendable {
+    public let frame: WITransportFrame
+    public let childFrames: [WITransportFrameResourceTree]?
+    public let resources: [WITransportFrameResource]
+
+    public init(
+        frame: WITransportFrame,
+        childFrames: [WITransportFrameResourceTree]? = nil,
+        resources: [WITransportFrameResource]
+    ) {
+        self.frame = frame
+        self.childFrames = childFrames
+        self.resources = resources
+    }
+}
+
+package enum WITransportNetworkBootstrapPhase: String, Decodable, Sendable {
+    case completed
+    case failed
+    case inFlight
+
+    package init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = Self(rawValue: rawValue) ?? .completed
+    }
+}
+
+package struct WITransportNetworkBootstrapBodyFetchDescriptor: Decodable, Sendable {
+    package let targetIdentifier: String?
+    package let frameId: String
+    package let url: String
+}
+
+package struct WITransportNetworkBootstrapResource: Decodable, Sendable {
+    package let bootstrapRowID: String
+    package let rawRequestID: String?
+    package let ownerSessionID: String
+    package let frameID: String?
+    package let targetIdentifier: String?
+    package let url: String
+    package let method: String
+    package let requestType: String?
+    package let mimeType: String?
+    package let statusCode: Int?
+    package let statusText: String?
+    package let requestHeaders: [String: String]?
+    package let responseHeaders: [String: String]?
+    package let phase: WITransportNetworkBootstrapPhase
+    package let canceled: Bool?
+    package let errorDescription: String?
+    package let bodyFetchDescriptor: WITransportNetworkBootstrapBodyFetchDescriptor?
+
+    private enum CodingKeys: String, CodingKey {
+        case bootstrapRowID
+        case rawRequestID
+        case ownerSessionID
+        case frameID
+        case targetIdentifier
+        case url
+        case method
+        case requestType
+        case mimeType
+        case statusCode
+        case statusText
+        case requestHeaders
+        case responseHeaders
+        case phase
+        case canceled
+        case errorDescription
+        case bodyFetchDescriptor
+    }
 }
 
 public struct WITransportDOMNode: Decodable, Sendable {
@@ -81,6 +233,54 @@ public extension WITransportCommands.Target {
     }
 }
 
+public extension WITransportCommands.Page {
+    struct GetResourceTree: WITransportPageCommand, Sendable {
+        public struct Response: Decodable, Sendable {
+            public let frameTree: WITransportFrameResourceTree
+
+            public init(frameTree: WITransportFrameResourceTree) {
+                self.frameTree = frameTree
+            }
+        }
+
+        public let parameters = WIEmptyTransportParameters()
+
+        public init() {}
+
+        public static let method = "Page.getResourceTree"
+    }
+
+    struct GetResourceContent: WITransportPageCommand, Sendable {
+        public struct Parameters: Encodable, Sendable {
+            public let frameId: String
+            public let url: String
+
+            public init(frameId: String, url: String) {
+                self.frameId = frameId
+                self.url = url
+            }
+        }
+
+        public struct Response: Decodable, Sendable {
+            public let content: String
+            public let base64Encoded: Bool
+
+            public init(content: String, base64Encoded: Bool) {
+                self.content = content
+                self.base64Encoded = base64Encoded
+            }
+        }
+
+        public let parameters: Parameters
+
+        public init(frameId: String, url: String) {
+            parameters = Parameters(frameId: frameId, url: url)
+        }
+
+        public static let method = "Page.getResourceContent"
+    }
+}
+
 public extension WITransportCommands.Network {
     struct Enable: WITransportPageCommand, Sendable {
         public typealias Response = WIEmptyTransportResponse
@@ -143,6 +343,20 @@ public extension WITransportCommands.Network {
         }
 
         public static let method = "Network.getRequestPostData"
+    }
+}
+
+package extension WITransportCommands.Network {
+    struct GetBootstrapSnapshot: WITransportPageCommand, Sendable {
+        package struct Response: Decodable, Sendable {
+            let resources: [WITransportNetworkBootstrapResource]
+        }
+
+        package let parameters = WIEmptyTransportParameters()
+
+        package init() {}
+
+        package static let method = "Network.getBootstrapSnapshot"
     }
 }
 
