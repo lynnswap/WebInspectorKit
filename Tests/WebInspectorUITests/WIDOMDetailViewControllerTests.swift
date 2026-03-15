@@ -5,6 +5,7 @@ import WebKit
 import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorUI
+@testable import WebInspectorTransport
 
 @MainActor
 @Suite(.serialized, .webKitIsolated)
@@ -416,6 +417,7 @@ import WebInspectorTestSupport
 @testable import WebInspectorCore
 @testable import WebInspectorCore
 @testable import WebInspectorUI
+@testable import WebInspectorTransport
 
 @MainActor
 @Suite(.serialized, .webKitIsolated)

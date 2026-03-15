@@ -2,6 +2,7 @@
 import Foundation
 import WebKit
 import WebInspectorCore
+import WebInspectorTransport
 @_spi(PreviewSupport) import WebInspectorCore
 
 @MainActor

@@ -8,21 +8,20 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     weak var webView: WKWebView?
     let store = NetworkStore()
 
-    private let registry: WISharedTransportRegistry
     private let logger = Logger(subsystem: "WebInspectorKit", category: "NetworkTransportDriver")
-    private let eventConsumerIdentifier = UUID()
+    private let eventTranslator = NetworkEventTranslator()
+    private let transportClient = NetworkTransportClient()
+    private let ingressCoordinator: NetworkIngressCoordinator
     private let resolver = NetworkTimelineResolver()
     private let initialSupport: WIBackendSupport
 
     private var loggingMode: NetworkLoggingMode = .buffering
-    private var lease: WISharedTransportRegistry.Lease?
-    private var attachTask: Task<Void, Never>?
 
     init(
         registry: WISharedTransportRegistry = .shared,
         initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
     ) {
-        self.registry = registry
+        self.ingressCoordinator = NetworkIngressCoordinator(registry: registry)
         self.initialSupport = initialSupport
         store.setRecording(true)
     }
@@ -32,15 +31,15 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     package var inspectorTransportCapabilities: Set<InspectorTransportCapability> {
-        lease?.inspectorTransportCapabilities ?? []
+        ingressCoordinator.inspectorTransportCapabilities
     }
 
     package var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
-        lease?.supportSnapshot
+        ingressCoordinator.supportSnapshot
     }
 
     var support: WIBackendSupport {
-        lease?.supportSnapshot.backendSupport ?? initialSupport
+        ingressCoordinator.supportSnapshot?.backendSupport ?? initialSupport
     }
 
     package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
@@ -59,12 +58,12 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     func attachPageWebView(_ newWebView: WKWebView?) {
-        guard webView !== newWebView || lease == nil else {
+        guard webView !== newWebView || ingressCoordinator.currentLease == nil else {
             return
         }
 
         let previousWebView = webView
-        releaseLease()
+        ingressCoordinator.detach()
         webView = newWebView
 
         if previousWebView !== newWebView {
@@ -75,13 +74,10 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             return
         }
 
-        startLeaseAttachment(for: newWebView)
+        startIngressAttachment(for: newWebView)
     }
 
     func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
-        attachTask?.cancel()
-        attachTask = nil
-
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -90,7 +86,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             }
         }
 
-        releaseLease()
+        ingressCoordinator.detach()
         webView = nil
     }
 
@@ -99,186 +95,92 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     package func waitForAttachForTesting() async {
-        await attachTask?.value
+        await ingressCoordinator.waitForAttachForTesting()
     }
 
     package func fetchBodyResult(
         locator: NetworkDeferredBodyLocator,
         role: NetworkBody.Role
     ) async -> WINetworkBodyFetchResult {
-        guard let lease else {
+        guard let lease = ingressCoordinator.currentLease else {
             return .agentUnavailable
         }
-
-        do {
-            try await lease.ensureAttached()
-            try await lease.ensureNetworkEventIngress()
-            switch locator {
-            case .networkRequest(let requestID, let targetIdentifier):
-                switch role {
-                case .request:
-                    let response: WITransportCommands.Network.GetRequestPostData.Response
-                    if let targetIdentifier {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetRequestPostData(requestId: requestID),
-                            targetIdentifier: targetIdentifier
-                        )
-                    } else {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetRequestPostData(requestId: requestID)
-                        )
-                    }
-                    guard !response.postData.isEmpty else {
-                        return .bodyUnavailable
-                    }
-                    return .fetched(
-                        NetworkBody(
-                            kind: .text,
-                            preview: nil,
-                            full: response.postData,
-                            size: response.postData.utf8.count,
-                            isBase64Encoded: false,
-                            isTruncated: false,
-                            summary: nil,
-                            formEntries: [],
-                            fetchState: .full,
-                            role: .request
-                        )
-                    )
-                case .response:
-                    let response: WITransportCommands.Network.GetResponseBody.Response
-                    if let targetIdentifier {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetResponseBody(requestId: requestID),
-                            targetIdentifier: targetIdentifier
-                        )
-                    } else {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetResponseBody(requestId: requestID)
-                        )
-                    }
-                    return .fetched(
-                        NetworkBody(
-                            kind: response.base64Encoded ? .binary : .text,
-                            preview: nil,
-                            full: response.body,
-                            size: nil,
-                            isBase64Encoded: response.base64Encoded,
-                            isTruncated: false,
-                            summary: nil,
-                            formEntries: [],
-                            fetchState: .full,
-                            role: .response
-                        )
-                    )
-                }
-            case .pageResource(let targetIdentifier, let frameID, let url):
-                guard role == .response else {
-                    return .bodyUnavailable
-                }
-                let response: WITransportCommands.Page.GetResourceContent.Response
-                if let targetIdentifier {
-                    response = try await lease.sendPage(
-                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url),
-                        targetIdentifier: targetIdentifier
-                    )
-                } else {
-                    response = try await lease.sendPage(
-                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url)
-                    )
-                }
-                return .fetched(
-                    NetworkBody(
-                        kind: response.base64Encoded ? .binary : .text,
-                        preview: nil,
-                        full: response.content,
-                        size: nil,
-                        isBase64Encoded: response.base64Encoded,
-                        isTruncated: false,
-                        summary: nil,
-                        formEntries: [],
-                        fetchState: .full,
-                        role: .response
-                    )
-                )
-            case .opaqueHandle:
-                return .bodyUnavailable
-            }
-        } catch let error as WITransportError {
-            switch error {
-            case .unsupported, .alreadyAttached, .notAttached, .attachFailed, .pageTargetUnavailable, .transportClosed:
-                return .agentUnavailable
-            case .remoteError, .requestTimedOut, .invalidResponse, .invalidCommandEncoding, .invalidChannelScope:
-                return .bodyUnavailable
-            }
-        } catch {
-            return .bodyUnavailable
-        }
+        return await transportClient.fetchBodyResult(
+            using: lease,
+            locator: locator,
+            role: role
+        )
     }
 }
 
 extension NetworkTransportDriver {
     func prepareForNavigationReconnect() {
-        attachTask?.cancel()
-        attachTask = nil
-        releaseLease()
+        ingressCoordinator.prepareForNavigationReconnect()
     }
 
     func resumeAfterNavigationReconnect() {
         guard let webView else {
             return
         }
-        guard lease == nil else {
-            return
-        }
-
-        startLeaseAttachment(for: webView)
+        let bootstrapContextID = UUID()
+        resolver.begin(contextID: bootstrapContextID)
+        ingressCoordinator.resumeAfterNavigationReconnect(
+            to: webView,
+            onEnvelope: { [weak self] envelope in
+                self?.handle(envelope)
+            },
+            onAttachWork: { [weak self] lease in
+                guard let self else {
+                    return
+                }
+                try await self.bootstrapExistingResources(using: lease, contextID: bootstrapContextID)
+                self.finishBootstrap(contextID: bootstrapContextID)
+            },
+            onFailure: { [weak self] error, lease in
+                guard let self else {
+                    return
+                }
+                self.finishBootstrap(contextID: bootstrapContextID)
+                guard self.shouldLogAttachFailure(error, lease: lease) else {
+                    return
+                }
+                self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
+            }
+        )
     }
 }
 
 private extension NetworkTransportDriver {
     func tearDownLifecycle() {
-        attachTask?.cancel()
-        attachTask = nil
-        releaseLease()
+        ingressCoordinator.detach()
     }
 
-    func startLeaseAttachment(for webView: WKWebView) {
-        attachTask?.cancel()
-        attachTask = nil
-        releaseLease()
-
-        let lease = registry.acquireLease(for: webView)
-        self.lease = lease
+    func startIngressAttachment(for webView: WKWebView) {
         let bootstrapContextID = UUID()
         resolver.begin(contextID: bootstrapContextID)
-        lease.addNetworkConsumer(eventConsumerIdentifier) { [weak self] envelope in
-            self?.handle(envelope)
-        }
-
-        attachTask = Task { @MainActor [weak self] in
-            guard let self else {
-                return
-            }
-
-            do {
-                try await lease.ensureAttached()
-                try await lease.ensureNetworkEventIngress()
+        ingressCoordinator.attach(
+            to: webView,
+            onEnvelope: { [weak self] envelope in
+                self?.handle(envelope)
+            },
+            onAttachWork: { [weak self] lease in
+                guard let self else {
+                    return
+                }
                 try await self.bootstrapExistingResources(using: lease, contextID: bootstrapContextID)
                 self.finishBootstrap(contextID: bootstrapContextID)
-            } catch is CancellationError {
-                self.finishBootstrap(contextID: bootstrapContextID)
-            } catch {
+            },
+            onFailure: { [weak self] error, lease in
+                guard let self else {
+                    return
+                }
                 self.finishBootstrap(contextID: bootstrapContextID)
                 guard self.shouldLogAttachFailure(error, lease: lease) else {
-                    self.attachTask = nil
                     return
                 }
                 self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
             }
-
-            self.attachTask = nil
-        }
+        )
     }
 
     func bootstrapExistingResources(
@@ -302,14 +204,8 @@ private extension NetworkTransportDriver {
         }
     }
 
-    func releaseLease() {
-        lease?.removeNetworkConsumer(eventConsumerIdentifier)
-        lease?.release()
-        lease = nil
-    }
-
     func shouldLogAttachFailure(_ error: Error, lease: WISharedTransportRegistry.Lease) -> Bool {
-        if lease !== self.lease {
+        if lease !== self.ingressCoordinator.currentLease {
             return false
         }
         if error is CancellationError {
@@ -328,7 +224,7 @@ private extension NetworkTransportDriver {
     }
 
     func handle(_ envelope: WITransportEventEnvelope) {
-        guard let event = decodePendingEvent(from: envelope) else {
+        guard let event = eventTranslator.translate(envelope) else {
             return
         }
         if resolver.buffersPendingEvents {
@@ -336,68 +232,6 @@ private extension NetworkTransportDriver {
             return
         }
         replay(event)
-    }
-
-    func decodePendingEvent(from envelope: WITransportEventEnvelope) -> NetworkPendingEvent? {
-        switch envelope.method {
-        case "Network.requestWillBeSent":
-            guard let params = try? JSONDecoder().decode(RequestWillBeSentParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .requestWillBeSent(params, envelope.targetIdentifier)
-        case "Network.responseReceived":
-            guard let params = try? JSONDecoder().decode(ResponseReceivedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .responseReceived(params, envelope.targetIdentifier)
-        case "Network.loadingFinished":
-            guard let params = try? JSONDecoder().decode(LoadingFinishedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .loadingFinished(params, envelope.targetIdentifier)
-        case "Network.loadingFailed":
-            guard let params = try? JSONDecoder().decode(LoadingFailedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .loadingFailed(params, envelope.targetIdentifier)
-        case "Network.webSocketCreated":
-            guard let params = try? JSONDecoder().decode(WebSocketCreatedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketCreated(params, envelope.targetIdentifier)
-        case "Network.webSocketWillSendHandshakeRequest":
-            guard let params = try? JSONDecoder().decode(WebSocketHandshakeRequestParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketHandshakeRequest(params, envelope.targetIdentifier)
-        case "Network.webSocketHandshakeResponseReceived":
-            guard let params = try? JSONDecoder().decode(WebSocketHandshakeResponseReceivedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketHandshakeResponseReceived(params, envelope.targetIdentifier)
-        case "Network.webSocketFrameReceived":
-            guard let params = try? JSONDecoder().decode(WebSocketFrameParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketFrameReceived(params, envelope.targetIdentifier)
-        case "Network.webSocketFrameSent":
-            guard let params = try? JSONDecoder().decode(WebSocketFrameParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketFrameSent(params, envelope.targetIdentifier)
-        case "Network.webSocketFrameError":
-            guard let params = try? JSONDecoder().decode(WebSocketFrameErrorParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketFrameError(params, envelope.targetIdentifier)
-        case "Network.webSocketClosed":
-            guard let params = try? JSONDecoder().decode(WebSocketClosedParams.self, from: envelope.paramsData) else {
-                return nil
-            }
-            return .webSocketClosed(params, envelope.targetIdentifier)
-        default:
-            return nil
-        }
     }
 
     func replay(_ event: NetworkPendingEvent) {
@@ -957,44 +791,21 @@ private extension NetworkTransportDriver {
     func loadBootstrapResources(
         using lease: WISharedTransportRegistry.Lease
     ) async throws -> NetworkBootstrapLoad {
-        let defaultSessionID: (String?) -> String = { [weak self] in
-            self?.sessionIdentifier(for: $0) ?? "page"
-        }
-        let normalizeScopeID: (String?) -> String? = { [weak self] in
-            self?.normalizedScopeID($0)
-        }
-        let allocateRequestID = { [resolver] in
-            resolver.allocateCanonicalRequestID()
-        }
-
-        if lease.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
-            do {
-                return try await StableBootstrapSource().load(
-                    using: lease,
-                    allocateRequestID: allocateRequestID,
-                    defaultSessionID: defaultSessionID,
-                    normalizeScopeID: normalizeScopeID
-                )
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                logger.debug("stable network bootstrap skipped: \(error.localizedDescription, privacy: .public)")
+        try await transportClient.loadBootstrapResources(
+            using: lease,
+            allocateRequestID: { [resolver] in
+                resolver.allocateCanonicalRequestID()
+            },
+            defaultSessionID: { [weak self] in
+                self?.sessionIdentifier(for: $0) ?? "page"
+            },
+            normalizeScopeID: { [weak self] in
+                self?.normalizedScopeID($0)
+            },
+            logFailure: { [weak self] message in
+                self?.logger.debug("\(message, privacy: .public)")
             }
-        }
-
-        do {
-            return try await HistoricalBootstrapSource().load(
-                using: lease,
-                allocateRequestID: allocateRequestID,
-                defaultSessionID: defaultSessionID,
-                normalizeScopeID: normalizeScopeID
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            logger.debug("historical network bootstrap skipped: \(error.localizedDescription, privacy: .public)")
-            return NetworkBootstrapLoad(seeds: [])
-        }
+        )
     }
 
     func sessionIdentifier(for targetIdentifier: String?) -> String {

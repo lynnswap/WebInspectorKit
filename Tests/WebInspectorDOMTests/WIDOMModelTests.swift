@@ -7,6 +7,7 @@ import AppKit
 #endif
 @testable import WebInspectorUI
 @testable import WebInspectorCore
+@testable import WebInspectorTransport
 
 @MainActor
 @Suite(.serialized, .webKitIsolated)

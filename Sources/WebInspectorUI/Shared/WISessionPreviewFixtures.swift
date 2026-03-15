@@ -1,5 +1,6 @@
 #if DEBUG
 import WebInspectorCore
+import WebInspectorTransport
 import WebKit
 
 @MainActor

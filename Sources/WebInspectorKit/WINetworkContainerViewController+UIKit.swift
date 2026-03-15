@@ -70,7 +70,10 @@ public final class WINetworkContainerViewController: UIViewController {
         }
 
         addChild(embeddedViewController)
-        let childView = embeddedViewController.view
+        embeddedViewController.loadViewIfNeeded()
+        guard let childView = embeddedViewController.view else {
+            return
+        }
         childView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(childView)
         NSLayoutConstraint.activate([
