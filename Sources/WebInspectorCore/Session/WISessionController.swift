@@ -105,6 +105,15 @@ public final class WISessionController {
         runtimeCoordinator.activateIfPossible(
             lifecycle: lifecycle,
             runtimeState: currentActivationPlan().runtimeState,
+            currentRuntimeState: { [weak self] in
+                self?.currentActivationPlan().runtimeState
+                    ?? SessionActivationPlan(
+                        panelConfigurations: [],
+                        currentSelection: nil,
+                        preferredSelection: nil,
+                        hasConfiguredPanelsFromUI: false
+                    ).runtimeState
+            },
             usesNavigationAwareRebind: usesNavigationAwareRebind,
             domStore: domStore,
             networkStore: networkStore,

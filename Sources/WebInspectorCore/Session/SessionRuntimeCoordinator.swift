@@ -37,6 +37,7 @@ package final class SessionRuntimeCoordinator {
     package func activateIfPossible(
         lifecycle: WISessionLifecycle,
         runtimeState: SessionActivationPlan.RuntimeAttachmentState,
+        currentRuntimeState: @escaping @MainActor () -> SessionActivationPlan.RuntimeAttachmentState,
         usesNavigationAwareRebind: Bool,
         domStore: WIDOMStore,
         networkStore: WINetworkStore,
@@ -49,7 +50,7 @@ package final class SessionRuntimeCoordinator {
         startObservingPageLoading(on: connectedPageWebView, onPageLoadingChange: onPageLoadingChange)
         if usesNavigationAwareRebind, connectedPageWebView.isLoading {
             prepareForNavigationRebindIfNeeded(
-                runtimeState: runtimeState,
+                currentRuntimeState: currentRuntimeState,
                 domStore: domStore,
                 onRecoverableError: onRecoverableError
             )
@@ -79,7 +80,7 @@ package final class SessionRuntimeCoordinator {
         guard let previousLoading else {
             if isLoading {
                 prepareForNavigationRebindIfNeeded(
-                    runtimeState: currentRuntimeState(),
+                    currentRuntimeState: currentRuntimeState,
                     domStore: domStore,
                     onRecoverableError: onRecoverableError
                 )
@@ -92,7 +93,7 @@ package final class SessionRuntimeCoordinator {
 
         if isLoading {
             prepareForNavigationRebindIfNeeded(
-                runtimeState: currentRuntimeState(),
+                currentRuntimeState: currentRuntimeState,
                 domStore: domStore,
                 onRecoverableError: onRecoverableError
             )
@@ -224,10 +225,11 @@ private extension SessionRuntimeCoordinator {
     }
 
     func prepareForNavigationRebindIfNeeded(
-        runtimeState: SessionActivationPlan.RuntimeAttachmentState,
+        currentRuntimeState: @escaping @MainActor () -> SessionActivationPlan.RuntimeAttachmentState,
         domStore: WIDOMStore,
         onRecoverableError: @escaping @MainActor (String) -> Void
     ) {
+        let runtimeState = currentRuntimeState()
         guard runtimeState.domEnabled else {
             return
         }
@@ -237,7 +239,7 @@ private extension SessionRuntimeCoordinator {
         domStore.session.prepareForNavigationReconnect()
         navigationRebindPrepared = true
         scheduleNavigationRebindResume(
-            currentRuntimeState: { runtimeState },
+            currentRuntimeState: currentRuntimeState,
             domStore: domStore,
             onRecoverableError: onRecoverableError
         )
