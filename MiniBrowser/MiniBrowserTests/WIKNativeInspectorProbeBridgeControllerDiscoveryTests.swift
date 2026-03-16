@@ -2,6 +2,7 @@
 import XCTest
 @testable import MiniBrowser
 
+@MainActor
 final class WIKNativeInspectorProbeBridgeControllerDiscoveryTests: XCTestCase {
     func testCachedOffsetResolvesImmediately() {
         let result = WIKNativeInspectorControllerDiscovery.runScenario(
