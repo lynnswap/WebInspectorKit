@@ -7,8 +7,7 @@ import WebKit
 @testable import WebInspectorUI
 
 @MainActor
-
-
+@Suite(.serialized)
 struct NetworkInspectorTests {
     @Test
     func applyFetchedBodyUpdatesDecodedBodyLengthForResponseBody() {

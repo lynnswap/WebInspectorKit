@@ -9,8 +9,7 @@ import WebInspectorTestSupport
 import AppKit
 
 @MainActor
-
-
+@Suite(.serialized)
 struct NetworkInspectorAppKitTests {
     @Test
     func networkTabDoesNotAutoSelectEntryWhenEntriesExist() throws {

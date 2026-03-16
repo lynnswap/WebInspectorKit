@@ -45,7 +45,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.5.1"
+            exact: "0.6.0"
         )
     ],
     targets: [

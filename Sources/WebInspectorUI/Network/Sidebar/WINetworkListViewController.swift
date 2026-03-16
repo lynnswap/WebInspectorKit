@@ -115,7 +115,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func startObservingInspector() {
-        inspector.observeTask(\.displayEntries, options: WIObservationOptions.dedupeDebounced) { [weak self] displayEntries in
+        inspector.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
         .store(in: &observationHandles)

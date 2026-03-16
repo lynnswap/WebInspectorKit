@@ -128,7 +128,15 @@ private extension WINetworkModel {
             guard self.selectedEntry?.id == entry.id else {
                 return
             }
-            self.scheduleSelectedEntryBodyFetch()
+            Task { @MainActor [weak self, weak entry] in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.scheduleSelectedEntryBodyFetch()
+            }
         }
         .store(in: &selectedEntryObservationHandles)
     }
@@ -142,7 +150,6 @@ private extension WINetworkModel {
 
         let selectedEntryID = selectedEntry.id
         selectedEntryFetchTask = Task { @MainActor [weak self] in
-            await Task.yield()
             guard let self, self.isAttachedToPage else {
                 return
             }

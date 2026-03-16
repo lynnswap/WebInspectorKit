@@ -56,7 +56,7 @@ import UIKit
         
         display(inspector.selectedEntry)
         
-        inspector.observeTask(\.selectedEntry,options: [.removeDuplicates]) { [weak self] newValue in
+        inspector.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
             self?.display(newValue)
         }
         .store(in: &observationHandles)

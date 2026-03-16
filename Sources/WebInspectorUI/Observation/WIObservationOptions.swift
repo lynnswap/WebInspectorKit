@@ -1,12 +1,15 @@
 import ObservationBridge
 
 enum WIObservationOptions {
-    private static let defaultDebounce = ObservationDebounce(
+    private static let defaultThrottle = ObservationThrottle(
         interval: .milliseconds(80),
-        mode: .immediateFirst
+        mode: .latest
     )
 
-    static let debounced = ObservationOptions.debounce(defaultDebounce)
-    static let dedupe: ObservationOptions = [.removeDuplicates]
-    static let dedupeDebounced: ObservationOptions = [.removeDuplicates, .debounce(defaultDebounce)]
+    static let networkListSnapshot: ObservationOptions = [
+        .removeDuplicates,
+        .rateLimit(.throttle(defaultThrottle))
+    ]
+
+    static let domDetailContent = ObservationOptions.rateLimit(.throttle(defaultThrottle))
 }
