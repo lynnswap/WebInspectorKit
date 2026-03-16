@@ -174,6 +174,32 @@ struct NetworkPageAgentTests {
     }
 
     @Test
+    func activeDetachPreservesStoreUntilNextAttach() async throws {
+        let agent = NetworkPageAgent()
+        let store = agent.store
+        let (webView, _) = makeTestWebView()
+        defer { agent.detachPageWebView(preparing: .stopped) }
+
+        await attachAndWait(agent, to: webView)
+
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 3,
+            "url": "https://example.com/navigation",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_010.0, wallMs: 1_700_000_000_010.0)
+        ])
+        store.applyEvent(payload)
+        #expect(store.entries.count == 1)
+
+        agent.detachPageWebView(preparing: .active)
+        #expect(store.entries.count == 1)
+
+        await attachAndWait(agent, to: webView)
+        #expect(store.entries.count == 1)
+    }
+
+    @Test
     func attachRegistersHandlersAndInstallsScripts() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()

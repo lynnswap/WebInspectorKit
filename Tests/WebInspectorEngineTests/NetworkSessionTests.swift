@@ -1,5 +1,6 @@
 import Testing
 import WebKit
+import WebInspectorTestSupport
 @testable import WebInspectorEngine
 
 @MainActor
@@ -9,6 +10,29 @@ struct NetworkSessionTests {
         let session = NetworkSession()
 
         #expect(session.mode == .active)
+    }
+
+    @Test
+    func attachReplacingWebViewPreservesExistingEntriesWhileActive() async throws {
+        let session = NetworkSession()
+        let firstWebView = WKWebView(frame: .zero)
+        let secondWebView = WKWebView(frame: .zero)
+
+        session.attach(pageWebView: firstWebView)
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 41,
+            "url": "https://example.com/navigation",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 4_100.0, wallMs: 1_700_000_004_100.0)
+        ])
+        session.store.applyEvent(start)
+        #expect(session.store.entries.count == 1)
+
+        session.attach(pageWebView: secondWebView)
+
+        #expect(session.lastPageWebView === secondWebView)
+        #expect(session.store.entries.count == 1)
     }
 
     @Test

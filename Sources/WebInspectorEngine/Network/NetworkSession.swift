@@ -65,6 +65,9 @@ public final class NetworkSession: PageSession {
     }
 
     public func attach(pageWebView webView: WKWebView) {
+        if let currentWebView = pageAgent.webView, currentWebView !== webView {
+            pageAgent.detachPageWebView(preparing: mode)
+        }
         pageAgent.setMode(mode)
         pageAgent.attachPageWebView(webView)
         lastPageWebView = webView

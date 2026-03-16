@@ -51,6 +51,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     private var nativeObserverEnabled = false
     private var nativeSessionID = ""
     private var networkMessageAuthToken = UUID().uuidString.lowercased()
+    private var preservesStoreAcrossNextAttach = false
     // Native observer is the primary source for non-XHR resources.
     // XHR/fetch remain page-hooked to preserve reliable body capture.
     private let nativeObserverIncludesFetchAndXHR = false
@@ -81,6 +82,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
+            preservesStoreAcrossNextAttach = false
             store.reset()
         }
         scheduleConfigure(mode: mode, clearExisting: false, on: webView)
@@ -107,9 +109,12 @@ extension NetworkPageAgent {
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
+            preservesStoreAcrossNextAttach = modeBeforeDetach != .stopped
             if modeBeforeDetach == .stopped {
                 store.reset()
             }
+        } else {
+            preservesStoreAcrossNextAttach = false
         }
         if let modeBeforeDetach, let webView {
             scheduleConfigure(mode: modeBeforeDetach, clearExisting: false, on: webView)
@@ -124,19 +129,23 @@ extension NetworkPageAgent {
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
         resolveBridgeModeIfNeeded(with: webView)
-        if previousWebView !== webView {
+        let preservesExistingStore = preservesStoreAcrossNextAttach
+        preservesStoreAcrossNextAttach = false
+        if previousWebView !== webView && preservesExistingStore == false {
             store.reset()
         }
         attachNativeResourceObserver(to: webView)
         registerMessageHandlers()
-        scheduleConfigure(mode: loggingMode, clearExisting: true, on: webView)
+        scheduleConfigure(mode: loggingMode, clearExisting: preservesExistingStore == false, on: webView)
     }
 
     func didClearPageWebView() {
         nativeResourceObserver = nil
         nativeObserverEnabled = false
         nativeSessionID = ""
-        store.reset()
+        if preservesStoreAcrossNextAttach == false {
+            store.reset()
+        }
     }
 
     func fetchBody(bodyRef: String?, bodyHandle: AnyObject?, role: NetworkBody.Role) async -> NetworkBody? {
