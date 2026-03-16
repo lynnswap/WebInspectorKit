@@ -104,6 +104,7 @@ let package = Package(
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
                 "WebInspectorBridge",
+                "WebInspectorBridgeObjCShim",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             resources: [
@@ -156,6 +157,7 @@ let package = Package(
                 "WebInspectorUI",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",
+                "WebInspectorBridge",
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorUITests",

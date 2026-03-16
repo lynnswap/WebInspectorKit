@@ -12,7 +12,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (nullable NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName;
 + (nullable NSNumber *)boolResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName;
-
 + (BOOL)invokeVoidOnTarget:(NSObject *)target selectorName:(NSString *)selectorName;
 + (BOOL)invokeActionStateOnTarget:(NSObject *)target
                     selectorName:(NSString *)selectorName
