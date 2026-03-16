@@ -1,12 +1,10 @@
 import Foundation
 import ObservationBridge
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
-import WebInspectorResources
 
 @MainActor
 public final class WINetworkListViewController: UICollectionViewController {
@@ -14,13 +12,11 @@ public final class WINetworkListViewController: UICollectionViewController {
         case main
     }
 
-    private let store: WINetworkStore
-    private let queryModel: WINetworkQueryState
+    private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private var observationHandles: Set<ObservationHandle> = []
 
     private var needsSnapshotReloadOnNextAppearance = false
-    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
-    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
     private lazy var dataSource = makeDataSource()
     private var searchController: UISearchController {
         queryModel.searchController
@@ -34,18 +30,18 @@ public final class WINetworkListViewController: UICollectionViewController {
         makeOverflowMenuElement()
     }
 
-    public init(store: WINetworkStore) {
-        self.store = store
-        self.queryModel = WINetworkQueryState(store: store)
+    public init(inspector: WINetworkModel) {
+        self.inspector = inspector
+        self.queryModel = WINetworkQueryModel(inspector: inspector)
         super.init(collectionViewLayout: Self.makeListLayout())
-        startObservingQueryState()
+        startObservingInspector()
     }
 
-    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
-        self.store = store
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+        self.inspector = inspector
         self.queryModel = queryModel
         super.init(collectionViewLayout: Self.makeListLayout())
-        startObservingQueryState()
+        startObservingInspector()
     }
 
     @available(*, unavailable)
@@ -118,8 +114,8 @@ public final class WINetworkListViewController: UICollectionViewController {
         return UICollectionViewCompositionalLayout.list(using: configuration)
     }
 
-    private func startObservingQueryState() {
-        queryModel.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
+    private func startObservingInspector() {
+        inspector.observe(\.displayEntries, options: WIObservationOptions.networkListSnapshot) { [weak self] displayEntries in
             self?.reloadDataFromInspector(displayEntries: displayEntries)
         }
         .store(in: &observationHandles)
@@ -168,7 +164,6 @@ public final class WINetworkListViewController: UICollectionViewController {
         Task {
             let snapshot = self.makeSnapshot(displayEntries: displayEntries)
             await self.dataSource.apply(snapshot, animatingDifferences: false)
-            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -178,14 +173,13 @@ public final class WINetworkListViewController: UICollectionViewController {
         }
         needsSnapshotReloadOnNextAppearance = false
         Task {
-            let snapshot = self.makeSnapshot(displayEntries: self.queryModel.displayEntries)
+            let snapshot = self.makeSnapshot(displayEntries: self.inspector.displayEntries)
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            self.recordSnapshotApplyForTesting()
         }
     }
 
     private func reloadDataFromInspector(displayEntries: [NetworkEntry]? = nil) {
-        let resolvedDisplayEntries = displayEntries ?? queryModel.displayEntries
+        let resolvedDisplayEntries = displayEntries ?? inspector.displayEntries
         queryModel.syncSearchControllerText()
         requestSnapshotUpdate(displayEntries: resolvedDisplayEntries)
         let shouldShowEmptyState = resolvedDisplayEntries.isEmpty
@@ -199,14 +193,6 @@ public final class WINetworkListViewController: UICollectionViewController {
         } else {
             contentUnavailableConfiguration = nil
         }
-    }
-
-    private func recordSnapshotApplyForTesting() {
-        snapshotApplyRevisionForTesting &+= 1
-        if snapshotApplyRevisionForTesting == 0 {
-            snapshotApplyRevisionForTesting = 1
-        }
-        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
     }
 
     private func configureListCell(_ cell: WINetworkObservingListCell, item: NetworkEntry) {
@@ -266,7 +252,7 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasEntries = !store.store.entries.isEmpty
+        let hasEntries = !inspector.store.entries.isEmpty
         let clearAction = UIAction(
             title: wiLocalized("network.controls.clear"),
             image: UIImage(systemName: "trash"),
@@ -284,15 +270,15 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func clearEntries() {
-        store.clear()
+        inspector.clear()
     }
 
     public override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let entry = dataSource.itemIdentifier(for: indexPath) else {
-            store.selectEntry(nil)
+            inspector.selectEntry(nil)
             return
         }
-        store.selectEntry(entry)
+        inspector.selectEntry(entry)
     }
 }
 
@@ -327,11 +313,13 @@ private func statusIndicatorConfiguration(for item: NetworkEntry) -> UICellAcces
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network List (UIKit)") {
-    UINavigationController(
-        rootViewController: WINetworkListViewController(
-            store: WINetworkPreviewFixtures.makeStore(mode: .root)
+    WIUIKitPreviewContainer {
+        UINavigationController(
+            rootViewController: WINetworkListViewController(
+                inspector: WINetworkPreviewFixtures.makeInspector(mode: .root)
+            )
         )
-    )
+    }
 }
 #endif
 #endif

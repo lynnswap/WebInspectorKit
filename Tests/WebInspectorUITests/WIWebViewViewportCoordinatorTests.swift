@@ -2,7 +2,7 @@
 import Testing
 import UIKit
 import WebKit
-@testable import WebInspectorCore
+@testable import WebInspectorBridge
 @testable import WebInspectorUI
 
 @MainActor
@@ -66,49 +66,6 @@ struct WIWebViewViewportCoordinatorTests {
         #expect(metrics.safeAreaInsets == hostViewController.view.safeAreaInsets)
         #expect(metrics.topObscuredHeight == hostViewController.view.safeAreaInsets.top)
         #expect(metrics.bottomObscuredHeight == hostViewController.view.safeAreaInsets.bottom)
-    }
-
-    @Test
-    @available(iOS 26.0, *)
-    func coordinatorAutomaticallyAppliesStandardScrollConfigurationAndViewportInsets() throws {
-        let hostViewController = UIViewController()
-        let webView = WKWebView(frame: .zero)
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        hostViewController.view.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
-            webView.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor)
-        ])
-
-        let navigationController = UINavigationController(rootViewController: hostViewController)
-        navigationController.setToolbarHidden(false, animated: false)
-        let window = makeWindow(rootViewController: navigationController)
-        defer {
-            window.isHidden = true
-            window.rootViewController = nil
-        }
-
-        navigationController.view.layoutIfNeeded()
-        hostViewController.view.layoutIfNeeded()
-
-        let coordinator = WIWebViewViewportCoordinator(
-            hostViewController: hostViewController,
-            webView: webView
-        )
-        navigationController.view.layoutIfNeeded()
-        hostViewController.view.layoutIfNeeded()
-
-        let resolved = try #require(coordinator.resolvedMetricsForTesting)
-        #expect(webView.scrollView.contentInsetAdjustmentBehavior == .always)
-        #expect(webView.scrollView.topEdgeEffect.isHidden == false)
-        #expect(webView.scrollView.bottomEdgeEffect.isHidden == false)
-        #expect(webView.scrollView.topEdgeEffect.style == .soft)
-        #expect(webView.scrollView.bottomEdgeEffect.style == .soft)
-        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
-        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
-        #expect(webView.obscuredContentInsets == resolved.obscuredInsets)
     }
 
     @Test
@@ -180,6 +137,25 @@ struct WIWebViewViewportCoordinatorTests {
     }
 
     @Test
+    func resolvedMetricsDeriveContentScrollInsetFallbackFromSafeAreaDelta() {
+        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
+            state: WIWebViewChromeMetrics(
+                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
+                topObscuredHeight: 103,
+                bottomObscuredHeight: 88,
+                keyboardOverlapHeight: 0,
+                inputAccessoryOverlapHeight: 0,
+                bottomChromeMode: .normal
+            ),
+            screenScale: 3
+        )
+
+        #expect(
+            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
+        )
+    }
+
+    @Test
     func viewportSPIBridgeFallbackNoOpsWhenSelectorsAreUnavailable() {
         let plainObject = NSObject()
         let resolvedMetrics = WIWebViewChromeResolvedMetrics(
@@ -205,25 +181,6 @@ struct WIWebViewViewportCoordinatorTests {
         WIWebViewViewportSPIBridge.apply(obscuredSafeAreaEdges: [.top, .bottom], to: plainObject)
 
         #expect(WIWebViewViewportSPIBridge.inputViewBoundsInWindow(of: plainObject) == nil)
-    }
-
-    @Test
-    func resolvedMetricsDeriveContentScrollInsetFallbackFromSafeAreaDelta() {
-        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
-            state: WIWebViewChromeMetrics(
-                safeAreaInsets: UIEdgeInsets(top: 59, left: 4, bottom: 34, right: 6),
-                topObscuredHeight: 103,
-                bottomObscuredHeight: 88,
-                keyboardOverlapHeight: 0,
-                inputAccessoryOverlapHeight: 0,
-                bottomChromeMode: .normal
-            ),
-            screenScale: 3
-        )
-
-        #expect(
-            resolvedMetrics.contentScrollInsetFallback == UIEdgeInsets(top: 44, left: 0, bottom: 54, right: 0)
-        )
     }
 
     @Test

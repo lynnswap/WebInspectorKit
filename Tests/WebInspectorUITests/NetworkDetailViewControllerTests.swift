@@ -3,17 +3,15 @@ import Foundation
 import Testing
 import UIKit
 import WebKit
-import WebInspectorTestSupport
-@testable import WebInspectorCore
-@testable import WebInspectorCore
+@testable import WebInspectorEngine
+@testable import WebInspectorRuntime
 @testable import WebInspectorUI
 
 @MainActor
-@Suite(.serialized, .webKitIsolated)
 struct NetworkDetailViewControllerTests {
     @Test
     func detailViewReflectsModelDrivenFetchForSelectedResponseBody() async throws {
-        let fetcher = StubNetworkBodyFetcher { _, role in
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -22,32 +20,31 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
+                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
             )
         }
-        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
-        store.attach(to: webView)
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        inspector.attach(to: WKWebView(frame: .zero))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
-        let responseBody = try #require(entry.responseBody)
-        let bodyStates = fetchStateRecorder(for: responseBody)
-        store.selectEntry(entry)
+        inspector.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(store: store)
+        let viewController = WINetworkDetailViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
 
-        _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchCount == 1)
-        #expect(entry.responseBody?.full == "eager response body")
+        let fetched = await waitUntil {
+            fetcher.fetchCount == 1 && entry.responseBody?.full == "eager response body"
+        }
+        #expect(fetched)
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
     @Test
     func detailViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async throws {
-        let fetcher = StubNetworkBodyFetcher { _, role in
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -56,34 +53,37 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
+                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
             )
         }
-        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
-        let responseBody = try #require(entry.responseBody)
-        let bodyStates = fetchStateRecorder(for: responseBody)
-        store.selectEntry(entry)
+        inspector.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(store: store)
+        let viewController = WINetworkDetailViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
+
+        for _ in 0..<64 {
+            await Task.yield()
+        }
 
         #expect(fetcher.fetchCount == 0)
 
-        let webView = WKWebView(frame: .zero)
-        store.attach(to: webView)
+        inspector.attach(to: WKWebView(frame: .zero))
 
-        _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchCount == 1)
-        #expect(entry.responseBody?.full == "reattached response body")
+        let fetched = await waitUntil {
+            fetcher.fetchCount == 1 && entry.responseBody?.full == "reattached response body"
+        }
+        #expect(fetched)
     }
 
     @Test
     func detailViewUpdatesWhenResponseHeadersAndBodyAppear() async throws {
-        let fetcher = StubNetworkBodyFetcher { _, role in
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -92,24 +92,18 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
+                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
             )
         }
-        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
-        store.attach(to: webView)
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        inspector.attach(to: WKWebView(frame: .zero))
         let entry = makeEntry()
-        store.selectEntry(entry)
+        inspector.selectEntry(entry)
 
-        let viewController = WINetworkDetailViewController(store: store)
-        let snapshotRevisions = AsyncValueQueue<UInt64>()
-        viewController.onSnapshotAppliedForTesting = { revision in
-            Task {
-                await snapshotRevisions.push(revision)
-            }
-        }
+        let viewController = WINetworkDetailViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
         viewController.view.frame = CGRect(x: 0, y: 0, width: 375, height: 812)
         viewController.view.layoutIfNeeded()
@@ -118,10 +112,10 @@ struct NetworkDetailViewControllerTests {
             viewController.view.subviews.compactMap { $0 as? UICollectionView }.first
         )
 
-        while collectionView.numberOfSections != 3 {
-            _ = await snapshotRevisions.next()
+        let initialSnapshotApplied = await waitUntil {
+            collectionView.numberOfSections == 3
         }
-        #expect(collectionView.numberOfSections == 3)
+        #expect(initialSnapshotApplied)
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
         #expect(listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) != nil)
         #expect(
@@ -132,27 +126,23 @@ struct NetworkDetailViewControllerTests {
             NetworkHeaderField(name: "content-type", value: "application/json")
         ])
 
-        while self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) != "content-type" {
-            _ = await snapshotRevisions.next()
+        let headersUpdated = await waitUntil {
+            self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type"
         }
-        #expect(self.listCellText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "content-type")
+        #expect(headersUpdated)
 
         entry.responseBody = makeBody(reference: "resp_ref")
-        let responseBody = try #require(entry.responseBody)
-        let bodyStates = fetchStateRecorder(for: responseBody)
 
-        while collectionView.numberOfSections != 4 {
-            _ = await snapshotRevisions.next()
+        let bodySectionAdded = await waitUntil {
+            collectionView.numberOfSections == 4 && fetcher.fetchCount == 1
         }
-        _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchCount == 1)
-        #expect(collectionView.numberOfSections == 4)
+        #expect(bodySectionAdded)
         #expect(entry.responseBody?.full == "response body")
     }
 
     @Test
     func previewViewUpdatesWhenModelFetchRunsAfterInspectorAttaches() async {
-        let fetcher = StubNetworkBodyFetcher { _, role in
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -161,39 +151,43 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
+                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
             )
         }
-        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
-        let bodyStates = fetchStateRecorder(for: body)
-        store.selectEntry(entry)
+        inspector.selectEntry(entry)
 
         let viewController = WINetworkBodyPreviewViewController(
             entry: entry,
-            store: store,
+            inspector: inspector,
             bodyState: body
         )
         viewController.loadViewIfNeeded()
 
+        for _ in 0..<64 {
+            await Task.yield()
+        }
+
         #expect(fetcher.fetchCount == 0)
 
-        let webView = WKWebView(frame: .zero)
-        store.attach(to: webView)
+        inspector.attach(to: WKWebView(frame: .zero))
 
-        _ = await bodyStates.next(where: { $0 == "full" })
-        #expect(fetcher.fetchCount == 1)
-        #expect(body.full == "reattached preview body")
+        let fetched = await waitUntil {
+            fetcher.fetchCount == 1 && body.full == "reattached preview body"
+        }
+        #expect(fetched)
         #expect(viewController.navigationItem.additionalOverflowItems == nil)
     }
 
     @Test
     func previewViewDoesNotFetchOnLoadWithoutModelSelection() async {
-        let fetcher = StubNetworkBodyFetcher { _, role in
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
             NetworkBody(
                 kind: .text,
                 preview: nil,
@@ -202,24 +196,28 @@ struct NetworkDetailViewControllerTests {
                 isBase64Encoded: false,
                 isTruncated: false,
                 summary: nil,
+                reference: ref,
                 formEntries: [],
                 fetchState: .full,
                 role: role
             )
         }
-        let store = WINetworkStore(session: WINetworkRuntime(bodyFetcher: fetcher))
-        let webView = WKWebView(frame: .zero)
-        store.attach(to: webView)
+        let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
+        inspector.attach(to: WKWebView(frame: .zero))
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
 
         let viewController = WINetworkBodyPreviewViewController(
             entry: entry,
-            store: store,
+            inspector: inspector,
             bodyState: body
         )
         viewController.loadViewIfNeeded()
+
+        for _ in 0..<64 {
+            await Task.yield()
+        }
 
         #expect(fetcher.fetchCount == 0)
         #expect(body.full == nil)
@@ -247,7 +245,7 @@ struct NetworkDetailViewControllerTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: reference, targetIdentifier: nil),
+            reference: reference,
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -269,59 +267,40 @@ struct NetworkDetailViewControllerTests {
         }
         return content.text
     }
-}
 
-@MainActor
-private func fetchStateRecorder(
-    for body: NetworkBody
-) -> ObservationRecorder<String> {
-    let recorder = ObservationRecorder<String>()
-    recorder.record { didChange in
-        body.observe(\.fetchState, options: [.removeDuplicates]) { state in
-            didChange(fetchStateLabel(state))
+    private func waitUntil(
+        maxTicks: Int = 512,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxTicks {
+            if condition() {
+                return true
+            }
+            await Task.yield()
         }
-    }
-    return recorder
-}
-
-private func fetchStateLabel(_ state: NetworkBody.FetchState?) -> String {
-    switch state {
-    case .inline:
-        "inline"
-    case .fetching:
-        "fetching"
-    case .full:
-        "full"
-    case .failed(.unavailable):
-        "failed:unavailable"
-    case .failed(.decodeFailed):
-        "failed:decodeFailed"
-    case .failed(.unknown):
-        "failed:unknown"
-    case nil:
-        "nil"
+        return condition()
     }
 }
 
 @MainActor
 private final class StubNetworkBodyFetcher: NetworkBodyFetching {
-    private let onFetch: @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> WINetworkBodyFetchResult
+    private let onFetch: @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBodyFetchResult
     private(set) var fetchCount = 0
 
     init(
-        onFetch: @escaping @MainActor (NetworkDeferredBodyLocator, NetworkBody.Role) async -> NetworkBody?
+        onFetch: @escaping @MainActor (String?, AnyObject?, NetworkBody.Role) async -> NetworkBody?
     ) {
-        self.onFetch = { locator, role in
-            guard let body = await onFetch(locator, role) else {
+        self.onFetch = { ref, handle, role in
+            guard let body = await onFetch(ref, handle, role) else {
                 return .bodyUnavailable
             }
             return .fetched(body)
         }
     }
 
-    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
+    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchCount += 1
-        return await onFetch(locator, role)
+        return await onFetch(ref, handle, role)
     }
 }
 #endif

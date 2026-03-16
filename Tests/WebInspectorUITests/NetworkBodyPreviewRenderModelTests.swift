@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 @testable import WebInspectorUI
-@testable import WebInspectorCore
+@testable import WebInspectorEngine
+@testable import WebInspectorRuntime
 
 @MainActor
 struct NetworkBodyPreviewRenderModelTests {
@@ -15,6 +16,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
+            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -40,6 +42,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
+            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -65,6 +68,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: false,
             summary: nil,
+            reference: nil,
             formEntries: [],
             fetchState: .full,
             role: .response
@@ -91,7 +95,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: summary,
-            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
+            reference: "resp_ref",
             formEntries: [],
             fetchState: .inline,
             role: .response
@@ -116,7 +120,7 @@ struct NetworkBodyPreviewRenderModelTests {
             isBase64Encoded: false,
             isTruncated: true,
             summary: nil,
-            deferredLocator: .networkRequest(id: "resp_ref", targetIdentifier: nil),
+            reference: "resp_ref",
             formEntries: [],
             fetchState: .inline,
             role: .response

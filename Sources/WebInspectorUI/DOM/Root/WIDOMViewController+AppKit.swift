@@ -1,20 +1,18 @@
 #if canImport(AppKit)
 import AppKit
-import WebInspectorCore
 
 @MainActor
 public final class WIDOMViewController: NSSplitViewController {
     private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.DOMSplitView")
 
-    private let store: WIDOMStore
+    private let inspector: WIDOMModel
     private let domTreeViewController: WIDOMTreeViewController
     private let elementDetailsViewController: WIDOMDetailViewController
 
-    public init(store: WIDOMStore) {
-        self.store = store
-        store.setUIBridge(WIDOMPlatformBridge.shared)
-        self.domTreeViewController = WIDOMTreeViewController(store: store)
-        self.elementDetailsViewController = WIDOMDetailViewController(store: store)
+    public init(inspector: WIDOMModel) {
+        self.inspector = inspector
+        self.domTreeViewController = WIDOMTreeViewController(inspector: inspector)
+        self.elementDetailsViewController = WIDOMDetailViewController(inspector: inspector)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -43,7 +41,9 @@ public final class WIDOMViewController: NSSplitViewController {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Root (AppKit)") {
-    WIDOMViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
+    WIAppKitPreviewContainer {
+        WIDOMViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected))
+    }
 }
 #endif
 

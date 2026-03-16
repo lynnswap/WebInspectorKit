@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorEngine
 
 struct NetworkBodyPreviewRenderModel: Sendable {
     enum Mode: Int, Sendable, CaseIterable {

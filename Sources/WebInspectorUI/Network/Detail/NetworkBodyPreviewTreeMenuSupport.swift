@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorEngine
 
 enum NetworkBodyPreviewTreeMenuSupport {
     struct PathComponent: Equatable, Sendable {

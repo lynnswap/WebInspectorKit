@@ -1,6 +1,7 @@
 import Testing
 @testable import WebInspectorUI
-@testable import WebInspectorCore
+@testable import WebInspectorEngine
+@testable import WebInspectorRuntime
 
 struct NetworkBodyPreviewTreeMenuTests {
     @Test

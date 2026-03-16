@@ -179,7 +179,9 @@ public final class WIWebViewViewportCoordinator: NSObject {
         installObservationViewIfPossible(in: hostView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
-        hostViewController.setContentScrollView(webView.scrollView)
+        if #available(iOS 26.0, *) {
+            hostViewController.setContentScrollView(webView.scrollView)
+        }
 
         let metrics = metricsProvider.makeChromeMetrics(
             in: hostViewController,
@@ -213,9 +215,6 @@ public final class WIWebViewViewportCoordinator: NSObject {
                 to: webView
             )
         } else {
-            // WebKit-7621.2.5.10.10 bases activeViewLayoutSize on _scrollViewSystemContentInset,
-            // so pre-iOS 26 runtimes stay aligned with layout/restore by applying only the
-            // chrome delta beyond safe area through WKScrollView._setContentScrollInset:.
             WIWebViewViewportSPIBridge.applyContentScrollInsetFallback(
                 resolvedMetrics.contentScrollInsetFallback,
                 to: webView.scrollView,
@@ -235,9 +234,11 @@ public final class WIWebViewViewportCoordinator: NSObject {
             return
         }
 
-        if hostViewController.contentScrollView(for: .top) === webView.scrollView
-            || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
-            hostViewController.setContentScrollView(nil)
+        if #available(iOS 26.0, *) {
+            if hostViewController.contentScrollView(for: .top) === webView.scrollView
+                || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
+                hostViewController.setContentScrollView(nil)
+            }
         }
     }
 

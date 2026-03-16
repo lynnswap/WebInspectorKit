@@ -1,8 +1,8 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
-import WebInspectorCore
-import WebInspectorSPIObjCShim
+import WebInspectorBridge
+import WebInspectorBridgeObjCShim
 
 enum WIWebViewViewportSPIBridge {
     private static let setContentScrollInsetSelector = NSSelectorFromString(
@@ -37,11 +37,6 @@ enum WIWebViewViewportSPIBridge {
         }
 
         setObscuredInsetsInternal(resolvedMetrics.obscuredInsets, to: object)
-        _ = WIKRuntimeBridge.setBoolValueOnTarget(
-            object,
-            key: WISPISymbols.automaticallyAdjustsViewLayoutSizesWithObscuredInsetKey,
-            value: resolvedMetrics.obscuredInsets != .zero
-        )
         apply(unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets, to: object)
         apply(obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges, to: object)
         frameOrBoundsMayHaveChanged(on: object)
