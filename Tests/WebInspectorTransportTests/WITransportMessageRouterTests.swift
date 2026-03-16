@@ -28,8 +28,8 @@ struct WITransportMessageRouterTests {
         async let firstData = router.send(scope: .root, method: WITransportCommands.Target.Enable.method, parametersData: nil)
         async let secondData = router.send(scope: .root, method: "Browser.getVersion", parametersData: nil)
 
-        let first = try JSONDecoder().decode(MethodEcho.self, from: try await firstData)
-        let second = try JSONDecoder().decode(MethodEcho.self, from: try await secondData)
+        let first = try Self.decode(MethodEcho.self, from: try await firstData)
+        let second = try Self.decode(MethodEcho.self, from: try await secondData)
 
         #expect(first.method == WITransportCommands.Target.Enable.method)
         #expect(second.method == "Browser.getVersion")
@@ -70,7 +70,10 @@ struct WITransportMessageRouterTests {
             ])
         )
 
-        let first = try JSONDecoder().decode(TargetEcho.self, from: try await router.send(scope: .page, method: "Network.enable", parametersData: nil))
+        let first = try Self.decode(
+            TargetEcho.self,
+            from: try await router.send(scope: .page, method: "Network.enable", parametersData: nil)
+        )
         #expect(first.targetIdentifier == "page-A")
 
         await router.handleIncomingRootMessage(
@@ -83,7 +86,10 @@ struct WITransportMessageRouterTests {
             ])
         )
 
-        let second = try JSONDecoder().decode(TargetEcho.self, from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil))
+        let second = try Self.decode(
+            TargetEcho.self,
+            from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil)
+        )
         #expect(second.targetIdentifier == "page-B")
         #expect(await recorder.snapshot() == ["page-A", "page-B"])
     }
@@ -119,7 +125,7 @@ struct WITransportMessageRouterTests {
             ])
         )
 
-        let response = try JSONDecoder().decode(
+        let response = try Self.decode(
             TargetEcho.self,
             from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil)
         )
@@ -176,7 +182,7 @@ struct WITransportMessageRouterTests {
             ])
         )
 
-        let response = try JSONDecoder().decode(
+        let response = try Self.decode(
             TargetEcho.self,
             from: try await router.send(scope: .page, method: "DOM.getDocument", parametersData: nil)
         )
@@ -233,7 +239,7 @@ struct WITransportMessageRouterTests {
             }
         )
 
-        let response = try JSONDecoder().decode(
+        let response = try Self.decode(
             TargetEcho.self,
             from: try await router.send(
                 scope: .page,
@@ -321,14 +327,42 @@ struct WITransportMessageRouterTests {
     }
 
     @Test
+    func parsedObjectEventsLazyMaterializeParamsData() async throws {
+        let router = WITransportMessageRouter(configuration: .init(responseTimeout: .seconds(1)))
+        let stream = await router.events(scope: .page, methods: ["DOM.documentUpdated"], bufferingLimit: 1)
+        let iterator = IteratorBox(stream: stream)
+
+        await router.handleIncomingPageMessage(
+            "{}",
+            parsedPayload: .object([
+                "method": "DOM.documentUpdated",
+                "params": [
+                    "reason": "reload",
+                ],
+            ]),
+            targetIdentifier: "page-A"
+        )
+
+        let event = try await Self.nextValue(from: iterator)
+        guard let event,
+              let paramsObject = try JSONSerialization.jsonObject(with: event.paramsData) as? [String: Any] else {
+            Issue.record("Expected a DOM.documentUpdated event with JSON params.")
+            return
+        }
+        #expect(event.method == "DOM.documentUpdated")
+        #expect(event.targetIdentifier == "page-A")
+        #expect(paramsObject["reason"] as? String == "reload")
+    }
+
+    @Test
     func commandChannelDecodesCustomTypedPageResponse() async throws {
         let channel = WITransportCommandChannel(
             scope: .page,
-            sender: { scope, method, parametersData in
+            sender: { scope, method, parametersPayload in
                 #expect(scope == .page)
                 #expect(method == CustomPageCommand.method)
-                #expect(parametersData != nil)
-                return try JSONEncoder().encode(CustomPageCommand.Response(value: "ok"))
+                #expect(parametersPayload != nil)
+                return .data(try JSONEncoder().encode(CustomPageCommand.Response(value: "ok")))
             },
             subscriber: { _, _, _ in AsyncStream { $0.finish() } }
         )
@@ -345,7 +379,7 @@ struct WITransportMessageRouterTests {
                 #expect(scope == .page)
                 switch method {
                 case WITransportCommands.DOM.GetDocument.method:
-                    return Self.jsonData([
+                    return .object([
                         "root": [
                             "nodeId": 1,
                             "nodeType": 9,
@@ -360,12 +394,12 @@ struct WITransportMessageRouterTests {
                         ],
                     ])
                 case WITransportCommands.DOM.GetOuterHTML.method:
-                    return Self.jsonData([
+                    return .object([
                         "outerHTML": "<html><body>Example</body></html>",
                     ])
                 default:
                     Issue.record("Unexpected DOM command method: \(method)")
-                    return Data("{}".utf8)
+                    return .object([:])
                 }
             },
             subscriber: { _, _, _ in AsyncStream { $0.finish() } }
@@ -502,6 +536,10 @@ private extension WITransportMessageRouterTests {
 
     static func jsonData(_ object: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
+
+    static func decode<T: Decodable>(_ type: T.Type, from payload: WITransportPayload) throws -> T {
+        try JSONDecoder().decode(T.self, from: payload.jsonData())
     }
 
     static func nextValue<T: Sendable>(

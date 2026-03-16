@@ -4,8 +4,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef void (^WITransportRootMessageHandler)(NSString *message);
-typedef void (^WITransportPageMessageHandler)(NSString *message, NSString *targetIdentifier);
+typedef void (^WITransportRootMessageHandler)(NSString *message, NSDictionary * _Nullable parsedMessage);
+typedef void (^WITransportPageMessageHandler)(NSString *message, NSDictionary * _Nullable parsedMessage, NSString *targetIdentifier);
 typedef void (^WITransportFatalFailureHandler)(NSString *message);
 
 typedef struct {

@@ -2,12 +2,12 @@ import Foundation
 
 public struct WITransportCommandChannel: Sendable {
     private let scope: WITransportTargetScope
-    private let sender: @Sendable (_ scope: WITransportTargetScope, _ method: String, _ parametersData: Data?) async throws -> Data
+    private let sender: @Sendable (_ scope: WITransportTargetScope, _ method: String, _ parametersPayload: WITransportPayload?) async throws -> WITransportPayload
     private let subscriber: @Sendable (_ scope: WITransportTargetScope, _ methods: Set<String>?, _ bufferingLimit: Int?) async -> AsyncStream<WITransportEventEnvelope>
 
     init(
         scope: WITransportTargetScope,
-        sender: @escaping @Sendable (_ scope: WITransportTargetScope, _ method: String, _ parametersData: Data?) async throws -> Data,
+        sender: @escaping @Sendable (_ scope: WITransportTargetScope, _ method: String, _ parametersPayload: WITransportPayload?) async throws -> WITransportPayload,
         subscriber: @escaping @Sendable (_ scope: WITransportTargetScope, _ methods: Set<String>?, _ bufferingLimit: Int?) async -> AsyncStream<WITransportEventEnvelope>
     ) {
         self.scope = scope
@@ -17,14 +17,14 @@ public struct WITransportCommandChannel: Sendable {
 
     public func send<C: WITransportRootCommand>(_ command: C) async throws -> C.Response {
         try ensureScope(expected: .root)
-        let data = try await sender(scope, C.method, encodeParameters(command.parameters))
-        return try decodeResponse(C.Response.self, from: data)
+        let payload = try await sender(scope, C.method, encodeParameters(command.parameters))
+        return try decodeResponse(C.Response.self, from: payload)
     }
 
     public func send<C: WITransportPageCommand>(_ command: C) async throws -> C.Response {
         try ensureScope(expected: .page)
-        let data = try await sender(scope, C.method, encodeParameters(command.parameters))
-        return try decodeResponse(C.Response.self, from: data)
+        let payload = try await sender(scope, C.method, encodeParameters(command.parameters))
+        return try decodeResponse(C.Response.self, from: payload)
     }
 
     public func events(methods: Set<String>? = nil, bufferingLimit: Int? = nil) -> AsyncStream<WITransportEventEnvelope> {
@@ -51,9 +51,17 @@ private extension WITransportCommandChannel {
         }
     }
 
-    func encodeParameters<Parameters: Encodable>(_ parameters: Parameters) throws -> Data? {
+    func encodeParameters<Parameters: Encodable>(_ parameters: Parameters) throws -> WITransportPayload? {
         if Parameters.self == WIEmptyTransportParameters.self {
             return nil
+        }
+
+        if let fastParameters = parameters as? any WITransportObjectEncodable {
+            let object = fastParameters.wiTransportObject()
+            if transportIsEmptyJSONObject(object) {
+                return nil
+            }
+            return .object(object)
         }
 
         do {
@@ -61,15 +69,15 @@ private extension WITransportCommandChannel {
             if data == Data("{}".utf8) {
                 return nil
             }
-            return data
+            return .data(data)
         } catch {
             throw WITransportError.invalidCommandEncoding(error.localizedDescription)
         }
     }
 
-    func decodeResponse<Response: Decodable>(_ type: Response.Type, from data: Data) throws -> Response {
+    func decodeResponse<Response: Decodable>(_ type: Response.Type, from payload: WITransportPayload) throws -> Response {
         do {
-            return try JSONDecoder().decode(Response.self, from: data)
+            return try payload.decode(Response.self)
         } catch {
             throw WITransportError.invalidResponse(error.localizedDescription)
         }

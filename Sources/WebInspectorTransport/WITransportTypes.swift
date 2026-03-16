@@ -183,20 +183,50 @@ public struct WITransportEventEnvelope: Sendable {
     public let method: String
     public let targetScope: WITransportTargetScope
     public let targetIdentifier: String?
-    public let paramsData: Data
+    private let payload: WITransportPayload
 
     public init(method: String, targetScope: WITransportTargetScope, targetIdentifier: String?, paramsData: Data) {
         self.method = method
         self.targetScope = targetScope
         self.targetIdentifier = targetIdentifier
-        self.paramsData = paramsData
+        self.payload = .data(paramsData)
+    }
+
+    package init(
+        method: String,
+        targetScope: WITransportTargetScope,
+        targetIdentifier: String?,
+        paramsPayload: WITransportPayload
+    ) {
+        self.method = method
+        self.targetScope = targetScope
+        self.targetIdentifier = targetIdentifier
+        self.payload = paramsPayload
+    }
+
+    public var paramsData: Data {
+        payload.jsonData()
     }
 
     public func decodeParams<T: Decodable>(
         _ type: T.Type,
         using decoder: JSONDecoder = JSONDecoder()
     ) throws -> T {
-        try decoder.decode(T.self, from: paramsData)
+        try payload.decode(T.self, using: decoder)
+    }
+}
+
+package extension WITransportEventEnvelope {
+    var paramsObject: Any? {
+        payload.object
+    }
+
+    func dictionaryParams() -> [String: Any]? {
+        payload.dictionaryObject
+    }
+
+    func decodeFastPath<T: WITransportObjectDecodable & Decodable>(_ type: T.Type) throws -> T {
+        try payload.decode(T.self)
     }
 }
 

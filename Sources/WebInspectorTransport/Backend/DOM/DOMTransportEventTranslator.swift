@@ -42,6 +42,120 @@ package struct DOMCharacterDataModifiedParams: Decodable {
     package let characterData: String
 }
 
+private extension DOMSetChildNodesParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let parentId = transportInt(from: dictionary["parentId"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.setChildNodes payload.")
+        }
+
+        let nodes = try transportArray(from: dictionary["nodes"])?.map {
+            try WITransportDOMNode(wiTransportObject: $0)
+        } ?? []
+        self.init(parentId: parentId, nodes: nodes)
+    }
+}
+
+package extension DOMInspectParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let nodeId = transportInt(from: dictionary["nodeId"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.inspect payload.")
+        }
+
+        self.init(nodeId: nodeId)
+    }
+}
+
+extension DOMInspectParams: WITransportObjectDecodable {}
+
+private extension DOMChildNodeInsertedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let parentNodeId = transportInt(from: dictionary["parentNodeId"]),
+              let nodeObject = dictionary["node"] else {
+            throw WITransportError.invalidResponse("Invalid DOM.childNodeInserted payload.")
+        }
+
+        self.init(
+            parentNodeId: parentNodeId,
+            previousNodeId: transportInt(from: dictionary["previousNodeId"]),
+            node: try WITransportDOMNode(wiTransportObject: nodeObject)
+        )
+    }
+}
+
+package extension DOMChildNodeRemovedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let parentNodeId = transportInt(from: dictionary["parentNodeId"]),
+              let nodeId = transportInt(from: dictionary["nodeId"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.childNodeRemoved payload.")
+        }
+
+        self.init(parentNodeId: parentNodeId, nodeId: nodeId)
+    }
+}
+
+extension DOMChildNodeRemovedParams: WITransportObjectDecodable {}
+
+package extension DOMChildNodeCountUpdatedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let nodeId = transportInt(from: dictionary["nodeId"]),
+              let childNodeCount = transportInt(from: dictionary["childNodeCount"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.childNodeCountUpdated payload.")
+        }
+
+        self.init(nodeId: nodeId, childNodeCount: childNodeCount)
+    }
+}
+
+extension DOMChildNodeCountUpdatedParams: WITransportObjectDecodable {}
+
+package extension DOMAttributeModifiedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let nodeId = transportInt(from: dictionary["nodeId"]),
+              let name = transportString(from: dictionary["name"]),
+              let value = transportString(from: dictionary["value"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.attributeModified payload.")
+        }
+
+        self.init(nodeId: nodeId, name: name, value: value)
+    }
+}
+
+extension DOMAttributeModifiedParams: WITransportObjectDecodable {}
+
+package extension DOMAttributeRemovedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let nodeId = transportInt(from: dictionary["nodeId"]),
+              let name = transportString(from: dictionary["name"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.attributeRemoved payload.")
+        }
+
+        self.init(nodeId: nodeId, name: name)
+    }
+}
+
+extension DOMAttributeRemovedParams: WITransportObjectDecodable {}
+
+package extension DOMCharacterDataModifiedParams {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let nodeId = transportInt(from: dictionary["nodeId"]),
+              let characterData = transportString(from: dictionary["characterData"]) else {
+            throw WITransportError.invalidResponse("Invalid DOM.characterDataModified payload.")
+        }
+
+        self.init(nodeId: nodeId, characterData: characterData)
+    }
+}
+
+extension DOMCharacterDataModifiedParams: WITransportObjectDecodable {}
+
 package enum DOMTransportUpdate {
     case setChildNodes(parentNodeID: Int, nodes: [WITransportDOMNode])
     case inspect(nodeID: Int)

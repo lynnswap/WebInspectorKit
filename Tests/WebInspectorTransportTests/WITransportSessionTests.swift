@@ -92,7 +92,7 @@ struct WITransportSessionTests {
                 guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
                     return nil
                 }
-                return Data("{}".utf8)
+                return .object([:])
             }
         )
         let session = WITransportSession(
@@ -118,7 +118,7 @@ struct WITransportSessionTests {
                 guard scope == .page, method == TestCSSEnable.method else {
                     return nil
                 }
-                return Data("{}".utf8)
+                return .object([:])
             }
         )
         let session = WITransportSession(
@@ -140,28 +140,24 @@ struct WITransportSessionTests {
                 guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
                     return nil
                 }
-                return Data(
-                    #"""
-                    {
-                      "frameTree": {
-                        "frame": {
-                          "id": "frame-main",
-                          "loaderId": "loader-main",
-                          "url": "https://example.com/",
-                          "securityOrigin": "https://example.com",
-                          "mimeType": "text/html"
-                        },
+                return .object([
+                    "frameTree": [
+                        "frame": [
+                            "id": "frame-main",
+                            "loaderId": "loader-main",
+                            "url": "https://example.com/",
+                            "securityOrigin": "https://example.com",
+                            "mimeType": "text/html",
+                        ],
                         "resources": [
-                          {
-                            "url": "https://example.com/app.js",
-                            "type": "Script",
-                            "mimeType": "text/javascript"
-                          }
-                        ]
-                      }
-                    }
-                    """#.utf8
-                )
+                            [
+                                "url": "https://example.com/app.js",
+                                "type": "Script",
+                                "mimeType": "text/javascript",
+                            ],
+                        ],
+                    ],
+                ])
             }
         )
         let session = WITransportSession(
@@ -188,28 +184,24 @@ struct WITransportSessionTests {
                 guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
                     return nil
                 }
-                return Data(
-                    #"""
-                    {
-                      "frameTree": {
-                        "frame": {
-                          "id": "frame-main",
-                          "loaderId": "loader-main",
-                          "url": "https://example.com/",
-                          "securityOrigin": "https://example.com",
-                          "mimeType": "text/html"
-                        },
+                return .object([
+                    "frameTree": [
+                        "frame": [
+                            "id": "frame-main",
+                            "loaderId": "loader-main",
+                            "url": "https://example.com/",
+                            "securityOrigin": "https://example.com",
+                            "mimeType": "text/html",
+                        ],
                         "resources": [
-                          {
-                            "url": "https://example.com/unknown.bin",
-                            "type": "Preload",
-                            "mimeType": "application/octet-stream"
-                          }
-                        ]
-                      }
-                    }
-                    """#.utf8
-                )
+                            [
+                                "url": "https://example.com/unknown.bin",
+                                "type": "Preload",
+                                "mimeType": "application/octet-stream",
+                            ],
+                        ],
+                    ],
+                ])
             }
         )
         let session = WITransportSession(
@@ -264,13 +256,13 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
 
     private var messageHandlers: WITransportBackendMessageHandlers?
     private let supportSnapshotAfterAttach: WITransportSupportSnapshot?
-    private let compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)?
+    private let compatibilityResponseProvider: ((WITransportTargetScope, String) -> WITransportPayload?)?
     private(set) var sentPageMessageCount = 0
 
     init(
         supportSnapshot: WITransportSupportSnapshot? = nil,
         supportSnapshotAfterAttach: WITransportSupportSnapshot? = nil,
-        compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)? = nil
+        compatibilityResponseProvider: ((WITransportTargetScope, String) -> WITransportPayload?)? = nil
     ) {
         self.supportSnapshot = supportSnapshot ?? .supported(
             backendKind: Self.defaultSupportedBackendKind,
@@ -287,7 +279,17 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
             supportSnapshot = supportSnapshotAfterAttach
         }
         messageHandlers.handleRootMessage(
-            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#,
+            [
+                "method": "Target.targetCreated",
+                "params": [
+                    "targetInfo": [
+                        "targetId": "page-A",
+                        "type": "page",
+                        "isProvisional": false,
+                    ],
+                ],
+            ]
         )
         messageHandlers.waitForPendingMessagesForTesting?()
     }
@@ -307,7 +309,7 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         sentPageMessageCount += 1
     }
 
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload? {
         compatibilityResponseProvider?(scope, method)
     }
 

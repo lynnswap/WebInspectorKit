@@ -826,7 +826,7 @@ private extension DOMTransportDriver {
 
     func handleDocumentUpdated() {
         finishPendingDocumentBoundOperations()
-        forwardProtocolEvent(method: "DOM.documentUpdated", paramsData: Data("{}".utf8))
+        forwardProtocolEvent(method: "DOM.documentUpdated", paramsData: Data("{}".utf8), paramsObject: [:])
         pendingSelectedNodeID = nil
         if pendingSelectionRecoveryPathArmed == false {
             pendingSelectedNodePath = nil
@@ -1890,11 +1890,15 @@ private extension DOMTransportDriver {
     }
 
     func forwardProtocolEvent(_ envelope: WITransportEventEnvelope) {
-        forwardProtocolEvent(method: envelope.method, paramsData: envelope.paramsData)
+        forwardProtocolEvent(
+            method: envelope.method,
+            paramsData: envelope.paramsData,
+            paramsObject: envelope.paramsObject
+        )
     }
 
-    func forwardProtocolEvent(method: String, paramsData: Data) {
-        eventSink?.domDidReceiveProtocolEvent(method: method, paramsData: paramsData)
+    func forwardProtocolEvent(method: String, paramsData: Data, paramsObject: Any? = nil) {
+        eventSink?.domDidReceiveProtocolEvent(method: method, paramsData: paramsData, paramsObject: paramsObject)
     }
 
     func preview(for entry: DOMEntry) -> String {
@@ -2475,6 +2479,362 @@ private struct EngineCSSGetComputedStyleForNode: WITransportPageCommand, Sendabl
 
     static let method = "CSS.getComputedStyleForNode"
 }
+
+private extension DOMTransportDriver.CSSInlineStylesResponse {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject) else {
+            throw WITransportError.invalidResponse("Invalid CSS.getInlineStylesForNode response payload.")
+        }
+
+        self.init(
+            inlineStyle: try transportDictionary(from: dictionary["inlineStyle"]).map(DOMTransportDriver.CSSStylePayload.init(dictionary:)),
+            attributesStyle: try transportDictionary(from: dictionary["attributesStyle"]).map(DOMTransportDriver.CSSStylePayload.init(dictionary:))
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSInlineStylesResponse: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSMatchedStylesResponse {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject) else {
+            throw WITransportError.invalidResponse("Invalid CSS.getMatchedStylesForNode response payload.")
+        }
+
+        self.init(
+            matchedCSSRules: try transportArray(from: dictionary["matchedCSSRules"])?.map(DOMTransportDriver.CSSRuleMatch.init(wiTransportObject:)),
+            pseudoElements: try transportArray(from: dictionary["pseudoElements"])?.map(DOMTransportDriver.CSSPseudoElementMatches.init(wiTransportObject:)),
+            inherited: try transportArray(from: dictionary["inherited"])?.map(DOMTransportDriver.CSSInheritedStyleEntry.init(wiTransportObject:))
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSMatchedStylesResponse: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSComputedStyleResponse {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject) else {
+            throw WITransportError.invalidResponse("Invalid CSS.getComputedStyleForNode response payload.")
+        }
+
+        self.init(
+            computedStyle: try transportArray(from: dictionary["computedStyle"])?.map(DOMTransportDriver.CSSComputedStylePropertyPayload.init(wiTransportObject:))
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSComputedStyleResponse: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSPseudoElementMatches {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let pseudoId = transportString(from: dictionary["pseudoId"]) else {
+            throw WITransportError.invalidResponse("Invalid CSS pseudo element payload.")
+        }
+
+        self.init(
+            pseudoId: pseudoId,
+            matches: try transportArray(from: dictionary["matches"])?.map(DOMTransportDriver.CSSRuleMatch.init(wiTransportObject:)) ?? []
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSPseudoElementMatches: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSInheritedStyleEntry {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject) else {
+            throw WITransportError.invalidResponse("Invalid inherited CSS style payload.")
+        }
+
+        self.init(
+            inlineStyle: try transportDictionary(from: dictionary["inlineStyle"]).map(DOMTransportDriver.CSSStylePayload.init(dictionary:)),
+            matchedCSSRules: try transportArray(from: dictionary["matchedCSSRules"])?.map(DOMTransportDriver.CSSRuleMatch.init(wiTransportObject:))
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSInheritedStyleEntry: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSRuleMatch {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let ruleObject = dictionary["rule"] else {
+            throw WITransportError.invalidResponse("Invalid CSS rule match payload.")
+        }
+
+        self.init(
+            rule: try .init(wiTransportObject: ruleObject),
+            matchingSelectors: transportArray(from: dictionary["matchingSelectors"])?.compactMap(transportInt(from:)) ?? []
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSRuleMatch: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSRulePayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let selectorListObject = dictionary["selectorList"],
+              let styleObject = dictionary["style"] else {
+            throw WITransportError.invalidResponse("Invalid CSS rule payload.")
+        }
+
+        self.init(
+            selectorList: try .init(wiTransportObject: selectorListObject),
+            sourceURL: transportString(from: dictionary["sourceURL"]),
+            sourceLine: transportInt(from: dictionary["sourceLine"]),
+            origin: transportString(from: dictionary["origin"]),
+            style: try .init(dictionary: transportDictionary(from: styleObject) ?? [:]),
+            groupings: try transportArray(from: dictionary["groupings"])?.map(DOMTransportDriver.CSSGroupingPayload.init(wiTransportObject:))
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSRulePayload: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSSelectorListPayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let text = transportString(from: dictionary["text"]) else {
+            throw WITransportError.invalidResponse("Invalid CSS selector list payload.")
+        }
+
+        self.init(
+            text: text,
+            selectors: try transportArray(from: dictionary["selectors"])?.map(DOMTransportDriver.CSSSelectorPayload.init(wiTransportObject:)) ?? []
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSSelectorListPayload: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSSelectorPayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let text = transportString(from: dictionary["text"]) else {
+            throw WITransportError.invalidResponse("Invalid CSS selector payload.")
+        }
+
+        self.init(text: text)
+    }
+}
+
+extension DOMTransportDriver.CSSSelectorPayload: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSGroupingPayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject) else {
+            throw WITransportError.invalidResponse("Invalid CSS grouping payload.")
+        }
+
+        self.init(
+            type: transportString(from: dictionary["type"]),
+            text: transportString(from: dictionary["text"])
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSGroupingPayload: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSStylePayload {
+    init(dictionary: [String: Any]) throws {
+        self.init(
+            cssProperties: try transportArray(from: dictionary["cssProperties"])?.map(DOMTransportDriver.CSSPropertyPayload.init(wiTransportObject:)) ?? []
+        )
+    }
+}
+
+private extension DOMTransportDriver.CSSPropertyPayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let name = transportString(from: dictionary["name"]),
+              let value = transportString(from: dictionary["value"]) else {
+            throw WITransportError.invalidResponse("Invalid CSS property payload.")
+        }
+
+        self.init(
+            name: name,
+            value: value,
+            priority: transportString(from: dictionary["priority"]),
+            parsedOk: transportBool(from: dictionary["parsedOk"]),
+            status: transportString(from: dictionary["status"]),
+            implicit: transportBool(from: dictionary["implicit"])
+        )
+    }
+}
+
+extension DOMTransportDriver.CSSPropertyPayload: WITransportObjectDecodable {}
+
+private extension DOMTransportDriver.CSSComputedStylePropertyPayload {
+    init(wiTransportObject: Any) throws {
+        guard let dictionary = transportDictionary(from: wiTransportObject),
+              let name = transportString(from: dictionary["name"]),
+              let value = transportString(from: dictionary["value"]) else {
+            throw WITransportError.invalidResponse("Invalid computed style property payload.")
+        }
+
+        self.init(name: name, value: value)
+    }
+}
+
+extension DOMTransportDriver.CSSComputedStylePropertyPayload: WITransportObjectDecodable {}
+
+private extension EngineDOMRequestChildNodes.Parameters {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = ["nodeId": nodeId]
+        if let depth {
+            object["depth"] = depth
+        }
+        return object
+    }
+}
+
+extension EngineDOMRequestChildNodes.Parameters: WITransportObjectEncodable {}
+
+private extension EngineDOMRemoveNode.Parameters {
+    func wiTransportObject() -> Any? {
+        ["nodeId": nodeId]
+    }
+}
+
+extension EngineDOMRemoveNode.Parameters: WITransportObjectEncodable {}
+
+private extension EngineDOMSetAttributeValue.Parameters {
+    func wiTransportObject() -> Any? {
+        [
+            "nodeId": nodeId,
+            "name": name,
+            "value": value,
+        ]
+    }
+}
+
+extension EngineDOMSetAttributeValue.Parameters: WITransportObjectEncodable {}
+
+private extension EngineDOMRemoveAttribute.Parameters {
+    func wiTransportObject() -> Any? {
+        [
+            "nodeId": nodeId,
+            "name": name,
+        ]
+    }
+}
+
+extension EngineDOMRemoveAttribute.Parameters: WITransportObjectEncodable {}
+
+private extension EngineDOMHighlightNode.RGBAColor {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = [
+            "r": r,
+            "g": g,
+            "b": b,
+        ]
+        if let a {
+            object["a"] = a
+        }
+        return object
+    }
+}
+
+extension EngineDOMHighlightNode.RGBAColor: WITransportObjectEncodable {}
+
+private extension EngineDOMHighlightNode.HighlightConfig {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = [:]
+        if let showInfo {
+            object["showInfo"] = showInfo
+        }
+        if let contentColor {
+            object["contentColor"] = contentColor.wiTransportObject()
+        }
+        if let paddingColor {
+            object["paddingColor"] = paddingColor.wiTransportObject()
+        }
+        if let borderColor {
+            object["borderColor"] = borderColor.wiTransportObject()
+        }
+        if let marginColor {
+            object["marginColor"] = marginColor.wiTransportObject()
+        }
+        return object
+    }
+}
+
+extension EngineDOMHighlightNode.HighlightConfig: WITransportObjectEncodable {}
+
+private extension EngineDOMHighlightNode.Parameters {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = [
+            "nodeId": nodeId,
+            "highlightConfig": highlightConfig.wiTransportObject() ?? [:],
+        ]
+        if let showRulers {
+            object["showRulers"] = showRulers
+        }
+        return object
+    }
+}
+
+extension EngineDOMHighlightNode.Parameters: WITransportObjectEncodable {}
+
+private extension EngineDOMSetInspectModeEnabled.HighlightConfig {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = [:]
+        if let showInfo {
+            object["showInfo"] = showInfo
+        }
+        return object
+    }
+}
+
+extension EngineDOMSetInspectModeEnabled.HighlightConfig: WITransportObjectEncodable {}
+
+private extension EngineDOMSetInspectModeEnabled.Parameters {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = ["enabled": enabled]
+        if let highlightConfig {
+            object["highlightConfig"] = highlightConfig.wiTransportObject() ?? [:]
+        }
+        if let showRulers {
+            object["showRulers"] = showRulers
+        }
+        return object
+    }
+}
+
+extension EngineDOMSetInspectModeEnabled.Parameters: WITransportObjectEncodable {}
+
+private extension EngineCSSGetMatchedStylesForNode.Parameters {
+    func wiTransportObject() -> Any? {
+        var object: [String: Any] = ["nodeId": nodeId]
+        if let includePseudo {
+            object["includePseudo"] = includePseudo
+        }
+        if let includeInherited {
+            object["includeInherited"] = includeInherited
+        }
+        return object
+    }
+}
+
+extension EngineCSSGetMatchedStylesForNode.Parameters: WITransportObjectEncodable {}
+
+private extension EngineCSSGetInlineStylesForNode.Parameters {
+    func wiTransportObject() -> Any? {
+        ["nodeId": nodeId]
+    }
+}
+
+extension EngineCSSGetInlineStylesForNode.Parameters: WITransportObjectEncodable {}
+
+private extension EngineCSSGetComputedStyleForNode.Parameters {
+    func wiTransportObject() -> Any? {
+        ["nodeId": nodeId]
+    }
+}
+
+extension EngineCSSGetComputedStyleForNode.Parameters: WITransportObjectEncodable {}
 
 #if DEBUG
 extension DOMTransportDriver {

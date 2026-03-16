@@ -3266,7 +3266,11 @@ private extension WISharedTransportRegistryTests {
             return true
         }
 
-        for _ in 0..<maxTurns {
+        for turn in 0..<maxTurns {
+            await Task.yield()
+            if turn.isMultiple(of: 128) {
+                try? await Task.sleep(for: .milliseconds(1))
+            }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.async {
                     continuation.resume()
@@ -3337,7 +3341,17 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         attachCallCount += 1
         self.messageHandlers = messageHandlers
         messageHandlers.handleRootMessage(
-            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#,
+            [
+                "method": "Target.targetCreated",
+                "params": [
+                    "targetInfo": [
+                        "targetId": "page-A",
+                        "type": "page",
+                        "isProvisional": false,
+                    ],
+                ],
+            ]
         )
         messageHandlers.waitForPendingMessagesForTesting?()
         Task {
@@ -3378,6 +3392,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             if let identifier = payload["id"] as? Int, let errorMessage = pageMethodErrors[method] {
                 messageHandlers?.handlePageMessage(
                     #"{"id":\#(identifier),"error":{"message":"\#(errorMessage)"}}"#,
+                    nil,
                     targetIdentifier
                 )
                 return
@@ -3390,6 +3405,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
                let resultString = String(data: data, encoding: .utf8) {
                 messageHandlers?.handlePageMessage(
                     #"{"id":\#(identifier),"result":\#(resultString)}"#,
+                    nil,
                     targetIdentifier
                 )
                 return
@@ -3398,6 +3414,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         if let identifier = payload["id"] as? Int {
             messageHandlers?.handlePageMessage(
                 #"{"id":\#(identifier),"result":{}}"#,
+                nil,
                 targetIdentifier
             )
         }
@@ -3407,7 +3424,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         }
     }
 
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload? {
         _ = scope
         _ = method
         return nil
@@ -3424,6 +3441,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
 
         messageHandlers?.handlePageMessage(
             #"{"method":"\#(method)","params":\#(paramsString)}"#,
+            nil,
             targetIdentifier
         )
         Task {
@@ -3440,7 +3458,8 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         }
 
         messageHandlers?.handleRootMessage(
-            #"{"method":"\#(method)","params":\#(paramsString)}"#
+            #"{"method":"\#(method)","params":\#(paramsString)}"#,
+            nil
         )
         Task {
             await sharedTransportStateChanges.push(())

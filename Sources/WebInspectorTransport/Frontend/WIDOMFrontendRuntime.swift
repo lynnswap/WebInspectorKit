@@ -856,17 +856,19 @@ private extension WIDOMFrontendRuntime {
 }
 
 extension WIDOMFrontendRuntime: WIDOMProtocolEventSink {
-    package func domDidReceiveProtocolEvent(method: String, paramsData: Data) {
-        let paramsObject: Any
-        if let object = try? JSONSerialization.jsonObject(with: paramsData) {
-            paramsObject = object
+    package func domDidReceiveProtocolEvent(method: String, paramsData: Data, paramsObject: Any?) {
+        let resolvedParamsObject: Any
+        if let paramsObject {
+            resolvedParamsObject = paramsObject
+        } else if let object = try? JSONSerialization.jsonObject(with: paramsData) {
+            resolvedParamsObject = object
         } else {
-            paramsObject = [:] as [String: Any]
+            resolvedParamsObject = [:] as [String: Any]
         }
 
         let message: [String: Any] = [
             "method": method,
-            "params": paramsObject,
+            "params": resolvedParamsObject,
         ]
 
         guard webView != nil else {

@@ -756,18 +756,20 @@ private:
     if (!messageString.length)
         return;
 
+    NSDictionary *message = nil;
+    NSData *payloadData = [messageString dataUsingEncoding:NSUTF8StringEncoding];
+    if (payloadData) {
+        NSError *error = nil;
+        id json = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:&error];
+        if (!error)
+            message = WITransportBridgePrivate::dictionaryValue(json);
+    }
+
     WITransportRootMessageHandler rootHandler = self.rootMessageHandler;
     if (rootHandler)
-        rootHandler(messageString);
+        rootHandler(messageString, message);
 
-    NSData *payloadData = [messageString dataUsingEncoding:NSUTF8StringEncoding];
-    if (!payloadData)
-        return;
-
-    NSError *error = nil;
-    id json = [NSJSONSerialization JSONObjectWithData:payloadData options:0 error:&error];
-    NSDictionary *message = WITransportBridgePrivate::dictionaryValue(json);
-    if (!message || error)
+    if (!message)
         return;
 
     NSString *method = WITransportBridgePrivate::stringValue(message[@"method"]);
@@ -780,9 +782,18 @@ private:
     if (!targetIdentifier.length || !pageMessageString.length)
         return;
 
+    NSDictionary *pageMessage = nil;
+    NSData *pagePayloadData = [pageMessageString dataUsingEncoding:NSUTF8StringEncoding];
+    if (pagePayloadData) {
+        NSError *pageError = nil;
+        id pageJSON = [NSJSONSerialization JSONObjectWithData:pagePayloadData options:0 error:&pageError];
+        if (!pageError)
+            pageMessage = WITransportBridgePrivate::dictionaryValue(pageJSON);
+    }
+
     WITransportPageMessageHandler pageHandler = self.pageMessageHandler;
     if (pageHandler)
-        pageHandler(pageMessageString, targetIdentifier);
+        pageHandler(pageMessageString, pageMessage, targetIdentifier);
 }
 
 - (void)reportFatalFailure:(NSString *)message
