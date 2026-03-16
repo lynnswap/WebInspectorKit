@@ -31,6 +31,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef void (^WIKNativeInspectorProbeEventHandler)(WIKNativeInspectorProbeRecord *record);
 
+typedef struct {
+    BOOL found;
+    BOOL usedFallbackRange;
+    NSInteger resolvedOffset;
+    NSUInteger attemptedOffsetCount;
+    NSUInteger validCandidateCount;
+    NSUInteger scannedByteCount;
+} WIKNativeInspectorControllerDiscoveryTestResult;
+
 @interface WIKNativeInspectorProbeSession : NSObject
 
 - (instancetype)initWithWebView:(WKWebView *)webView NS_DESIGNATED_INITIALIZER;
@@ -41,5 +50,18 @@ typedef void (^WIKNativeInspectorProbeEventHandler)(WIKNativeInspectorProbeRecor
 - (void)cancel;
 
 @end
+
+FOUNDATION_EXPORT WIKNativeInspectorControllerDiscoveryTestResult WIKNativeInspectorFindInspectorControllerForTesting(
+    const void *pageProxy,
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset
+);
+
+FOUNDATION_EXPORT WIKNativeInspectorControllerDiscoveryTestResult WIKNativeInspectorRunControllerDiscoveryScenarioForTesting(
+    NSUInteger pageAllocationSize,
+    NSInteger cachedOffset,
+    NSInteger primaryControllerOffset,
+    NSInteger secondaryControllerOffset
+);
 
 NS_ASSUME_NONNULL_END
