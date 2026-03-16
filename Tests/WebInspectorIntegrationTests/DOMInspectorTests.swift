@@ -1,74 +1,84 @@
 import Testing
-import WebInspectorKit
-import WebInspectorTestSupport
 import WebKit
-@testable import WebInspectorCore
-@testable import WebInspectorTransport
+import WebInspectorEngine
 @testable import WebInspectorUI
+@testable import WebInspectorRuntime
 
 @MainActor
-@Suite(.serialized, .webKitIsolated)
+
+
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
-        let controller = WISessionController()
-        let store = controller.domStore
-        #expect(store.selectedEntry == nil)
-        #expect(store.session.graphStore.selectedEntry == nil)
+        let controller = WIModel()
+        let inspector = controller.dom
+        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.session.graphStore.selectedEntry == nil)
     }
 
     @Test
     func hasPageWebViewReflectsAttachAndDetach() {
-        let controller = WISessionController()
-        let store = controller.domStore
+        let controller = WIModel()
+        let inspector = controller.dom
         let webView = makeTestWebView()
 
-        #expect(store.hasPageWebView == false)
-        store.attach(to: webView)
-        #expect(store.hasPageWebView == true)
-        #expect(store.session.lastPageWebView === webView)
+        #expect(inspector.hasPageWebView == false)
+        inspector.attach(to: webView)
+        #expect(inspector.hasPageWebView == true)
+        #expect(inspector.session.lastPageWebView === webView)
 
-        store.detach()
-        #expect(store.hasPageWebView == false)
-        #expect(store.session.lastPageWebView == nil)
-        #expect(store.selectedEntry == nil)
-        #expect(store.treeRows.isEmpty)
+        inspector.detach()
+        #expect(inspector.hasPageWebView == false)
+        #expect(inspector.session.lastPageWebView == nil)
+        #expect(inspector.selectedEntry == nil)
+    }
+
+    @Test
+    func attachSwitchingPageClearsPendingMutationBundles() {
+        let controller = WIModel()
+        let inspector = controller.dom
+        let firstWebView = makeTestWebView()
+        let secondWebView = makeTestWebView()
+
+        inspector.attach(to: firstWebView)
+        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
+        #expect(inspector.pendingMutationBundleCount == 1)
+
+        inspector.attach(to: secondWebView)
+
+        #expect(inspector.session.lastPageWebView === secondWebView)
+        #expect(inspector.pendingMutationBundleCount == 0)
     }
 
     @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WISessionController()
-        let store = controller.domStore
-        #expect(store.errorMessage == nil)
+        let controller = WIModel()
+        let inspector = controller.dom
+        #expect(inspector.errorMessage == nil)
 
-        await store.reloadFrontend()
+        await inspector.reloadInspector()
 
-        #expect(store.errorMessage == "Web view unavailable.")
+        #expect(inspector.errorMessage == "Web view unavailable.")
+    }
+
+    @Test
+    func updateSnapshotDepthClampsAndUpdatesConfiguration() {
+        let controller = WIModel()
+        let inspector = controller.dom
+        inspector.updateSnapshotDepth(0)
+        #expect(inspector.session.configuration.snapshotDepth == 1)
+
+        inspector.updateSnapshotDepth(6)
+        #expect(inspector.session.configuration.snapshotDepth == 6)
     }
 
     @Test
     func updateAndRemoveAttributeMutateSelectionState() {
-        let controller = WISessionController()
-        let store = controller.domStore
-        store.session.graphStore.applySnapshot(
+        let controller = WIModel()
+        let inspector = controller.dom
+        inspector.session.graphStore.applySelectionSnapshot(
             .init(
-                root: DOMGraphNodeDescriptor(
-                    nodeID: 7,
-                    nodeType: 1,
-                    nodeName: "DIV",
-                    localName: "div",
-                    nodeValue: "",
-                    attributes: [],
-                    childCount: 0,
-                    layoutFlags: [],
-                    isRendered: true,
-                    children: []
-                )
-            )
-        )
-        store.session.graphStore.applySelectionSnapshot(
-            .init(
-                nodeID: 7,
+                localID: 7,
                 preview: "<div id=\"foo\">",
                 attributes: [
                     DOMAttribute(nodeId: 7, name: "class", value: "old"),
@@ -80,225 +90,119 @@ struct DOMInspectorTests {
             )
         )
 
-        store.updateAttributeValue(name: "class", value: "new")
-        #expect(store.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
+        inspector.updateAttributeValue(name: "class", value: "new")
+        #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
 
-        store.removeAttribute(name: "id")
-        #expect(store.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
+        inspector.removeAttribute(name: "id")
+        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
     }
 
     @Test
-    func detachClearsErrorMessageAndGraphState() async {
-        await withWebKitTestIsolation {
-            let controller = makeTransportController()
-            let store = controller.domStore
-            let webView = makeTestWebView()
+    func detachClearsErrorMessage() async {
+        let controller = WIModel()
+        let inspector = controller.dom
+        await inspector.reloadInspector()
+        #expect(inspector.errorMessage != nil)
 
-            store.attach(to: webView)
-            await loadHTML(
-                """
-                <html><body><main><div id="target">Hello</div></main></body></html>
-                """,
-                in: webView
+        inspector.detach()
+
+        #expect(inspector.errorMessage == nil)
+    }
+
+    @Test
+    func detachClearsMatchedStylesState() {
+        let controller = WIModel()
+        let inspector = controller.dom
+        inspector.session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: 11,
+                preview: "<div class=\"target\">",
+                attributes: [],
+                path: [],
+                selectorPath: ".target",
+                styleRevision: 0
             )
-            await store.reloadFrontend()
-            #expect(await waitForTreeRowsToLoad(in: store))
-
-            guard let selectedNodeID = store.session.graphStore.rootID?.nodeID else {
-                Issue.record("expected a loaded DOM root before mutating selection state")
-                return
-            }
-
-            store.session.graphStore.applySelectionSnapshot(
-                .init(
-                    nodeID: selectedNodeID,
-                    preview: "<div class=\"target\">",
-                    attributes: [],
-                    path: [],
-                    selectorPath: ".target",
-                    styleRevision: 0
-                )
-            )
-            store.session.graphStore.applyStyle(
-                .init(
-                    nodeId: selectedNodeID,
-                    matched: .init(
-                        sections: [
-                            .init(
-                                kind: .element,
-                                rules: [
-                                    DOMStyleRule(
-                                        origin: .author,
-                                        selectorText: ".target",
-                                        declarations: [
-                                            DOMStyleDeclaration(
-                                                name: "color",
-                                                value: "red",
-                                                important: false
-                                            )
-                                        ],
-                                        source: .init(label: "inline")
-                                    )
-                                ]
-                            )
-                        ],
-                        isTruncated: true,
-                        blockedStylesheetCount: 3
+        )
+        inspector.session.graphStore.applyMatchedStyles(
+            .init(
+                nodeId: 11,
+                rules: [
+                    DOMMatchedStyleRule(
+                        origin: .author,
+                        selectorText: ".target",
+                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
+                        sourceLabel: "inline"
                     ),
-                    computed: .empty
-                ),
-                for: selectedNodeID
-            )
-            store.session.graphStore.beginStyleLoading(for: selectedNodeID)
+                ],
+                truncated: true,
+                blockedStylesheetCount: 3
+            ),
+            for: 11
+        )
+        inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
 
-            store.detach()
+        inspector.detach()
 
-            #expect(store.errorMessage == nil)
-            #expect(store.selectedEntry == nil)
-            #expect(store.session.graphStore.entriesByID.isEmpty)
-            #expect(store.treeRows.isEmpty)
-        }
+        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.session.graphStore.entriesByID.isEmpty)
     }
 
     @Test
-    func reloadInspectorLoadsTreeRowsForAttachedPage() async {
-        await withWebKitTestIsolation {
-            let controller = makeTransportController()
-            let store = controller.domStore
-            let webView = makeTestWebView()
+    func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
+        let controller = WIModel()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+        let undoManager = UndoManager()
+        let html = """
+        <html>
+            <body>
+                <div id="first">First</div>
+                <div id="second">Second</div>
+            </body>
+        </html>
+        """
 
-            store.attach(to: webView)
-            await loadHTML(
-                """
-                <html>
-                    <body>
-                        <main id="content">
-                            <section><h1>Hello</h1><p>World</p></section>
-                        </main>
-                    </body>
-                </html>
-                """,
-                in: webView
-            )
+        inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
 
-            await store.reloadFrontend()
-
-            #expect(await waitForTreeRowsToLoad(in: store))
-            #expect(store.treeRows.count > 0)
-            #expect(store.session.graphStore.rootID != nil)
-            #expect(store.backendSupport.isSupported)
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
+              let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
+        else {
+            Issue.record("target nodes were not found in snapshot")
+            return
         }
-    }
 
-    @Test
-    func reloadInspectorPublishesErrorWhenTransportIsUnsupported() async {
-        await withWebKitTestIsolation {
-            let controller = WISessionController(
-                domSession: WIDOMRuntime(configuration: .init()),
-                networkSession: WINetworkRuntime(configuration: .init())
-            )
-            let store = controller.domStore
-            let webView = makeTestWebView()
+        inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
+        inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
 
-            store.attach(to: webView)
-            await loadHTML(
-                """
-                <html>
-                    <body>
-                        <main id="legacy-content">
-                            <section><h1>Hello</h1><p>Legacy</p></section>
-                        </main>
-                    </body>
-                </html>
-                """,
-                in: webView
-            )
-
-            await store.reloadFrontend()
-
-            #expect(store.backendSupport.isSupported == false)
-            #expect(store.treeRows.isEmpty)
-            #expect(store.session.graphStore.rootID == nil)
-            #expect(store.errorMessage?.isEmpty == false)
+        let bothDeleted = await waitForCondition {
+            let firstExists = await domNodeExists(withID: "first", in: webView)
+            let secondExists = await domNodeExists(withID: "second", in: webView)
+            return !firstExists && !secondExists
         }
-    }
+        #expect(bothDeleted == true)
 
-    @Test
-    func selectingEntryLoadsMatchedStylesViaTransportWithoutProtocolEnable() async {
-        await withWebKitTestIsolation {
-            let controller = makeTransportController()
-            let store = controller.domStore
-            let webView = makeTestWebView()
-
-            store.attach(to: webView)
-            await loadHTML(
-                """
-                <html>
-                    <head>
-                        <style>
-                            #content {
-                                color: rgb(255, 0, 0);
-                                display: block;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <main id="content">Hello</main>
-                    </body>
-                </html>
-                """,
-                in: webView
-            )
-
-            await store.reloadFrontend()
-            #expect(await waitForTreeRowsToLoad(in: store))
-
-            guard let contentNodeID = findNodeId(
-                in: store.session.graphStore,
-                attributeName: "id",
-                attributeValue: "content"
-            ) else {
-                Issue.record("target node was not found in graph store")
-                return
-            }
-
-            do {
-                let payload = try await store.session.styles(nodeId: contentNodeID, maxMatchedRules: 0)
-                #expect(payload.matched.allRules.contains(where: { $0.selectorText.contains("#content") }))
-                #expect(store.errorMessage == nil)
-            } catch {
-                Issue.record("matched styles transport fetch failed: \(error.localizedDescription)")
-            }
+        undoManager.undo()
+        let secondRestored = await waitForCondition {
+            await domNodeExists(withID: "second", in: webView)
         }
+        #expect(secondRestored == true)
+        #expect(await domNodeExists(withID: "first", in: webView) == false)
+
+        undoManager.undo()
+        let firstRestored = await waitForCondition {
+            await domNodeExists(withID: "first", in: webView)
+        }
+        #expect(firstRestored == true)
+        #expect(await domNodeExists(withID: "second", in: webView) == true)
     }
 
     private func makeTestWebView() -> WKWebView {
-        makeIsolatedTestWebView()
-    }
-
-    private func makeTransportController() -> WISessionController {
-        let domGraphStore = DOMGraphStore()
-        let domBackend = WIBackendFactory.makeDOMBackend(
-            configuration: .init(),
-            graphStore: domGraphStore
-        )
-        let domRuntime = WIDOMRuntime(
-            configuration: .init(),
-            graphStore: domGraphStore,
-            backend: domBackend
-        )
-        let domFrontendBridge = WIDOMFrontendRuntime(session: domRuntime)
-
-        let networkRuntime = WINetworkRuntime(
-            configuration: .init(),
-            backend: WIBackendFactory.makeNetworkBackend(configuration: .init())
-        )
-
-        return WISessionController(
-            domSession: domRuntime,
-            networkSession: networkRuntime,
-            domFrontendBridge: domFrontendBridge
-        )
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        return WKWebView(frame: .zero, configuration: configuration)
     }
 
     private func loadHTML(_ html: String, in webView: WKWebView) async {
@@ -309,6 +213,30 @@ struct DOMInspectorTests {
             navigationDelegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: nil)
         }
+    }
+
+    private func waitForCondition(
+        maxAttempts: Int = 250,
+        intervalNanoseconds: UInt64 = 20_000_000,
+        condition: @escaping @MainActor () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxAttempts {
+            if await condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return await condition()
+    }
+
+    private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return document.getElementById(identifier) !== null;",
+            arguments: ["identifier": id],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
 
     private func findNodeId(
@@ -324,18 +252,6 @@ struct DOMInspectorTests {
             return nil
         }
         return findNodeId(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
-    }
-
-    private func findNodeId(
-        in graphStore: DOMGraphStore,
-        attributeName: String,
-        attributeValue: String
-    ) -> Int? {
-        graphStore.entriesByID.values.first(where: { entry in
-            entry.attributes.contains(where: { attribute in
-                attribute.name == attributeName && attribute.value == attributeValue
-            })
-        })?.id.nodeID
     }
 
     private func findNodeId(
@@ -364,56 +280,20 @@ struct DOMInspectorTests {
     }
 }
 
-@MainActor
-private func waitForTreeRowsToLoad(
-    in store: WIDOMStore,
-    maxTurns: Int = 8_192
-) async -> Bool {
-    if store.treeRows.isEmpty == false, store.session.graphStore.rootID != nil {
-        return true
-    }
-
-    for _ in 0..<maxTurns {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                continuation.resume()
-            }
-        }
-
-        if store.treeRows.isEmpty == false, store.session.graphStore.rootID != nil {
-            return true
-        }
-    }
-
-    return store.treeRows.isEmpty == false && store.session.graphStore.rootID != nil
-}
-
-
-@MainActor
-private final class NoopBodyFetcher: NetworkBodyFetching {
-    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
-        _ = locator
-        _ = role
-        return .agentUnavailable
-    }
-}
-
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {
     var continuation: CheckedContinuation<Void, Never>?
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        resumeIfNeeded()
+        continuation?.resume()
+        continuation = nil
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        resumeIfNeeded()
+        continuation?.resume()
+        continuation = nil
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        resumeIfNeeded()
-    }
-
-    func resumeIfNeeded() {
         continuation?.resume()
         continuation = nil
     }

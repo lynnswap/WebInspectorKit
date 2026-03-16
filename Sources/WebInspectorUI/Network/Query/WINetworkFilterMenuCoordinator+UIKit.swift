@@ -1,14 +1,12 @@
 #if canImport(UIKit)
 import UIKit
-import WebInspectorCore
+import WebInspectorEngine
 import ObservationBridge
 
 @MainActor
 final class WINetworkFilterMenuCoordinator {
-    private unowned let queryModel: WINetworkQueryState
+    private unowned let queryModel: WINetworkQueryModel
     private var observationHandles: Set<ObservationHandle> = []
-    package private(set) var menuStateRevisionForTesting: UInt64 = 0
-    package var onMenuStateUpdatedForTesting: (@MainActor (UInt64) -> Void)?
 
     private lazy var barButtonItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -19,10 +17,10 @@ final class WINetworkFilterMenuCoordinator {
         return item
     }()
 
-    init(queryModel: WINetworkQueryState) {
+    init(queryModel: WINetworkQueryModel) {
         self.queryModel = queryModel
 
-        queryModel.observe(\.effectiveFilters) { [weak self] effectiveFilters in
+        queryModel.observeTask(\.effectiveFilters) { [weak self] effectiveFilters in
             self?.applyMenuStateAfterMutation(effectiveFilters: effectiveFilters)
         }
         .store(in: &observationHandles)
@@ -76,11 +74,6 @@ final class WINetworkFilterMenuCoordinator {
     private func applyMenuStateAfterMutation(effectiveFilters: Set<NetworkResourceFilter>) {
         barButtonItem.isSelected = !effectiveFilters.isEmpty
         barButtonItem.menu = makeMenu()
-        menuStateRevisionForTesting &+= 1
-        if menuStateRevisionForTesting == 0 {
-            menuStateRevisionForTesting = 1
-        }
-        onMenuStateUpdatedForTesting?(menuStateRevisionForTesting)
     }
 }
 #endif

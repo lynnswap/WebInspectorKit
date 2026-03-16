@@ -1,5 +1,5 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorEngine
 
 extension NetworkEntry {
     var displayName: String {

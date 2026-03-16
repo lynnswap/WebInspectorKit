@@ -1,24 +1,21 @@
 import WebKit
+import WebInspectorEngine
+import WebInspectorRuntime
 import ObservationBridge
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
 
 #if canImport(AppKit)
 import AppKit
-import WebInspectorResources
 
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
-    private let store: WIDOMStore
+    private let inspector: WIDOMModel
     private var contextMenuNodeID: Int?
-    private weak var inspectorWebView: WKWebView?
-    private let errorLabel = NSTextField(labelWithString: "")
     private var observationHandles: Set<ObservationHandle> = []
 
-    public init(store: WIDOMStore) {
-        self.store = store
-        store.setUIBridge(WIDOMPlatformBridge.shared)
+    private let errorLabel = NSTextField(labelWithString: "")
+
+    public init(inspector: WIDOMModel) {
+        self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -34,10 +31,9 @@ public final class WIDOMTreeViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let inspectorWebView = store.makeFrontendWebView()
+        let inspectorWebView = inspector.makeInspectorWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
-        self.inspectorWebView = inspectorWebView
-        store.setDOMContextMenuProvider { [weak self] nodeID in
+        inspector.setDOMContextMenuProvider { [weak self] nodeID in
             guard let self else {
                 return nil
             }
@@ -45,8 +41,12 @@ public final class WIDOMTreeViewController: NSViewController {
             return self.makeTreeContextMenu()
         }
 
+        errorLabel.translatesAutoresizingMaskIntoConstraints = false
+        errorLabel.isHidden = true
+        errorLabel.textColor = .secondaryLabelColor
+        errorLabel.maximumNumberOfLines = 3
+
         view.addSubview(inspectorWebView)
-        configureErrorLabel()
         view.addSubview(errorLabel)
 
         NSLayoutConstraint.activate([
@@ -54,14 +54,23 @@ public final class WIDOMTreeViewController: NSViewController {
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            errorLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            errorLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
-            errorLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
+
+            errorLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
         ])
 
-        startObservingErrorState()
-        updateErrorPresentation()
+        observeState()
+        updateErrorLabel(errorMessage: inspector.errorMessage)
+    }
+
+    private func observeState() {
+        inspector.observe(
+            \.errorMessage,
+            options: [.removeDuplicates]
+        ) { [weak self] newErrorMessage in
+            self?.updateErrorLabel(errorMessage: newErrorMessage)
+        }
+        .store(in: &observationHandles)
     }
 
     private func makeCopyMenu() -> NSMenu {
@@ -103,6 +112,17 @@ public final class WIDOMTreeViewController: NSViewController {
 
         return menu
     }
+
+    private func updateErrorLabel(errorMessage: String?) {
+        if let errorMessage, !errorMessage.isEmpty {
+            errorLabel.stringValue = errorMessage
+            errorLabel.isHidden = false
+        } else {
+            errorLabel.stringValue = ""
+            errorLabel.isHidden = true
+        }
+    }
+
     @objc
     private func copyHTML(_ sender: NSMenuItem) {
         copyNodeForContextMenu(kind: .html)
@@ -125,7 +145,7 @@ public final class WIDOMTreeViewController: NSViewController {
         guard let nodeID else {
             return
         }
-        store.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {
@@ -140,7 +160,7 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         Task {
             do {
-                let text = try await store.session.selectionCopyText(nodeId: nodeID, kind: kind)
+                let text = try await inspector.session.selectionCopyText(nodeId: nodeID, kind: kind)
                 guard !text.isEmpty else {
                     return
                 }
@@ -152,59 +172,14 @@ public final class WIDOMTreeViewController: NSViewController {
             }
         }
     }
-
-    private func configureErrorLabel() {
-        errorLabel.translatesAutoresizingMaskIntoConstraints = false
-        errorLabel.alignment = .center
-        errorLabel.lineBreakMode = .byWordWrapping
-        errorLabel.maximumNumberOfLines = 0
-        errorLabel.textColor = .secondaryLabelColor
-        errorLabel.isHidden = true
-        errorLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-
-    private func startObservingErrorState() {
-        store.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.updateErrorPresentation()
-        }
-        .store(in: &observationHandles)
-
-        store.session.graphStore.observe(
-            \.rootID,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.updateErrorPresentation()
-        }
-        .store(in: &observationHandles)
-    }
-
-    private func updateErrorPresentation() {
-        guard let errorMessage = store.errorMessage,
-              errorMessage.isEmpty == false,
-              store.session.graphStore.rootID == nil else {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
-            inspectorWebView?.isHidden = false
-            return
-        }
-
-        errorLabel.stringValue = errorMessage
-        errorLabel.isHidden = false
-        inspectorWebView?.isHidden = true
-    }
-
-    var testShowsErrorLabel: Bool {
-        errorLabel.isHidden == false
-    }
 }
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Tree (AppKit)") {
-    WIDOMTreeViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
+    WIAppKitPreviewContainer {
+        WIDOMTreeViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected))
+    }
 }
 #endif
 

@@ -1,11 +1,9 @@
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 import ObservationBridge
 
 #if canImport(UIKit)
 import UIKit
-import WebInspectorResources
 import SwiftUI
 
 private protocol DiffableStableID: Hashable, Sendable {}
@@ -52,7 +50,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case element
         case selector
         case styles
-        case computed
         case attributes
     }
 
@@ -69,7 +66,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private struct StyleRuleSignature: Hashable, Sendable {
-        let sectionTitle: String?
         let selectorText: String
         let sourceLabel: String
     }
@@ -78,8 +74,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case element
         case selector
         case styleRule(signature: StyleRuleSignature, ordinal: Int)
-        case styleMeta(section: SectionKey, kind: StyleMetaKind)
-        case computedProperty(name: String)
+        case styleMeta(kind: StyleMetaKind)
         case attribute(nodeID: DOMEntryID?, name: String)
         case emptyAttribute
     }
@@ -114,7 +109,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector(path: String)
         case styleRule(signature: StyleRuleSignature, selector: String, detail: String)
         case styleMeta(kind: StyleMetaKind, message: String)
-        case computedProperty(name: String, value: String)
         case attribute(nodeID: DOMEntryID?, name: String, value: String)
         case emptyAttribute
     }
@@ -124,7 +118,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector(path: String)
         case styleRule(selector: String, detail: String)
         case styleMeta(message: String)
-        case computedProperty(name: String, value: String)
         case attribute(nodeID: DOMEntryID?, name: String, value: String)
         case emptyAttribute
     }
@@ -134,7 +127,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         let stableIDs: [ItemStableID]
     }
 
-    private let store: WIDOMStore
+    private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
     private var stateObservationHandles: Set<ObservationHandle> = []
@@ -149,11 +142,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
-    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
-    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
-    private var selectedObservationHandles: Set<ObservationHandle> = []
-    private weak var observedSelectedEntry: DOMEntry?
-    private weak var observedSelectedStyle: DOMStyleState?
 
     private lazy var dataSource = makeDataSource()
 
@@ -166,10 +154,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
     }()
 
-    public init(store: WIDOMStore, showsNavigationControls: Bool = true) {
-        self.store = store
+    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+        self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
-        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(collectionViewLayout: UICollectionViewLayout())
     }
 
@@ -180,7 +167,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
-        selectedObservationHandles.removeAll()
         stateObservationHandles.removeAll()
     }
 
@@ -228,63 +214,60 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return
         }
         hasStartedObservingState = true
-        let graphStore = store.session.graphStore
+        let graphStore = inspector.session.graphStore
 
-        store.observe(
+        inspector.observe(
             \.hasPageWebView,
-            options: [.removeDuplicates]
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
-        store.observe(
+        inspector.observe(
             \.isSelectingElement,
-            options: [.removeDuplicates]
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
         graphStore.observe(
             \.selectedID,
-            options: [.removeDuplicates]
+            options: WIObservationOptions.dedupe
         ) { [weak self] _ in
-            self?.reconnectSelectedObservationIfNeeded()
             self?.scheduleNavigationControlsUpdate()
             self?.scheduleContentUpdate()
         }
         .store(in: &stateObservationHandles)
         graphStore.observe(
             \.entriesByID,
-            options: WIObservationOptions.domDetailContent
+            options: WIObservationOptions.debounced
         ) { [weak self] _ in
-            self?.reconnectSelectedObservationIfNeeded()
+            self?.scheduleContentUpdate()
         }
         .store(in: &stateObservationHandles)
-
-        reconnectSelectedObservationIfNeeded()
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = store.selectedEntry != nil
-        let hasPageWebView = store.hasPageWebView
+        let hasSelection = inspector.selectedEntry != nil
+        let hasPageWebView = inspector.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.store.copySelection(.html)
+                self?.inspector.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.store.copySelection(.selectorPath)
+                self?.inspector.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.store.copySelection(.xpath)
+                self?.inspector.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
-                self?.reloadFrontend()
+                self?.reloadInspector()
             },
             onReloadPage: { [weak self] in
-                self?.store.session.reloadPage()
+                self?.inspector.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -309,16 +292,16 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = store.hasPageWebView
+            pickItem.isEnabled = inspector.hasPageWebView
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = store.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
     }
 
     private func updateContent() {
-        let currentSelectionID = store.selectedEntry?.id
+        let currentSelectionID = inspector.selectedEntry?.id
         if editingAttributeKey?.nodeID != currentSelectionID {
             clearInlineEditingState()
         }
@@ -370,11 +353,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeSections() -> [DetailSection] {
-        guard let selected = store.selectedEntry else {
+        guard let selected = inspector.selectedEntry else {
             return []
         }
-
-        let style = selected.style
 
         let previewText = selected.preview.isEmpty ? defaultPreview(for: selected) : selected.preview
 
@@ -391,40 +372,32 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
 
         var styleRows: [DetailRow] = []
-        if style.isLoading && style.matched.isEmpty {
+        if selected.isLoadingMatchedStyles {
             styleRows.append(.styleMeta(kind: .loading, message: wiLocalized("dom.element.styles.loading")))
-        } else if style.matched.isEmpty {
+        } else if selected.matchedStyles.isEmpty {
             styleRows.append(.styleMeta(kind: .empty, message: wiLocalized("dom.element.styles.empty")))
         } else {
-            let includeElementFallback = style.matched.sections.count > 1
-            for section in style.matched.sections {
-                let sectionTitle = styleRuleSectionTitle(for: section, includeElementFallback: includeElementFallback)
-                for rule in section.rules {
-                    let signature = StyleRuleSignature(
-                        sectionTitle: sectionTitle,
-                        selectorText: rule.selectorText,
-                        sourceLabel: rule.source.label
-                    )
-                    let selector = if let sectionTitle {
-                        "\(sectionTitle)\n\(rule.selectorText)"
-                    } else {
-                        rule.selectorText
-                    }
-                    styleRows.append(
-                        .styleRule(
-                            signature: signature,
-                            selector: selector,
-                            detail: styleRuleDetail(rule)
-                        )
-                    )
+            for rule in selected.matchedStyles {
+                let declarations = rule.declarations.map { declaration in
+                    let importantSuffix = declaration.important ? " !important" : ""
+                    return "\(declaration.name): \(declaration.value)\(importantSuffix);"
                 }
+                var details = declarations.joined(separator: "\n")
+                if !rule.sourceLabel.isEmpty {
+                    details = "\(rule.sourceLabel)\n\(details)"
+                }
+                let signature = StyleRuleSignature(
+                    selectorText: rule.selectorText,
+                    sourceLabel: rule.sourceLabel
+                )
+                styleRows.append(.styleRule(signature: signature, selector: rule.selectorText, detail: details))
             }
         }
-        if style.matched.isTruncated {
+        if selected.matchedStylesTruncated {
             styleRows.append(.styleMeta(kind: .truncated, message: wiLocalized("dom.element.styles.truncated")))
         }
-        if style.matched.blockedStylesheetCount > 0 {
-            let blocked = "\(style.matched.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))"
+        if selected.blockedStylesheetCount > 0 {
+            let blocked = "\(selected.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))"
             styleRows.append(.styleMeta(kind: .blockedStylesheets, message: blocked))
         }
 
@@ -432,23 +405,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             key: .styles,
             title: wiLocalized("dom.element.section.styles"),
             rows: styleRows
-        )
-
-        let computedRows: [DetailRow]
-        if style.isLoading && style.computed.isEmpty {
-            computedRows = [.styleMeta(kind: .loading, message: wiLocalized("dom.element.styles.loading"))]
-        } else if style.computed.isEmpty {
-            computedRows = [.styleMeta(kind: .empty, message: wiLocalized("dom.element.styles.empty"))]
-        } else {
-            computedRows = style.computed.properties.map { property in
-                .computedProperty(name: property.name, value: property.value)
-            }
-        }
-
-        let computedSection = DetailSection(
-            key: .computed,
-            title: wiLocalized("dom.element.section.computed", default: "Computed"),
-            rows: computedRows
         )
 
         let attributeRows: [DetailRow]
@@ -468,7 +424,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             rows: attributeRows
         )
 
-        return [elementSection, selectorSection, styleSection, computedSection, attributeSection]
+        return [elementSection, selectorSection, styleSection, attributeSection]
     }
 
     private func defaultPreview(for entry: DOMEntry) -> String {
@@ -565,7 +521,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         pendingReloadDataTask?.cancel()
         let snapshot = makeSnapshot()
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
-        recordSnapshotApplyForTesting()
     }
 
     private func applySnapshotUsingReloadData() {
@@ -585,7 +540,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             guard !Task.isCancelled else {
                 return
             }
-            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -655,14 +609,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         applySnapshotUsingReloadData()
     }
 
-    private func recordSnapshotApplyForTesting() {
-        snapshotApplyRevisionForTesting &+= 1
-        if snapshotApplyRevisionForTesting == 0 {
-            snapshotApplyRevisionForTesting = 1
-        }
-        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
-    }
-
     private func makeRenderSections() -> [RenderSection] {
         var styleRuleOccurrences: [StyleRuleSignature: Int] = [:]
         return sections.enumerated().map { sectionIndex, section in
@@ -670,7 +616,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             let stableIDs = section.rows.map { row in
                 itemStableID(
                     for: row,
-                    in: section.key,
                     styleRuleOccurrences: &styleRuleOccurrences
                 )
             }
@@ -689,7 +634,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     private func itemStableID(
         for row: DetailRow,
-        in sectionKey: SectionKey,
         styleRuleOccurrences: inout [StyleRuleSignature: Int]
     ) -> ItemStableID {
         switch row {
@@ -705,9 +649,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 cellKind: .list
             )
         case let .styleMeta(kind, _):
-            return ItemStableID(key: .styleMeta(section: sectionKey, kind: kind), cellKind: .list)
-        case let .computedProperty(name, _):
-            return ItemStableID(key: .computedProperty(name: name), cellKind: .list)
+            return ItemStableID(key: .styleMeta(kind: kind), cellKind: .list)
         case let .attribute(nodeID, name, _):
             return ItemStableID(key: .attribute(nodeID: nodeID, name: name), cellKind: .attributeEditor)
         case .emptyAttribute:
@@ -725,8 +667,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return .styleRule(selector: selector, detail: detail)
         case let .styleMeta(_, message):
             return .styleMeta(message: message)
-        case let .computedProperty(name, value):
-            return .computedProperty(name: name, value: value)
         case let .attribute(nodeID, name, value):
             return .attribute(nodeID: nodeID, name: name, value: value)
         case .emptyAttribute:
@@ -750,17 +690,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case let .styleMeta(message):
             hasher.combine(3)
             hasher.combine(message)
-        case let .computedProperty(name, value):
-            hasher.combine(4)
-            hasher.combine(name)
-            hasher.combine(value)
         case let .attribute(nodeID, name, value):
-            hasher.combine(5)
+            hasher.combine(4)
             hasher.combine(nodeID)
             hasher.combine(name)
             hasher.combine(value)
         case .emptyAttribute:
-            hasher.combine(6)
+            hasher.combine(5)
         }
         return hasher.finalize()
     }
@@ -821,24 +757,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             configuration.text = message
             configuration.textProperties.color = .secondaryLabel
             configuration.textProperties.font = .preferredFont(forTextStyle: .subheadline)
-        case let .computedProperty(name, value):
-            configuration = UIListContentConfiguration.subtitleCell()
-            configuration.text = name
-            configuration.secondaryText = value
-            configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-                for: .monospacedSystemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                    weight: .semibold
-                )
-            )
-            configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
-                for: .monospacedSystemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
-                    weight: .regular
-                )
-            )
-            configuration.secondaryTextProperties.numberOfLines = 0
-            configuration.textToSecondaryTextVerticalPadding = 6
         case .emptyAttribute:
             configuration.text = wiLocalized("dom.element.attributes.empty")
             configuration.textProperties.color = .secondaryLabel
@@ -933,7 +851,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         if editingAttributeKey == key {
             clearInlineEditingState()
         }
-        store.removeAttribute(name: key.name)
+        inspector.removeAttribute(name: key.name)
     }
 
     private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
@@ -948,72 +866,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         return nil
     }
 
-    private func reconnectSelectedObservationIfNeeded() {
-        let selectedEntry = store.selectedEntry
-        let selectedStyle = selectedEntry?.style
-
-        if observedSelectedEntry === selectedEntry, observedSelectedStyle === selectedStyle {
-            return
-        }
-
-        selectedObservationHandles.removeAll()
-        observedSelectedEntry = selectedEntry
-        observedSelectedStyle = selectedStyle
-
-        guard let selectedEntry, let selectedStyle else {
-            scheduleContentUpdate()
-            return
-        }
-
-        selectedEntry.observe([\.preview, \.nodeValue, \.attributes, \.selectorPath]) { [weak self] in
-            self?.scheduleContentUpdate()
-        }
-        .store(in: &selectedObservationHandles)
-
-        selectedStyle.observe([\.loadState, \.matched, \.computed, \.errorMessage]) { [weak self] in
-            self?.scheduleContentUpdate()
-        }
-        .store(in: &selectedObservationHandles)
-
-        scheduleContentUpdate()
-    }
-
-    private func styleRuleDetail(_ rule: DOMStyleRule) -> String {
-        var parts: [String] = []
-        if !rule.source.label.isEmpty {
-            parts.append(rule.source.label)
-        }
-        if !rule.groupings.isEmpty {
-            parts.append(contentsOf: rule.groupings.map(\.text))
-        }
-        let declarations = rule.declarations.map { declaration in
-            let importantSuffix = declaration.important ? " !important" : ""
-            return "\(declaration.name): \(declaration.value)\(importantSuffix);"
-        }
-        if !declarations.isEmpty {
-            parts.append(contentsOf: declarations)
-        }
-        return parts.joined(separator: "\n")
-    }
-
-    private func styleRuleSectionTitle(
-        for section: DOMStyleSection,
-        includeElementFallback: Bool
-    ) -> String? {
-        if let title = section.title, !title.isEmpty {
-            return title
-        }
-
-        switch section.kind {
-        case .element:
-            return includeElementFallback ? wiLocalized("dom.element.section.element") : nil
-        case .pseudoElement:
-            return "::pseudo-element"
-        case .inherited:
-            return "Inherited"
-        }
-    }
-
     private func clearInlineEditingState() {
         editingAttributeKey = nil
         editingDraftValue = nil
@@ -1022,19 +874,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func toggleSelectionMode() {
-        store.toggleSelectionMode()
+        inspector.toggleSelectionMode()
     }
 
     @objc
-    private func reloadFrontend() {
+    private func reloadInspector() {
         Task {
-            await store.reloadFrontend()
+            await inspector.reloadInspector()
         }
     }
 
     @objc
     private func deleteNode() {
-        store.deleteSelectedNode(undoManager: undoManager)
+        inspector.deleteSelectedNode(undoManager: undoManager)
     }
 }
 
@@ -1066,7 +918,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
     ) {
         editingAttributeKey = key
         editingDraftValue = value
-        store.updateAttributeValue(name: key.name, value: value)
+        inspector.updateAttributeValue(name: key.name, value: value)
     }
 
     fileprivate func elementAttributeEditorCellDidEndEditing(
@@ -1375,27 +1227,33 @@ private struct KeyboardToolbarView: View {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Detail Empty (UIKit)") {
-    UINavigationController(
-        rootViewController: WIDOMDetailViewController(
-            store: WIDOMPreviewFixtures.makeStore(mode: .empty)
+    WIUIKitPreviewContainer {
+        UINavigationController(
+            rootViewController: WIDOMDetailViewController(
+                inspector: WIDOMPreviewFixtures.makeInspector(mode: .empty)
+            )
         )
-    )
+    }
 }
 
 #Preview("DOM Detail Selected (UIKit)") {
-    UINavigationController(
-        rootViewController: WIDOMDetailViewController(
-            store: WIDOMPreviewFixtures.makeStore(mode: .selected)
+    WIUIKitPreviewContainer {
+        UINavigationController(
+            rootViewController: WIDOMDetailViewController(
+                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected)
+            )
         )
-    )
+    }
 }
 
 #Preview("DOM Detail Editable Attributes (UIKit)") {
-    UINavigationController(
-        rootViewController: WIDOMDetailViewController(
-            store: WIDOMPreviewFixtures.makeStore(mode: .selectedEditableAttributes)
+    WIUIKitPreviewContainer {
+        UINavigationController(
+            rootViewController: WIDOMDetailViewController(
+                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selectedEditableAttributes)
+            )
         )
-    )
+    }
 }
 #endif
 

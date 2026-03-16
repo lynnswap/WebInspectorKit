@@ -1,27 +1,17 @@
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 
 #if canImport(AppKit)
 import AppKit
-import WebInspectorResources
-import ObservationBridge
 import SwiftUI
 
 @MainActor
 public final class WIDOMDetailViewController: NSViewController {
-    private let store: WIDOMStore
+    private let inspector: WIDOMModel
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
-    private var observationHandles: Set<ObservationHandle> = []
-    private var selectedObservationHandles: Set<ObservationHandle> = []
-    private weak var observedSelectedEntry: DOMEntry?
-    private weak var observedSelectedStyle: DOMStyleState?
-    private var renderRefreshCount = 0
-    package var onRenderRefreshForTesting: (@MainActor (Int) -> Void)?
 
-    public init(store: WIDOMStore) {
-        self.store = store
-        store.setUIBridge(WIDOMPlatformBridge.shared)
+    public init(inspector: WIDOMModel) {
+        self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -37,7 +27,7 @@ public final class WIDOMDetailViewController: NSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        let hostingController = NSHostingController(rootView: ElementDetailsMacRootView(store: store))
+        let hostingController = NSHostingController(rootView: ElementDetailsMacRootView(inspector: inspector))
         self.hostingController = hostingController
         addChild(hostingController)
 
@@ -51,74 +41,6 @@ public final class WIDOMDetailViewController: NSViewController {
             hostedView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hostedView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-
-        startObservingInspectorState()
-    }
-
-    private func startObservingInspectorState() {
-        store.observe(\.graphProjectionRevision, options: [.removeDuplicates]) { [weak self] _ in
-            self?.refreshRootView()
-        }
-        .store(in: &observationHandles)
-
-        store.observe(\.errorMessage, options: [.removeDuplicates]) { [weak self] _ in
-            self?.refreshRootView()
-        }
-        .store(in: &observationHandles)
-
-        store.session.graphStore.observe(\.selectedID, options: [.removeDuplicates]) { [weak self] _ in
-            self?.reconnectSelectedObservationIfNeeded()
-            self?.refreshRootView()
-        }
-        .store(in: &observationHandles)
-
-        store.session.graphStore.observe(\.entriesByID, options: WIObservationOptions.domDetailContent) { [weak self] _ in
-            self?.reconnectSelectedObservationIfNeeded()
-        }
-        .store(in: &observationHandles)
-
-        reconnectSelectedObservationIfNeeded()
-    }
-
-    private func refreshRootView() {
-        renderRefreshCount += 1
-        hostingController?.rootView = ElementDetailsMacRootView(store: store)
-        hostingController?.view.layoutSubtreeIfNeeded()
-        onRenderRefreshForTesting?(renderRefreshCount)
-    }
-
-    private func reconnectSelectedObservationIfNeeded() {
-        let selectedEntry = store.selectedEntry
-        let selectedStyle = selectedEntry?.style
-
-        if observedSelectedEntry === selectedEntry, observedSelectedStyle === selectedStyle {
-            return
-        }
-
-        selectedObservationHandles.removeAll()
-        observedSelectedEntry = selectedEntry
-        observedSelectedStyle = selectedStyle
-
-        guard let selectedEntry, let selectedStyle else {
-            refreshRootView()
-            return
-        }
-
-        selectedEntry.observe([\.preview, \.nodeValue, \.attributes, \.selectorPath]) { [weak self] in
-            self?.refreshRootView()
-        }
-        .store(in: &selectedObservationHandles)
-
-        selectedStyle.observe([\.loadState, \.matched, \.computed, \.errorMessage]) { [weak self] in
-            self?.refreshRootView()
-        }
-        .store(in: &selectedObservationHandles)
-
-        refreshRootView()
-    }
-
-    var testRenderRefreshCount: Int {
-        renderRefreshCount
     }
 }
 
@@ -130,17 +52,17 @@ private struct ElementDetailsMacRootView: View {
         let initialValue: String
 
         var id: String {
-            let nodeID = nodeID?.nodeID ?? 0
-            return "\(nodeID):\(name)"
+            let localID = nodeID?.localID ?? 0
+            return "\(localID):\(name)"
         }
     }
 
-    @Bindable var store: WIDOMStore
+    @Bindable var inspector: WIDOMModel
     @State private var attributeEditorState: AttributeEditorState?
     @State private var attributeEditorDraft = ""
 
     private var selectedEntry: DOMEntry? {
-        store.selectedEntry
+        inspector.selectedEntry
     }
 
     private var hasSelection: Bool {
@@ -150,29 +72,25 @@ private struct ElementDetailsMacRootView: View {
     var body: some View {
         if hasSelection {
             List {
-                if let errorMessage = store.errorMessage, !errorMessage.isEmpty {
+                if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
                     Section {
                         infoRow(message: errorMessage, color: .orange)
                     }
                 }
 
-                Section(LocalizedStringResource("dom.element.section.element", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("dom.element.section.element", bundle: .module)) {
                     previewRow
                 }
 
-                Section(LocalizedStringResource("dom.element.section.selector", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("dom.element.section.selector", bundle: .module)) {
                     selectorRow
                 }
 
-                Section(LocalizedStringResource("dom.element.section.styles", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
                     stylesSection
                 }
 
-                Section(wiLocalized("dom.element.section.computed", default: "Computed")) {
-                    computedSection
-                }
-
-                Section(LocalizedStringResource("dom.element.section.attributes", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
                     attributesSection
                 }
             }
@@ -194,7 +112,7 @@ private struct ElementDetailsMacRootView: View {
                             attributeEditorState = nil
                         }
                         Button(wiLocalized("save", default: "Save")) {
-                            store.updateAttributeValue(name: state.name, value: attributeEditorDraft)
+                            inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
                             attributeEditorState = nil
                         }
                         .keyboardShortcut(.defaultAction)
@@ -242,63 +160,31 @@ private struct ElementDetailsMacRootView: View {
 
     @ViewBuilder
     private var stylesSection: some View {
-        if selectedEntry?.style.isLoading == true && (selectedEntry?.style.matched.isEmpty ?? true) {
+        if selectedEntry?.isLoadingMatchedStyles == true {
             infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if selectedEntry?.style.matched.isEmpty ?? true {
+        } else if (selectedEntry?.matchedStyles ?? []).isEmpty {
             infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
         } else {
-            let matchedSections = selectedEntry?.style.matched.sections ?? []
-            let includeElementFallback = matchedSections.count > 1
-            ForEach(Array(matchedSections.enumerated()), id: \.offset) { _, section in
-                let sectionTitle = styleRuleSectionTitle(for: section, includeElementFallback: includeElementFallback)
-                ForEach(Array(section.rules.enumerated()), id: \.offset) { _, rule in
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let sectionTitle {
-                            Text(sectionTitle)
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.tertiary)
-                        }
-                        Text(rule.selectorText)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Text(styleRuleDetail(rule))
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .lineLimit(12)
-                    }
+            ForEach(Array((selectedEntry?.matchedStyles ?? []).enumerated()), id: \.offset) { _, rule in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(rule.selectorText)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(styleRuleDetail(rule))
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(12)
                 }
             }
 
-            if selectedEntry?.style.matched.isTruncated == true {
+            if selectedEntry?.matchedStylesTruncated == true {
                 infoRow(message: wiLocalized("dom.element.styles.truncated"), color: .secondary)
             }
-            if let blockedStylesheetCount = selectedEntry?.style.matched.blockedStylesheetCount,
-               blockedStylesheetCount > 0 {
+            if let blockedStylesheetCount = selectedEntry?.blockedStylesheetCount, blockedStylesheetCount > 0 {
                 infoRow(
                     message: "\(blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
                     color: .secondary
                 )
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var computedSection: some View {
-        if selectedEntry?.style.isLoading == true && (selectedEntry?.style.computed.isEmpty ?? true) {
-            infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if selectedEntry?.style.computed.isEmpty ?? true {
-            infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
-        } else {
-            ForEach(Array((selectedEntry?.style.computed.properties ?? []).enumerated()), id: \.offset) { _, property in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(property.name)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(property.value)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(6)
-                }
             }
         }
     }
@@ -329,20 +215,20 @@ private struct ElementDetailsMacRootView: View {
                         attributeEditorDraft = attribute.value
                     }
                     Button(wiLocalized("dom.element.attributes.delete", default: "Delete Attribute"), role: .destructive) {
-                        store.removeAttribute(name: attribute.name)
+                        inspector.removeAttribute(name: attribute.name)
                     }
                 }
             }
         }
     }
 
-    private func styleRuleDetail(_ rule: DOMStyleRule) -> String {
+    private func styleRuleDetail(_ rule: DOMMatchedStyleRule) -> String {
         var parts: [String] = []
-        if !rule.source.label.isEmpty {
-            parts.append(rule.source.label)
+        if !rule.sourceLabel.isEmpty {
+            parts.append(rule.sourceLabel)
         }
-        if !rule.groupings.isEmpty {
-            parts.append(contentsOf: rule.groupings.map(\.text))
+        if !rule.atRuleContext.isEmpty {
+            parts.append(contentsOf: rule.atRuleContext)
         }
         let declarations = rule.declarations.map { declaration in
             let importantSuffix = declaration.important ? " !important" : ""
@@ -352,24 +238,6 @@ private struct ElementDetailsMacRootView: View {
             parts.append(declarations)
         }
         return parts.joined(separator: "\n")
-    }
-
-    private func styleRuleSectionTitle(
-        for section: DOMStyleSection,
-        includeElementFallback: Bool
-    ) -> String? {
-        if let title = section.title, !title.isEmpty {
-            return title
-        }
-
-        switch section.kind {
-        case .element:
-            return includeElementFallback ? wiLocalized("dom.element.section.element") : nil
-        case .pseudoElement:
-            return "::pseudo-element"
-        case .inherited:
-            return "Inherited"
-        }
     }
 
     private func infoRow(message: String, color: Color) -> some View {
@@ -383,11 +251,15 @@ private struct ElementDetailsMacRootView: View {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Detail Empty (AppKit)") {
-    WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .empty))
+    WIAppKitPreviewContainer {
+        WIDOMDetailViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .empty))
+    }
 }
 
 #Preview("DOM Detail Selected (AppKit)") {
-    WIDOMDetailViewController(store: WIDOMPreviewFixtures.makeStore(mode: .selected))
+    WIAppKitPreviewContainer {
+        WIDOMDetailViewController(inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected))
+    }
 }
 #endif
 

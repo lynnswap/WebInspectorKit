@@ -1,12 +1,10 @@
 import Foundation
 import ObservationBridge
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
-import WebInspectorResources
 
 @MainActor
 @Observable public final class WINetworkDetailViewController: UIViewController, UICollectionViewDelegate {
@@ -31,12 +29,10 @@ import WebInspectorResources
         let itemIDs: [DetailItemID]
     }
 
-    private let store: WINetworkStore
+    private let inspector: WINetworkModel
     private let showsNavigationControls: Bool
     @ObservationIgnored private var observationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
-    package private(set) var snapshotApplyRevisionForTesting: UInt64 = 0
-    package var onSnapshotAppliedForTesting: (@MainActor (UInt64) -> Void)?
     @ObservationIgnored private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -47,20 +43,20 @@ import WebInspectorResources
     @ObservationIgnored private lazy var dataSource = makeDataSource()
     
     private var entry:NetworkEntry? {
-        store.selectedEntry
+        inspector.selectedEntry
     }
 
     public init(
-        store: WINetworkStore,
+        inspector: WINetworkModel,
         showsNavigationControls: Bool = true
     ) {
-        self.store = store
+        self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
-
-        display(store.selectedEntry)
-
-        store.observe(\.selectedEntry, options: [.removeDuplicates]) { [weak self] newValue in
+        
+        display(inspector.selectedEntry)
+        
+        inspector.observeTask(\.selectedEntry,options: [.removeDuplicates]) { [weak self] newValue in
             self?.display(newValue)
         }
         .store(in: &observationHandles)
@@ -168,7 +164,6 @@ import WebInspectorResources
         Task {
             let snapshot = self.makeSnapshot()
             await self.dataSource.apply(snapshot, animatingDifferences: false)
-            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -176,7 +171,6 @@ import WebInspectorResources
         Task {
             let snapshot = self.makeSnapshot()
             await self.dataSource.applySnapshotUsingReloadData(snapshot)
-            self.recordSnapshotApplyForTesting()
         }
     }
 
@@ -201,14 +195,6 @@ import WebInspectorResources
 
     private func requestSnapshotUpdate() {
         applySnapshotUsingReloadData()
-    }
-
-    private func recordSnapshotApplyForTesting() {
-        snapshotApplyRevisionForTesting &+= 1
-        if snapshotApplyRevisionForTesting == 0 {
-            snapshotApplyRevisionForTesting = 1
-        }
-        onSnapshotAppliedForTesting?(snapshotApplyRevisionForTesting)
     }
 
     private func makeRenderSections() -> [RenderSection] {
@@ -603,7 +589,7 @@ import WebInspectorResources
             return
         }
 
-        let preview = WINetworkBodyPreviewViewController(entry: entry, store: store, bodyState: body)
+        let preview = WINetworkBodyPreviewViewController(entry: entry, inspector: inspector, bodyState: body)
         if showsNavigationControls {
             navigationController?.pushViewController(preview, animated: true)
             return
@@ -707,7 +693,7 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
         }
         .store(in: &observationHandles)
 
-        body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState]) {
+        body.observe([\.preview, \.full, \.summary, \.formEntries, \.isBase64Encoded, \.isTruncated, \.fetchState, \.reference]) {
             [weak self, weak body] in
             guard let self, let body else { return }
             self.updateBodySecondaryText(makeSecondaryText(body))
@@ -752,12 +738,14 @@ private final class WINetworkDetailObservingListCell: UICollectionViewListCell {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Detail (UIKit)") {
-    guard let context = WINetworkPreviewFixtures.makeDetailContext() else {
-        return UIViewController()
+    WIUIKitPreviewContainer {
+        guard let context = WINetworkPreviewFixtures.makeDetailContext() else {
+            return UIViewController()
+        }
+        return UINavigationController(
+            rootViewController: WINetworkDetailViewController(inspector: context.inspector)
+        )
     }
-    return UINavigationController(
-        rootViewController: WINetworkDetailViewController(store: context.store)
-    )
 }
 #endif
 #endif

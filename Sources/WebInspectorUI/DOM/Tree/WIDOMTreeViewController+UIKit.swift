@@ -1,6 +1,6 @@
 import WebKit
-import WebInspectorCore
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 import ObservationBridge
 
 #if canImport(UIKit)
@@ -8,7 +8,7 @@ import UIKit
 
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
-    private let store: WIDOMStore
+    private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
     private var observationHandles: Set<ObservationHandle> = []
     // Keep coalescing here because navigation controls are driven by multiple observed states.
@@ -23,11 +23,11 @@ public final class WIDOMTreeViewController: UIViewController {
         )
     }()
 
-    public init(store: WIDOMStore, showsNavigationControls: Bool = true) {
-        self.store = store
+    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+        self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
-        store.setUIBridge(WIDOMPlatformBridge.shared)
         super.init(nibName: nil, bundle: nil)
+        
     }
 
     @available(*, unavailable)
@@ -39,7 +39,7 @@ public final class WIDOMTreeViewController: UIViewController {
         super.viewDidLoad()
         title = nil
 
-        let inspectorWebView = store.makeFrontendWebView()
+        let inspectorWebView = inspector.makeInspectorWebView()
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(inspectorWebView)
 
@@ -57,8 +57,8 @@ public final class WIDOMTreeViewController: UIViewController {
         }
 
         observeState()
+        updateErrorPresentation(errorMessage: inspector.errorMessage)
         updateNavigationControls()
-        updateErrorPresentation()
     }
 
     private var pickSymbolName: String {
@@ -74,29 +74,29 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = store.selectedEntry != nil
-        let hasPageWebView = store.hasPageWebView
+        let hasSelection = inspector.selectedEntry != nil
+        let hasPageWebView = inspector.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.store.copySelection(.html)
+                self?.inspector.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.store.copySelection(.selectorPath)
+                self?.inspector.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.store.copySelection(.xpath)
+                self?.inspector.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 guard let self else { return }
                 Task {
-                    await self.store.reloadFrontend()
+                    await self.inspector.reloadInspector()
                 }
             },
             onReloadPage: { [weak self] in
-                self?.store.session.reloadPage()
+                self?.inspector.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -105,39 +105,32 @@ public final class WIDOMTreeViewController: UIViewController {
     }
 
     private func observeState() {
-        store.observe(
+        inspector.observe(
+            \.errorMessage,
+            options: [.removeDuplicates]
+        ) { [weak self] newErrorMessage in
+            self?.updateErrorPresentation(errorMessage: newErrorMessage)
+        }
+        .store(in: &observationHandles)
+        inspector.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        store.observe(
+        inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &observationHandles)
-        store.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.updateErrorPresentation()
-        }
-        .store(in: &observationHandles)
-        store.session.graphStore.observe(
+        inspector.session.graphStore.observe(
             \.selectedID,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()
-        }
-        .store(in: &observationHandles)
-        store.session.graphStore.observe(
-            \.rootID,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.updateErrorPresentation()
         }
         .store(in: &observationHandles)
     }
@@ -148,54 +141,51 @@ public final class WIDOMTreeViewController: UIViewController {
         }
     }
 
+    private func updateErrorPresentation(errorMessage: String?) {
+        if let errorMessage, !errorMessage.isEmpty {
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.text = errorMessage
+            configuration.image = UIImage(systemName: "exclamationmark.triangle")
+            contentUnavailableConfiguration = configuration
+        } else {
+            contentUnavailableConfiguration = nil
+        }
+    }
+
     private func updateNavigationControls() {
         if showsNavigationControls {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = store.hasPageWebView
+            pickItem.isEnabled = inspector.hasPageWebView
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = store.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
     }
 
-    private func updateErrorPresentation() {
-        guard let errorMessage = store.errorMessage,
-              errorMessage.isEmpty == false,
-              store.session.graphStore.rootID == nil else {
-            contentUnavailableConfiguration = nil
-            navigationItem.prompt = nil
-            return
-        }
-
-        var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.text = String(localized: "Unable to Load DOM")
-        configuration.secondaryText = errorMessage
-        contentUnavailableConfiguration = configuration
-        navigationItem.prompt = errorMessage
-    }
-
     @objc
     private func toggleSelectionMode() {
-        store.toggleSelectionMode()
+        inspector.toggleSelectionMode()
     }
 
     @objc
     private func deleteNode() {
-        store.deleteSelectedNode(undoManager: undoManager)
+        inspector.deleteSelectedNode(undoManager: undoManager)
     }
 }
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("DOM Tree (UIKit)") {
-    UINavigationController(
-        rootViewController: WIDOMTreeViewController(
-            store: WIDOMPreviewFixtures.makeStore(mode: .selected)
+    WIUIKitPreviewContainer {
+        UINavigationController(
+            rootViewController: WIDOMTreeViewController(
+                inspector: WIDOMPreviewFixtures.makeInspector(mode: .selected)
+            )
         )
-    )
+    }
 }
 #endif
 

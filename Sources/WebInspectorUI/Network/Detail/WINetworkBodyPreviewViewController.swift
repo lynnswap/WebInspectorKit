@@ -2,10 +2,8 @@
 import Foundation
 import ObservationBridge
 import UIKit
-import WebInspectorResources
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 
 @MainActor
 public final class WINetworkBodyPreviewViewController: UIViewController, UICollectionViewDelegate {
@@ -37,7 +35,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private let entry: NetworkEntry
-    private let store: WINetworkStore
+    private let inspector: WINetworkModel
     private let bodyState: NetworkBody
 
     private var mode: NetworkBodyPreviewRenderModel.Mode = .text
@@ -73,9 +71,9 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         return view
     }()
 
-    public init(entry: NetworkEntry, store: WINetworkStore, bodyState: NetworkBody) {
+    public init(entry: NetworkEntry, inspector: WINetworkModel, bodyState: NetworkBody) {
         self.entry = entry
-        self.store = store
+        self.inspector = inspector
         self.bodyState = bodyState
         super.init(nibName: nil, bundle: nil)
     }
@@ -207,7 +205,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     private func startObservingBodyState() {
         bodyObservationHandles.removeAll()
-        bodyState.observe(
+        bodyState.observeTask(
             [
                 \.kind,
                 \.preview,
@@ -216,6 +214,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
                 \.isBase64Encoded,
                 \.isTruncated,
                 \.summary,
+                \.reference,
                 \.formEntries,
                 \.fetchState
             ]
@@ -599,27 +598,31 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Body Preview Object Tree (UIKit)") {
-    guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: false) else {
-        return UIViewController()
+    WIUIKitPreviewContainer {
+        guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: false) else {
+            return UIViewController()
+        }
+        let preview = WINetworkBodyPreviewViewController(
+            entry: context.entry,
+            inspector: context.inspector,
+            bodyState: context.body
+        )
+        return UINavigationController(rootViewController: preview)
     }
-    let preview = WINetworkBodyPreviewViewController(
-        entry: context.entry,
-        store: context.store,
-        bodyState: context.body
-    )
-    return UINavigationController(rootViewController: preview)
 }
 
 #Preview("Network Body Preview Text (UIKit)") {
-    guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: true) else {
-        return UIViewController()
+    WIUIKitPreviewContainer {
+        guard let context = WINetworkPreviewFixtures.makeBodyPreviewContext(textMode: true) else {
+            return UIViewController()
+        }
+        let preview = WINetworkBodyPreviewViewController(
+            entry: context.entry,
+            inspector: context.inspector,
+            bodyState: context.body
+        )
+        return UINavigationController(rootViewController: preview)
     }
-    let preview = WINetworkBodyPreviewViewController(
-        entry: context.entry,
-        store: context.store,
-        bodyState: context.body
-    )
-    return UINavigationController(rootViewController: preview)
 }
 #endif
 #endif

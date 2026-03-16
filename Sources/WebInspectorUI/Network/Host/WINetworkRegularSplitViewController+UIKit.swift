@@ -1,28 +1,28 @@
 import Foundation
-import WebInspectorCore
+import WebInspectorRuntime
 
 #if canImport(UIKit)
 import UIKit
 
 @MainActor
 final class WINetworkRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let store: WINetworkStore
+    private let inspector: WINetworkModel
 
     private let listPaneViewController: WINetworkListViewController
     private let listNavigationController: UINavigationController
     private let detailViewController: WINetworkDetailViewController
     private let detailNavigationController: UINavigationController
 
-    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
-        self.store = store
-        let listPaneViewController = WINetworkListViewController(store: store, queryModel: queryModel)
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+        self.inspector = inspector
+        let listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
         self.listPaneViewController = listPaneViewController
         let listNavigationController = UINavigationController(rootViewController: listPaneViewController)
         wiApplyClearNavigationBarStyle(to: listNavigationController)
         listNavigationController.navigationBar.prefersLargeTitles = false
         self.listNavigationController = listNavigationController
         let detailViewController = WINetworkDetailViewController(
-            store: store,
+            inspector: inspector,
             showsNavigationControls: false
         )
         self.detailViewController = detailViewController
@@ -81,7 +81,7 @@ final class WINetworkRegularSplitViewController: UISplitViewController, UISplitV
         _ splitViewController: UISplitViewController,
         topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column
     ) -> UISplitViewController.Column {
-        if store.selectedEntry == nil {
+        if inspector.selectedEntry == nil {
             return .primary
         }
         return proposedTopColumn

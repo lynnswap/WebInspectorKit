@@ -7,7 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
+			77B94B4A0F2A4D0A8B64C01A /* MachOKit in Frameworks */ = {isa = PBXBuildFile; productRef = 77B94B4C0F2A4D0A8B64C01A /* MachOKit */; };
+			ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -26,25 +27,26 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MiniBrowserTests;
-			sourceTree = "<group>";
-		};
-		ABA353CA2EDFF1EC00489A00 /* MiniBrowser */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MiniBrowser;
-			sourceTree = "<group>";
-		};
+			77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */ = {
+				isa = PBXFileSystemSynchronizedRootGroup;
+				path = MiniBrowserTests;
+				sourceTree = "<group>";
+			};
+			ABA353CA2EDFF1EC00489A00 /* MiniBrowser */ = {
+				isa = PBXFileSystemSynchronizedRootGroup;
+				path = MiniBrowser;
+				sourceTree = "<group>";
+			};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		ABA353C52EDFF1EC00489A00 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
-			);
+			ABA353C52EDFF1EC00489A00 /* Frameworks */ = {
+				isa = PBXFrameworksBuildPhase;
+				buildActionMask = 2147483647;
+				files = (
+					77B94B4A0F2A4D0A8B64C01A /* MachOKit in Frameworks */,
+					ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
+				);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		ABA353D22EDFF1ED00489A00 /* Frameworks */ = {
@@ -59,11 +61,11 @@
 /* Begin PBXGroup section */
 		ABA353BF2EDFF1EC00489A00 = {
 			isa = PBXGroup;
-			children = (
-				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
-				77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
-				ABA353C92EDFF1EC00489A00 /* Products */,
-			);
+				children = (
+					ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
+					77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
+					ABA353C92EDFF1EC00489A00 /* Products */,
+				);
 			sourceTree = "<group>";
 		};
 		ABA353C92EDFF1EC00489A00 /* Products */ = {
@@ -90,13 +92,14 @@
 			);
 			dependencies = (
 			);
-			fileSystemSynchronizedGroups = (
-				ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
-			);
-			name = MiniBrowser;
-			packageProductDependencies = (
-				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
-			);
+				fileSystemSynchronizedGroups = (
+					ABA353CA2EDFF1EC00489A00 /* MiniBrowser */,
+				);
+				name = MiniBrowser;
+				packageProductDependencies = (
+					77B94B4C0F2A4D0A8B64C01A /* MachOKit */,
+					ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
+				);
 			productName = MiniBrowser;
 			productReference = ABA353C82EDFF1EC00489A00 /* MiniBrowser.app */;
 			productType = "com.apple.product-type.application";
@@ -111,15 +114,15 @@
 			);
 			buildRules = (
 			);
-			dependencies = (
-				ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
-			);
-			name = MiniBrowserTests;
-			packageProductDependencies = (
-			);
+				dependencies = (
+					ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
+				);
+				fileSystemSynchronizedGroups = (
+					77B94B4D0F2A4D0A8B64C01A /* MiniBrowserTests */,
+				);
+				name = MiniBrowserTests;
+				packageProductDependencies = (
+				);
 			productName = MiniBrowserTests;
 			productReference = ABA353D52EDFF1ED00489A00 /* MiniBrowserTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -132,7 +135,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2610;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2610;
 				TargetAttributes = {
 					ABA353C72EDFF1EC00489A00 = {
 						CreatedOnToolsVersion = 26.1.1;
@@ -152,9 +155,10 @@
 			);
 			mainGroup = ABA353BF2EDFF1EC00489A00;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
-			);
+				packageReferences = (
+					77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */,
+					ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
+				);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ABA353C92EDFF1EC00489A00 /* Products */;
 			projectDirPath = "";
@@ -243,7 +247,6 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -267,7 +270,6 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -308,7 +310,6 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -325,7 +326,6 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_STRICT_CONCURRENCY = complete;
 			};
@@ -339,7 +339,6 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++2b";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -366,10 +365,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -384,6 +383,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MiniBrowser/MiniBrowser-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -400,7 +400,6 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++2b";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -427,10 +426,10 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -445,6 +444,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MiniBrowser/MiniBrowser-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -459,7 +459,6 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
@@ -486,7 +485,6 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 58KPFKMJJW;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
@@ -540,16 +538,32 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ..;
-		};
+			ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */ = {
+				isa = XCLocalSwiftPackageReference;
+				relativePath = ..;
+			};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+			77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */ = {
+				isa = XCRemoteSwiftPackageReference;
+				repositoryURL = "https://github.com/p-x9/MachOKit";
+				requirement = {
+					kind = exactVersion;
+					version = 0.46.1;
+				};
+			};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
-		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = WebInspectorKit;
+			77B94B4C0F2A4D0A8B64C01A /* MachOKit */ = {
+				isa = XCSwiftPackageProductDependency;
+				package = 77B94B4B0F2A4D0A8B64C01A /* XCRemoteSwiftPackageReference "MachOKit" */;
+				productName = MachOKit;
+			};
+			ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
+				isa = XCSwiftPackageProductDependency;
+				productName = WebInspectorKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

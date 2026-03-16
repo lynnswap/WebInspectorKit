@@ -8,14 +8,17 @@ Web Inspector for `WKWebView` (iOS / macOS).
 
 ## Products
 
-- `WebInspectorKit`: the only public product. It re-exports the session controller, typed panel model, DOM/Network stores, and container UI.
+- `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
+- `WebInspectorEngine` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
+
+`WebInspectorKit` depends on `WebInspectorEngine`.
 
 ## Features
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
 - Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
-- Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Explicit lifecycle via `WIModel` (`connect(to:)`, `suspend()`, `disconnect()`)
 
 ## Requirements
 
@@ -34,11 +37,11 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let sessionController = WISessionController()
+    private let inspector = WIModel()
 
     @objc private func presentInspector() {
-        let container = WIContainerViewController(
-            sessionController,
+        let container = WITabViewController(
+            inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
         )
@@ -52,7 +55,7 @@ final class BrowserViewController: UIViewController {
 }
 ```
 
-On iOS, `WIContainerViewController` defaults to `DOM + Network`.
+On iOS, `WITabViewController` defaults to `DOM + Network`.
 
 - `compact` (`horizontalSizeClass == .compact`): `DOM`, `Element` (auto inserted when missing), `Network`
 - `regular/unspecified` (`horizontalSizeClass != .compact`): `DOM` (split DOM + Element), `Network`
@@ -61,7 +64,7 @@ On iOS, `WIContainerViewController` defaults to `DOM + Network`.
 - `compact`: hosted by `UITabBarController`; each tab root is wrapped in `UINavigationController`.
 - `regular/unspecified`: hosted by `UINavigationController` with a centered segmented tab switcher.
 - Network search/filter use standard UIKit navigation APIs (`UISearchController`, `UIBarButtonItem` menu).
-- `WIContainerViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
+- `WITabViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
 
 ### AppKit
 
@@ -72,11 +75,11 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let sessionController = WISessionController()
+    let inspector = WIModel()
 
     @objc func presentInspector() {
-        let container = WIContainerViewController(
-            sessionController,
+        let container = WITabViewController(
+            inspector,
             webView: pageWebView,
             tabs: [.dom(), .network()]
         )
@@ -93,9 +96,9 @@ final class BrowserWindowController: NSWindowController {
 
 ```swift
 let customTab = WITab(
-    id: "my_custom_tab",
     title: "Custom",
     image: nil,
+    identifier: "my_custom_tab",
     role: .other
 ) { tab in
     _ = tab
@@ -106,16 +109,22 @@ let customTab = WITab(
     #endif
 }
 
-let container = WIContainerViewController(
-    sessionController,
+let container = WITabViewController(
+    inspector,
     webView: pageWebView,
     tabs: [.dom(), .network(), customTab]
 )
 ```
 
+## Testing
+
+- `swift test`
+- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run test`
+- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run typecheck`
+
 ## Migration
 
-See [`MIGRATION.md`](Docs/MIGRATION.md) for current breaking changes and target reorganization notes.
+See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
 
 ## License
 

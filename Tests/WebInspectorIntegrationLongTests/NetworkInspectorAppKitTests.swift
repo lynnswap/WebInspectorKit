@@ -1,153 +1,107 @@
 import Foundation
 import Testing
-import WebInspectorKit
+import WebInspectorTestSupport
 @testable import WebInspectorUI
-@testable import WebInspectorCore
-@testable import WebInspectorCore
+@testable import WebInspectorEngine
+@testable import WebInspectorRuntime
 
 #if canImport(AppKit)
 import AppKit
 
 @MainActor
 
-@Suite(.serialized, .webKitIsolated)
+
 struct NetworkInspectorAppKitTests {
     @Test
     func networkTabDoesNotAutoSelectEntryWhenEntriesExist() throws {
-        let store = WINetworkStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(store: store)
+        let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
-            to: store,
+            to: inspector,
             requestID: 101,
             url: "https://example.com/first",
             initiator: "document",
             monotonicMs: 1_000
         )
         try applyRequestStart(
-            to: store,
+            to: inspector,
             requestID: 102,
             url: "https://example.com/second",
             initiator: "script",
             monotonicMs: 1_010
         )
 
-        let controller = WINetworkViewController(store: store, queryModel: queryModel)
+        let controller = WINetworkViewController(inspector: inspector)
         controller.loadViewIfNeeded()
 
-        #expect(store.selectedEntry == nil)
+        #expect(inspector.selectedEntry == nil)
     }
 
     @Test
     func networkTabUpdatesDetailWhenSelectionChanges() throws {
-        let store = WINetworkStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(store: store)
+        let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
-            to: store,
+            to: inspector,
             requestID: 111,
             url: "https://example.com/first",
             initiator: "document",
             monotonicMs: 1_000
         )
         try applyRequestStart(
-            to: store,
+            to: inspector,
             requestID: 112,
             url: "https://example.com/second",
             initiator: "script",
             monotonicMs: 1_010
         )
 
-        let controller = WINetworkViewController(store: store, queryModel: queryModel)
+        let controller = WINetworkViewController(inspector: inspector)
         controller.loadViewIfNeeded()
         let selected = try #require(
-            queryModel.displayEntries.first(where: { $0.requestID == 112 })
+            inspector.displayEntries.first(where: { $0.requestID == 112 })
         )
 
-        store.selectEntry(selected)
+        inspector.selectEntry(selected)
 
-        #expect(store.selectedEntry?.id == selected.id)
+        #expect(inspector.selectedEntry?.id == selected.id)
     }
 
     @Test
     func networkTabLifecycleCanRepeatWithoutLeaking() async throws {
-        let store = WINetworkStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(store: store)
+        let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
-            to: store,
+            to: inspector,
             requestID: 201,
             url: "https://example.com/resource.js",
             initiator: "script",
             monotonicMs: 1_000
         )
 
-        var controller: WINetworkViewController? = WINetworkViewController(
-            store: store,
-            queryModel: queryModel
-        )
+        var controller: WINetworkViewController? = WINetworkViewController(inspector: inspector)
         weak let weakController = controller
         controller?.loadViewIfNeeded()
         let lifecycleTask = Task { @MainActor in
             for _ in 0..<8 {
                 controller?.viewWillAppear()
+                await Task.yield()
                 controller?.viewDidDisappear()
+                await Task.yield()
             }
         }
-        await lifecycleTask.value
+        let completed = await valueWithinTimeout(seconds: 10) {
+            await lifecycleTask.value
+            return true
+        }
+        #expect(completed == true)
 
         controller = nil
+        for _ in 0..<8 {
+            await Task.yield()
+        }
         #expect(weakController == nil)
     }
 
-    @Test
-    func networkContainerCloseResetsStoreState() throws {
-        let container = WINetworkContainerViewController()
-        let window = NSWindow(contentViewController: container)
-        container.loadViewIfNeeded()
-        try applyRequestStart(
-            to: container.store,
-            requestID: 301,
-            url: "https://example.com/close-reset.json",
-            initiator: "fetch",
-            monotonicMs: 1_000
-        )
-        let selectedEntry = try #require(container.store.store.entries.first)
-        container.store.selectEntry(selectedEntry)
-
-        #expect(container.store.store.entries.count == 1)
-        #expect(container.store.selectedEntry?.id == selectedEntry.id)
-
-        window.orderOut(nil)
-        window.contentViewController = nil
-        container.viewDidDisappear()
-
-        #expect(container.store.store.entries.isEmpty)
-        #expect(container.store.selectedEntry == nil)
-        #expect(container.sessionController.networkStore.session.mode == .stopped)
-    }
-
-    @Test
-    func standaloneNetworkViewCloseDoesNotResetOwnedStore() throws {
-        let store = WINetworkStore(session: WINetworkRuntime())
-        let queryModel = WINetworkQueryState(store: store)
-        let controller = WINetworkViewController(store: store, queryModel: queryModel)
-        let window = NSWindow(contentViewController: controller)
-        controller.loadViewIfNeeded()
-        try applyRequestStart(
-            to: store,
-            requestID: 302,
-            url: "https://example.com/pure-view.json",
-            initiator: "fetch",
-            monotonicMs: 1_000
-        )
-
-        window.orderOut(nil)
-        window.contentViewController = nil
-        controller.viewDidDisappear()
-
-        #expect(store.store.entries.count == 1)
-    }
-
     private func applyRequestStart(
-        to store: WINetworkStore,
+        to inspector: WINetworkModel,
         requestID: Int,
         url: String,
         initiator: String,
@@ -165,7 +119,7 @@ struct NetworkInspectorAppKitTests {
             ]
         ]
         let event = try decodeEvent(payload)
-        store.store.applyEvent(event)
+        inspector.store.applyEvent(event)
     }
 
     private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> HTTPNetworkEvent {

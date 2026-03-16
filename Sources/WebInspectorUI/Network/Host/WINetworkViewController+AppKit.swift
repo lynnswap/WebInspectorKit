@@ -1,31 +1,29 @@
 import Foundation
-import WebInspectorCore
-import WebInspectorResources
-import WebInspectorCore
+import WebInspectorEngine
+import WebInspectorRuntime
 
 #if canImport(AppKit)
 import AppKit
-import WebInspectorResources
 import SwiftUI
 
 @MainActor
 public final class WINetworkViewController: NSSplitViewController {
     private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.NetworkSplitView")
 
-    private let store: WINetworkStore
-    private let queryModel: WINetworkQueryState
+    private let inspector: WINetworkModel
+    private let queryModel: WINetworkQueryModel
     private var listHostingController: NSHostingController<NetworkMacListTab>?
     private var detailViewController: NetworkMacDetailViewController?
 
-    public convenience init(store: WINetworkStore) {
+    public convenience init(inspector: WINetworkModel) {
         self.init(
-            store: store,
-            queryModel: WINetworkQueryState(store: store)
+            inspector: inspector,
+            queryModel: WINetworkQueryModel(inspector: inspector)
         )
     }
 
-    init(store: WINetworkStore, queryModel: WINetworkQueryState) {
-        self.store = store
+    init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
+        self.inspector = inspector
         self.queryModel = queryModel
         super.init(nibName: nil, bundle: nil)
     }
@@ -38,10 +36,10 @@ public final class WINetworkViewController: NSSplitViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         splitView.autosaveName = Self.splitViewAutosaveName
-        store.selectEntry(nil)
+        inspector.selectEntry(nil)
 
-        let listHost = NSHostingController(rootView: NetworkMacListTab(store: store, queryModel: queryModel))
-        let detailController = NetworkMacDetailViewController(store: store)
+        let listHost = NSHostingController(rootView: NetworkMacListTab(inspector: inspector, queryModel: queryModel))
+        let detailController = NetworkMacDetailViewController(inspector: inspector)
         listHostingController = listHost
         detailViewController = detailController
 
@@ -63,11 +61,11 @@ public final class WINetworkViewController: NSSplitViewController {
 
 @MainActor
 private final class NetworkMacDetailViewController: NSViewController {
-    private let store: WINetworkStore
+    private let inspector: WINetworkModel
     private var hostingController: NSHostingController<NetworkMacDetailTab>?
 
-    init(store: WINetworkStore) {
-        self.store = store
+    init(inspector: WINetworkModel) {
+        self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -83,7 +81,7 @@ private final class NetworkMacDetailViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let hostingController = NSHostingController(rootView: NetworkMacDetailTab(store: store))
+        let hostingController = NSHostingController(rootView: NetworkMacDetailTab(inspector: inspector))
         self.hostingController = hostingController
         addChild(hostingController)
         let hostedView = hostingController.view
@@ -103,16 +101,16 @@ private final class NetworkMacDetailViewController: NSViewController {
 
 @MainActor
 private struct NetworkMacListTab: View {
-    @Bindable var store: WINetworkStore
-    @Bindable var queryModel: WINetworkQueryState
+    @Bindable var inspector: WINetworkModel
+    @Bindable var queryModel: WINetworkQueryModel
 
     var body: some View {
         Group {
-            if queryModel.displayEntries.isEmpty {
+            if inspector.displayEntries.isEmpty {
                 emptyState
             } else {
-                Table(queryModel.displayEntries, selection: tableSelection) {
-                    TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .webInspectorResources))) { entry in
+                Table(inspector.displayEntries, selection: tableSelection) {
+                    TableColumn(Text(LocalizedStringResource("network.table.column.request", bundle: .module))) { entry in
                         Text(entry.displayName)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -120,7 +118,7 @@ private struct NetworkMacListTab: View {
                     }
                     .width(min: 220, ideal: 320)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.status", bundle: .webInspectorResources))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.status", bundle: .module))) { entry in
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(networkStatusColor(for: entry.statusSeverity))
@@ -132,25 +130,25 @@ private struct NetworkMacListTab: View {
                     }
                     .width(min: 92, ideal: 120)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.method", bundle: .webInspectorResources))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.method", bundle: .module))) { entry in
                         Text(entry.method)
                             .font(.footnote.monospaced())
                     }
                     .width(min: 80, ideal: 96)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.type", bundle: .webInspectorResources))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.type", bundle: .module))) { entry in
                         Text(entry.fileTypeLabel)
                             .font(.footnote.monospaced())
                     }
                     .width(min: 88, ideal: 110)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.duration", bundle: .webInspectorResources))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.duration", bundle: .module))) { entry in
                         Text(entry.duration.map(entry.durationText(for:)) ?? "-")
                             .font(.footnote)
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn(Text(LocalizedStringResource("network.table.column.size", bundle: .webInspectorResources))) { entry in
+                    TableColumn(Text(LocalizedStringResource("network.table.column.size", bundle: .module))) { entry in
                         Text(entry.encodedBodyLength.map(entry.sizeText(for:)) ?? "-")
                             .font(.footnote.monospaced())
                     }
@@ -168,8 +166,8 @@ private struct NetworkMacListTab: View {
                 .foregroundStyle(.secondary)
         } description: {
             VStack(spacing: 4) {
-                Text(LocalizedStringResource("network.empty.title", bundle: .webInspectorResources))
-                Text(LocalizedStringResource("network.empty.description", bundle: .webInspectorResources))
+                Text(LocalizedStringResource("network.empty.title", bundle: .module))
+                Text(LocalizedStringResource("network.empty.description", bundle: .module))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -180,15 +178,15 @@ private struct NetworkMacListTab: View {
     private var tableSelection: Binding<Set<UUID>> {
         Binding(
             get: {
-                guard let selected = store.selectedEntry?.id else {
+                guard let selected = inspector.selectedEntry?.id else {
                     return []
                 }
                 return [selected]
             },
             set: { newSelection in
                 let selected = newSelection.first
-                let selectedEntry = queryModel.displayEntries.first(where: { $0.id == selected })
-                store.selectEntry(selectedEntry)
+                let selectedEntry = inspector.displayEntries.first(where: { $0.id == selected })
+                inspector.selectEntry(selectedEntry)
             }
         )
     }
@@ -196,45 +194,45 @@ private struct NetworkMacListTab: View {
 
 @MainActor
 private struct NetworkMacDetailTab: View {
-    @Bindable var store: WINetworkStore
+    @Bindable var inspector: WINetworkModel
 
     private var entry: NetworkEntry? {
-        store.selectedEntry
+        inspector.selectedEntry
     }
 
     private var hasEntries: Bool {
-        !store.store.entries.isEmpty
+        !inspector.store.entries.isEmpty
     }
 
     var body: some View {
         if let entry {
             List {
-                Section(LocalizedStringResource("network.detail.section.overview", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("network.detail.section.overview", bundle: .module)) {
                     overviewRow(for: entry)
                 }
 
-                Section(LocalizedStringResource("network.section.request", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("network.section.request", bundle: .module)) {
                     headersRows(entry.requestHeaders)
                 }
 
                 if let requestBody = entry.requestBody {
-                    Section(LocalizedStringResource("network.section.body.request", bundle: .webInspectorResources)) {
+                    Section(LocalizedStringResource("network.section.body.request", bundle: .module)) {
                         bodyRow(entry: entry, body: requestBody)
                     }
                 }
 
-                Section(LocalizedStringResource("network.section.response", bundle: .webInspectorResources)) {
+                Section(LocalizedStringResource("network.section.response", bundle: .module)) {
                     headersRows(entry.responseHeaders)
                 }
 
                 if let responseBody = entry.responseBody {
-                    Section(LocalizedStringResource("network.section.body.response", bundle: .webInspectorResources)) {
+                    Section(LocalizedStringResource("network.section.body.response", bundle: .module)) {
                         bodyRow(entry: entry, body: responseBody)
                     }
                 }
 
                 if let error = entry.errorDescription, !error.isEmpty {
-                    Section(LocalizedStringResource("network.section.error", bundle: .webInspectorResources)) {
+                    Section(LocalizedStringResource("network.section.error", bundle: .module)) {
                         errorRow(error)
                     }
                 }
@@ -256,8 +254,8 @@ private struct NetworkMacDetailTab: View {
                     .foregroundStyle(.secondary)
             } description: {
                 VStack(spacing: 4) {
-                    Text(LocalizedStringResource("network.empty.title", bundle: .webInspectorResources))
-                    Text(LocalizedStringResource("network.empty.description", bundle: .webInspectorResources))
+                    Text(LocalizedStringResource("network.empty.title", bundle: .module))
+                    Text(LocalizedStringResource("network.empty.description", bundle: .module))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -296,7 +294,7 @@ private struct NetworkMacDetailTab: View {
     @ViewBuilder
     private func headersRows(_ headers: NetworkHeaders) -> some View {
         if headers.isEmpty {
-            Text(LocalizedStringResource("network.headers.empty", bundle: .webInspectorResources))
+            Text(LocalizedStringResource("network.headers.empty", bundle: .module))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         } else {
@@ -458,11 +456,15 @@ private func decodedBodyText(from body: NetworkBody) -> String? {
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
 #Preview("Network Root (AppKit)") {
-    WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .root))
+    WIAppKitPreviewContainer {
+        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .root))
+    }
 }
 
 #Preview("Network Root Long Title (AppKit)") {
-    WINetworkViewController(store: WINetworkPreviewFixtures.makeStore(mode: .rootLongTitle))
+    WIAppKitPreviewContainer {
+        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .rootLongTitle))
+    }
 }
 #endif
 
