@@ -10,11 +10,11 @@ protocol WITransportPlatformBackend: AnyObject {
     func detach()
     func sendRootMessage(_ message: String) throws
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload?
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data?
 }
 
 extension WITransportPlatformBackend {
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload? {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
         _ = scope
         _ = method
         return nil
@@ -22,8 +22,8 @@ extension WITransportPlatformBackend {
 }
 
 struct WITransportBackendMessageHandlers {
-    let handleRootMessage: (String, Any?) -> Void
-    let handlePageMessage: (String, Any?, String) -> Void
+    let handleRootMessage: (String) -> Void
+    let handlePageMessage: (String, String) -> Void
     let handleFatalFailure: (String) -> Void
     let waitForPendingMessagesForTesting: (() -> Void)?
 }
@@ -116,7 +116,7 @@ private final class WITransportIOSPlatformBackend: WITransportPlatformBackend {
         try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
     }
 
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload? {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
         WITransportCompatibilityResponse.pageCompatibilityResponse(
             scope: scope,
             method: method,
@@ -160,7 +160,7 @@ final class WITransportMacNativeInspectorPlatformBackend: WITransportPlatformBac
         try endpoint.sendPageMessage(message, targetIdentifier: targetIdentifier, outerIdentifier: outerIdentifier)
     }
 
-    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> WITransportPayload? {
+    func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
         WITransportCompatibilityResponse.pageCompatibilityResponse(
             scope: scope,
             method: method,
@@ -174,15 +174,15 @@ private enum WITransportCompatibilityResponse {
         scope: WITransportTargetScope,
         method: String,
         allowsCSSEnableCompatibilityResponse: Bool
-    ) -> WITransportPayload? {
+    ) -> Data? {
         guard scope == .page else {
             return nil
         }
         if method == WITransportCommands.DOM.Enable.method {
-            return .object([:])
+            return Data("{}".utf8)
         }
         if allowsCSSEnableCompatibilityResponse && method == "CSS.enable" {
-            return .object([:])
+            return Data("{}".utf8)
         }
         return nil
     }

@@ -132,12 +132,6 @@ private extension DOMProtocolRouter {
             method = try container.decode(String.self, forKey: .method)
             params = try container.decodeIfPresent(JSONValue.self, forKey: .params) ?? .object([:])
         }
-
-        init(id: Int, method: String, params: JSONValue) {
-            self.id = id
-            self.method = method
-            self.params = params
-        }
     }
 
     struct ProtocolIdentifier: Decodable {
@@ -246,26 +240,10 @@ private extension DOMProtocolRouter {
         guard let payload else {
             return nil
         }
-
-        if let dictionary = transportDictionary(from: payload),
-           let request = decodeRequest(from: dictionary) {
-            return request
-        }
-
         guard let data = payloadData(from: payload) else {
             return nil
         }
         return try? JSONDecoder().decode(ProtocolRequest.self, from: data)
-    }
-
-    func decodeRequest(from dictionary: [String: Any]) -> ProtocolRequest? {
-        guard let identifier = parseIdentifierValue(dictionary["id"]),
-              let method = transportString(from: dictionary["method"]) else {
-            return nil
-        }
-
-        let paramsValue = jsonValue(from: dictionary["params"]) ?? .object([:])
-        return ProtocolRequest(id: identifier, method: method, params: paramsValue)
     }
 
     func decodeRequestIdentifier(from payload: Any?) -> Int? {

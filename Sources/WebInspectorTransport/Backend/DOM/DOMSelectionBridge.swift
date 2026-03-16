@@ -52,15 +52,8 @@ final class DOMSelectionBridge: DOMSelectionBridging {
             in: nil,
             contentWorld: Self.selectionWorld
         )
-
-        guard let dictionary = transportDictionary(from: rawResult),
-              let cancelled = transportBool(from: dictionary["cancelled"]),
-              let requiredDepth = transportInt(from: dictionary["requiredDepth"]) else {
-            let data = try serializePayload(rawResult)
-            return try JSONDecoder().decode(DOMSelectionModeResult.self, from: data)
-        }
-
-        return DOMSelectionModeResult(cancelled: cancelled, requiredDepth: requiredDepth)
+        let data = try serializePayload(rawResult)
+        return try JSONDecoder().decode(DOMSelectionModeResult.self, from: data)
     }
 
     func cancelSelection(on webView: WKWebView) async {

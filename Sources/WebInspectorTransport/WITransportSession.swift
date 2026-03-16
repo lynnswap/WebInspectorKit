@@ -96,26 +96,17 @@ public final class WITransportSession {
             try await backend.attach(
                 to: webView,
                 messageHandlers: WITransportBackendMessageHandlers(
-                    handleRootMessage: { [router] message, parsedMessage in
-                        let parsedPayload = parsedMessage.map(WITransportPayload.object)
+                    handleRootMessage: { [router] message in
                         inboundMessageGroup.enter()
-                        Task {
-                            await router.handleIncomingRootMessage(
-                                message,
-                                parsedPayload: parsedPayload
-                            )
+                        Task.detached {
+                            await router.handleIncomingRootMessage(message)
                             inboundMessageGroup.leave()
                         }
                     },
-                    handlePageMessage: { [router] message, parsedMessage, targetIdentifier in
-                        let parsedPayload = parsedMessage.map(WITransportPayload.object)
+                    handlePageMessage: { [router] message, targetIdentifier in
                         inboundMessageGroup.enter()
-                        Task {
-                            await router.handleIncomingPageMessage(
-                                message,
-                                parsedPayload: parsedPayload,
-                                targetIdentifier: targetIdentifier
-                            )
+                        Task.detached {
+                            await router.handleIncomingPageMessage(message, targetIdentifier: targetIdentifier)
                             inboundMessageGroup.leave()
                         }
                     },
@@ -231,7 +222,7 @@ package extension WITransportSession {
     func sendPageCapturingCurrentTarget<C: WITransportPageCommand>(
         _ command: sending C
     ) async throws -> (targetIdentifier: String, response: C.Response) {
-        let parametersPayload = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
+        let parametersData = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
 
         guard let router, let backend else {
             throw WITransportError.notAttached
@@ -247,9 +238,9 @@ package extension WITransportSession {
 
         let result = try await router.sendPageCommandCapturingCurrentTarget(
             method: C.method,
-            parametersPayload: parametersPayload
+            parametersData: parametersData
         )
-        let response = try decodeTransportResponse(C.Response.self, from: result.payload)
+        let response = try decodeTransportResponse(C.Response.self, from: result.data)
         return (result.targetIdentifier, response)
     }
 
@@ -257,14 +248,14 @@ package extension WITransportSession {
         _ command: sending C,
         targetIdentifier: String
     ) async throws -> C.Response {
-        let parametersPayload = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
-        let payload = try await send(
+        let parametersData = try encodeTransportParameters(command.parameters, emptyType: C.Parameters.self)
+        let data = try await send(
             scope: .page,
             method: C.method,
-            parametersPayload: parametersPayload,
+            parametersData: parametersData,
             targetIdentifierOverride: targetIdentifier
         )
-        return try decodeTransportResponse(C.Response.self, from: payload)
+        return try decodeTransportResponse(C.Response.self, from: data)
     }
 }
 
@@ -273,16 +264,11 @@ private extension WITransportSession {
         let sessionReference = SessionReference(self)
         return WITransportCommandChannel(
             scope: scope,
-            sender: { [sessionReference] scope, method, parametersPayload in
+            sender: { [sessionReference] scope, method, parametersData in
                 guard let session = await MainActor.run(body: { sessionReference.session }) else {
                     throw WITransportError.transportClosed
                 }
-                return try await session.send(
-                    scope: scope,
-                    method: method,
-                    parametersPayload: parametersPayload,
-                    targetIdentifierOverride: nil
-                )
+                return try await session.send(scope: scope, method: method, parametersData: parametersData)
             },
             subscriber: { [sessionReference] scope, methods, bufferingLimit in
                 guard let session = await MainActor.run(body: { sessionReference.session }) else {
@@ -295,13 +281,8 @@ private extension WITransportSession {
         )
     }
 
-    func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> WITransportPayload {
-        try await send(
-            scope: scope,
-            method: method,
-            parametersPayload: parametersData.map(WITransportPayload.data),
-            targetIdentifierOverride: nil
-        )
+    func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> Data {
+        try await send(scope: scope, method: method, parametersData: parametersData, targetIdentifierOverride: nil)
     }
 
     func send(
@@ -309,21 +290,7 @@ private extension WITransportSession {
         method: String,
         parametersData: Data?,
         targetIdentifierOverride: String?
-    ) async throws -> WITransportPayload {
-        try await send(
-            scope: scope,
-            method: method,
-            parametersPayload: parametersData.map(WITransportPayload.data),
-            targetIdentifierOverride: targetIdentifierOverride
-        )
-    }
-
-    func send(
-        scope: WITransportTargetScope,
-        method: String,
-        parametersPayload: WITransportPayload?,
-        targetIdentifierOverride: String?
-    ) async throws -> WITransportPayload {
+    ) async throws -> Data {
         guard let router, let backend else {
             throw WITransportError.notAttached
         }
@@ -335,7 +302,7 @@ private extension WITransportSession {
         return try await router.send(
             scope: scope,
             method: method,
-            parametersPayload: parametersPayload,
+            parametersData: parametersData,
             targetIdentifierOverride: targetIdentifierOverride
         )
     }
@@ -395,17 +362,9 @@ private extension WITransportSession {
     func encodeTransportParameters<Parameters: Encodable>(
         _ parameters: Parameters,
         emptyType: Parameters.Type
-    ) throws -> WITransportPayload? {
+    ) throws -> Data? {
         if emptyType == WIEmptyTransportParameters.self {
             return nil
-        }
-
-        if let fastParameters = parameters as? any WITransportObjectEncodable {
-            let object = fastParameters.wiTransportObject()
-            if transportIsEmptyJSONObject(object) {
-                return nil
-            }
-            return .object(object)
         }
 
         do {
@@ -413,7 +372,7 @@ private extension WITransportSession {
             if data == Data("{}".utf8) {
                 return nil
             }
-            return .data(data)
+            return data
         } catch {
             throw WITransportError.invalidCommandEncoding(error.localizedDescription)
         }
@@ -421,10 +380,10 @@ private extension WITransportSession {
 
     func decodeTransportResponse<Response: Decodable>(
         _ type: Response.Type,
-        from payload: WITransportPayload
+        from data: Data
     ) throws -> Response {
         do {
-            return try payload.decode(Response.self)
+            return try JSONDecoder().decode(Response.self, from: data)
         } catch {
             throw WITransportError.invalidResponse(error.localizedDescription)
         }

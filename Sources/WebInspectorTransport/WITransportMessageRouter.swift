@@ -6,7 +6,7 @@ actor WITransportMessageRouter {
 
     private struct PendingRootRequest {
         let method: String
-        let continuation: CheckedContinuation<WITransportPayload, Error>
+        let continuation: CheckedContinuation<Data, Error>
         let timeoutTask: Task<Void, Never>
     }
 
@@ -14,7 +14,7 @@ actor WITransportMessageRouter {
         let method: String
         let outerIdentifier: Int
         let targetIdentifier: String
-        let continuation: CheckedContinuation<WITransportPayload, Error>
+        let continuation: CheckedContinuation<Data, Error>
         let timeoutTask: Task<Void, Never>
     }
 
@@ -27,8 +27,8 @@ actor WITransportMessageRouter {
     private struct ParsedMessage {
         let identifier: Int?
         let method: String?
-        let paramsPayload: WITransportPayload?
-        let resultPayload: WITransportPayload?
+        let paramsObject: Any?
+        let resultObject: Any?
         let errorMessage: String?
     }
 
@@ -191,13 +191,8 @@ actor WITransportMessageRouter {
         }
     }
 
-    func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> WITransportPayload {
-        try await send(
-            scope: scope,
-            method: method,
-            parametersPayload: parametersData.map(WITransportPayload.data),
-            targetIdentifierOverride: nil
-        )
+    func send(scope: WITransportTargetScope, method: String, parametersData: Data?) async throws -> Data {
+        try await send(scope: scope, method: method, parametersData: parametersData, targetIdentifierOverride: nil)
     }
 
     func send(
@@ -205,39 +200,21 @@ actor WITransportMessageRouter {
         method: String,
         parametersData: Data?,
         targetIdentifierOverride: String?
-    ) async throws -> WITransportPayload {
-        try await send(
-            scope: scope,
-            method: method,
-            parametersPayload: parametersData.map(WITransportPayload.data),
-            targetIdentifierOverride: targetIdentifierOverride
-        )
-    }
-
-    func send(
-        scope: WITransportTargetScope,
-        method: String,
-        parametersPayload: WITransportPayload?,
-        targetIdentifierOverride: String?
-    ) async throws -> WITransportPayload {
+    ) async throws -> Data {
         switch scope {
         case .root:
-            return try await sendRootCommand(method: method, parametersPayload: parametersPayload)
+            return try await sendRootCommand(method: method, parametersData: parametersData)
         case .page:
             return try await sendPageCommand(
                 method: method,
-                parametersPayload: parametersPayload,
+                parametersData: parametersData,
                 targetIdentifierOverride: targetIdentifierOverride
             )
         }
     }
 
     func handleIncomingRootMessage(_ messageString: String) {
-        handleIncomingRootMessage(messageString, parsedPayload: nil)
-    }
-
-    func handleIncomingRootMessage(_ messageString: String, parsedPayload: WITransportPayload?) {
-        guard let parsed = parseMessage(messageString, parsedPayload: parsedPayload) else {
+        guard let parsed = parseMessage(messageString) else {
             return
         }
 
@@ -254,25 +231,17 @@ actor WITransportMessageRouter {
             return
         }
 
-        updatePageTargetStateIfNeeded(method: method, paramsPayload: parsed.paramsPayload)
+        updatePageTargetStateIfNeeded(method: method, paramsObject: parsed.paramsObject)
         emitEventIfNeeded(
             scope: .root,
             method: method,
             targetIdentifier: nil,
-            paramsPayload: parsed.paramsPayload
+            paramsObject: parsed.paramsObject
         )
     }
 
     func handleIncomingPageMessage(_ messageString: String, targetIdentifier: String) {
-        handleIncomingPageMessage(messageString, parsedPayload: nil, targetIdentifier: targetIdentifier)
-    }
-
-    func handleIncomingPageMessage(
-        _ messageString: String,
-        parsedPayload: WITransportPayload?,
-        targetIdentifier: String
-    ) {
-        guard let parsed = parseMessage(messageString, parsedPayload: parsedPayload) else {
+        guard let parsed = parseMessage(messageString) else {
             return
         }
 
@@ -290,7 +259,7 @@ actor WITransportMessageRouter {
             scope: .page,
             method: method,
             targetIdentifier: targetIdentifier,
-            paramsPayload: parsed.paramsPayload
+            paramsObject: parsed.paramsObject
         )
     }
 
@@ -316,27 +285,17 @@ actor WITransportMessageRouter {
     func sendPageCommandCapturingCurrentTarget(
         method: String,
         parametersData: Data?
-    ) async throws -> (targetIdentifier: String, payload: WITransportPayload) {
-        try await sendPageCommandCapturingCurrentTarget(
-            method: method,
-            parametersPayload: parametersData.map(WITransportPayload.data)
-        )
-    }
-
-    func sendPageCommandCapturingCurrentTarget(
-        method: String,
-        parametersPayload: WITransportPayload?
-    ) async throws -> (targetIdentifier: String, payload: WITransportPayload) {
+    ) async throws -> (targetIdentifier: String, data: Data) {
         guard let targetIdentifier = currentPageTargetIdentifier else {
             throw WITransportError.pageTargetUnavailable
         }
 
-        let payload = try await sendPageCommand(
+        let data = try await sendPageCommand(
             method: method,
-            parametersPayload: parametersPayload,
+            parametersData: parametersData,
             targetIdentifierOverride: targetIdentifier
         )
-        return (targetIdentifier, payload)
+        return (targetIdentifier, data)
     }
 }
 
@@ -355,13 +314,13 @@ private extension WITransportMessageRouter {
         subscriptions.removeValue(forKey: identifier)
     }
 
-    func sendRootCommand(method: String, parametersPayload: WITransportPayload?) async throws -> WITransportPayload {
+    func sendRootCommand(method: String, parametersData: Data?) async throws -> Data {
         guard let rootDispatcher else {
             throw WITransportError.notAttached
         }
 
         let identifier = nextIdentifier()
-        let jsonString = try commandJSONString(identifier: identifier, method: method, parametersPayload: parametersPayload)
+        let jsonString = try commandJSONString(identifier: identifier, method: method, parametersData: parametersData)
 
         return try await withCheckedThrowingContinuation { continuation in
             let timeoutTask = timeoutTask(identifier: identifier, method: method, scope: .root)
@@ -383,9 +342,9 @@ private extension WITransportMessageRouter {
 
     func sendPageCommand(
         method: String,
-        parametersPayload: WITransportPayload?,
+        parametersData: Data?,
         targetIdentifierOverride: String?
-    ) async throws -> WITransportPayload {
+    ) async throws -> Data {
         guard let pageDispatcher else {
             throw WITransportError.notAttached
         }
@@ -398,11 +357,7 @@ private extension WITransportMessageRouter {
 
         let innerIdentifier = nextIdentifier()
         let outerIdentifier = nextIdentifier()
-        let innerMessage = try commandJSONString(
-            identifier: innerIdentifier,
-            method: method,
-            parametersPayload: parametersPayload
-        )
+        let innerMessage = try commandJSONString(identifier: innerIdentifier, method: method, parametersData: parametersData)
 
         return try await withCheckedThrowingContinuation { continuation in
             let timeoutTask = timeoutTask(identifier: innerIdentifier, method: method, scope: .page)
@@ -483,7 +438,7 @@ private extension WITransportMessageRouter {
                 throwing: WITransportError.remoteError(scope: .root, method: pending.method, message: errorMessage)
             )
         } else {
-            pending.continuation.resume(returning: parsed.resultPayload ?? .object([:]))
+            pending.continuation.resume(returning: dataForJSONObject(parsed.resultObject))
         }
         return true
     }
@@ -518,21 +473,21 @@ private extension WITransportMessageRouter {
                 throwing: WITransportError.remoteError(scope: .page, method: pending.method, message: errorMessage)
             )
         } else {
-            pending.continuation.resume(returning: parsed.resultPayload ?? .object([:]))
+            pending.continuation.resume(returning: dataForJSONObject(parsed.resultObject))
         }
         return true
     }
 
-    func updatePageTargetStateIfNeeded(method: String, paramsPayload: WITransportPayload?) {
-        guard let params = paramsPayload?.dictionaryObject else {
+    func updatePageTargetStateIfNeeded(method: String, paramsObject: Any?) {
+        guard let params = paramsObject as? [String: Any] else {
             return
         }
 
         if method == "Target.targetCreated" {
-            let targetInfo = transportDictionary(from: params["targetInfo"])
-            let targetType = transportString(from: targetInfo?["type"])
-            let targetIdentifier = transportString(from: targetInfo?["targetId"])
-            let isProvisional = transportBool(from: targetInfo?["isProvisional"])
+            let targetInfo = params["targetInfo"] as? [String: Any]
+            let targetType = stringValue(targetInfo?["type"])
+            let targetIdentifier = stringValue(targetInfo?["targetId"])
+            let isProvisional = boolValue(targetInfo?["isProvisional"])
             log("target created id=\(targetIdentifier ?? "n/a") type=\(targetType ?? "n/a") provisional=\(String(describing: isProvisional))")
 
             guard targetInfo != nil, let targetType, let targetIdentifier else {
@@ -558,14 +513,14 @@ private extension WITransportMessageRouter {
 
         if method == "Target.didCommitProvisionalTarget" {
             guard
-                let newTargetIdentifier = transportString(from: params["newTargetId"])
+                let newTargetIdentifier = stringValue(params["newTargetId"])
             else {
                 return
             }
 
-            log("target committed old=\(transportString(from: params["oldTargetId"]) ?? "n/a") new=\(newTargetIdentifier)")
+            log("target committed old=\(stringValue(params["oldTargetId"]) ?? "n/a") new=\(newTargetIdentifier)")
 
-            if let oldTargetIdentifier = transportString(from: params["oldTargetId"]) {
+            if let oldTargetIdentifier = stringValue(params["oldTargetId"]) {
                 if var target = knownTargets.removeValue(forKey: oldTargetIdentifier) {
                     target = KnownTarget(
                         identifier: newTargetIdentifier,
@@ -598,7 +553,7 @@ private extension WITransportMessageRouter {
             emitPageTargetLifecycleEvent(
                 .committedProvisional,
                 targetIdentifier: newTargetIdentifier,
-                oldTargetIdentifier: transportString(from: params["oldTargetId"]),
+                oldTargetIdentifier: stringValue(params["oldTargetId"]),
                 targetType: knownTargets[newTargetIdentifier]?.type ?? "page",
                 isProvisional: false
             )
@@ -606,7 +561,7 @@ private extension WITransportMessageRouter {
         }
 
         if method == "Target.targetDestroyed",
-           let targetIdentifier = transportString(from: params["targetId"]) {
+           let targetIdentifier = stringValue(params["targetId"]) {
             let target = knownTargets[targetIdentifier]
             if committedPageTargetIdentifier == targetIdentifier {
                 committedPageTargetIdentifier = nil
@@ -708,7 +663,7 @@ private extension WITransportMessageRouter {
         scope: WITransportTargetScope,
         method: String,
         targetIdentifier: String?,
-        paramsPayload: WITransportPayload?
+        paramsObject: Any?
     ) {
         let matchingSubscriptions = subscriptions.values.filter { subscription in
             guard subscription.scope == scope else {
@@ -729,7 +684,7 @@ private extension WITransportMessageRouter {
             method: method,
             targetScope: scope,
             targetIdentifier: targetIdentifier,
-            paramsPayload: paramsPayload ?? .object([:])
+            paramsData: dataForJSONObject(paramsObject)
         )
 
         if shouldBufferForFutureSubscribers {
@@ -746,17 +701,15 @@ private extension WITransportMessageRouter {
         }
     }
 
-    func commandJSONString(identifier: Int, method: String, parametersPayload: WITransportPayload?) throws -> String {
+    func commandJSONString(identifier: Int, method: String, parametersData: Data?) throws -> String {
         var payload: [String: Any] = [
             "id": identifier,
             "method": method,
         ]
 
-        if let parametersPayload {
-            let paramsObject = try parametersPayload.jsonObject()
-            if transportIsEmptyJSONObject(paramsObject) == false {
-                payload["params"] = paramsObject
-            }
+        if let parametersData {
+            let object = try jsonObject(from: parametersData)
+            payload["params"] = object
         }
 
         do {
@@ -772,29 +725,80 @@ private extension WITransportMessageRouter {
         }
     }
 
-    private func parseMessage(_ messageString: String, parsedPayload: WITransportPayload?) -> ParsedMessage? {
-        let dictionary: [String: Any]
-        if let parsedDictionary = parsedPayload?.dictionaryObject {
-            dictionary = parsedDictionary
-        } else if let data = messageString.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data, options: []),
-                  let parsedDictionary = transportDictionary(from: object) {
-            dictionary = parsedDictionary
-        } else {
+    func jsonObject(from data: Data) throws -> Any {
+        do {
+            return try JSONSerialization.jsonObject(with: data, options: [])
+        } catch {
+            throw WITransportError.invalidCommandEncoding(error.localizedDescription)
+        }
+    }
+
+    private func parseMessage(_ messageString: String) -> ParsedMessage? {
+        guard let data = messageString.data(using: .utf8) else {
+            return nil
+        }
+
+        guard
+            let object = try? JSONSerialization.jsonObject(with: data, options: []),
+            let dictionary = object as? [String: Any]
+        else {
             return nil
         }
 
         return ParsedMessage(
             identifier: identifierValue(dictionary["id"]),
-            method: transportString(from: dictionary["method"]),
-            paramsPayload: dictionary.keys.contains("params") ? .object(dictionary["params"]) : nil,
-            resultPayload: dictionary.keys.contains("result") ? .object(dictionary["result"]) : nil,
-            errorMessage: transportString(from: transportDictionary(from: dictionary["error"])?["message"])
+            method: stringValue(dictionary["method"]),
+            paramsObject: dictionary["params"],
+            resultObject: dictionary["result"],
+            errorMessage: stringValue((dictionary["error"] as? [String: Any])?["message"])
         )
     }
 
     func identifierValue(_ value: Any?) -> Int? {
-        transportInt(from: value)
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String {
+            return Int(string)
+        }
+        return nil
+    }
+
+    func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    func boolValue(_ value: Any?) -> Bool? {
+        if let number = value as? NSNumber {
+            return number.boolValue
+        }
+        if let bool = value as? Bool {
+            return bool
+        }
+        return nil
+    }
+
+    func dataForJSONObject(_ object: Any?) -> Data {
+        guard let object else {
+            return Data("{}".utf8)
+        }
+
+        if JSONSerialization.isValidJSONObject(object),
+           let data = try? JSONSerialization.data(withJSONObject: object, options: []) {
+            return data
+        }
+
+        if object is NSNull {
+            return Data("{}".utf8)
+        }
+
+        return Data("{}".utf8)
     }
 
     func nextIdentifier() -> Int {
