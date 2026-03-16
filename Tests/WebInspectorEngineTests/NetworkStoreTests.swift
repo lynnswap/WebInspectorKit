@@ -458,4 +458,109 @@ struct NetworkStoreTests {
         #expect(store.entry(forRequestID: 1, sessionID: sessionID)?.statusCode == 200)
         #expect(store.entry(forRequestID: 2, sessionID: sessionID)?.phase == .completed)
     }
+
+    @Test
+    func requestStartMergesIntoExistingResourceTimingEntry() throws {
+        let store = NetworkStore()
+        let sessionID = "merge-session"
+
+        let resourceTiming = try NetworkTestHelpers.decodeEvent([
+            "kind": "resourceTiming",
+            "requestId": 77,
+            "url": "https://example.com/original",
+            "startTime": NetworkTestHelpers.timePayload(monotonicMs: 7_700.0, wallMs: 1_700_000_007_700.0),
+            "endTime": NetworkTestHelpers.timePayload(monotonicMs: 7_710.0, wallMs: 1_700_000_007_710.0)
+        ], sessionID: sessionID)
+        store.applyEvent(resourceTiming)
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 77,
+            "url": "https://example.com/redirected",
+            "method": "POST",
+            "headers": ["content-type": "application/json"],
+            "body": [
+                "kind": "text",
+                "encoding": "utf-8",
+                "preview": #"{"hello":"world"}"#,
+                "truncated": false,
+                "size": 17
+            ],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 7_705.0, wallMs: 1_700_000_007_705.0)
+        ], sessionID: sessionID)
+        store.applyEvent(start)
+
+        #expect(store.entries.count == 1)
+        let entry = try #require(store.entry(forRequestID: 77, sessionID: sessionID))
+        #expect(entry.url == "https://example.com/redirected")
+        #expect(entry.method == "POST")
+        #expect(entry.requestHeaders["content-type"] == "application/json")
+        #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
+        #expect(entry.phase == .pending)
+    }
+
+    @Test
+    func resourceTimingCompletesExistingLiveEntryWithoutAppendingDuplicate() throws {
+        let store = NetworkStore()
+        let sessionID = "completion-session"
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 88,
+            "url": "https://example.com/live",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 8_800.0, wallMs: 1_700_000_008_800.0)
+        ], sessionID: sessionID)
+        store.applyEvent(start)
+
+        let resourceTiming = try NetworkTestHelpers.decodeEvent([
+            "kind": "resourceTiming",
+            "requestId": 88,
+            "url": "https://example.com/live",
+            "startTime": NetworkTestHelpers.timePayload(monotonicMs: 8_790.0, wallMs: 1_700_000_008_790.0),
+            "endTime": NetworkTestHelpers.timePayload(monotonicMs: 8_820.0, wallMs: 1_700_000_008_820.0)
+        ], sessionID: sessionID)
+        store.applyEvent(resourceTiming)
+
+        #expect(store.entries.count == 1)
+        let entry = try #require(store.entry(forRequestID: 88, sessionID: sessionID))
+        #expect(entry.phase == .completed)
+        #expect(abs(entry.startTimestamp - 8.79) < 0.0001)
+        #expect(abs((entry.endTimestamp ?? 0) - 8.82) < 0.0001)
+    }
+
+    @Test
+    func batchedResourceTimingCompletesExistingLiveEntryWithoutAppendingDuplicate() throws {
+        let store = NetworkStore()
+        let sessionID = "batched-merge-session"
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 99,
+            "url": "https://example.com/live",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 9_900.0, wallMs: 1_700_000_009_900.0)
+        ], sessionID: sessionID)
+        store.applyEvent(start)
+
+        let batch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": sessionID,
+            "seq": 3,
+            "events": [[
+                "kind": "resourceTiming",
+                "requestId": 99,
+                "url": "https://example.com/live",
+                "startTime": NetworkTestHelpers.timePayload(monotonicMs: 9_890.0, wallMs: 1_700_000_009_890.0),
+                "endTime": NetworkTestHelpers.timePayload(monotonicMs: 9_930.0, wallMs: 1_700_000_009_930.0)
+            ]]
+        ])
+        store.applyNetworkBatch(batch)
+
+        #expect(store.entries.count == 1)
+        let entry = try #require(store.entry(forRequestID: 99, sessionID: sessionID))
+        #expect(entry.phase == .completed)
+        #expect(abs(entry.startTimestamp - 9.89) < 0.0001)
+        #expect(abs((entry.endTimestamp ?? 0) - 9.93) < 0.0001)
+    }
 }

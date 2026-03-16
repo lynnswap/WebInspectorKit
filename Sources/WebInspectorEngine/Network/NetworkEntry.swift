@@ -101,7 +101,40 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         refreshFileTypeLabel()
     }
 
+    func applyStartPayload(_ payload: HTTPNetworkEvent) {
+        if let url = payload.url {
+            self.url = url
+        }
+        if let method = payload.method, !method.isEmpty {
+            self.method = method
+        }
+        if !payload.requestHeaders.isEmpty {
+            requestHeaders = payload.requestHeaders
+        }
+        if let requestType = payload.requestType {
+            self.requestType = requestType
+        }
+        if let requestBody = payload.requestBody {
+            self.requestBody = requestBody
+            self.requestBody?.role = .request
+        }
+        if let requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size {
+            self.requestBodyBytesSent = requestBodyBytesSent
+        }
+        if let wallTime = payload.wallTimeSeconds {
+            self.wallTime = wallTime
+        }
+        if startTimestamp > payload.startTimeSeconds {
+            startTimestamp = payload.startTimeSeconds
+        }
+        phase = .pending
+        refreshFileTypeLabel()
+    }
+
     func applyResponsePayload(_ payload: HTTPNetworkEvent) {
+        if startTimestamp > payload.startTimeSeconds {
+            startTimestamp = payload.startTimeSeconds
+        }
         statusCode = payload.statusCode
         statusText = payload.statusText ?? ""
         mimeType = payload.mimeType
@@ -124,6 +157,9 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     }
 
     func applyCompletionPayload(_ payload: HTTPNetworkEvent, failed: Bool) {
+        if startTimestamp > payload.startTimeSeconds {
+            startTimestamp = payload.startTimeSeconds
+        }
         if let statusCode = payload.statusCode {
             self.statusCode = statusCode
         }
@@ -142,6 +178,9 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             self.decodedBodyLength = responseBody.size
         }
         if let endTime = payload.endTimeSeconds {
+            if startTimestamp > endTime {
+                startTimestamp = endTime
+            }
             endTimestamp = endTime
             duration = max(0, endTime - startTimestamp)
         }
@@ -151,6 +190,8 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         if let responseBody = payload.responseBody {
             self.responseBody = responseBody
             self.responseBody?.role = .response
+        } else if failed {
+            responseBody = nil
         }
         errorDescription = payload.errorDescription
         refreshFileTypeLabel()

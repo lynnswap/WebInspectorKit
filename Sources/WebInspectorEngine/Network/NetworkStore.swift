@@ -77,8 +77,9 @@ public final class NetworkStore {
             if seenRequestIDs.contains(requestID) {
                 continue
             }
-            // Skip if an entry already exists from a non-batch path.
-            if existingBucket.entry(for: requestID) != nil {
+            if let existingEntry = existingBucket.entry(for: requestID) {
+                existingEntry.applyCompletionPayload(event, failed: false)
+                seenRequestIDs.insert(requestID)
                 continue
             }
 
@@ -179,7 +180,8 @@ public final class NetworkStore {
     private func handleStart(_ event: HTTPNetworkEvent) {
         let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
-        if bucket.entry(for: requestID) != nil {
+        if let existingEntry = bucket.entry(for: requestID) {
+            existingEntry.applyStartPayload(event)
             return
         }
         appendEntry(NetworkEntry(startPayload: event))
@@ -200,7 +202,8 @@ public final class NetworkStore {
     private func handleResourceTiming(_ event: HTTPNetworkEvent) {
         let requestID = event.requestID
         let bucket = bucket(for: event.sessionID)
-        if bucket.entry(for: requestID) != nil {
+        if let existingEntry = bucket.entry(for: requestID) {
+            existingEntry.applyCompletionPayload(event, failed: false)
             return
         }
         let entry = NetworkEntry(startPayload: event)
