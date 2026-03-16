@@ -45,6 +45,40 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func requestBodyIfNeededRereadsLocatorBeforeDispatchingFetch() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "body-\(ref ?? "nil")",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                reference: ref,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let session = NetworkSession(bodyFetcher: fetcher)
+        session.attach(pageWebView: WKWebView(frame: .zero))
+
+        let entry = makeEntry()
+        let body = makeBody(reference: "resp_ref", role: .response)
+        entry.responseBody = body
+
+        session.requestBodyIfNeeded(for: entry, role: .response)
+        body.reference = "resp_ref_committed"
+
+        let fetched = await waitUntil {
+            body.fetchState == .full && body.full == "body-resp_ref_committed"
+        }
+        #expect(fetched)
+        #expect(fetcher.fetchRefs == ["resp_ref_committed"])
+    }
+
+    @Test
     func requestBodyIfNeededSkipsWhenSessionIsDetached() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in
             Issue.record("fetchBody should not run while detached")
@@ -149,6 +183,48 @@ struct NetworkSessionTests {
 
         #expect(body.fetchState == .inline)
         #expect(body.full == nil)
+    }
+
+    @Test
+    func requestBodyIfNeededIgnoresLateFetchWhenLocatorChanges() async {
+        let fetcher = StubNetworkBodyFetcher { ref, _, role in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            return NetworkBody(
+                kind: .text,
+                preview: nil,
+                full: "late-\(ref ?? "nil")",
+                size: nil,
+                isBase64Encoded: false,
+                isTruncated: false,
+                summary: nil,
+                reference: ref,
+                formEntries: [],
+                fetchState: .full,
+                role: role
+            )
+        }
+        let session = NetworkSession(bodyFetcher: fetcher)
+        session.attach(pageWebView: WKWebView(frame: .zero))
+
+        let entry = makeEntry()
+        let body = makeBody(reference: "resp_ref", role: .response)
+        entry.responseBody = body
+
+        session.requestBodyIfNeeded(for: entry, role: .response)
+
+        let started = await waitUntil {
+            body.fetchState == .fetching && fetcher.fetchRefs == ["resp_ref"]
+        }
+        #expect(started)
+
+        body.reference = "resp_ref_committed"
+
+        let reset = await waitUntil {
+            body.fetchState == .inline
+        }
+        #expect(reset)
+        #expect(body.full == nil)
+        #expect(fetcher.fetchRefs == ["resp_ref"])
     }
 
     @Test

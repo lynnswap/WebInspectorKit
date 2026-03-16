@@ -84,6 +84,29 @@ struct NetworkBodyPayload: Decodable {
     }
 }
 
+package struct NetworkDeferredBodyLocator: Equatable {
+    let reference: String?
+    let handle: AnyObject?
+
+    private let handleIdentity: ObjectIdentifier?
+
+    init?(reference: String?, handle: AnyObject?) {
+        let resolvedReference = (reference?.isEmpty == false) ? reference : nil
+        guard resolvedReference != nil || handle != nil else {
+            return nil
+        }
+
+        self.reference = resolvedReference
+        self.handle = handle
+        self.handleIdentity = handle.map(ObjectIdentifier.init)
+    }
+
+    package static func == (lhs: NetworkDeferredBodyLocator, rhs: NetworkDeferredBodyLocator) -> Bool {
+        lhs.reference == rhs.reference
+            && lhs.handleIdentity == rhs.handleIdentity
+    }
+}
+
 @Observable
 public final class NetworkBody {
     public enum Kind: String, Sendable {
@@ -152,11 +175,20 @@ public final class NetworkBody {
     public var isBase64Encoded: Bool
     public var isTruncated: Bool
     public var summary: String?
-    public var reference: String?
-    public var handle: AnyObject?
+    public var reference: String? {
+        didSet {
+            refreshDeferredLocator()
+        }
+    }
+    public var handle: AnyObject? {
+        didSet {
+            refreshDeferredLocator()
+        }
+    }
     public var formEntries: [FormEntry]
     public var fetchState: FetchState
     public var role: Role
+    package private(set) var deferredLocator: NetworkDeferredBodyLocator?
 
     public init(
         kind: Kind = .text,
@@ -185,11 +217,11 @@ public final class NetworkBody {
         self.handle = handle
         self.formEntries = formEntries
         self.role = role
-        let hasReference = reference?.isEmpty == false
-        let hasHandle = handle != nil
+        let deferredLocator = NetworkDeferredBodyLocator(reference: reference, handle: handle)
+        self.deferredLocator = deferredLocator
         if let fetchState {
             self.fetchState = fetchState
-        } else if resolvedFull == nil && (hasReference || hasHandle) {
+        } else if resolvedFull == nil && deferredLocator != nil {
             self.fetchState = .inline
         } else {
             self.fetchState = .full
@@ -283,6 +315,10 @@ public final class NetworkBody {
         return false
     }
 
+    public var hasDeferredContent: Bool {
+        deferredLocator != nil
+    }
+
     public func markFetching() {
         fetchState = .fetching
     }
@@ -303,5 +339,13 @@ public final class NetworkBody {
         self.isTruncated = isTruncated
         self.size = size ?? fullBody.count
         fetchState = .full
+    }
+
+    package func currentDeferredLocator() -> NetworkDeferredBodyLocator? {
+        deferredLocator
+    }
+
+    private func refreshDeferredLocator() {
+        deferredLocator = NetworkDeferredBodyLocator(reference: reference, handle: handle)
     }
 }

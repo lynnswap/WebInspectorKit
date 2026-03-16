@@ -118,11 +118,7 @@ public final class NetworkSession: PageSession {
             return
         }
 
-        let bodyRef = body.reference
-        let bodyHandle = body.handle
-        let hasReference = bodyRef?.isEmpty == false
-        let hasHandle = bodyHandle != nil
-        guard hasReference || hasHandle else {
+        guard body.currentDeferredLocator() != nil else {
             body.markFailed(.unavailable)
             return
         }
@@ -137,8 +133,19 @@ public final class NetworkSession: PageSession {
             guard let self, let entry, let body else {
                 return
             }
+            guard self.body(for: entry, role: role) === body else {
+                return
+            }
+            guard let locator = body.currentDeferredLocator() else {
+                body.markFailed(.unavailable)
+                return
+            }
 
-            let fetchResult = await self.bodyFetcher.fetchBodyResult(ref: bodyRef, handle: bodyHandle, role: role)
+            let fetchResult = await self.bodyFetcher.fetchBodyResult(
+                ref: locator.reference,
+                handle: locator.handle,
+                role: role
+            )
 
             guard !Task.isCancelled else {
                 self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
@@ -146,6 +153,10 @@ public final class NetworkSession: PageSession {
             }
 
             guard self.body(for: entry, role: role) === body else {
+                return
+            }
+            guard body.currentDeferredLocator() == locator else {
+                self.resetBodyToInlineIfFetching(for: entry, role: role, expectedBody: body)
                 return
             }
             guard self.hasAttachedPageWebView else {
