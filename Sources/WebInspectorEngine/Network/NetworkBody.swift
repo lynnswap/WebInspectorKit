@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-struct NetworkBodyFormEntryPayload: Decodable {
+package struct NetworkBodyFormEntryPayload: Decodable {
     let name: String
     let value: String
     let isFile: Bool?
@@ -9,7 +9,7 @@ struct NetworkBodyFormEntryPayload: Decodable {
     let size: Int?
 }
 
-struct NetworkBodyPayload: Decodable {
+package struct NetworkBodyPayload: Decodable {
     let kind: String
     let encoding: String?
     let size: Int?
@@ -34,7 +34,7 @@ struct NetworkBodyPayload: Decodable {
         case handle
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "other"
         encoding = try container.decodeIfPresent(String.self, forKey: .encoding)
@@ -48,7 +48,7 @@ struct NetworkBodyPayload: Decodable {
         handle = nil
     }
 
-    init(dictionary: NSDictionary) {
+    package init(dictionary: NSDictionary) {
         kind = (dictionary["kind"] as? String) ?? "other"
         encoding = dictionary["encoding"] as? String
         if let size = dictionary["size"] as? Int {
@@ -81,29 +81,6 @@ struct NetworkBodyPayload: Decodable {
         }
         ref = dictionary["ref"] as? String
         handle = dictionary["handle"] as AnyObject?
-    }
-}
-
-package struct NetworkDeferredBodyLocator: Equatable {
-    let reference: String?
-    let handle: AnyObject?
-
-    private let handleIdentity: ObjectIdentifier?
-
-    init?(reference: String?, handle: AnyObject?) {
-        let resolvedReference = (reference?.isEmpty == false) ? reference : nil
-        guard resolvedReference != nil || handle != nil else {
-            return nil
-        }
-
-        self.reference = resolvedReference
-        self.handle = handle
-        self.handleIdentity = handle.map(ObjectIdentifier.init)
-    }
-
-    package static func == (lhs: NetworkDeferredBodyLocator, rhs: NetworkDeferredBodyLocator) -> Bool {
-        lhs.reference == rhs.reference
-            && lhs.handleIdentity == rhs.handleIdentity
     }
 }
 
@@ -140,7 +117,7 @@ public final class NetworkBody {
         public let isFile: Bool
         public let fileName: String?
 
-        init(name: String, value: String, isFile: Bool, fileName: String?) {
+        package init(name: String, value: String, isFile: Bool, fileName: String?) {
             self.name = name
             self.value = value
             self.isFile = isFile
@@ -158,7 +135,7 @@ public final class NetworkBody {
             self.init(name: name, value: value, isFile: isFile, fileName: fileName)
         }
 
-        init(payload: NetworkBodyFormEntryPayload) {
+        package init(payload: NetworkBodyFormEntryPayload) {
             self.init(
                 name: payload.name,
                 value: payload.value,
@@ -177,12 +154,12 @@ public final class NetworkBody {
     public var summary: String?
     public var reference: String? {
         didSet {
-            refreshDeferredLocator()
+            refreshDeferredLocatorFromExposedFields()
         }
     }
     public var handle: AnyObject? {
         didSet {
-            refreshDeferredLocator()
+            refreshDeferredLocatorFromExposedFields()
         }
     }
     public var formEntries: [FormEntry]
@@ -190,7 +167,10 @@ public final class NetworkBody {
     public var role: Role
     package private(set) var deferredLocator: NetworkDeferredBodyLocator?
 
-    public init(
+    @ObservationIgnored
+    private var isSynchronizingDeferredLocatorFields = false
+
+    public convenience init(
         kind: Kind = .text,
         preview: String?,
         full: String? = nil,
@@ -204,6 +184,34 @@ public final class NetworkBody {
         fetchState: FetchState? = nil,
         role: Role = .response
     ) {
+        self.init(
+            kind: kind,
+            preview: preview,
+            full: full,
+            size: size,
+            isBase64Encoded: isBase64Encoded,
+            isTruncated: isTruncated,
+            summary: summary,
+            deferredLocator: Self.makeDeferredLocator(reference: reference, handle: handle),
+            formEntries: formEntries,
+            fetchState: fetchState,
+            role: role
+        )
+    }
+
+    package init(
+        kind: Kind = .text,
+        preview: String?,
+        full: String? = nil,
+        size: Int? = nil,
+        isBase64Encoded: Bool = false,
+        isTruncated: Bool = false,
+        summary: String? = nil,
+        deferredLocator: NetworkDeferredBodyLocator? = nil,
+        formEntries: [FormEntry] = [],
+        fetchState: FetchState? = nil,
+        role: Role = .response
+    ) {
         let resolvedFull = full ?? (isTruncated ? nil : preview)
         let resolvedSize = size ?? (resolvedFull?.count ?? preview?.count)
         self.kind = kind
@@ -213,12 +221,11 @@ public final class NetworkBody {
         self.isBase64Encoded = isBase64Encoded
         self.isTruncated = isTruncated
         self.summary = summary
-        self.reference = reference
-        self.handle = handle
+        self.reference = nil
+        self.handle = nil
+        self.deferredLocator = deferredLocator
         self.formEntries = formEntries
         self.role = role
-        let deferredLocator = NetworkDeferredBodyLocator(reference: reference, handle: handle)
-        self.deferredLocator = deferredLocator
         if let fetchState {
             self.fetchState = fetchState
         } else if resolvedFull == nil && deferredLocator != nil {
@@ -226,6 +233,7 @@ public final class NetworkBody {
         } else {
             self.fetchState = .full
         }
+        syncExposedFieldsFromDeferredLocator()
     }
 
     convenience init?(dictionary: NSDictionary) {
@@ -245,8 +253,6 @@ public final class NetworkBody {
         let rawSize = dictionary["size"]
         let size = rawSize as? Int ?? (rawSize as? NSNumber)?.intValue
         let summary = dictionary["summary"] as? String
-        let reference = dictionary["ref"] as? String
-        let handle = dictionary["handle"] as AnyObject?
         let formEntries = (dictionary["formEntries"] as? [NSDictionary] ?? [])
             .compactMap(FormEntry.init(dictionary:))
 
@@ -258,8 +264,10 @@ public final class NetworkBody {
             isBase64Encoded: base64,
             isTruncated: truncated,
             summary: summary,
-            reference: reference,
-            handle: handle,
+            deferredLocator: Self.makeDeferredLocator(
+                reference: dictionary["ref"] as? String,
+                handle: dictionary["handle"] as AnyObject?
+            ),
             formEntries: formEntries
         )
     }
@@ -284,7 +292,7 @@ public final class NetworkBody {
         return nil
     }
 
-    static func from(payload: NetworkBodyPayload, role: Role) -> NetworkBody {
+    package static func from(payload: NetworkBodyPayload, role: Role) -> NetworkBody {
         let kind = Kind(rawValue: payload.kind.lowercased()) ?? .other
         let encoding = (payload.encoding ?? "").lowercased()
         let isBase64 = encoding == "base64"
@@ -297,11 +305,37 @@ public final class NetworkBody {
             isBase64Encoded: isBase64,
             isTruncated: payload.truncated,
             summary: payload.summary,
-            reference: payload.ref,
-            handle: payload.handle,
+            deferredLocator: makeDeferredLocator(from: payload),
             formEntries: entries,
             role: role
         )
+    }
+
+    package static func makeDeferredLocator(from payload: NetworkBodyPayload) -> NetworkDeferredBodyLocator? {
+        makeDeferredLocator(reference: payload.ref, handle: payload.handle)
+    }
+
+    package static func makeDeferredLocator(
+        reference: String?,
+        handle: AnyObject?,
+        preserving currentLocator: NetworkDeferredBodyLocator? = nil
+    ) -> NetworkDeferredBodyLocator? {
+        if let reference, !reference.isEmpty {
+            let targetIdentifier: String?
+            if case .networkRequest(_, let currentTargetIdentifier)? = currentLocator {
+                targetIdentifier = currentTargetIdentifier
+            } else {
+                targetIdentifier = nil
+            }
+            return .networkRequest(id: reference, targetIdentifier: targetIdentifier)
+        }
+        if let handle {
+            return .opaqueHandle(handle)
+        }
+        if case .pageResource = currentLocator {
+            return currentLocator
+        }
+        return nil
     }
 
     public var displayText: String? {
@@ -345,7 +379,88 @@ public final class NetworkBody {
         deferredLocator
     }
 
-    private func refreshDeferredLocator() {
-        deferredLocator = NetworkDeferredBodyLocator(reference: reference, handle: handle)
+    package func rebindDeferredTarget(
+        from previousTargetIdentifier: String?,
+        to targetIdentifier: String?
+    ) {
+        switch deferredLocator {
+        case .pageResource(let currentTargetIdentifier, let frameID, let url)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            updateDeferredLocator(
+                .pageResource(
+                targetIdentifier: targetIdentifier,
+                frameID: frameID,
+                url: url
+            )
+            )
+        case .networkRequest(let requestID, let currentTargetIdentifier)?
+            where currentTargetIdentifier == previousTargetIdentifier:
+            updateDeferredLocator(
+                .networkRequest(
+                id: requestID,
+                targetIdentifier: targetIdentifier
+            )
+            )
+        default:
+            return
+        }
+    }
+
+    package func defaultDeferredNetworkRequestTarget(_ targetIdentifier: String?) {
+        guard case .networkRequest(let requestID, nil)? = deferredLocator else {
+            return
+        }
+        updateDeferredLocator(
+            .networkRequest(
+                id: requestID,
+                targetIdentifier: targetIdentifier
+            )
+        )
+    }
+
+    package func adoptDeferredNetworkRequestTarget(from other: NetworkBody) {
+        guard case .networkRequest(let requestID, let currentTargetIdentifier)? = deferredLocator,
+              case .networkRequest(_, let incomingTargetIdentifier)? = other.deferredLocator,
+              let incomingTargetIdentifier,
+              currentTargetIdentifier != incomingTargetIdentifier else {
+            return
+        }
+        updateDeferredLocator(
+            .networkRequest(
+                id: requestID,
+                targetIdentifier: incomingTargetIdentifier
+            )
+        )
+    }
+}
+
+private extension NetworkBody {
+    func refreshDeferredLocatorFromExposedFields() {
+        guard isSynchronizingDeferredLocatorFields == false else {
+            return
+        }
+        updateDeferredLocator(
+            Self.makeDeferredLocator(
+            reference: reference,
+            handle: handle,
+            preserving: deferredLocator
+        )
+        )
+    }
+
+    func syncExposedFieldsFromDeferredLocator() {
+        isSynchronizingDeferredLocatorFields = true
+        reference = deferredLocator?.reference
+        handle = deferredLocator?.handle
+        isSynchronizingDeferredLocatorFields = false
+    }
+
+    func updateDeferredLocator(_ locator: NetworkDeferredBodyLocator?) {
+        let changed = deferredLocator != locator
+        deferredLocator = locator
+        if changed, case .fetching = fetchState {
+            fetchState = .inline
+        }
+        syncExposedFieldsFromDeferredLocator()
     }
 }

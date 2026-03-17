@@ -207,8 +207,25 @@ extension NetworkPageAgent {
 }
 
 extension NetworkPageAgent: NetworkBodyFetching {
-    package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
-        await fetchBodyResult(bodyRef: ref, bodyHandle: handle, role: role)
+    package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        switch role {
+        case .request, .response:
+            true
+        }
+    }
+
+    package func fetchBodyResult(
+        locator: NetworkDeferredBodyLocator,
+        role: NetworkBody.Role
+    ) async -> NetworkBodyFetchResult {
+        switch locator {
+        case .networkRequest(let requestID, _):
+            return await fetchBodyResult(bodyRef: requestID, bodyHandle: nil, role: role)
+        case .pageResource:
+            return .bodyUnavailable
+        case .opaqueHandle(let handle):
+            return await fetchBodyResult(bodyRef: nil, bodyHandle: handle, role: role)
+        }
     }
 }
 

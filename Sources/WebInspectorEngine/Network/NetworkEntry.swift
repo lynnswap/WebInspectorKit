@@ -15,7 +15,7 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
 
     nonisolated public let id: UUID
 
-    public let sessionID: String
+    public private(set) var sessionID: String
     nonisolated public let requestID: Int
     nonisolated public let createdAt: Date
 
@@ -101,6 +101,41 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         refreshFileTypeLabel()
     }
 
+    convenience init(seed: NetworkEntrySeed) {
+        self.init(
+            sessionID: seed.sessionID,
+            requestID: seed.requestID,
+            url: seed.url,
+            method: seed.method,
+            requestHeaders: seed.requestHeaders,
+            startTimestamp: seed.startTimestamp,
+            wallTime: seed.wallTime
+        )
+        responseHeaders = seed.responseHeaders
+        statusCode = seed.statusCode
+        statusText = seed.statusText
+        mimeType = seed.mimeType
+        encodedBodyLength = seed.encodedBodyLength
+        decodedBodyLength = seed.decodedBodyLength ?? seed.responseBody?.size
+        errorDescription = seed.errorDescription
+        requestType = seed.requestType
+        requestBodyBytesSent = seed.requestBodyBytesSent ?? seed.requestBody?.size
+        requestBody = seed.requestBody
+        requestBody?.role = .request
+        responseBody = seed.responseBody
+        responseBody?.role = .response
+        phase = seed.phase
+        switch seed.phase {
+        case .pending:
+            endTimestamp = nil
+            duration = nil
+        case .completed, .failed:
+            endTimestamp = seed.startTimestamp
+            duration = 0
+        }
+        refreshFileTypeLabel()
+    }
+
     func applyStartPayload(_ payload: HTTPNetworkEvent) {
         if let url = payload.url {
             self.url = url
@@ -115,8 +150,15 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             self.requestType = requestType
         }
         if let requestBody = payload.requestBody {
-            self.requestBody = requestBody
-            self.requestBody?.role = .request
+            if let existingRequestBody = self.requestBody,
+               existingRequestBody.hasDeferredContent,
+               requestBody.hasDeferredContent {
+                existingRequestBody.role = .request
+                existingRequestBody.adoptDeferredNetworkRequestTarget(from: requestBody)
+            } else {
+                self.requestBody = requestBody
+                self.requestBody?.role = .request
+            }
         }
         if let requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size {
             self.requestBodyBytesSent = requestBodyBytesSent
@@ -234,6 +276,26 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
             target.size = size
         }
         applyFetchedBodySizeMetadata(from: target)
+    }
+
+    package func moveSession(to sessionID: String) {
+        self.sessionID = sessionID
+    }
+
+    package func rebindDeferredBodyTargets(
+        previousRequestTargetIdentifier: String?,
+        requestTargetIdentifier: String?,
+        previousResponseTargetIdentifier: String?,
+        responseTargetIdentifier: String?
+    ) {
+        requestBody?.rebindDeferredTarget(
+            from: previousRequestTargetIdentifier,
+            to: requestTargetIdentifier
+        )
+        responseBody?.rebindDeferredTarget(
+            from: previousResponseTargetIdentifier,
+            to: responseTargetIdentifier
+        )
     }
 
     func refreshFileTypeLabel() {

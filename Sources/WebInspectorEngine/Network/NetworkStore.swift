@@ -4,6 +4,8 @@ import Observation
 @MainActor
 @Observable
 public final class NetworkStore {
+    public init() {}
+
     public private(set) var isRecording = true
     public private(set) var entries: [NetworkEntry] = []
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
@@ -20,11 +22,11 @@ public final class NetworkStore {
         }
     }
 
-    func applyEvent(_ event: HTTPNetworkEvent) {
+    package func applyEvent(_ event: HTTPNetworkEvent) {
         applyHTTPEvent(event)
     }
 
-    func applyEvent(_ event: WSNetworkEvent) {
+    package func applyEvent(_ event: WSNetworkEvent) {
         applyWSEvent(event)
     }
 
@@ -58,6 +60,115 @@ public final class NetworkStore {
         }
 
         flushPendingResourceTimingEvents()
+    }
+
+    @discardableResult
+    package func applySeeds(_ seeds: [NetworkEntrySeed]) -> [NetworkEntry] {
+        guard isRecording else { return [] }
+        guard !seeds.isEmpty else { return [] }
+
+        var insertedEntries: [NetworkEntry] = []
+        insertedEntries.reserveCapacity(seeds.count)
+        for seed in seeds {
+            let entry = NetworkEntry(seed: seed)
+            appendEntry(entry)
+            insertedEntries.append(entry)
+        }
+
+        return insertedEntries.filter(entryIsTracked)
+    }
+
+    @discardableResult
+    package func moveEntrySession(
+        requestID: Int,
+        from previousSessionID: String,
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
+    ) -> NetworkEntry? {
+        let targetsChanged = previousRequestTargetIdentifier != requestTargetIdentifier
+            || previousResponseTargetIdentifier != responseTargetIdentifier
+        guard previousSessionID != sessionID || targetsChanged else {
+            return entry(forRequestID: requestID, sessionID: sessionID)
+        }
+        guard let entry = entry(forRequestID: requestID, sessionID: previousSessionID) else {
+            return nil
+        }
+        entry.rebindDeferredBodyTargets(
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
+        if previousSessionID == sessionID {
+            return entry
+        }
+        let previousBucketKey = sessionKey(for: previousSessionID)
+        sessionBuckets[previousBucketKey]?.remove(requestID: requestID)
+        entry.moveSession(to: sessionID)
+        bucket(for: sessionID).set(entry, requestID: requestID)
+        return entry
+    }
+
+    package func containsEntry(requestID: Int, sessionID: String?) -> Bool {
+        entry(forRequestID: requestID, sessionID: sessionID) != nil
+    }
+
+    package func entry(requestID: Int, sessionID: String?) -> NetworkEntry? {
+        entry(forRequestID: requestID, sessionID: sessionID)
+    }
+
+    package func updateEntrySession(
+        _ entry: NetworkEntry,
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
+    ) {
+        let previousSessionID = entry.sessionID
+        let targetsChanged = previousRequestTargetIdentifier != requestTargetIdentifier
+            || previousResponseTargetIdentifier != responseTargetIdentifier
+        guard previousSessionID != sessionID || targetsChanged else {
+            return
+        }
+        entry.rebindDeferredBodyTargets(
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
+        if previousSessionID == sessionID {
+            return
+        }
+        let previousBucketKey = sessionKey(for: previousSessionID)
+        sessionBuckets[previousBucketKey]?.remove(requestID: entry.requestID)
+        entry.moveSession(to: sessionID)
+        bucket(for: sessionID).set(entry, requestID: entry.requestID)
+    }
+
+    package func updateEntrySession(
+        requestID: Int,
+        from previousSessionID: String,
+        to sessionID: String,
+        previousRequestTargetIdentifier: String? = nil,
+        requestTargetIdentifier: String? = nil,
+        previousResponseTargetIdentifier: String? = nil,
+        responseTargetIdentifier: String? = nil
+    ) {
+        guard let entry = entry(forRequestID: requestID, sessionID: previousSessionID) else {
+            return
+        }
+        updateEntrySession(
+            entry,
+            to: sessionID,
+            previousRequestTargetIdentifier: previousRequestTargetIdentifier,
+            requestTargetIdentifier: requestTargetIdentifier,
+            previousResponseTargetIdentifier: previousResponseTargetIdentifier,
+            responseTargetIdentifier: responseTargetIdentifier
+        )
     }
 
     func applyBatchedInsertions(_ batch: NetworkEventBatch) {
@@ -155,16 +266,16 @@ public final class NetworkStore {
         }
     }
 
-    func reset() {
+    package func reset() {
         sessionBuckets.removeAll()
         entries.removeAll()
     }
 
-    func clear() {
+    package func clear() {
         reset()
     }
 
-    func setRecording(_ enabled: Bool) {
+    package func setRecording(_ enabled: Bool) {
         isRecording = enabled
     }
 
@@ -298,6 +409,15 @@ public final class NetworkStore {
         bucket.set(entry, requestID: entry.requestID)
     }
 
+    private func entryIsTracked(_ entry: NetworkEntry) -> Bool {
+        let key = sessionKey(for: entry.sessionID)
+        guard let bucket = sessionBuckets[key],
+              bucket.entry(for: entry.requestID) === entry else {
+            return false
+        }
+        return entries.contains { $0 === entry }
+    }
+
     private func bucket(for sessionID: String?) -> SessionBucket {
         let key = sessionKey(for: sessionID)
         if let existing = sessionBuckets[key] {
@@ -354,5 +474,9 @@ private final class SessionBucket {
 
     func set(_ entry: NetworkEntry, requestID: Int) {
         entriesByRequestID[requestID] = WeakEntry(value: entry)
+    }
+
+    func remove(requestID: Int) {
+        entriesByRequestID.removeValue(forKey: requestID)
     }
 }
