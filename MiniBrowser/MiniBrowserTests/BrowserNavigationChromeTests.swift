@@ -67,6 +67,16 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertFalse(pageViewController.compactBackButtonItemForTesting.isEnabled)
         XCTAssertFalse(pageViewController.compactForwardButtonItemForTesting.isEnabled)
     }
+
+    @MainActor
+    func testCompactToolbarContributesAdditionalBottomSafeArea() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
+        XCTAssertGreaterThan(pageViewController.view.safeAreaInsets.bottom, windowSafeAreaBottom)
+    }
 }
 
 private extension BrowserNavigationChromeTests {
