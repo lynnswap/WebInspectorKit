@@ -40,7 +40,7 @@ package final class WINetworkRuntime {
     package convenience init(configuration: NetworkConfiguration = .init()) {
         self.init(
             configuration: configuration,
-            backend: WINetworkUnavailableBackend()
+            backend: NetworkPageAgent()
         )
     }
 
@@ -67,6 +67,9 @@ package final class WINetworkRuntime {
     }
 
     package func attach(pageWebView webView: WKWebView) {
+        if let currentWebView = backend.webView, currentWebView !== webView {
+            backend.detachPageWebView(preparing: mode)
+        }
         backend.setMode(mode)
         backend.attachPageWebView(webView)
         lastPageWebView = webView

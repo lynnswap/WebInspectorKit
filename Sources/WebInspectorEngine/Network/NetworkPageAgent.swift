@@ -42,8 +42,8 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         }
     }
 
-    weak var webView: WKWebView?
-    let store = NetworkStore()
+    package weak var webView: WKWebView?
+    package let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
     private var configureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
@@ -78,7 +78,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         detachPageWebView()
     }
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    package func setMode(_ mode: NetworkLoggingMode) {
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
@@ -92,7 +92,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         await configureTask?.value
     }
 
-    func clearNetworkLogs() {
+    package func clearNetworkLogs() {
         store.clear()
         scheduleClear(on: webView)
     }
@@ -101,11 +101,11 @@ public final class NetworkPageAgent: NSObject, PageAgent {
 // MARK: - WIPageAgent
 
 extension NetworkPageAgent {
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    package func attachPageWebView(_ newWebView: WKWebView?) {
         replacePageWebView(with: newWebView)
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) {
+    package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) {
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -226,6 +226,16 @@ extension NetworkPageAgent: NetworkBodyFetching {
         case .opaqueHandle(let handle):
             return await fetchBodyResult(bodyRef: nil, bodyHandle: handle, role: role)
         }
+    }
+}
+
+extension NetworkPageAgent: WINetworkBackend {
+    package var support: WIBackendSupport {
+        WIBackendSupport(
+            availability: .supported,
+            backendKind: .unsupported,
+            failureReason: "Using page-hook network backend."
+        )
     }
 }
 

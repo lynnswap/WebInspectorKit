@@ -13,6 +13,14 @@ struct NetworkSessionTests {
     }
 
     @Test
+    func defaultSessionUsesFunctionalPageAgentBackend() {
+        let session = NetworkSession()
+
+        #expect(session.testBackendTypeName() == "NetworkPageAgent")
+        #expect(session.backendSupport.isSupported)
+    }
+
+    @Test
     func attachReplacingWebViewPreservesExistingEntriesWhileActive() async throws {
         let session = NetworkSession()
         let firstWebView = WKWebView(frame: .zero)

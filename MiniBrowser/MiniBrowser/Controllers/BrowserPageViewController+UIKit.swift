@@ -64,7 +64,7 @@ final class BrowserPageViewController: UIViewController {
     )
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
-    private var viewportCoordinator: BrowserViewportStateCoordinator?
+    private var viewportCoordinator: WIWebViewViewportCoordinator?
     private var storeObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
@@ -98,7 +98,7 @@ final class BrowserPageViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        viewportCoordinator = BrowserViewportStateCoordinator(
+        viewportCoordinator = WIWebViewViewportCoordinator(
             hostViewController: self,
             webView: store.webView
         )

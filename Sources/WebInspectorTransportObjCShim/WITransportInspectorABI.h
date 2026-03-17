@@ -80,6 +80,17 @@ inline void constructStringFromUTF8(WTF::String *storage, std::span<const char8_
         : "r"(symbol)
         : "cc", "memory", "x2", "x3", "x4", "x5", "x6", "x7", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "lr"
     );
+#elif defined(__x86_64__)
+    register WTF::String *result asm("rdi") = storage;
+    register const char8_t *data asm("rsi") = characters.data();
+    register size_t length asm("rdx") = characters.size();
+    void *symbol = reinterpret_cast<void *>(WITransportStringFromUTF8Symbol);
+    asm volatile(
+        "call *%3"
+        : "+r"(result), "+r"(data), "+r"(length)
+        : "r"(symbol)
+        : "cc", "memory", "rax", "rcx", "r8", "r9", "r10", "r11"
+    );
 #else
 #error Unsupported architecture for WITransportInspectorABI::constructStringFromUTF8
 #endif
