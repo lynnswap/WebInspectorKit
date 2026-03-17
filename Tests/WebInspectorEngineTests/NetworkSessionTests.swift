@@ -53,7 +53,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -86,7 +87,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -127,7 +129,8 @@ struct NetworkSessionTests {
     func requestBodyIfNeededDoesNotRetryFailedBody() async {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -155,7 +158,8 @@ struct NetworkSessionTests {
             .agentUnavailable
         })
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -189,7 +193,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -228,7 +233,8 @@ struct NetworkSessionTests {
             )
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
@@ -258,7 +264,8 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
 
@@ -294,7 +301,8 @@ struct NetworkSessionTests {
             return nil
         }
         let session = NetworkSession(bodyFetcher: fetcher)
-        session.attach(pageWebView: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = NetworkBody(
@@ -386,8 +394,17 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         self.onFetch = resultOnFetch
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
-        fetchRefs.append(ref)
-        return await onFetch(ref, handle, role)
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        switch role {
+        case .request, .response:
+            true
+        }
+    }
+
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        let reference = locator.reference
+        let handle = locator.handle
+        fetchRefs.append(reference)
+        return await onFetch(reference, handle, role)
     }
 }

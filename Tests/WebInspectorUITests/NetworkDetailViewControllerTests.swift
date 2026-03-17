@@ -27,7 +27,8 @@ struct NetworkDetailViewControllerTests {
             )
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         inspector.selectEntry(entry)
@@ -73,7 +74,8 @@ struct NetworkDetailViewControllerTests {
 
         #expect(fetcher.fetchCount == 0)
 
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchCount == 1 && entry.responseBody?.full == "reattached response body"
@@ -99,7 +101,8 @@ struct NetworkDetailViewControllerTests {
             )
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
         inspector.selectEntry(entry)
 
@@ -176,7 +179,8 @@ struct NetworkDetailViewControllerTests {
 
         #expect(fetcher.fetchCount == 0)
 
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchCount == 1 && body.full == "reattached preview body"
@@ -203,7 +207,8 @@ struct NetworkDetailViewControllerTests {
             )
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body
@@ -298,9 +303,16 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        switch role {
+        case .request, .response:
+            true
+        }
+    }
+
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
         fetchCount += 1
-        return await onFetch(ref, handle, role)
+        return await onFetch(locator.reference, locator.handle, role)
     }
 }
 #endif
