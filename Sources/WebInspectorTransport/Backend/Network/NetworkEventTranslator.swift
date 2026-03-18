@@ -6,6 +6,21 @@ package struct NetworkEventTranslator {
 
     package func translate(_ envelope: WITransportEventEnvelope) -> NetworkPendingEvent? {
         switch envelope.method {
+        case "Target.targetCreated":
+            guard let params = try? JSONDecoder().decode(TargetCreatedParams.self, from: envelope.paramsData) else {
+                return nil
+            }
+            return .targetCreated(params, envelope.targetIdentifier)
+        case "Target.didCommitProvisionalTarget":
+            guard let params = try? JSONDecoder().decode(TargetDidCommitProvisionalTargetParams.self, from: envelope.paramsData) else {
+                return nil
+            }
+            return .targetDidCommitProvisionalTarget(params, envelope.targetIdentifier)
+        case "Target.targetDestroyed":
+            guard let params = try? JSONDecoder().decode(TargetDestroyedParams.self, from: envelope.paramsData) else {
+                return nil
+            }
+            return .targetDestroyed(params, envelope.targetIdentifier)
         case "Network.requestWillBeSent":
             guard let params = try? JSONDecoder().decode(RequestWillBeSentParams.self, from: envelope.paramsData) else {
                 return nil

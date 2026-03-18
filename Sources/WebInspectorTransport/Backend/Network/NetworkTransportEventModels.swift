@@ -44,6 +44,25 @@ package struct LoadingFailedParams: Decodable {
     package let canceled: Bool?
 }
 
+package struct TargetDidCommitProvisionalTargetParams: Decodable {
+    package let oldTargetId: String?
+    package let newTargetId: String
+}
+
+package struct TargetCreatedParams: Decodable {
+    package struct TargetInfo: Decodable {
+        package let targetId: String
+        package let type: String
+        package let isProvisional: Bool?
+    }
+
+    package let targetInfo: TargetInfo
+}
+
+package struct TargetDestroyedParams: Decodable {
+    package let targetId: String
+}
+
 package struct ResponsePayload: Decodable {
     package let url: String?
     package let status: Int
@@ -107,6 +126,9 @@ package struct WebSocketClosedParams: Decodable {
 }
 
 package enum NetworkPendingEvent {
+    case targetCreated(TargetCreatedParams, String?)
+    case targetDidCommitProvisionalTarget(TargetDidCommitProvisionalTargetParams, String?)
+    case targetDestroyed(TargetDestroyedParams, String?)
     case requestWillBeSent(RequestWillBeSentParams, String?)
     case responseReceived(ResponseReceivedParams, String?)
     case loadingFinished(LoadingFinishedParams, String?)

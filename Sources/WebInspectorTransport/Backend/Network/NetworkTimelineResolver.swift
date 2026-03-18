@@ -19,6 +19,8 @@ package final class NetworkTimelineResolver {
     private var phase: Phase = .idle
     private var bufferedEvents: [NetworkPendingEvent] = []
     private var exactBindings: [RequestKey: NetworkContinuationBinding] = [:]
+    private var committedTargetPredecessors: [String: String] = [:]
+    private var provisionalTargetIdentifiers: Set<String> = []
     private var nextCanonicalRequestID = 1
 
     package var buffersPendingEvents: Bool {
@@ -32,6 +34,8 @@ package final class NetworkTimelineResolver {
         phase = .buffering
         bufferedEvents.removeAll(keepingCapacity: true)
         exactBindings.removeAll(keepingCapacity: true)
+        committedTargetPredecessors.removeAll(keepingCapacity: true)
+        provisionalTargetIdentifiers.removeAll(keepingCapacity: true)
     }
 
     package func matches(contextID: UUID) -> Bool {
@@ -82,7 +86,39 @@ package final class NetworkTimelineResolver {
         phase = .idle
         bufferedEvents.removeAll(keepingCapacity: true)
         exactBindings.removeAll(keepingCapacity: true)
+        committedTargetPredecessors.removeAll(keepingCapacity: true)
+        provisionalTargetIdentifiers.removeAll(keepingCapacity: true)
         nextCanonicalRequestID = 1
+    }
+
+    package func recordTargetCreated(
+        identifier: String,
+        isProvisional: Bool
+    ) {
+        if isProvisional {
+            provisionalTargetIdentifiers.insert(identifier)
+        } else {
+            provisionalTargetIdentifiers.remove(identifier)
+        }
+    }
+
+    package func recordCommittedTargetTransition(
+        from oldTargetIdentifier: String?,
+        to newTargetIdentifier: String
+    ) {
+        guard let oldTargetIdentifier,
+              oldTargetIdentifier != newTargetIdentifier else {
+            provisionalTargetIdentifiers.remove(newTargetIdentifier)
+            return
+        }
+        provisionalTargetIdentifiers.remove(oldTargetIdentifier)
+        provisionalTargetIdentifiers.remove(newTargetIdentifier)
+        committedTargetPredecessors[newTargetIdentifier] = oldTargetIdentifier
+    }
+
+    package func recordTargetDestroyed(identifier: String) {
+        provisionalTargetIdentifiers.remove(identifier)
+        committedTargetPredecessors.removeValue(forKey: identifier)
     }
 
     package func resolveRequestStart(
@@ -110,7 +146,8 @@ package final class NetworkTimelineResolver {
             url: url,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
-            store: store
+            store: store,
+            includeLiveBindings: false
         ) {
             return rebound.canonicalRequestID
         }
@@ -155,7 +192,8 @@ package final class NetworkTimelineResolver {
             url: url,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
-            store: store
+            store: store,
+            includeLiveBindings: true
         )?.canonicalRequestID
     }
 
@@ -199,7 +237,8 @@ private extension NetworkTimelineResolver {
         url: String,
         requestType: String?,
         targetIdentifier: String?,
-        store: NetworkStore
+        store: NetworkStore,
+        includeLiveBindings: Bool
     ) -> NetworkContinuationBinding? {
         rebindStableContinuation(
             sessionID: sessionID,
@@ -207,7 +246,8 @@ private extension NetworkTimelineResolver {
             url: url as String?,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
-            store: store
+            store: store,
+            includeLiveBindings: includeLiveBindings
         )
     }
 
@@ -217,11 +257,16 @@ private extension NetworkTimelineResolver {
         url: String?,
         requestType: String?,
         targetIdentifier: String?,
-        store: NetworkStore
+        store: NetworkStore,
+        includeLiveBindings: Bool
     ) -> NetworkContinuationBinding? {
         let candidates = exactBindings.values.filter { binding in
             guard binding.rawRequestID == rawRequestID,
-                  binding.allowsCrossTargetRebind else {
+                  (includeLiveBindings || binding.allowsCrossTargetRebind),
+                  allowsTargetRebind(
+                    from: binding,
+                    to: targetIdentifier
+                  ) else {
                 return false
             }
             if let url, binding.url != url {
@@ -256,6 +301,55 @@ private extension NetworkTimelineResolver {
         let reboundKey = RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)
         exactBindings[reboundKey] = binding
         return binding
+    }
+
+    func allowsTargetRebind(
+        from binding: NetworkContinuationBinding,
+        to targetIdentifier: String?
+    ) -> Bool {
+        guard let targetIdentifier else {
+            return false
+        }
+
+        return isCommittedDescendant(targetIdentifier, of: binding.requestTargetIdentifier)
+            || isCommittedDescendant(targetIdentifier, of: binding.responseTargetIdentifier)
+            || allowsProvisionalTargetRebind(
+                targetIdentifier,
+                from: binding
+            )
+    }
+
+    func isCommittedDescendant(
+        _ targetIdentifier: String,
+        of ancestorIdentifier: String?
+    ) -> Bool {
+        guard let ancestorIdentifier else {
+            return false
+        }
+        guard ancestorIdentifier != targetIdentifier else {
+            return true
+        }
+
+        var currentIdentifier = targetIdentifier
+        while let predecessor = committedTargetPredecessors[currentIdentifier] {
+            if predecessor == ancestorIdentifier {
+                return true
+            }
+            currentIdentifier = predecessor
+        }
+        return false
+    }
+
+    func allowsProvisionalTargetRebind(
+        _ targetIdentifier: String,
+        from binding: NetworkContinuationBinding
+    ) -> Bool {
+        guard provisionalTargetIdentifiers.contains(targetIdentifier) == false else {
+            return false
+        }
+
+        return binding.requestTargetIdentifier.map(provisionalTargetIdentifiers.contains) == true
+            || binding.responseTargetIdentifier.map(provisionalTargetIdentifiers.contains) == true
     }
 
     func syncTargetsIfNeeded(

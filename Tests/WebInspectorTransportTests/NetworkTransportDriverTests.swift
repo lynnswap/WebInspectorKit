@@ -233,6 +233,231 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func networkTransportDriverKeepsIndependentTargetsWithMatchingRequestIDsSeparateWithoutCommitLineage() async {
+        let backend = FakeRegistryBackend()
+        let driver = NetworkTransportDriver(registry: makeRegistry(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 12.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/collision.json",
+                    "method": "GET",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-first"
+        )
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 13.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/collision.json",
+                    "method": "GET",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-second"
+        )
+        backend.emitPageEvent(
+            method: "Network.responseReceived",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 14.0,
+                "type": "Fetch",
+                "response": [
+                    "url": "https://example.com/collision.json",
+                    "status": 201,
+                    "statusText": "Created",
+                    "headers": [:],
+                    "mimeType": "application/json",
+                ],
+            ],
+            targetIdentifier: "page-first"
+        )
+        backend.emitPageEvent(
+            method: "Network.loadingFinished",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 15.0,
+                "metrics": [
+                    "responseBodyBytesReceived": 32,
+                    "responseBodyDecodedSize": 32,
+                ],
+            ],
+            targetIdentifier: "page-first"
+        )
+        backend.emitPageEvent(
+            method: "Network.responseReceived",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 16.0,
+                "type": "Fetch",
+                "response": [
+                    "url": "https://example.com/collision.json",
+                    "status": 202,
+                    "statusText": "Accepted",
+                    "headers": [:],
+                    "mimeType": "application/json",
+                ],
+            ],
+            targetIdentifier: "page-second"
+        )
+        backend.emitPageEvent(
+            method: "Network.loadingFinished",
+            params: [
+                "requestId": "request-collision",
+                "timestamp": 17.0,
+                "metrics": [
+                    "responseBodyBytesReceived": 64,
+                    "responseBodyDecodedSize": 64,
+                ],
+            ],
+            targetIdentifier: "page-second"
+        )
+
+        #expect(await waitForCondition {
+            let matches = driver.store.entries.filter { $0.url == "https://example.com/collision.json" }
+            guard matches.count == 2 else {
+                return false
+            }
+            let sessions = Set(matches.map(\.sessionID))
+            let statuses = Set(matches.compactMap(\.statusCode))
+            let lengths = Set(matches.compactMap(\.encodedBodyLength))
+            return sessions == ["page-first", "page-second"]
+                && statuses == [201, 202]
+                && lengths == [32, 64]
+                && matches.allSatisfy { $0.phase == .completed }
+        })
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverRebindsLiveRequestsAcrossCommittedTargetLineage() async {
+        let backend = FakeRegistryBackend()
+        let driver = NetworkTransportDriver(registry: makeRegistry(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitPageTargetCreated(
+            identifier: "page-provisional",
+            isProvisional: true
+        )
+        backend.emitPageEvent(
+            method: "Network.requestWillBeSent",
+            params: [
+                "requestId": "request-live-target-swap",
+                "timestamp": 12.0,
+                "type": "Fetch",
+                "request": [
+                    "url": "https://example.com/live-target-swap.json",
+                    "method": "GET",
+                    "headers": [:],
+                ],
+            ],
+            targetIdentifier: "page-provisional"
+        )
+        backend.emitPageEvent(
+            method: "Network.responseReceived",
+            params: [
+                "requestId": "request-live-target-swap",
+                "timestamp": 13.0,
+                "type": "Fetch",
+                "response": [
+                    "url": "https://example.com/live-target-swap.json",
+                    "status": 200,
+                    "statusText": "OK",
+                    "headers": [:],
+                    "mimeType": "application/json",
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-provisional",
+                "newTargetId": "page-committed",
+            ]
+        )
+        backend.emitPageEvent(
+            method: "Network.loadingFinished",
+            params: [
+                "requestId": "request-live-target-swap",
+                "timestamp": 14.0,
+                "metrics": [
+                    "responseBodyBytesReceived": 64,
+                    "responseBodyDecodedSize": 64,
+                ],
+            ],
+            targetIdentifier: "page-committed"
+        )
+
+        #expect(await waitForCondition {
+            let matches = driver.store.entries.filter { $0.url == "https://example.com/live-target-swap.json" }
+            guard let entry = matches.first else {
+                return false
+            }
+            return matches.count == 1
+                && entry.sessionID == "page-committed"
+                && entry.phase == .completed
+                && entry.statusCode == 200
+                && entry.encodedBodyLength == 64
+        })
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTimelineResolverClearsCommittedTargetLineageWhenBeginningNewContext() {
+        let resolver = NetworkTimelineResolver()
+        let store = NetworkStore()
+
+        resolver.recordTargetCreated(
+            identifier: "page-old",
+            isProvisional: true
+        )
+        resolver.recordCommittedTargetTransition(
+            from: "page-old",
+            to: "page-new"
+        )
+        resolver.begin(contextID: UUID())
+
+        _ = resolver.resolveRequestStart(
+            sessionID: "page-old",
+            rawRequestID: "request-lineage-reset",
+            url: "https://example.com/lineage-reset.json",
+            requestType: "Fetch",
+            targetIdentifier: "page-old",
+            store: store
+        )
+
+        let reboundRequestID = resolver.resolveEvent(
+            sessionID: "page-new",
+            rawRequestID: "request-lineage-reset",
+            url: "https://example.com/lineage-reset.json",
+            requestType: "Fetch",
+            targetIdentifier: "page-new",
+            store: store
+        )
+
+        #expect(reboundRequestID == nil)
+    }
+
+    @Test
     func networkTransportDriverRebindsStableBootstrapRowsAcrossTargetChanges() async {
         let backend = FakeRegistryBackend(
             capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot],
@@ -264,6 +489,10 @@ struct NetworkTransportDriverTests {
         driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
+        backend.emitPageTargetCreated(
+            identifier: "page-provisional",
+            isProvisional: true
+        )
         backend.emitPageEvent(
             method: "Network.requestWillBeSent",
             params: [
@@ -277,6 +506,13 @@ struct NetworkTransportDriverTests {
                 ],
             ],
             targetIdentifier: "page-committed"
+        )
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-provisional",
+                "newTargetId": "page-committed",
+            ]
         )
         backend.emitPageEvent(
             method: "Network.responseReceived",
@@ -354,6 +590,13 @@ struct NetworkTransportDriverTests {
         driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
+        backend.emitRootEvent(
+            method: "Target.didCommitProvisionalTarget",
+            params: [
+                "oldTargetId": "page-provisional",
+                "newTargetId": "page-committed",
+            ]
+        )
         backend.emitPageEvent(
             method: "Network.requestWillBeSent",
             params: [
@@ -597,6 +840,32 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         messageHandlers?.handlePageMessage(
             #"{"method":"\#(method)","params":\#(paramsString)}"#,
             targetIdentifier
+        )
+    }
+
+    func emitRootEvent(method: String, params: [String: Any]) {
+        guard JSONSerialization.isValidJSONObject(params),
+              let data = try? JSONSerialization.data(withJSONObject: params),
+              let paramsString = String(data: data, encoding: .utf8) else {
+            Issue.record("Failed to encode fake root event params for \(method)")
+            return
+        }
+
+        messageHandlers?.handleRootMessage(
+            #"{"method":"\#(method)","params":\#(paramsString)}"#
+        )
+    }
+
+    func emitPageTargetCreated(identifier: String, isProvisional: Bool) {
+        emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": identifier,
+                    "type": "page",
+                    "isProvisional": isProvisional,
+                ]
+            ]
         )
     }
 

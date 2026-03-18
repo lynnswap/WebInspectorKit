@@ -234,6 +234,18 @@ private extension NetworkTransportDriver {
 
     func replay(_ event: NetworkPendingEvent) {
         switch event {
+        case .targetCreated(let params, _):
+            resolver.recordTargetCreated(
+                identifier: params.targetInfo.targetId,
+                isProvisional: params.targetInfo.isProvisional == true
+            )
+        case .targetDidCommitProvisionalTarget(let params, _):
+            resolver.recordCommittedTargetTransition(
+                from: params.oldTargetId,
+                to: params.newTargetId
+            )
+        case .targetDestroyed(let params, _):
+            resolver.recordTargetDestroyed(identifier: params.targetId)
         case .requestWillBeSent(let params, let targetIdentifier):
             handleRequestWillBeSent(params, targetIdentifier: targetIdentifier)
         case .responseReceived(let params, let targetIdentifier):

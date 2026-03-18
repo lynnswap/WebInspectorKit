@@ -508,6 +508,15 @@ private extension WITransportMessageRouter {
                 targetType: targetType,
                 isProvisional: isProvisional == true
             )
+            if targetType == "page" {
+                emitEventIfNeeded(
+                    scope: .page,
+                    method: method,
+                    targetIdentifier: targetIdentifier,
+                    paramsObject: params,
+                    forceBuffer: true
+                )
+            }
             return
         }
 
@@ -557,6 +566,13 @@ private extension WITransportMessageRouter {
                 targetType: knownTargets[newTargetIdentifier]?.type ?? "page",
                 isProvisional: false
             )
+            emitEventIfNeeded(
+                scope: .page,
+                method: method,
+                targetIdentifier: newTargetIdentifier,
+                paramsObject: params,
+                forceBuffer: true
+            )
             return
         }
 
@@ -575,6 +591,14 @@ private extension WITransportMessageRouter {
                 targetType: target?.type ?? "page",
                 isProvisional: target?.isProvisional ?? false
             )
+            if target?.type == "page" {
+                emitEventIfNeeded(
+                    scope: .page,
+                    method: method,
+                    targetIdentifier: targetIdentifier,
+                    paramsObject: params
+                )
+            }
         }
     }
 
@@ -663,7 +687,8 @@ private extension WITransportMessageRouter {
         scope: WITransportTargetScope,
         method: String,
         targetIdentifier: String?,
-        paramsObject: Any?
+        paramsObject: Any?,
+        forceBuffer: Bool = false
     ) {
         let matchingSubscriptions = subscriptions.values.filter { subscription in
             guard subscription.scope == scope else {
@@ -675,7 +700,7 @@ private extension WITransportMessageRouter {
             return methods.contains(method)
         }
 
-        let shouldBufferForFutureSubscribers = !configuration.dropEventsWithoutSubscribers
+        let shouldBufferForFutureSubscribers = forceBuffer || !configuration.dropEventsWithoutSubscribers
         guard !matchingSubscriptions.isEmpty || shouldBufferForFutureSubscribers else {
             return
         }

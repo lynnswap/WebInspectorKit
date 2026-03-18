@@ -3,6 +3,9 @@ import Foundation
 @MainActor
 package final class TransportEventHub {
     package static let networkEventMethods: Set<String> = [
+        "Target.targetCreated",
+        "Target.didCommitProvisionalTarget",
+        "Target.targetDestroyed",
         "Network.requestWillBeSent",
         "Network.responseReceived",
         "Network.loadingFinished",
