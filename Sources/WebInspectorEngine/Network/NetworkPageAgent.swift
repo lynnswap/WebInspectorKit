@@ -65,7 +65,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
-    init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
+    package init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
         runtime = .shared
         self.controllerStateRegistry = controllerStateRegistry
         bridgeMode = runtime.startupMode()

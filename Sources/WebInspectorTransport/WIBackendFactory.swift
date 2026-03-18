@@ -6,8 +6,11 @@ package enum WIBackendFactory {
         configuration: NetworkConfiguration,
         supportSnapshot: WITransportSupportSnapshot? = nil
     ) -> any WINetworkBackend {
-        _ = configuration
         let resolvedSupport = supportSnapshot ?? WITransportSession().supportSnapshot
+        _ = configuration
+        guard resolvedSupport.isSupported else {
+            return NetworkPageAgent()
+        }
         return NetworkTransportDriver(
             initialSupport: resolvedSupport.backendSupport
         )
