@@ -89,17 +89,22 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
+            name: "WebInspectorScriptsGenerated",
+            path: "Generated/WebInspectorScriptsGenerated",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorScripts",
+            dependencies: [
+                "WebInspectorScriptsGenerated"
+            ],
             exclude: [
-                "TypeScript/Tests"
+                "TypeScript"
             ],
             resources: [
                 .process("Resources/DOMTreeView")
             ],
-            swiftSettings: strictSwiftSettings,
-            plugins: [
-                .plugin(name: "WebInspectorKitObfuscatePlugin")
-            ],
+            swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorTransport",
@@ -228,6 +233,14 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WebInspectorScriptsTests",
+            dependencies: [
+                "WebInspectorScripts"
+            ],
+            path: "Tests/WebInspectorScriptsTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorIntegrationLongTests",
             dependencies: [
                 "WebInspectorKit",
@@ -238,10 +251,6 @@ let package = Package(
             ],
             path: "Tests/WebInspectorIntegrationLongTests",
             swiftSettings: strictSwiftSettings
-        ),
-        .plugin(
-            name: "WebInspectorKitObfuscatePlugin",
-            capability: .buildTool()
         )
 
     ],

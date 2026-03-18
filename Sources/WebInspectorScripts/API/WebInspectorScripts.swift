@@ -1,4 +1,5 @@
 import Foundation
+import WebInspectorScriptsGenerated
 
 public enum WebInspectorScriptsError: LocalizedError, Sendable {
     case scriptUnavailable(name: String)
@@ -20,6 +21,10 @@ public enum WebInspectorScripts {
 
     public static var resourceBundle: Bundle {
         Bundle.module
+    }
+
+    static var bundledScriptInputFingerprint: String {
+        CommittedBundledJavaScriptData.inputFingerprint
     }
 
     public static func resourceURL(

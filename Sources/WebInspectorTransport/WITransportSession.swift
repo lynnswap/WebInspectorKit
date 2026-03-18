@@ -213,13 +213,17 @@ public final class WITransportSession {
             throw WITransportError.notAttached
         }
 
-        let resolvedTargetIdentifier = targetIdentifier ?? pageTargetTracker.currentIdentifier
-        guard let resolvedTargetIdentifier else {
-            throw WITransportError.pageTargetUnavailable
-        }
-
         if let compatibilityResponse = backend.compatibilityResponse(scope: .page, method: method) {
             return compatibilityResponse
+        }
+
+        let resolvedTargetIdentifier: String
+        if let targetIdentifier {
+            resolvedTargetIdentifier = targetIdentifier
+        } else if let currentTargetIdentifier = pageTargetTracker.currentIdentifier {
+            resolvedTargetIdentifier = currentTargetIdentifier
+        } else {
+            resolvedTargetIdentifier = try await waitForPageTarget(timeout: configuration.responseTimeout)
         }
 
         let commandID = replyRegistry.allocateID()
