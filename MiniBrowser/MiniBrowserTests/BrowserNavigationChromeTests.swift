@@ -145,6 +145,22 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testRegularInspectorSheetInstallsDismissDelegateOnSheetPresentationController() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        drainMainQueue()
+
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        XCTAssertNotNil(inspectorContainer.sheetPresentationController?.delegate)
+
+        dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
     func testRegularInspectorWindowActionCreatesWindowAndPreventsReentry() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
         var activationCount = 0

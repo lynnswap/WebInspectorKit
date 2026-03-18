@@ -39,7 +39,7 @@ struct BrowserInspectorSceneActivationRequester {
 @MainActor
 final class BrowserInspectorCoordinator {
 #if canImport(UIKit)
-    private final class InspectorSheetObserver: NSObject, UIAdaptivePresentationControllerDelegate {
+    private final class InspectorSheetObserver: NSObject, UISheetPresentationControllerDelegate {
         var onDismiss: (() -> Void)?
 
         func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
@@ -170,7 +170,7 @@ final class BrowserInspectorCoordinator {
                 self.notifyPresentationStateChanged()
             }
         }
-        container.presentationController?.delegate = sheetObserver
+        container.sheetPresentationController?.delegate = sheetObserver
         anchor.present(container, animated: true)
         notifyPresentationStateChanged()
         return true
