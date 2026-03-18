@@ -177,7 +177,6 @@ private extension WIModel {
         let networkMode: NetworkLoggingMode
 
         if hasConfiguredTabsFromUI {
-            let hasDOMTab = tabs.contains { $0.identifier == WITab.domTabID }
             domEnabled = tabs.contains { $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID }
             networkEnabled = tabs.contains { $0.identifier == WITab.networkTabID }
             domAutoSnapshotEnabled = selectedTab?.identifier == WITab.domTabID
