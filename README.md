@@ -6,6 +6,8 @@
 
 Web Inspector for `WKWebView` (iOS / macOS).
 
+> This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
+
 ## Products
 
 - `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
