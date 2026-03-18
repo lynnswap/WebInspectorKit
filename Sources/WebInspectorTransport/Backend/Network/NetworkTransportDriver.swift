@@ -17,6 +17,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     private var deferredEnvelopesByTargetIdentifier: [String: [WITransportEventEnvelope]] = [:]
     private var transportSession: WITransportSession?
     private var attachTask: Task<Void, Never>?
+    private var bootstrapRecoveryTask: Task<Void, Never>?
     private var pageEventTask: Task<Void, Never>?
 
     private var loggingMode: NetworkLoggingMode = .buffering
@@ -155,6 +156,8 @@ private extension NetworkTransportDriver {
     func detachTransportSession() {
         attachTask?.cancel()
         attachTask = nil
+        bootstrapRecoveryTask?.cancel()
+        bootstrapRecoveryTask = nil
         pageEventTask?.cancel()
         pageEventTask = nil
         transportSession?.detach()
@@ -172,37 +175,159 @@ private extension NetworkTransportDriver {
             guard let self, let transportSession else {
                 return
             }
+            defer {
+                self.attachTask = nil
+            }
 
             do {
                 try await transportSession.attach(to: webView)
-                self.startPageEventLoop(using: transportSession)
-                _ = try await self.prepareInitialPageTarget(using: transportSession)
-                try await self.bootstrapExistingResources(
-                    using: transportSession,
-                    contextID: bootstrapContextID
-                )
-                self.finishBootstrap(contextID: bootstrapContextID)
             } catch {
-                self.finishBootstrap(contextID: bootstrapContextID)
-                guard self.shouldLogAttachFailure(error, session: transportSession) else {
-                    if self.transportSession === transportSession {
-                        self.pageEventTask?.cancel()
-                        self.pageEventTask = nil
-                        self.transportSession = nil
-                    }
-                    return
-                }
-                self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
-                if self.transportSession === transportSession {
-                    self.pageEventTask?.cancel()
-                    self.pageEventTask = nil
-                    transportSession.detach()
-                    self.transportSession = nil
-                }
+                self.handleStartupFailure(
+                    error,
+                    session: transportSession,
+                    contextID: bootstrapContextID,
+                    allowRecovery: false
+                )
+                return
             }
 
-            self.attachTask = nil
+            self.startPageEventLoop(using: transportSession)
+            await self.performInitialBootstrap(
+                using: transportSession,
+                contextID: bootstrapContextID
+            )
         }
+    }
+
+    func performInitialBootstrap(
+        using transportSession: WITransportSession,
+        contextID: UUID
+    ) async {
+        do {
+            _ = try await prepareInitialPageTarget(using: transportSession)
+            try await bootstrapExistingResources(
+                using: transportSession,
+                contextID: contextID
+            )
+            finishBootstrap(contextID: contextID)
+        } catch {
+            handleStartupFailure(
+                error,
+                session: transportSession,
+                contextID: contextID,
+                allowRecovery: true
+            )
+        }
+    }
+
+    func scheduleBootstrapRecovery(
+        using transportSession: WITransportSession,
+        contextID: UUID,
+        after error: Error
+    ) {
+        guard bootstrapRecoveryTask == nil else {
+            return
+        }
+
+        logger.debug("network transport startup deferred: \(error.localizedDescription, privacy: .public)")
+        bootstrapRecoveryTask = Task { @MainActor [weak self, weak transportSession] in
+            guard let self, let transportSession else {
+                return
+            }
+            defer {
+                self.bootstrapRecoveryTask = nil
+            }
+
+            while self.transportSession === transportSession,
+                  self.resolver.matches(contextID: contextID) {
+                do {
+                    _ = try await self.prepareInitialPageTarget(using: transportSession)
+                    try await self.bootstrapExistingResources(
+                        using: transportSession,
+                        contextID: contextID
+                    )
+                    self.finishBootstrap(contextID: contextID)
+                    return
+                } catch {
+                    guard self.shouldRetryBootstrapStartup(after: error, session: transportSession) else {
+                        self.handleStartupFailure(
+                            error,
+                            session: transportSession,
+                            contextID: contextID,
+                            allowRecovery: false
+                        )
+                        return
+                    }
+                    await self.yieldToMainQueue()
+                }
+            }
+        }
+    }
+
+    func handleStartupFailure(
+        _ error: Error,
+        session: WITransportSession,
+        contextID: UUID,
+        allowRecovery: Bool
+    ) {
+        if allowRecovery,
+           shouldRetryBootstrapStartup(after: error, session: session) {
+            scheduleBootstrapRecovery(
+                using: session,
+                contextID: contextID,
+                after: error
+            )
+            return
+        }
+
+        finishBootstrap(contextID: contextID)
+        guard shouldLogAttachFailure(error, session: session) else {
+            if transportSession === session {
+                bootstrapRecoveryTask?.cancel()
+                bootstrapRecoveryTask = nil
+                pageEventTask?.cancel()
+                pageEventTask = nil
+                transportSession = nil
+            }
+            return
+        }
+
+        logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
+        discardTransportSessionIfCurrent(session)
+    }
+
+    func shouldRetryBootstrapStartup(
+        after error: Error,
+        session: WITransportSession
+    ) -> Bool {
+        guard transportSession === session,
+              !(error is CancellationError),
+              let transportError = error as? WITransportError else {
+            return false
+        }
+
+        return switch transportError {
+        case .pageTargetUnavailable:
+            true
+        case .requestTimedOut(let scope, let method):
+            scope == .root && method == "Target.targetCreated"
+        case .remoteError(let scope, let method, _):
+            scope == .root && method == "Target.sendMessageToTarget"
+        default:
+            false
+        }
+    }
+
+    func discardTransportSessionIfCurrent(_ transportSession: WITransportSession) {
+        guard self.transportSession === transportSession else {
+            return
+        }
+        bootstrapRecoveryTask?.cancel()
+        bootstrapRecoveryTask = nil
+        pageEventTask?.cancel()
+        pageEventTask = nil
+        transportSession.detach()
+        self.transportSession = nil
     }
 
     func startPageEventLoop(using transportSession: WITransportSession) {

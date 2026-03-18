@@ -156,6 +156,78 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func networkTransportDriverKeepsTransportAliveWhenInitialPageTargetArrivesLate() async {
+        let backend = FakeRegistryBackend(
+            pageResultProvider: { method, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
+                    return nil
+                }
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
+                    resources: [
+                        makeFrameResourcePayload(
+                            url: "https://example.com/late.js",
+                            type: "Script",
+                            mimeType: "text/javascript"
+                        ),
+                    ]
+                )
+            },
+            attachHandler: { _ in }
+        )
+        let driver = NetworkTransportDriver(
+            transportSessionFactory: makeTransportSessionFactory(
+                using: backend,
+                configuration: .init(responseTimeout: .milliseconds(25))
+            )
+        )
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(backend.attachCallCount == 1)
+        #expect(backend.detachCallCount == 0)
+
+        backend.emitPageTargetCreated(
+            identifier: "page-late",
+            isProvisional: false
+        )
+
+        let recoveredWithoutReattach = await waitForCondition {
+            backend.attachCallCount == 1
+                && backend.detachCallCount == 0
+                && backend.sentPageTargets.contains {
+                    $0.method == WITransportMethod.Network.enable
+                        && $0.targetIdentifier == "page-late"
+                }
+                && backend.sentPageTargets.contains {
+                    $0.method == WITransportMethod.Page.getResourceTree
+                        && $0.targetIdentifier == "page-late"
+                }
+                && driver.store.entries.contains { entry in
+                    entry.url == "https://example.com/late.js"
+                        && entry.phase == .completed
+                }
+        }
+        if !recoveredWithoutReattach {
+            let snapshot = driver.store.entries.map {
+                "\($0.url)|session=\($0.sessionID)|phase=\($0.phase.rawValue)|status=\($0.statusCode.map(String.init) ?? "nil")|bytes=\($0.encodedBodyLength.map(String.init) ?? "nil")"
+            }
+            Issue.record(
+                """
+                late target recovery snapshot:
+                sentTargets=\(backend.sentPageTargets)
+                store=\(snapshot)
+                """
+            )
+        }
+        #expect(recoveredWithoutReattach)
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
     func networkTransportDriverReconnectsUsingReplacementWebView() async {
         let backend = FakeRegistryBackend()
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
@@ -1132,10 +1204,13 @@ struct NetworkTransportDriverTests {
 
 @MainActor
 private extension NetworkTransportDriverTests {
-    func makeTransportSessionFactory(using backend: FakeRegistryBackend) -> @MainActor () -> WITransportSession {
+    func makeTransportSessionFactory(
+        using backend: FakeRegistryBackend,
+        configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1))
+    ) -> @MainActor () -> WITransportSession {
         {
             WITransportSession(
-                configuration: .init(responseTimeout: .seconds(1)),
+                configuration: configuration,
                 backendFactory: { _ in backend }
             )
         }
