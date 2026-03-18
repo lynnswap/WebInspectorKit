@@ -145,7 +145,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
-    func testRegularInspectorSheetInstallsDismissDelegateOnSheetPresentationController() throws {
+    func testRegularInspectorSheetInstallsDismissDelegateOnPresentationController() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
@@ -155,9 +155,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         drainMainQueue()
 
         let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
-        XCTAssertNotNil(inspectorContainer.sheetPresentationController?.delegate)
-
-        dismissPresentedInspector(from: rootViewController)
+        XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
     }
 
     @MainActor
@@ -188,6 +186,24 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertFalse(pageViewController.triggerRegularInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         pageViewController.dismissInspectorWindowForTesting()
+    }
+
+    @MainActor
+    func testInspectorWindowPresentationStateIgnoresAttachedScenesWithoutContext() {
+        XCTAssertFalse(
+            BrowserInspectorCoordinator.inspectorWindowPresentationStateForTesting(
+                hasContext: false,
+                isPendingPresentation: false,
+                attachedSceneCount: 1
+            )
+        )
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.inspectorWindowPresentationStateForTesting(
+                hasContext: true,
+                isPendingPresentation: false,
+                attachedSceneCount: 1
+            )
+        )
     }
 
     @MainActor

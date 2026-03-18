@@ -39,7 +39,7 @@ struct BrowserInspectorSceneActivationRequester {
 @MainActor
 final class BrowserInspectorCoordinator {
 #if canImport(UIKit)
-    private final class InspectorSheetObserver: NSObject, UISheetPresentationControllerDelegate {
+    private final class InspectorSheetObserver: NSObject, UIAdaptivePresentationControllerDelegate {
         var onDismiss: (() -> Void)?
 
         func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
@@ -72,7 +72,11 @@ final class BrowserInspectorCoordinator {
 
         var presentationState: Bool {
             pruneDisconnectedSceneSessions()
-            return isPendingPresentation || sceneSessionsByIdentifier.isEmpty == false
+            return Self.isPresentationActive(
+                hasContext: context != nil,
+                isPendingPresentation: isPendingPresentation,
+                attachedSceneCount: sceneSessionsByIdentifier.count
+            )
         }
 
         func setContext(_ context: BrowserInspectorWindowContext?) {
@@ -125,6 +129,14 @@ final class BrowserInspectorCoordinator {
             sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
         }
 
+        static func isPresentationActive(
+            hasContext: Bool,
+            isPendingPresentation: Bool,
+            attachedSceneCount: Int
+        ) -> Bool {
+            hasContext && (isPendingPresentation || attachedSceneCount > 0)
+        }
+
         private func notifyObserversIfNeeded(previousState: Bool) {
             let currentState = presentationState
             guard currentState != previousState else {
@@ -170,8 +182,8 @@ final class BrowserInspectorCoordinator {
                 self.notifyPresentationStateChanged()
             }
         }
-        container.sheetPresentationController?.delegate = sheetObserver
         anchor.present(container, animated: true)
+        container.presentationController?.delegate = sheetObserver
         notifyPresentationStateChanged()
         return true
     }
@@ -265,6 +277,18 @@ final class BrowserInspectorCoordinator {
 
     static func clearInspectorWindowPresentation() {
         inspectorWindowRegistry.clear()
+    }
+
+    static func inspectorWindowPresentationStateForTesting(
+        hasContext: Bool,
+        isPendingPresentation: Bool,
+        attachedSceneCount: Int
+    ) -> Bool {
+        InspectorWindowRegistry.isPresentationActive(
+            hasContext: hasContext,
+            isPendingPresentation: isPendingPresentation,
+            attachedSceneCount: attachedSceneCount
+        )
     }
 
     private static func makeInspectorWindowUserActivity() -> NSUserActivity {
