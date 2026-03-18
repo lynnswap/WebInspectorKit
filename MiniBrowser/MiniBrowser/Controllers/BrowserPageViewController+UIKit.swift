@@ -2,6 +2,7 @@
 import OSLog
 import UIKit
 import WebInspectorKit
+import WKViewport
 
 @MainActor
 final class BrowserPageViewController: UIViewController {
@@ -64,7 +65,7 @@ final class BrowserPageViewController: UIViewController {
     )
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
-    private var viewportCoordinator: WIWebViewViewportCoordinator?
+    private var viewportCoordinator: ViewportCoordinator?
     private var storeObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
@@ -98,10 +99,7 @@ final class BrowserPageViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        viewportCoordinator = WIWebViewViewportCoordinator(
-            hostViewController: self,
-            webView: store.webView
-        )
+        viewportCoordinator = ViewportCoordinator(webView: store.webView)
 
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
@@ -257,7 +255,7 @@ final class BrowserPageViewController: UIViewController {
             navigationController?.setToolbarHidden(true, animated: false)
         }
 
-        viewportCoordinator?.updateChromeState()
+        viewportCoordinator?.updateViewport()
     }
 
     private func resolvedChromePlacement() -> ChromePlacement {

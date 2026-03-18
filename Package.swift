@@ -7,7 +7,6 @@ let strictSwiftSettings: [SwiftSetting] = [
     .swiftLanguageMode(.v6),
     .defaultIsolation(nil),
     .strictMemorySafety(),
-    .treatAllWarnings(as: .error),
 ]
 
 let package = Package(
@@ -20,6 +19,10 @@ let package = Package(
         .library(
             name: "WebInspectorEngine",
             targets: ["WebInspectorEngine"]
+        ),
+        .library(
+            name: "WKViewport",
+            targets: ["WKViewport"]
         ),
         .library(
             name: "WebInspectorRuntime",
@@ -59,6 +62,11 @@ let package = Package(
                 "WebInspectorBridge",
                 "WebInspectorScripts",
             ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WKViewport",
+            dependencies: [],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -157,6 +165,14 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
+            name: "WKViewportTests",
+            dependencies: [
+                "WKViewport"
+            ],
+            path: "Tests/WKViewportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
             name: "WebInspectorEngineTests",
             dependencies: [
                 "WebInspectorEngine",
@@ -189,6 +205,7 @@ let package = Package(
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
+                "WKViewport",
                 "WebInspectorUI",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",

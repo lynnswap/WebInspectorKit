@@ -3,31 +3,31 @@ import Combine
 import UIKit
 import WebKit
 
-public enum WIWebViewBottomChromeMode: Equatable {
+public enum BottomChromeMode: Equatable {
     case normal
     case hiddenForKeyboard
 }
 
-public enum WIWebViewScrollEdgeEffectStyle: Equatable {
+public enum ScrollEdgeEffectStyle: Equatable {
     case automatic
     case hard
     case soft
 }
 
-public struct WIWebViewChromeConfiguration: Equatable {
+public struct ViewportConfiguration: Equatable {
     public var contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior
     public var topEdgeEffectHidden: Bool
     public var bottomEdgeEffectHidden: Bool
-    public var topEdgeEffectStyle: WIWebViewScrollEdgeEffectStyle
-    public var bottomEdgeEffectStyle: WIWebViewScrollEdgeEffectStyle
+    public var topEdgeEffectStyle: ScrollEdgeEffectStyle
+    public var bottomEdgeEffectStyle: ScrollEdgeEffectStyle
     public var safeAreaAffectedEdges: UIRectEdge
 
     public init(
         contentInsetAdjustmentBehavior: UIScrollView.ContentInsetAdjustmentBehavior = .always,
         topEdgeEffectHidden: Bool = false,
         bottomEdgeEffectHidden: Bool = false,
-        topEdgeEffectStyle: WIWebViewScrollEdgeEffectStyle = .soft,
-        bottomEdgeEffectStyle: WIWebViewScrollEdgeEffectStyle = .soft,
+        topEdgeEffectStyle: ScrollEdgeEffectStyle = .soft,
+        bottomEdgeEffectStyle: ScrollEdgeEffectStyle = .soft,
         safeAreaAffectedEdges: UIRectEdge = [.top, .bottom]
     ) {
         self.contentInsetAdjustmentBehavior = contentInsetAdjustmentBehavior
@@ -39,13 +39,13 @@ public struct WIWebViewChromeConfiguration: Equatable {
     }
 }
 
-public struct WIWebViewChromeMetrics: Equatable {
+public struct ViewportMetrics: Equatable {
     public var safeAreaInsets: UIEdgeInsets
     public var topObscuredHeight: CGFloat
     public var bottomObscuredHeight: CGFloat
     public var keyboardOverlapHeight: CGFloat
     public var inputAccessoryOverlapHeight: CGFloat
-    public var bottomChromeMode: WIWebViewBottomChromeMode
+    public var bottomChromeMode: BottomChromeMode
     public var safeAreaAffectedEdges: UIRectEdge
 
     public init(
@@ -54,7 +54,7 @@ public struct WIWebViewChromeMetrics: Equatable {
         bottomObscuredHeight: CGFloat,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat,
-        bottomChromeMode: WIWebViewBottomChromeMode,
+        bottomChromeMode: BottomChromeMode,
         safeAreaAffectedEdges: UIRectEdge = [.top, .bottom]
     ) {
         self.safeAreaInsets = safeAreaInsets
@@ -81,15 +81,15 @@ public struct WIWebViewChromeMetrics: Equatable {
     }
 }
 
-public struct WIWebViewChromeResolvedMetrics: Equatable {
-    public let safeAreaInsets: UIEdgeInsets
-    public let obscuredInsets: UIEdgeInsets
-    public let unobscuredSafeAreaInsets: UIEdgeInsets
-    public let safeAreaAffectedEdges: UIRectEdge
+struct ResolvedViewportMetrics: Equatable {
+    let safeAreaInsets: UIEdgeInsets
+    let obscuredInsets: UIEdgeInsets
+    let unobscuredSafeAreaInsets: UIEdgeInsets
+    let safeAreaAffectedEdges: UIRectEdge
 
-    public init(state: WIWebViewChromeMetrics, screenScale: CGFloat) {
-        safeAreaInsets = state.safeAreaInsets.wi_roundedToPixel(screenScale)
-        obscuredInsets = state.finalObscuredInsets.wi_roundedToPixel(screenScale)
+    init(state: ViewportMetrics, screenScale: CGFloat) {
+        safeAreaInsets = state.safeAreaInsets.wk_roundedToPixel(screenScale)
+        obscuredInsets = state.finalObscuredInsets.wk_roundedToPixel(screenScale)
         unobscuredSafeAreaInsets = UIEdgeInsets(
             top: max(0, safeAreaInsets.top - obscuredInsets.top),
             left: max(0, safeAreaInsets.left - obscuredInsets.left),
@@ -110,29 +110,55 @@ public struct WIWebViewChromeResolvedMetrics: Equatable {
 }
 
 @MainActor
-public protocol WIWebViewChromeMetricsProviding {
-    func makeChromeMetrics(
+public protocol ViewportMetricsProvider {
+    func makeViewportMetrics(
         in hostViewController: UIViewController,
         webView: WKWebView,
         keyboardOverlapHeight: CGFloat,
         inputAccessoryOverlapHeight: CGFloat
-    ) -> WIWebViewChromeMetrics
+    ) -> ViewportMetrics
 }
 
 @MainActor
-public final class WIWebViewViewportCoordinator: NSObject {
+public final class NavigationControllerViewportMetricsProvider: ViewportMetricsProvider {
+    public init() {}
+
+    public func makeViewportMetrics(
+        in hostViewController: UIViewController,
+        webView: WKWebView,
+        keyboardOverlapHeight: CGFloat,
+        inputAccessoryOverlapHeight: CGFloat
+    ) -> ViewportMetrics {
+        let safeAreaInsets = hostViewController.viewIfLoaded?.safeAreaInsets ?? .zero
+        return ViewportMetrics(
+            safeAreaInsets: safeAreaInsets,
+            topObscuredHeight: safeAreaInsets.top,
+            bottomObscuredHeight: safeAreaInsets.bottom,
+            keyboardOverlapHeight: keyboardOverlapHeight,
+            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
+            bottomChromeMode: .normal
+        )
+    }
+}
+
+@MainActor
+public final class ViewportCoordinator: NSObject {
     public weak var hostViewController: UIViewController?
     public weak var webView: WKWebView?
-    public var configuration: WIWebViewChromeConfiguration
-    public var metricsProvider: any WIWebViewChromeMetricsProviding
+    public var configuration: ViewportConfiguration
+    public var metricsProvider: any ViewportMetricsProvider
 
     private var keyboardFrameInScreen: CGRect = .null
-    private var lastAppliedResolvedMetrics: WIWebViewChromeResolvedMetrics?
+    private var lastAppliedResolvedMetrics: ResolvedViewportMetrics?
     private var observationView: ViewportObservationView?
+    private weak var observedHostViewController: UIViewController?
     private var webViewStateCancellables: Set<AnyCancellable> = []
+#if DEBUG
     private var appliedViewportUpdateCount = 0
+#endif
 
-    var resolvedMetricsForTesting: WIWebViewChromeResolvedMetrics? {
+#if DEBUG
+    var resolvedMetricsForTesting: ResolvedViewportMetrics? {
         lastAppliedResolvedMetrics
     }
 
@@ -144,11 +170,16 @@ public final class WIWebViewViewportCoordinator: NSObject {
         appliedViewportUpdateCount
     }
 
+    var resolvedHostViewControllerForTesting: UIViewController? {
+        resolvedHostViewController()
+    }
+#endif
+
     public init(
-        hostViewController: UIViewController,
+        hostViewController: UIViewController? = nil,
         webView: WKWebView,
-        configuration: WIWebViewChromeConfiguration = .init(),
-        metricsProvider: any WIWebViewChromeMetricsProviding = WINavigationControllerChromeMetricsProvider()
+        configuration: ViewportConfiguration = .init(),
+        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
@@ -160,39 +191,53 @@ public final class WIWebViewViewportCoordinator: NSObject {
         observeWebViewStateIfPossible()
     }
 
+    public convenience init(
+        webView: WKWebView,
+        configuration: ViewportConfiguration = .init(),
+        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+    ) {
+        self.init(
+            hostViewController: nil,
+            webView: webView,
+            configuration: configuration,
+            metricsProvider: metricsProvider
+        )
+    }
+
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
 
     public func handleViewDidAppear() {
-        updateChromeState()
+        updateViewport()
     }
 
-    public func updateChromeState() {
-        guard let hostViewController, let webView else {
+    public func updateViewport() {
+        guard let webView, let resolvedHostViewController = resolvedHostViewController() else {
+            return
+        }
+        guard let hostView = resolvedHostViewController.view else {
             return
         }
 
-        guard let hostView = hostViewController.view else {
-            return
-        }
+        updateObservedHostViewControllerIfNeeded(resolvedHostViewController, webView: webView)
+
         installObservationViewIfPossible(in: hostView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
-        hostViewController.setContentScrollView(webView.scrollView)
+        resolvedHostViewController.setContentScrollView(webView.scrollView)
 
-        let metrics = metricsProvider.makeChromeMetrics(
-            in: hostViewController,
+        var effectiveMetrics = metricsProvider.makeViewportMetrics(
+            in: resolvedHostViewController,
             webView: webView,
             keyboardOverlapHeight: keyboardOverlapHeight(),
             inputAccessoryOverlapHeight: inputAccessoryOverlapHeight()
         )
-        var effectiveMetrics = metrics
         effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
 
         let screenScale = hostView.window?.screen.scale
             ?? hostView.traitCollection.displayScale
-        let resolvedMetrics = WIWebViewChromeResolvedMetrics(
+        let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
             screenScale: screenScale
         )
@@ -201,19 +246,21 @@ public final class WIWebViewViewportCoordinator: NSObject {
         }
 
         lastAppliedResolvedMetrics = resolvedMetrics
+#if DEBUG
         appliedViewportUpdateCount += 1
+#endif
         if #available(iOS 26.0, *) {
             webView.obscuredContentInsets = resolvedMetrics.obscuredInsets
-            WIWebViewViewportSPIBridge.apply(
+            ViewportSPIBridge.apply(
                 unobscuredSafeAreaInsets: resolvedMetrics.unobscuredSafeAreaInsets,
                 to: webView
             )
-            WIWebViewViewportSPIBridge.apply(
+            ViewportSPIBridge.apply(
                 obscuredSafeAreaEdges: resolvedMetrics.safeAreaAffectedEdges,
                 to: webView
             )
         } else {
-            WIWebViewViewportSPIBridge.applyContentScrollInsetFallback(
+            ViewportSPIBridge.applyContentScrollInsetFallback(
                 resolvedMetrics.contentScrollInsetFallback,
                 to: webView.scrollView,
                 webView: webView
@@ -228,14 +275,12 @@ public final class WIWebViewViewportCoordinator: NSObject {
         observationView?.removeFromSuperview()
         observationView = nil
 
-        guard let hostViewController, let webView else {
+        guard let webView else {
             return
         }
 
-        if hostViewController.contentScrollView(for: .top) === webView.scrollView
-            || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
-            hostViewController.setContentScrollView(nil)
-        }
+        clearObservedScrollViewIfNeeded(on: observedHostViewController ?? hostViewController, webView: webView)
+        observedHostViewController = nil
     }
 
     private func applyScrollViewConfiguration(to scrollView: UIScrollView) {
@@ -252,7 +297,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
     }
 
     private func installObservationViewIfPossible() {
-        guard let hostView = hostViewController?.viewIfLoaded else {
+        guard let hostView = resolvedHostViewController()?.viewIfLoaded else {
             return
         }
 
@@ -260,13 +305,16 @@ public final class WIWebViewViewportCoordinator: NSObject {
     }
 
     private func installObservationViewIfPossible(in hostView: UIView) {
-        guard observationView == nil else {
+        if observationView?.superview === hostView {
             return
         }
 
+        observationView?.onViewportGeometryChanged = nil
+        observationView?.removeFromSuperview()
+
         let observationView = ViewportObservationView()
         observationView.onViewportGeometryChanged = { [weak self] in
-            self?.updateChromeState()
+            self?.updateViewport()
         }
         observationView.translatesAutoresizingMaskIntoConstraints = false
         observationView.isUserInteractionEnabled = false
@@ -284,6 +332,48 @@ public final class WIWebViewViewportCoordinator: NSObject {
         self.observationView = observationView
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
+    }
+
+    private func resolvedHostViewController() -> UIViewController? {
+        if let hostViewController {
+            return hostViewController
+        }
+        guard let webView else {
+            return nil
+        }
+
+        var responder: UIResponder? = webView
+        while let nextResponder = responder?.next {
+            if let viewController = nextResponder as? UIViewController {
+                return viewController
+            }
+            responder = nextResponder
+        }
+
+        return webView.window?.rootViewController
+    }
+
+    private func updateObservedHostViewControllerIfNeeded(
+        _ resolvedHostViewController: UIViewController,
+        webView: WKWebView
+    ) {
+        guard observedHostViewController !== resolvedHostViewController else {
+            return
+        }
+
+        clearObservedScrollViewIfNeeded(on: observedHostViewController, webView: webView)
+        observedHostViewController = resolvedHostViewController
+    }
+
+    private func clearObservedScrollViewIfNeeded(on hostViewController: UIViewController?, webView: WKWebView) {
+        guard let hostViewController else {
+            return
+        }
+
+        if hostViewController.contentScrollView(for: .top) === webView.scrollView
+            || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
+            hostViewController.setContentScrollView(nil)
+        }
     }
 
     private func observeWebViewStateIfPossible() {
@@ -308,16 +398,18 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     private func handleObservedWebViewStateChange() {
         lastAppliedResolvedMetrics = nil
-        updateChromeState()
+        updateViewport()
     }
 
+#if DEBUG
     func handleObservedWebViewStateChangeForTesting() {
         handleObservedWebViewStateChange()
     }
+#endif
 
     private func keyboardOverlapHeight() -> CGFloat {
         guard
-            let hostView = hostViewController?.view,
+            let hostView = resolvedHostViewController()?.view,
             let window = hostView.window,
             keyboardFrameInScreen.isNull == false
         else {
@@ -334,10 +426,10 @@ public final class WIWebViewViewportCoordinator: NSObject {
 
     private func inputAccessoryOverlapHeight() -> CGFloat {
         guard
-            let hostView = hostViewController?.view,
+            let hostView = resolvedHostViewController()?.view,
             let window = hostView.window,
             let webView,
-            let inputViewBoundsInWindow = WIWebViewViewportSPIBridge.inputViewBoundsInWindow(of: webView)
+            let inputViewBoundsInWindow = ViewportSPIBridge.inputViewBoundsInWindow(of: webView)
         else {
             return 0
         }
@@ -392,7 +484,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
         if resetFrame {
             keyboardFrameInScreen = .null
         }
-        updateChromeState()
+        updateViewport()
     }
 }
 
@@ -417,7 +509,7 @@ private final class ViewportObservationView: UIView {
 }
 
 private extension UIEdgeInsets {
-    func wi_roundedToPixel(_ screenScale: CGFloat) -> UIEdgeInsets {
+    func wk_roundedToPixel(_ screenScale: CGFloat) -> UIEdgeInsets {
         guard screenScale > 0 else {
             return self
         }
@@ -437,7 +529,7 @@ private extension UIEdgeInsets {
 
 @MainActor
 @available(iOS 26.0, *)
-private extension WIWebViewScrollEdgeEffectStyle {
+private extension ScrollEdgeEffectStyle {
     var uiKitStyle: UIScrollEdgeEffect.Style {
         switch self {
         case .automatic:
