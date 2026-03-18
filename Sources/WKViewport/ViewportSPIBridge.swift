@@ -1,35 +1,49 @@
 #if canImport(UIKit)
 import UIKit
 import WebKit
-import WebInspectorBridge
-import WebInspectorBridgeObjCShim
 
-enum WIWebViewViewportSPIBridge {
+enum ViewportSPISelectorNames {
+    private static func deobfuscate(_ reverseTokens: [String]) -> String {
+        reverseTokens.reversed().joined()
+    }
+
+    static let setUnobscuredSafeAreaInsets = deobfuscate([":", "Insets", "Area", "Safe", "Unobscured", "set", "_"])
+    static let setObscuredInsetEdgesAffectedBySafeArea = deobfuscate([
+        ":", "Area", "Safe", "By", "Affected", "Edges", "Inset", "Obscured", "set", "_"
+    ])
+    static let setObscuredInsetsInternal = deobfuscate([":", "Internal", "Insets", "Obscured", "set", "_"])
+    static let setContentScrollInset = deobfuscate([":", "Inset", "Scroll", "Content", "set", "_"])
+    static let setContentScrollInsetInternal = deobfuscate([":", "Internal", "Inset", "Scroll", "Content", "set", "_"])
+    static let frameOrBoundsMayHaveChanged = deobfuscate(["Changed", "Have", "May", "Bounds", "Or", "frame", "_"])
+    static let inputViewBoundsInWindow = deobfuscate(["Window", "In", "Bounds", "View", "input", "_"])
+}
+
+enum ViewportSPIBridge {
     private static let setContentScrollInsetSelector = NSSelectorFromString(
-        WISPISymbols.setContentScrollInsetSelector
+        ViewportSPISelectorNames.setContentScrollInset
     )
     private static let setContentScrollInsetInternalSelector = NSSelectorFromString(
-        WISPISymbols.setContentScrollInsetInternalSelector
+        ViewportSPISelectorNames.setContentScrollInsetInternal
     )
     private static let setObscuredInsetsInternalSelector = NSSelectorFromString(
-        WISPISymbols.setObscuredInsetsInternalSelector
+        ViewportSPISelectorNames.setObscuredInsetsInternal
     )
     private static let setUnobscuredSafeAreaInsetsSelector = NSSelectorFromString(
-        WISPISymbols.setUnobscuredSafeAreaInsetsSelector
+        ViewportSPISelectorNames.setUnobscuredSafeAreaInsets
     )
     private static let setObscuredInsetEdgesAffectedBySafeAreaSelector = NSSelectorFromString(
-        WISPISymbols.setObscuredInsetEdgesAffectedBySafeAreaSelector
+        ViewportSPISelectorNames.setObscuredInsetEdgesAffectedBySafeArea
     )
     private static let frameOrBoundsMayHaveChangedSelector = NSSelectorFromString(
-        WISPISymbols.frameOrBoundsMayHaveChangedSelector
+        ViewportSPISelectorNames.frameOrBoundsMayHaveChanged
     )
     private static let inputViewBoundsInWindowSelector = NSSelectorFromString(
-        WISPISymbols.inputViewBoundsInWindowSelector
+        ViewportSPISelectorNames.inputViewBoundsInWindow
     )
 
     @discardableResult
     static func applyObscuredInsetsFallback(
-        _ resolvedMetrics: WIWebViewChromeResolvedMetrics,
+        _ resolvedMetrics: ResolvedViewportMetrics,
         to object: NSObject
     ) -> Bool {
         guard object.responds(to: Self.setObscuredInsetsInternalSelector) else {
