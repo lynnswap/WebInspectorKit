@@ -9,8 +9,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 ## Products
 
 - `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
-- `WebInspectorEngine` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
-- `WKViewport`: Explicit `WKWebView` viewport coordination for bars, safe area, keyboard overlap, and managed hosting
+- `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
 
 `WebInspectorKit` depends on `WebInspectorEngine`.
 
@@ -55,17 +54,6 @@ final class BrowserViewController: UIViewController {
     }
 }
 ```
-
-On iOS, `WITabViewController` defaults to `DOM + Network`.
-
-- `compact` (`horizontalSizeClass == .compact`): `DOM`, `Element` (auto inserted when missing), `Network`
-- `regular/unspecified` (`horizontalSizeClass != .compact`): `DOM` (split DOM + Element), `Network`
-- In `regular/unspecified`, `wi_element` is always merged into `wi_dom` and never shown as a standalone tab.
-- `UISplitViewController` is used only in `regular/unspecified` (`DOM`, `Network`). `compact` keeps single-column tab flows.
-- `compact`: hosted by `UITabBarController`; each tab root is wrapped in `UINavigationController`.
-- `regular/unspecified`: hosted by `UINavigationController` with a centered segmented tab switcher.
-- Network search/filter use standard UIKit navigation APIs (`UISearchController`, `UIBarButtonItem` menu).
-- `WITabViewController` now inherits from `UIViewController` (it no longer subclasses `UITabBarController`).
 
 ### AppKit
 
@@ -116,32 +104,6 @@ let container = WITabViewController(
     tabs: [.dom(), .network(), customTab]
 )
 ```
-
-## WKViewport
-
-`WKViewport` is a separate product in this package. Import it explicitly when you want viewport coordination without pulling it through `WebInspectorKit`.
-
-```swift
-import UIKit
-import WebKit
-import WKViewport
-
-final class BrowserViewController: UIViewController {
-    private let pageWebView = WKWebView(frame: .zero)
-    private var viewportCoordinator: ViewportCoordinator?
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.addSubview(pageWebView)
-        pageWebView.frame = view.bounds
-        pageWebView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-
-        viewportCoordinator = ViewportCoordinator(webView: pageWebView)
-    }
-}
-```
-
-`ManagedViewportWebView` is also available when you want a `WKWebView` subclass that manages viewport coordination automatically. `WKViewport` keeps iOS 18 era private selector fallback behavior for inset/chrome coordination, so treat it as an iOS-focused utility product.
 
 ## Migration
 

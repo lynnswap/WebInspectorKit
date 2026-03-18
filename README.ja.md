@@ -9,7 +9,7 @@
 ## 製品
 
 - `WebInspectorKit`: コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
-- `WebInspectorEngine`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
+- `WebInspectorEngine`: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
 `WebInspectorKit` は `WebInspectorEngine` に依存します。
 
@@ -55,17 +55,6 @@ final class BrowserViewController: UIViewController {
     }
 }
 ```
-
-`WITabViewController` は iOS ではデフォルト `DOM + Network` です。
-
-- `compact`（`horizontalSizeClass == .compact`）: `DOM` / `Element`（未指定時は自動追加）/ `Network`
-- `regular/unspecified`（`horizontalSizeClass != .compact`）: `DOM`（DOM + Element の split）/ `Network`
-- `regular/unspecified` では `wi_element` は常に `wi_dom` に統合され、独立タブとしては表示されません。
-- `UISplitViewController` は `regular/unspecified` のみで利用します（`DOM` / `Network`）。`compact` は単一カラムのタブ遷移です。
-- `compact` は `UITabBarController` ベースで、各タブ root は `UINavigationController` にラップされます。
-- `regular/unspecified` は `UINavigationController` ベースで、中央の segmented control でタブ切り替えします。
-- Network の検索/フィルタは UIKit 標準 API（`UISearchController` / `UIBarButtonItem` メニュー）を使用します。
-- `WITabViewController` は `UIViewController` 継承です（`UITabBarController` 継承ではありません）。
 
 ### AppKit
 
