@@ -1,37 +1,99 @@
-# MIGRATION (Next Release)
+# Migration from v0.1.x
 
-This release includes **breaking API changes** around tab modeling and ownership.
+This guide lists only the source changes that matter when upgrading from `v0.1.x` to the current API.
 
-## Breaking Changes
+Internal refactors, transport rewrites, module splits, and cache changes are intentionally omitted unless they require changes in app code.
 
-| Old | New |
+## 1. Replace the old inspector entry point
+
+`WebInspectorView` was removed.
+
+Use `WITabViewController` with a `WIModel` instead.
+
+```swift
+private let inspector = WIModel()
+
+@objc private func presentInspector() {
+    let controller = WITabViewController(
+        inspector,
+        webView: pageWebView,
+        tabs: [.dom(), .network()]
+    )
+    present(controller, animated: true)
+}
+```
+
+If your app used the default inspector UI, this is the main migration.
+
+## 2. Rename the model and lifecycle API
+
+| `v0.1.x` | Current |
 | --- | --- |
-| `WITabDescriptor` | `WITab` |
-| `WITab` (value type-like usage) | `WITab: NSObject` |
-| `WIModel.setTabsFromUI(_:)` | `WIModel.setTabs(_:)` |
-| Host-side tab cache (`RenderEntry` / `TabEntry` / `stableKey`) | `WITab` internal content VC cache |
-| `WISessionLifecycle` in `WebInspectorEngine` | `WISessionLifecycle` in `WebInspectorRuntime` |
+| `WebInspectorModel` | `WIModel` |
+| `WebInspectorConfiguration` | `WIModelConfiguration` |
+| `attach(webView:)` | `connect(to:)` |
+| `detach()` | `disconnect()` |
 
-## New Architecture
+`suspend()` is still available.
 
-- SSOT remains `WIModel` (`tabs` / `selectedTab`).
-- Observation compatibility layer has been renamed to `ObservationBridge` and package resolution now targets `ObservationBridge` `0.4.0`.
-- `WITab` owns:
-  - tab definition (`identifier`, `title`, `image`, `role`)
-  - optional `viewControllerProvider`
-  - optional `userInfo`
-  - internal cached content view controller
-- UIKit/AppKit hosts project `WIModel` directly using Observation.
-- Observation handles are retained explicitly via `.store(in:)` with lifecycle-scoped `Set<ObservationHandle>` stores in UI hosts/cells.
-- `ObservationsCompat` remains only as a temporary shim in upstream package and is no longer imported in this repository.
-- Compact Element synthetic tab handling stays in UIKit host layer only.
+The DOM-related configuration fields keep the same meaning, but they now live under `WIModelConfiguration.dom`.
 
-## Migration Steps
+Before:
 
-1. Replace `WITabDescriptor` with `WITab`.
-2. Replace `setTabsFromUI(_:)` calls with `setTabs(_:)`.
-3. Remove app-side dependencies on host `stableKey` behavior.
-4. Keep custom tabs through `WITab(..., viewControllerProvider:)` and use `userInfo` for per-tab metadata when needed.
-5. Migrate imports from `ObservationsCompat` to `ObservationBridge`.
-6. For all `observe/observeTask` usage, keep returned handles in lifecycle-owned sets using `.store(in:)`.
-7. Rebuild and run tests to confirm there are no references to removed types/APIs.
+```swift
+let inspector = WebInspectorModel(
+    configuration: WebInspectorConfiguration(
+        snapshotDepth: 6,
+        subtreeDepth: 4,
+        autoUpdateDebounce: 0.3
+    )
+)
+
+inspector.attach(webView: webView)
+```
+
+After:
+
+```swift
+let inspector = WIModel(
+    configuration: WIModelConfiguration(
+        dom: DOMConfiguration(
+            snapshotDepth: 6,
+            subtreeDepth: 4,
+            autoUpdateDebounce: 0.3
+        )
+    )
+)
+
+inspector.connect(to: webView)
+```
+
+## 3. Update custom tab definitions
+
+The important source-level changes are:
+
+- `WITab` changed from a value type to a reference type.
+- `WITabRole` became `WITab.Role`.
+- `value:` became `id:` / `identifier:`.
+- Tab titles are now plain `String`.
+- The old `WITabBuilder`-based `WebInspectorView { ... }` API is gone.
+- Custom tabs now provide a platform view controller (`UIViewController` / `NSViewController`).
+
+```swift
+let customTab = WITab(
+    id: "custom",
+    title: "Custom",
+    systemImage: "folder",
+    role: .other
+) { _ in
+    MyCustomViewController()
+}
+
+let controller = WITabViewController(
+    inspector,
+    webView: pageWebView,
+    tabs: [.dom(), .network(), customTab]
+)
+```
+
+If you only use the built-in tabs, keep using `.dom()`, `.network()`, and on UIKit `.element()`.
