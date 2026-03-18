@@ -86,7 +86,7 @@ struct ControllerActivationTests {
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
 
         selectTab("wi_element", in: store)
-        #expect(controller.dom.session.isAutoSnapshotEnabled == false)
+        #expect(controller.dom.session.isAutoSnapshotEnabled == true)
 
         selectTab("wi_dom", in: store)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)

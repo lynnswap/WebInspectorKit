@@ -7,6 +7,7 @@ import WebInspectorRuntime
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
     private let model: WIModel
     private let renderCache: WIUIKitTabRenderCache
+    private let synthesizedElementTab = WITab.element()
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
@@ -33,6 +34,12 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         bindModel()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        restoreModelSelectionIfNeeded(displayTabs: displayTabs)
+        syncNativeSelection(with: model.selectedTab)
+    }
+
     func prepareForRemoval() {
         delegate = nil
         tabObservationHandles.removeAll()
@@ -44,6 +51,13 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     var currentUITabsForTesting: [UITab] {
         tabs
+    }
+
+    private var displayTabs: [WITab] {
+        wiCompactDisplayTabs(
+            from: model.tabs,
+            synthesizedElementTab: synthesizedElementTab
+        )
     }
 
     private func bindModel() {
@@ -70,19 +84,21 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func rebuildNativeTabsIfPossible() {
-        renderCache.prune(activeTabs: model.tabs)
-        // Intentionally project `model.tabs` as-is in compact mode.
-        // We do not synthesize `.element` here; `WIModel.tabs` is the SSOT across layout changes.
-        let desiredTabs = model.tabs.map { makeNativeTab(for: $0) }
+        let resolvedDisplayTabs = displayTabs
+        restoreModelSelectionIfNeeded(displayTabs: resolvedDisplayTabs)
+        renderCache.prune(activeTabs: resolvedDisplayTabs)
+        let desiredTabs = resolvedDisplayTabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
-        syncNativeSelection(with: model.selectedTab)
+        syncNativeSelection(with: model.selectedTab, displayTabs: resolvedDisplayTabs)
     }
 
     private func applyNativeTabsIfNeeded(_ desiredTabs: [UITab]) {
         guard tabsMatchCurrent(desiredTabs) == false else {
             return
         }
+        isApplyingSelectionFromModel = true
         setTabs(desiredTabs, animated: false)
+        isApplyingSelectionFromModel = false
     }
 
     private func tabsMatchCurrent(_ desiredTabs: [UITab]) -> Bool {
@@ -115,13 +131,14 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         return nativeTab
     }
 
-    private func syncNativeSelection(with tab: WITab?) {
-        guard tabs.isEmpty == false else {
+    private func syncNativeSelection(with tab: WITab?, displayTabs: [WITab]? = nil) {
+        let displayTabs = displayTabs ?? self.displayTabs
+        guard displayTabs.isEmpty == false, tabs.isEmpty == false else {
             return
         }
 
         guard
-            let targetModelTab = resolveDisplayedModelTab(from: tab),
+            let targetModelTab = resolveDisplayedModelTab(from: tab, in: displayTabs),
             let targetTab = resolveNativeTab(for: targetModelTab)
         else {
             return
@@ -160,27 +177,42 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func applyUserSelection(selectedTab: WITab) {
+        model.setPreferredCompactSelectedTabIdentifierFromUI(selectedTab.identifier)
         model.setSelectedTabFromUI(selectedTab)
     }
 
-    private func resolveDisplayedModelTab(from requestedTab: WITab?) -> WITab? {
-        guard let requestedTab else {
-            return model.tabs.first
+    private func restoreModelSelectionIfNeeded(displayTabs: [WITab]) {
+        guard let preferredIdentifier = model.preferredCompactSelectedTabIdentifier else {
+            return
         }
-        if let exactMatch = model.tabs.first(where: { $0 === requestedTab }) {
+        guard model.selectedTab?.identifier != preferredIdentifier else {
+            return
+        }
+        guard let preferredTab = displayTabs.first(where: { $0.identifier == preferredIdentifier }) else {
+            return
+        }
+        model.setSelectedTabFromUI(preferredTab)
+    }
+
+    private func resolveDisplayedModelTab(from requestedTab: WITab?, in displayTabs: [WITab]) -> WITab? {
+        guard let requestedTab else {
+            return displayTabs.first
+        }
+        if let exactMatch = displayTabs.first(where: { $0 === requestedTab }) {
             return exactMatch
         }
-        if let identifierMatch = model.tabs.first(where: { $0.identifier == requestedTab.identifier }) {
+        if let identifierMatch = displayTabs.first(where: { $0.identifier == requestedTab.identifier }) {
             return identifierMatch
         }
-        return model.tabs.first
+        return displayTabs.first
     }
 
     private func resolveModelTab(for nativeTab: UITab) -> WITab? {
-        if let exactMatch = renderCache.modelTab(for: nativeTab, among: model.tabs) {
+        let resolvedDisplayTabs = displayTabs
+        if let exactMatch = renderCache.modelTab(for: nativeTab, among: resolvedDisplayTabs) {
             return exactMatch
         }
-        return model.tabs.first(where: { $0.identifier == nativeTab.identifier })
+        return resolvedDisplayTabs.first(where: { $0.identifier == nativeTab.identifier })
     }
 
     private func resolveNativeTab(for modelTab: WITab) -> UITab? {
