@@ -204,9 +204,13 @@ private extension NetworkTransportDriver {
 
     func startPageEventLoop(using transportSession: WITransportSession) {
         pageEventTask?.cancel()
+        transportSession.beginPageEventSubscription()
         pageEventTask = Task { @MainActor [weak self, weak transportSession] in
             guard let self, let transportSession else {
                 return
+            }
+            defer {
+                transportSession.endPageEventSubscription()
             }
 
             while self.transportSession === transportSession,

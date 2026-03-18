@@ -285,7 +285,10 @@ struct WITransportSessionTests {
     func inboundQueuePreservesRootThenPageArrivalOrder() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
-            configuration: .init(responseTimeout: .seconds(1)),
+            configuration: .init(
+                responseTimeout: .seconds(1),
+                dropEventsWithoutSubscribers: false
+            ),
             backendFactory: { _ in backend }
         )
         let webView = makeIsolatedTestWebView()
@@ -308,6 +311,42 @@ struct WITransportSessionTests {
             "Network.responseReceived",
         ])
         #expect(events.map(\.targetIdentifier) == ["page-A", "page-B", "page-B"])
+    }
+
+    @Test
+    func pageEventBufferKeepsNewestEnvelopesForLateConsumersWhenConfigured() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(
+                responseTimeout: .seconds(1),
+                eventBufferLimit: 2,
+                dropEventsWithoutSubscribers: false
+            ),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+        )
+        backend.emitPageMessage(
+            #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
+            targetIdentifier: "page-B"
+        )
+        backend.emitPageMessage(
+            #"{"method":"Network.loadingFinished","params":{"requestId":"request-1"}}"#,
+            targetIdentifier: "page-B"
+        )
+        backend.waitForPendingMessages()
+
+        let events = await Self.nextEvents(from: session, count: 2)
+        #expect(events.map(\.method) == [
+            "Network.requestWillBeSent",
+            "Network.loadingFinished",
+        ])
+        #expect(events.map(\.targetIdentifier) == ["page-B", "page-B"])
     }
 
     @Test
@@ -334,7 +373,10 @@ struct WITransportSessionTests {
     func nextPageEventReturnsLifecycleAndNetworkEventsInOrder() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
-            configuration: .init(responseTimeout: .seconds(1)),
+            configuration: .init(
+                responseTimeout: .seconds(1),
+                dropEventsWithoutSubscribers: false
+            ),
             backendFactory: { _ in backend }
         )
         let webView = makeIsolatedTestWebView()
@@ -361,6 +403,58 @@ struct WITransportSessionTests {
             "Target.targetDestroyed",
         ])
         #expect(events.map(\.targetIdentifier) == ["page-A", "page-B", "page-B", "page-B"])
+    }
+
+    @Test
+    func pageEventBufferKeepsNewestEnvelopesForSlowConsumersAfterSubscriptionStarts() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(
+                responseTimeout: .seconds(1),
+                eventBufferLimit: 2,
+                dropEventsWithoutSubscribers: true
+            ),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        await session.withPageEventSubscription {
+            let firstEventTask = Task { @MainActor in
+                await session.nextPageEvent()
+            }
+            await Task.yield()
+
+            backend.emitRootMessage(
+                #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+            )
+            backend.waitForPendingMessages()
+
+            let firstEvent = await firstEventTask.value
+            #expect(firstEvent?.method == "Target.didCommitProvisionalTarget")
+            #expect(firstEvent?.targetIdentifier == "page-B")
+
+            backend.emitPageMessage(
+                #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
+                targetIdentifier: "page-B"
+            )
+            backend.emitPageMessage(
+                #"{"method":"Network.responseReceived","params":{"requestId":"request-1"}}"#,
+                targetIdentifier: "page-B"
+            )
+            backend.emitRootMessage(
+                #"{"method":"Target.targetDestroyed","params":{"targetId":"page-B"}}"#
+            )
+            backend.waitForPendingMessages()
+
+            let events = await Self.nextEvents(from: session, count: 2)
+            #expect(events.map(\.method) == [
+                "Network.responseReceived",
+                "Target.targetDestroyed",
+            ])
+            #expect(events.map(\.targetIdentifier) == ["page-B", "page-B"])
+        }
     }
 
     @Test
@@ -479,15 +573,17 @@ private extension WITransportSessionTests {
         from session: WITransportSession,
         count: Int
     ) async -> [WITransportEventEnvelope] {
-        var events: [WITransportEventEnvelope] = []
-        events.reserveCapacity(count)
-        for _ in 0..<count {
-            guard let event = await session.nextPageEvent() else {
-                break
+        await session.withPageEventSubscription {
+            var events: [WITransportEventEnvelope] = []
+            events.reserveCapacity(count)
+            for _ in 0..<count {
+                guard let event = await session.nextPageEvent() else {
+                    break
+                }
+                events.append(event)
             }
-            events.append(event)
+            return events
         }
-        return events
     }
 
     static func codec() -> WITransportCodec {

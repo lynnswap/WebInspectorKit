@@ -28,6 +28,7 @@ public final class WITransportSession {
     private var queuedPageEvents: [WITransportEventEnvelope] = []
     private var pageEventWaiter: CheckedContinuation<WITransportEventEnvelope?, Never>?
     private var pageEventQueueClosed = true
+    private var pageEventSubscriberCount = 0
 
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
@@ -200,6 +201,22 @@ public final class WITransportSession {
                 parametersData: parametersData
             )
         )
+    }
+
+    package func beginPageEventSubscription() {
+        pageEventSubscriberCount += 1
+    }
+
+    package func endPageEventSubscription() {
+        pageEventSubscriberCount = max(0, pageEventSubscriberCount - 1)
+    }
+
+    package func withPageEventSubscription<T>(_ operation: () async -> T) async -> T {
+        beginPageEventSubscription()
+        defer {
+            endPageEventSubscription()
+        }
+        return await operation()
     }
 
     package func nextPageEvent() async -> WITransportEventEnvelope? {
@@ -467,8 +484,11 @@ private extension WITransportSession {
         if let waiter = pageEventWaiter {
             pageEventWaiter = nil
             waiter.resume(returning: envelope)
-        } else {
+        } else if pageEventSubscriberCount > 0 || !configuration.dropEventsWithoutSubscribers {
             queuedPageEvents.append(envelope)
+            if queuedPageEvents.count > configuration.eventBufferLimit {
+                queuedPageEvents.removeFirst(queuedPageEvents.count - configuration.eventBufferLimit)
+            }
         }
     }
 
@@ -478,6 +498,7 @@ private extension WITransportSession {
         queuedPageEvents.removeAll(keepingCapacity: true)
         pageEventWaiter = nil
         pageEventQueueClosed = false
+        pageEventSubscriberCount = 0
     }
 
     func disconnectTransportState() {
