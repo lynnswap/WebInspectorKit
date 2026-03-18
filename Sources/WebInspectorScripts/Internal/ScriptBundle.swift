@@ -1,7 +1,8 @@
 import Foundation
+import WebInspectorScriptsGenerated
 
 enum ScriptBundle {
     static func source(named name: String) -> String? {
-        BundledJavaScriptData.scripts[name]
+        CommittedBundledJavaScriptData.scripts[name]
     }
 }

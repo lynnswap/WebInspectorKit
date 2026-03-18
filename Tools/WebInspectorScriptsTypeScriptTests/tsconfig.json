@@ -4,6 +4,12 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "vitest": ["./node_modules/vitest"],
+      "vitest/*": ["./node_modules/vitest/*"]
+    },
+    "types": ["node", "vitest/globals"],
     "noEmit": true,
     "strict": true,
     "noImplicitAny": true,
@@ -22,8 +28,9 @@
     "esModuleInterop": true
   },
   "include": [
-    "../**/*.ts",
+    "../../Sources/WebInspectorScripts/TypeScript/**/*.ts",
     "./**/*.ts",
-    "./vitest.config.ts"
+    "./vitest.config.ts",
+    "./vitest.setup.ts"
   ]
 }

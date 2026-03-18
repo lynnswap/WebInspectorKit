@@ -130,6 +130,54 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func pageCommandWaitsForInitialPageTargetWhenNeeded() async throws {
+        let backend = FakeSessionBackend(attachHandler: { messageSink in
+            Task { @MainActor in
+                await Task.yield()
+                messageSink.didReceiveRootMessage(
+                    #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-late","type":"page","isProvisional":false}}}"#
+                )
+            }
+        })
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            #expect(targetIdentifier == "page-late")
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [
+                        "frameTree": [
+                            "frame": [
+                                "id": "frame-late",
+                                "loaderId": "loader-late",
+                                "url": "https://example.com/late",
+                                "securityOrigin": "https://example.com",
+                                "mimeType": "text/html",
+                            ],
+                            "resources": [],
+                        ],
+                    ],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let response = try await Self.pageGetResourceTree(using: session)
+
+        #expect(response.frameTree.frame.id == "frame-late")
+        #expect(session.currentPageTargetIdentifier() == "page-late")
+    }
+
+    @Test
     func waitForPageTargetTimesOutWithoutTargets() async throws {
         let clock = TestClock()
         let backend = FakeSessionBackend(attachHandler: { _ in })

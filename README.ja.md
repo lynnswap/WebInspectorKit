@@ -110,6 +110,14 @@ let container = WITabViewController(
 
 破壊的変更の詳細は [`MIGRATION.md`](Docs/MIGRATION.md) を参照してください。
 
+## コントリビュータ向け運用
+
+- Swift package の利用者に `node` / `pnpm` / `esbuild` は不要です。
+- `Sources/WebInspectorScripts/TypeScript`、`Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.js`、`Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/obfuscate.config.json` を変更したら `./Scripts/generate-bundled-js.sh` を実行してください。
+- `./Scripts/generate-bundled-js.sh` は毎回 `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS` を `pnpm install --frozen-lockfile` で同期し、その後 `Generated/WebInspectorScriptsGenerated/CommittedBundledJavaScriptData.swift` を更新します。
+- TypeScript の `.test.ts` は `Sources/WebInspectorScripts/TypeScript/Tests` に残し、pnpm/vitest harness だけを `Tools/WebInspectorScriptsTypeScriptTests` に置いて、`node_modules` が `Sources/` 配下に生えないようにしています。
+- TypeScript や tooling の変更と、再生成された `CommittedBundledJavaScriptData.swift` は同じコミットに含めてください。
+
 ## ライセンス
 
 [LICENSE](LICENSE) を参照してください。
