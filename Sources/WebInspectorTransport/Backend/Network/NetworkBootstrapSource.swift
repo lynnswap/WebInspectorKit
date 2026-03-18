@@ -18,6 +18,7 @@ package struct NetworkBootstrapLoad {
 package protocol NetworkBootstrapSource {
     func load(
         using session: WITransportSession,
+        targetIdentifier: String,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
@@ -32,17 +33,18 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
 
     package func load(
         using session: WITransportSession,
+        targetIdentifier: String,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
-        let result = try await session.sendPageDataCapturingCurrentTarget(
-            method: WITransportMethod.Network.getBootstrapSnapshot
+        let result = try await session.sendPageData(
+            method: WITransportMethod.Network.getBootstrapSnapshot,
+            targetIdentifier: targetIdentifier
         )
-        let capturedTargetIdentifier = result.targetIdentifier
         let snapshot = try await codec.decode(
             NetworkGetBootstrapSnapshotResponse.self,
-            from: result.data
+            from: result
         )
         let syntheticDefaultSessionID = defaultSessionID(nil)
         let now = Date().timeIntervalSince1970
@@ -52,17 +54,17 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
                 ?? normalizeScopeID(resource.frameID)
             let resolvedOwnerSessionID = normalizedOwnerSessionID
                 ?? normalizeScopeID(resource.targetIdentifier)
-                ?? defaultSessionID(capturedTargetIdentifier)
+                ?? defaultSessionID(targetIdentifier)
             let resolvedTargetIdentifier = normalizeScopeID(resource.bodyFetchDescriptor?.targetIdentifier)
                 ?? normalizeScopeID(resource.targetIdentifier)
-                ?? ((resolvedOwnerSessionID == defaultSessionID(capturedTargetIdentifier)
+                ?? ((resolvedOwnerSessionID == defaultSessionID(targetIdentifier)
                     || resolvedOwnerSessionID == syntheticDefaultSessionID)
-                    ? normalizeScopeID(capturedTargetIdentifier)
+                    ? normalizeScopeID(targetIdentifier)
                     : normalizedOwnerSessionID)
             let resolvedRequestTargetIdentifier = normalizeScopeID(resource.targetIdentifier)
-                ?? ((resolvedOwnerSessionID == defaultSessionID(capturedTargetIdentifier)
+                ?? ((resolvedOwnerSessionID == defaultSessionID(targetIdentifier)
                     || resolvedOwnerSessionID == syntheticDefaultSessionID)
-                    ? normalizeScopeID(capturedTargetIdentifier)
+                    ? normalizeScopeID(targetIdentifier)
                     : normalizedOwnerSessionID)
             let requestID = allocateRequestID()
             let responseBodyLocator: NetworkDeferredBodyLocator?
@@ -190,19 +192,20 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
 
     package func load(
         using session: WITransportSession,
+        targetIdentifier: String,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
-        let result = try await session.sendPageDataCapturingCurrentTarget(
-            method: WITransportMethod.Page.getResourceTree
+        let result = try await session.sendPageData(
+            method: WITransportMethod.Page.getResourceTree,
+            targetIdentifier: targetIdentifier
         )
-        let capturedTargetIdentifier = result.targetIdentifier
         let response = try await codec.decode(
             WITransportPageGetResourceTreeResponse.self,
-            from: result.data
+            from: result
         )
-        let defaultTargetIdentifier = normalizeScopeID(capturedTargetIdentifier)
+        let defaultTargetIdentifier = normalizeScopeID(targetIdentifier)
         let now = Date().timeIntervalSince1970
         var snapshots: [NetworkEntry.Snapshot] = []
 
@@ -360,7 +363,7 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
 
         appendResources(
             from: response.frameTree,
-            parentSessionID: defaultSessionID(capturedTargetIdentifier),
+            parentSessionID: defaultSessionID(targetIdentifier),
             parentTargetIdentifier: defaultTargetIdentifier
         )
         return NetworkBootstrapLoad(snapshots: snapshots)

@@ -115,6 +115,7 @@ package struct NetworkTransportClient {
 
     package func loadBootstrapResources(
         using session: WITransportSession,
+        targetIdentifier: String,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?,
@@ -124,6 +125,7 @@ package struct NetworkTransportClient {
             do {
                 return try await StableBootstrapSource().load(
                     using: session,
+                    targetIdentifier: targetIdentifier,
                     allocateRequestID: allocateRequestID,
                     defaultSessionID: defaultSessionID,
                     normalizeScopeID: normalizeScopeID
@@ -138,6 +140,7 @@ package struct NetworkTransportClient {
         do {
             return try await HistoricalBootstrapSource().load(
                 using: session,
+                targetIdentifier: targetIdentifier,
                 allocateRequestID: allocateRequestID,
                 defaultSessionID: defaultSessionID,
                 normalizeScopeID: normalizeScopeID

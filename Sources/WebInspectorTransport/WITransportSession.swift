@@ -26,9 +26,9 @@ public final class WITransportSession {
     private var backendMessageSink: WITransportSessionMessageSink?
 
     private var queuedPageEvents: [WITransportEventEnvelope] = []
-    private var pageEventWaiter: CheckedContinuation<WITransportEventEnvelope?, Never>?
+    private var pageEventStreamContinuation: AsyncStream<WITransportEventEnvelope>.Continuation?
     private var pageEventQueueClosed = true
-    private var pageEventSubscriberCount = 0
+    private var hasAttachedPageEventConsumer = false
 
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
@@ -72,11 +72,6 @@ public final class WITransportSession {
         do {
             try await backend.attach(to: webView, messageSink: messageSink)
             supportSnapshot = backend.supportSnapshot
-
-            try await pageTargetTracker.waitUntilAvailable(
-                timeout: configuration.responseTimeout,
-                clock: clock
-            )
             guard state == .attaching, self.backend != nil else {
                 throw WITransportError.transportClosed
             }
@@ -118,6 +113,64 @@ public final class WITransportSession {
         webView = nil
         transition(to: .detached)
         log("detached")
+    }
+
+    public func waitForPageTarget(timeout: Duration? = nil) async throws -> String {
+        try await waitForPageTarget(excluding: nil, timeout: timeout)
+    }
+
+    package func waitForReplacementPageTarget(
+        after targetIdentifier: String,
+        timeout: Duration? = nil
+    ) async throws -> String {
+        try await waitForPageTarget(excluding: targetIdentifier, timeout: timeout)
+    }
+
+    private func waitForPageTarget(
+        excluding excludedTargetIdentifier: String?,
+        timeout: Duration?
+    ) async throws -> String {
+        guard backend != nil else {
+            throw WITransportError.notAttached
+        }
+
+        let resolvedTimeout = timeout ?? configuration.responseTimeout
+        let timeoutError = WITransportError.requestTimedOut(
+            scope: .root,
+            method: "Target.targetCreated"
+        )
+        var didTimeOut = false
+        let waiterTask = Task { @MainActor in
+            try await self.pageTargetTracker.waitUntilAvailable(excluding: excludedTargetIdentifier)
+        }
+        let timeoutTask = Task { [clock] in
+            do {
+                try await clock.sleep(for: resolvedTimeout)
+            } catch {
+                return
+            }
+            await MainActor.run {
+                didTimeOut = true
+                waiterTask.cancel()
+            }
+        }
+
+        return try await withTaskCancellationHandler {
+            defer {
+                timeoutTask.cancel()
+            }
+
+            do {
+                let identifier = try await waiterTask.value
+                timeoutTask.cancel()
+                return identifier
+            } catch is CancellationError where didTimeOut {
+                throw timeoutError
+            }
+        } onCancel: {
+            waiterTask.cancel()
+            timeoutTask.cancel()
+        }
     }
 
     package func currentPageTargetIdentifier() -> String? {
@@ -186,55 +239,37 @@ public final class WITransportSession {
         }
     }
 
-    package func sendPageDataCapturingCurrentTarget(
-        method: String,
-        parametersData: Data? = nil
-    ) async throws -> (targetIdentifier: String, data: Data) {
-        guard let targetIdentifier = pageTargetTracker.currentIdentifier else {
-            throw WITransportError.pageTargetUnavailable
-        }
-        return (
-            targetIdentifier,
-            try await sendPageData(
-                method: method,
-                targetIdentifier: targetIdentifier,
-                parametersData: parametersData
-            )
-        )
-    }
+    package func pageEvents() -> AsyncStream<WITransportEventEnvelope> {
+        precondition(pageEventStreamContinuation == nil, "pageEvents() supports only a single consumer.")
 
-    package func beginPageEventSubscription() {
-        pageEventSubscriberCount += 1
-    }
+        let bufferedEvents = queuedPageEvents
+        queuedPageEvents.removeAll(keepingCapacity: true)
+        let isClosed = pageEventQueueClosed
+        hasAttachedPageEventConsumer = true
 
-    package func endPageEventSubscription() {
-        pageEventSubscriberCount = max(0, pageEventSubscriberCount - 1)
-    }
+        return AsyncStream(bufferingPolicy: .bufferingNewest(configuration.eventBufferLimit)) { continuation in
+            self.pageEventStreamContinuation = continuation
+            continuation.onTermination = { [weak self] _ in
+                guard let self else {
+                    return
+                }
 
-    package func withPageEventSubscription<T>(_ operation: () async -> T) async -> T {
-        beginPageEventSubscription()
-        defer {
-            endPageEventSubscription()
-        }
-        return await operation()
-    }
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self.pageEventStreamContinuation = nil
+                    }
+                } else {
+                    Task { @MainActor [weak self] in
+                        self?.pageEventStreamContinuation = nil
+                    }
+                }
+            }
 
-    package func nextPageEvent() async -> WITransportEventEnvelope? {
-        if !queuedPageEvents.isEmpty {
-            return queuedPageEvents.removeFirst()
-        }
-        if pageEventQueueClosed {
-            return nil
-        }
-
-        return await withCheckedContinuation { continuation in
-            if !queuedPageEvents.isEmpty {
-                continuation.resume(returning: queuedPageEvents.removeFirst())
-            } else if pageEventQueueClosed {
-                continuation.resume(returning: nil)
-            } else {
-                precondition(pageEventWaiter == nil, "nextPageEvent() supports only a single consumer.")
-                pageEventWaiter = continuation
+            for event in bufferedEvents {
+                continuation.yield(event)
+            }
+            if isClosed {
+                continuation.finish()
             }
         }
     }
@@ -481,10 +516,18 @@ private extension WITransportSession {
             paramsData: dataForJSONObject(paramsObject)
         )
 
-        if let waiter = pageEventWaiter {
-            pageEventWaiter = nil
-            waiter.resume(returning: envelope)
-        } else if pageEventSubscriberCount > 0 || !configuration.dropEventsWithoutSubscribers {
+        if let pageEventStreamContinuation {
+            switch pageEventStreamContinuation.yield(envelope) {
+            case .enqueued, .dropped:
+                return
+            case .terminated:
+                self.pageEventStreamContinuation = nil
+            @unknown default:
+                self.pageEventStreamContinuation = nil
+            }
+        }
+
+        if !hasAttachedPageEventConsumer || !configuration.dropEventsWithoutSubscribers {
             queuedPageEvents.append(envelope)
             if queuedPageEvents.count > configuration.eventBufferLimit {
                 queuedPageEvents.removeFirst(queuedPageEvents.count - configuration.eventBufferLimit)
@@ -496,14 +539,14 @@ private extension WITransportSession {
         replyRegistry.reset()
         pageTargetTracker.reset()
         queuedPageEvents.removeAll(keepingCapacity: true)
-        pageEventWaiter = nil
+        pageEventStreamContinuation = nil
         pageEventQueueClosed = false
-        pageEventSubscriberCount = 0
+        hasAttachedPageEventConsumer = false
     }
 
     func disconnectTransportState() {
         replyRegistry.resumeAllTransportClosed()
-        pageTargetTracker.failWaiter(WITransportError.transportClosed)
+        pageTargetTracker.failWaiters(WITransportError.transportClosed)
         pageTargetTracker.reset()
         closePageEventQueue()
     }
@@ -515,9 +558,9 @@ private extension WITransportSession {
 
         pageEventQueueClosed = true
         queuedPageEvents.removeAll(keepingCapacity: false)
-        let waiter = pageEventWaiter
-        pageEventWaiter = nil
-        waiter?.resume(returning: nil)
+        let continuation = pageEventStreamContinuation
+        pageEventStreamContinuation = nil
+        continuation?.finish()
     }
 
     func parseMessage(
@@ -745,11 +788,16 @@ private final class WITransportPageTargetTracker {
         let creationOrder: Int
     }
 
+    private struct AvailabilityWaiter {
+        let excludedIdentifier: String?
+        let continuation: CheckedContinuation<String, Error>
+    }
+
     private var targetsByIdentifier: [String: KnownPageTarget] = [:]
     private var currentIdentifierStorage: String?
     private var committedIdentifierStorage: String?
     private var nextCreationOrder = 0
-    private var availabilityWaiter: CheckedContinuation<Void, Error>?
+    private var availabilityWaiters: [UUID: AvailabilityWaiter] = [:]
 
     var currentIdentifier: String? {
         currentIdentifierStorage
@@ -817,45 +865,48 @@ private final class WITransportPageTargetTracker {
         return true
     }
 
-    func waitUntilAvailable(
-        timeout: Duration,
-        clock: any Clock<Duration>
-    ) async throws {
-        guard currentIdentifierStorage == nil else {
-            return
-        }
+    func waitUntilAvailable(excluding excludedIdentifier: String? = nil) async throws -> String {
+        while true {
+            if let currentIdentifierStorage,
+               currentIdentifierStorage != excludedIdentifier {
+                return currentIdentifierStorage
+            }
 
-        let timeoutTask = Task { [weak self] in
-            do {
-                try await clock.sleep(for: timeout)
-            } catch {
-                return
+            let waiterID = UUID()
+            let nextIdentifier = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    if let currentIdentifierStorage,
+                       currentIdentifierStorage != excludedIdentifier {
+                        continuation.resume(returning: currentIdentifierStorage)
+                        return
+                    }
+                    availabilityWaiters[waiterID] = AvailabilityWaiter(
+                        excludedIdentifier: excludedIdentifier,
+                        continuation: continuation
+                    )
+                }
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    self?.cancelAvailabilityWaiter(id: waiterID)
+                }
             }
-            await MainActor.run {
-                self?.failWaiter(
-                    WITransportError.requestTimedOut(scope: .root, method: "Target.targetCreated")
-                )
-            }
-        }
-        defer {
-            timeoutTask.cancel()
-        }
 
-        try await withCheckedThrowingContinuation { continuation in
-            if currentIdentifierStorage != nil {
-                continuation.resume()
-                return
+            if currentIdentifierStorage == nextIdentifier,
+               nextIdentifier != excludedIdentifier {
+                return nextIdentifier
             }
-            availabilityWaiter = continuation
         }
     }
 
-    func failWaiter(_ error: Error) {
-        guard let waiter = availabilityWaiter else {
+    func failWaiters(_ error: Error) {
+        guard !availabilityWaiters.isEmpty else {
             return
         }
-        availabilityWaiter = nil
-        waiter.resume(throwing: error)
+        let waiters = Array(availabilityWaiters.values.map(\.continuation))
+        availabilityWaiters.removeAll(keepingCapacity: true)
+        for waiter in waiters {
+            waiter.resume(throwing: error)
+        }
     }
 
     func reset() {
@@ -863,7 +914,7 @@ private final class WITransportPageTargetTracker {
         currentIdentifierStorage = nil
         committedIdentifierStorage = nil
         nextCreationOrder = 0
-        availabilityWaiter = nil
+        availabilityWaiters.removeAll(keepingCapacity: true)
     }
 
     private func refreshCurrentIdentifier() {
@@ -874,9 +925,14 @@ private final class WITransportPageTargetTracker {
             return
         }
 
-        if let waiter = availabilityWaiter, currentIdentifierStorage != nil {
-            availabilityWaiter = nil
-            waiter.resume()
+        if let currentIdentifierStorage, !availabilityWaiters.isEmpty {
+            let waiterIDsToResume = availabilityWaiters.compactMap { waiterID, waiter in
+                waiter.excludedIdentifier == currentIdentifierStorage ? nil : waiterID
+            }
+            let waiters = waiterIDsToResume.compactMap { availabilityWaiters.removeValue(forKey: $0)?.continuation }
+            for waiter in waiters {
+                waiter.resume(returning: currentIdentifierStorage)
+            }
         }
     }
 
@@ -907,6 +963,13 @@ private final class WITransportPageTargetTracker {
     private func nextCreationOrderValue() -> Int {
         defer { nextCreationOrder += 1 }
         return nextCreationOrder
+    }
+
+    private func cancelAvailabilityWaiter(id: UUID) {
+        guard let waiter = availabilityWaiters.removeValue(forKey: id)?.continuation else {
+            return
+        }
+        waiter.resume(throwing: CancellationError())
     }
 }
 
@@ -948,8 +1011,8 @@ private final class WITransportSessionMessageSink: WITransportBackendMessageSink
         }
     }
 
-    func waitForPendingMessagesForTesting() {
-        inboundPump.waitUntilDrained()
+    func waitForPendingMessagesForTesting() async {
+        await inboundPump.waitUntilDrained()
     }
 
     func invalidate() {
@@ -963,11 +1026,11 @@ private final class InboundMessagePump: @unchecked Sendable {
         var isDraining = false
         var queue: [WITransportInboundMessage] = []
         var readIndex = 0
+        var drainWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let sessionReference: SessionReference
     private let stateLock = NSLock()
-    private let pendingGroup = DispatchGroup()
     private var state = State()
 
     init(session: WITransportSession) {
@@ -979,7 +1042,6 @@ private final class InboundMessagePump: @unchecked Sendable {
 
         stateLock.lock()
         if state.isActive {
-            pendingGroup.enter()
             state.queue.append(message)
             if !state.isDraining {
                 state.isDraining = true
@@ -1002,54 +1064,60 @@ private final class InboundMessagePump: @unchecked Sendable {
         }
     }
 
-    func waitUntilDrained() {
-        if Thread.isMainThread {
+    func waitUntilDrained() async {
+        await MainActor.run {
             drainPendingMessagesOnMainThreadIfPossible()
-            let isFullyDrained = stateLock.withLock {
-                state.queue.isEmpty && state.readIndex == 0 && !state.isDraining
-            }
-            if isFullyDrained {
-                return
-            }
         }
-        pendingGroup.wait()
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            stateLock.lock()
+            state.drainWaiters.append(continuation)
+            stateLock.unlock()
+            resumeDrainWaitersIfNeeded()
+        }
     }
 
     func invalidate() {
-        let pendingCount: Int = stateLock.withLock {
-            guard state.isActive else {
-                return 0
-            }
-            state.isActive = false
-            let queuedCount = state.queue.count - state.readIndex
-            state.queue.removeAll(keepingCapacity: false)
-            state.readIndex = 0
-            state.isDraining = false
-            return max(0, queuedCount)
+        stateLock.lock()
+        guard state.isActive else {
+            stateLock.unlock()
+            return
         }
+        state.isActive = false
+        state.queue.removeAll(keepingCapacity: false)
+        state.readIndex = 0
+        state.isDraining = false
+        let drainWaiters = state.drainWaiters
+        state.drainWaiters.removeAll(keepingCapacity: true)
+        stateLock.unlock()
 
-        for _ in 0..<pendingCount {
-            pendingGroup.leave()
+        for drainWaiter in drainWaiters {
+            drainWaiter.resume()
         }
     }
 
     private func nextMessage() -> WITransportInboundMessage? {
-        stateLock.withLock {
-            guard state.readIndex < state.queue.count else {
-                state.queue.removeAll(keepingCapacity: true)
-                state.readIndex = 0
-                state.isDraining = false
-                return nil
-            }
-
-            let message = state.queue[state.readIndex]
+        stateLock.lock()
+        let result: WITransportInboundMessage?
+        if state.readIndex < state.queue.count {
+            result = state.queue[state.readIndex]
             state.readIndex += 1
             if state.readIndex == state.queue.count {
                 state.queue.removeAll(keepingCapacity: true)
                 state.readIndex = 0
             }
-            return message
+        } else {
+            state.queue.removeAll(keepingCapacity: true)
+            state.readIndex = 0
+            state.isDraining = false
+            result = nil
         }
+        stateLock.unlock()
+
+        if result == nil {
+            resumeDrainWaitersIfNeeded()
+        }
+        return result
     }
 
     private func drain() async {
@@ -1059,7 +1127,6 @@ private final class InboundMessagePump: @unchecked Sendable {
                     session.handleInboundMessage(message)
                 }
             }
-            pendingGroup.leave()
         }
     }
 
@@ -1072,7 +1139,22 @@ private final class InboundMessagePump: @unchecked Sendable {
             MainActor.assumeIsolated {
                 session.handleInboundMessage(message)
             }
-            pendingGroup.leave()
+        }
+    }
+
+    private func resumeDrainWaitersIfNeeded() {
+        stateLock.lock()
+        let drainWaiters: [CheckedContinuation<Void, Never>]
+        if state.queue.isEmpty && !state.isDraining && !state.drainWaiters.isEmpty {
+            drainWaiters = state.drainWaiters
+            state.drainWaiters.removeAll(keepingCapacity: true)
+        } else {
+            drainWaiters = []
+        }
+        stateLock.unlock()
+
+        for drainWaiter in drainWaiters {
+            drainWaiter.resume()
         }
     }
 }

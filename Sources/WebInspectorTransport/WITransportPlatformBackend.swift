@@ -26,11 +26,11 @@ package enum WITransportInboundMessage: Sendable {
     case page(message: String, targetIdentifier: String)
 }
 
-protocol WITransportBackendMessageSink: AnyObject {
+protocol WITransportBackendMessageSink: AnyObject, Sendable {
     func didReceiveRootMessage(_ message: String)
     func didReceivePageMessage(_ message: String, targetIdentifier: String)
     func didReceiveFatalFailure(_ message: String)
-    func waitForPendingMessagesForTesting()
+    func waitForPendingMessagesForTesting() async
 }
 
 @MainActor

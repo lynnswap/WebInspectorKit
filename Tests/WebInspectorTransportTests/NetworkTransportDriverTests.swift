@@ -182,6 +182,217 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func networkTransportDriverUsesSurvivingPageTargetAfterAttachChurn() async {
+        let backend = FakeRegistryBackend(
+            pageResultProvider: { method, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
+                    return nil
+                }
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
+                    resources: [
+                        makeFrameResourcePayload(
+                            url: "https://example.com/app.js",
+                            type: "Script",
+                            mimeType: "text/javascript"
+                        ),
+                    ]
+                )
+            },
+            attachHandler: { messageSink in
+                messageSink.didReceiveRootMessage(
+                    #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+                )
+                messageSink.didReceiveRootMessage(
+                    #"{"method":"Target.targetDestroyed","params":{"targetId":"page-A"}}"#
+                )
+                messageSink.didReceiveRootMessage(
+                    #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-B","type":"page","isProvisional":false}}}"#
+                )
+                await messageSink.waitForPendingMessagesForTesting()
+            }
+        )
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Network.enable
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Page.getResourceTree
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+        #expect(
+            !backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Page.getResourceTree
+                    && $0.targetIdentifier == "page-A"
+            }
+        )
+
+        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+    }
+
+    @Test
+    func networkTransportDriverRetriesInitialTargetEnableWhenReplacementEventsDrainLater() async {
+        var backend: FakeRegistryBackend!
+        var shouldFailInitialEnable = true
+        backend = FakeRegistryBackend(
+            pageResultProvider: { method, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
+                    return nil
+                }
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
+                    resources: [
+                        makeFrameResourcePayload(
+                            url: "https://example.com/app.js",
+                            type: "Script",
+                            mimeType: "text/javascript"
+                        ),
+                    ]
+                )
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard shouldFailInitialEnable,
+                      method == WITransportMethod.Network.enable,
+                      targetIdentifier == "page-A" else {
+                    return nil
+                }
+                shouldFailInitialEnable = false
+                Task { @MainActor [backend] in
+                    guard let backend else {
+                        return
+                    }
+                    backend.emitRootEvent(
+                        method: "Target.targetDestroyed",
+                        params: ["targetId": "page-A"]
+                    )
+                    backend.emitRootEvent(
+                        method: "Target.targetCreated",
+                        params: [
+                            "targetInfo": [
+                                "targetId": "page-B",
+                                "type": "page",
+                                "isProvisional": false,
+                            ]
+                        ]
+                    )
+                }
+                throw WITransportError.remoteError(
+                    scope: .root,
+                    method: "Target.sendMessageToTarget",
+                    message: "target closed"
+                )
+            }
+        )
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Network.enable
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Page.getResourceTree
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+
+        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+    }
+
+    @Test
+    func networkTransportDriverRechecksCurrentTargetAfterSuccessfulEnableBeforeBootstrap() async {
+        var backend: FakeRegistryBackend!
+        var shouldReplaceTargetAfterInitialEnable = true
+        backend = FakeRegistryBackend(
+            pageResultProvider: { method, _ in
+                guard method == WITransportMethod.Page.getResourceTree else {
+                    return nil
+                }
+                return makeResourceTreeResultPayload(
+                    mainURL: "https://example.com/",
+                    resources: [
+                        makeFrameResourcePayload(
+                            url: "https://example.com/app.js",
+                            type: "Script",
+                            mimeType: "text/javascript"
+                        ),
+                    ]
+                )
+            },
+            pageTargetedResultProvider: { method, _, targetIdentifier in
+                guard shouldReplaceTargetAfterInitialEnable,
+                      method == WITransportMethod.Network.enable,
+                      targetIdentifier == "page-A" else {
+                    return nil
+                }
+                shouldReplaceTargetAfterInitialEnable = false
+                Task { @MainActor [backend] in
+                    guard let backend else {
+                        return
+                    }
+                    backend.emitRootEvent(
+                        method: "Target.targetDestroyed",
+                        params: ["targetId": "page-A"]
+                    )
+                    backend.emitRootEvent(
+                        method: "Target.targetCreated",
+                        params: [
+                            "targetInfo": [
+                                "targetId": "page-B",
+                                "type": "page",
+                                "isProvisional": false,
+                            ]
+                        ]
+                    )
+                }
+                return [:]
+            }
+        )
+        let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Network.enable
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+        #expect(
+            backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Page.getResourceTree
+                    && $0.targetIdentifier == "page-B"
+            }
+        )
+        #expect(
+            !backend.sentPageTargets.contains {
+                $0.method == WITransportMethod.Page.getResourceTree
+                    && $0.targetIdentifier == "page-A"
+            }
+        )
+
+        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+    }
+
+    @Test
     func networkTransportDriverKeepsBootstrapAndLiveRequestsWhenSameURLStartsDuringBootstrap() async {
         var backend: FakeRegistryBackend!
         backend = FakeRegistryBackend(
@@ -967,9 +1178,10 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     private(set) var sentPageMethods: [String] = []
     private(set) var sentPageTargets: [SentPageTarget] = []
 
-    fileprivate var pageResultProvider: ((String, [String: Any]) -> [String: Any]?)?
-    fileprivate var pageTargetedResultProvider: ((String, [String: Any], String) -> [String: Any]?)?
+    fileprivate var pageResultProvider: ((String, [String: Any]) throws -> [String: Any]?)?
+    fileprivate var pageTargetedResultProvider: ((String, [String: Any], String) throws -> [String: Any]?)?
     private var failingAttachCount: Int
+    private let attachHandler: ((any WITransportBackendMessageSink) async -> Void)?
 
     private var messageSink: (any WITransportBackendMessageSink)?
     private var ownsWebKitTestIsolation = false
@@ -977,8 +1189,9 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     init(
         capabilities: Set<WITransportCapability> = [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
         failingAttachCount: Int = 0,
-        pageResultProvider: ((String, [String: Any]) -> [String: Any]?)? = nil,
-        pageTargetedResultProvider: ((String, [String: Any], String) -> [String: Any]?)? = nil
+        pageResultProvider: ((String, [String: Any]) throws -> [String: Any]?)? = nil,
+        pageTargetedResultProvider: ((String, [String: Any], String) throws -> [String: Any]?)? = nil,
+        attachHandler: ((any WITransportBackendMessageSink) async -> Void)? = nil
     ) {
         supportSnapshot = .supported(
             backendKind: .macOSNativeInspector,
@@ -987,6 +1200,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
         self.failingAttachCount = failingAttachCount
         self.pageResultProvider = pageResultProvider
         self.pageTargetedResultProvider = pageTargetedResultProvider
+        self.attachHandler = attachHandler
     }
 
     deinit {
@@ -1012,10 +1226,14 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             throw WITransportError.attachFailed("simulated attach failure")
         }
         self.messageSink = messageSink
-        messageSink.didReceiveRootMessage(
-            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
-        )
-        messageSink.waitForPendingMessagesForTesting()
+        if let attachHandler {
+            await attachHandler(messageSink)
+        } else {
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            )
+            await messageSink.waitForPendingMessagesForTesting()
+        }
     }
 
     func detach() {
@@ -1047,7 +1265,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             return
         }
 
-        let result = pageTargetedResultProvider?(method, payload, targetIdentifier)
+        let result = try pageTargetedResultProvider?(method, payload, targetIdentifier)
             ?? pageResultProvider?(method, payload)
             ?? [:]
 

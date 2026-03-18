@@ -176,8 +176,11 @@ private extension NetworkTransportDriver {
             do {
                 try await transportSession.attach(to: webView)
                 self.startPageEventLoop(using: transportSession)
-                try await self.enableNetworkIfNeeded(for: transportSession.currentPageTargetIdentifier(), session: transportSession)
-                try await self.bootstrapExistingResources(using: transportSession, contextID: bootstrapContextID)
+                _ = try await self.prepareInitialPageTarget(using: transportSession)
+                try await self.bootstrapExistingResources(
+                    using: transportSession,
+                    contextID: bootstrapContextID
+                )
                 self.finishBootstrap(contextID: bootstrapContextID)
             } catch {
                 self.finishBootstrap(contextID: bootstrapContextID)
@@ -204,17 +207,16 @@ private extension NetworkTransportDriver {
 
     func startPageEventLoop(using transportSession: WITransportSession) {
         pageEventTask?.cancel()
-        transportSession.beginPageEventSubscription()
+        let stream = transportSession.pageEvents()
         pageEventTask = Task { @MainActor [weak self, weak transportSession] in
             guard let self, let transportSession else {
                 return
             }
-            defer {
-                transportSession.endPageEventSubscription()
-            }
 
-            while self.transportSession === transportSession,
-                  let envelope = await transportSession.nextPageEvent() {
+            for await envelope in stream {
+                guard self.transportSession === transportSession else {
+                    break
+                }
                 await self.handlePageEvent(envelope, session: transportSession)
             }
             if self.transportSession === transportSession {
@@ -223,11 +225,49 @@ private extension NetworkTransportDriver {
         }
     }
 
+    func prepareInitialPageTarget(using transportSession: WITransportSession) async throws -> String {
+        var targetIdentifier = try await transportSession.waitForPageTarget()
+
+        while true {
+            do {
+                try await enableNetworkIfNeeded(for: targetIdentifier, session: transportSession)
+                await yieldToMainQueue()
+                guard transportSession.currentPageTargetIdentifier() == targetIdentifier else {
+                    targetIdentifier = try await transportSession.waitForReplacementPageTarget(after: targetIdentifier)
+                    continue
+                }
+                return targetIdentifier
+            } catch let error as WITransportError {
+                guard let replacementTargetIdentifier = try await replacementTargetAfterInitialTargetPreparationFailure(
+                    after: error,
+                    targetIdentifier: targetIdentifier,
+                    session: transportSession
+                ) else {
+                    throw error
+                }
+                targetIdentifier = replacementTargetIdentifier
+            }
+        }
+    }
+
     func bootstrapExistingResources(
         using transportSession: WITransportSession,
         contextID: UUID
     ) async throws {
-        let load = try await loadBootstrapResources(using: transportSession)
+        let targetIdentifier: String
+        if let currentPageTargetIdentifier = transportSession.currentPageTargetIdentifier() {
+            targetIdentifier = currentPageTargetIdentifier
+        } else {
+            targetIdentifier = try await transportSession.waitForPageTarget()
+        }
+        let load = try await loadBootstrapResources(
+            using: transportSession,
+            targetIdentifier: targetIdentifier
+        )
+        // Page commands can synchronously enqueue live events while we are still
+        // bootstrapping on MainActor. Yield once so the page-event task can
+        // buffer them before snapshots are applied and replayed.
+        await yieldToMainQueue()
         guard resolver.matches(contextID: contextID) else {
             return
         }
@@ -258,6 +298,34 @@ private extension NetworkTransportDriver {
         return true
     }
 
+    func replacementTargetAfterInitialTargetPreparationFailure(
+        after error: WITransportError,
+        targetIdentifier: String,
+        session: WITransportSession
+    ) async throws -> String? {
+        switch error {
+        case .remoteError(let scope, _, _):
+            guard scope == .root else {
+                return nil
+            }
+            await yieldToMainQueue()
+            if let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
+               currentPageTargetIdentifier != targetIdentifier {
+                return currentPageTargetIdentifier
+            }
+            do {
+                return try await session.waitForReplacementPageTarget(after: targetIdentifier)
+            } catch let waitError as WITransportError {
+                guard case .requestTimedOut = waitError else {
+                    throw waitError
+                }
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
     func handlePageEvent(_ envelope: WITransportEventEnvelope, session: WITransportSession) async {
         switch envelope.method {
         case "Target.targetCreated", "Target.didCommitProvisionalTarget":
@@ -281,6 +349,14 @@ private extension NetworkTransportDriver {
         store.reset()
         resolver.reset()
         deferredEnvelopesByTargetIdentifier.removeAll(keepingCapacity: true)
+    }
+
+    func yieldToMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
     }
 
     func handle(_ envelope: WITransportEventEnvelope) {
@@ -868,10 +944,12 @@ private extension NetworkTransportDriver {
     }
 
     func loadBootstrapResources(
-        using transportSession: WITransportSession
+        using transportSession: WITransportSession,
+        targetIdentifier: String
     ) async throws -> NetworkBootstrapLoad {
         try await transportClient.loadBootstrapResources(
             using: transportSession,
+            targetIdentifier: targetIdentifier,
             allocateRequestID: { [resolver] in
                 resolver.allocateCanonicalRequestID()
             },
