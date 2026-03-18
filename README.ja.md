@@ -2,23 +2,23 @@
 
 [English README](README.md)
 
-![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
+![WebInspectorKit preview](Resources/preview.webp)
 
 `WKWebView`（iOS / macOS）向けの Web Inspector です。
 
 ## 製品
 
-- `WebInspectorKit`: コンテナ UI、ペイン記述子、Observation ベースの状態管理
-- `WebInspectorKitCore`（Core）: DOM/Network エンジン、ランタイム actor、同梱 inspector script
+- `WebInspectorKit`: コンテナ UI、`WITab` ベースのタブ構成、Observation ベースの状態管理
+- `WebInspectorEngine`: DOM/Network エンジン、ランタイム actor、同梱 inspector script
 
-`WebInspectorKit` は `WebInspectorKitCore` に依存します。
+`WebInspectorKit` は `WebInspectorEngine` に依存します。
 
 ## 機能
 
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
-- `WIPaneDescriptor` によるペイン構成のカスタマイズ
-- `WISessionController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
+- `WITab` によるタブ構成のカスタマイズ（custom tab は `viewControllerProvider` を利用）
+- `WIModel` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
 
 ## 要件
 
@@ -37,13 +37,13 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WISessionController()
+    private let inspector = WIModel()
 
     @objc private func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         container.modalPresentationStyle = .pageSheet
         if let sheet = container.sheetPresentationController {
@@ -65,13 +65,13 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WISessionController()
+    let inspector = WIModel()
 
     @objc func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         let inspectorWindow = NSWindow(contentViewController: container)
         inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -82,15 +82,16 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## カスタムペイン
+## カスタムタブ
 
 ```swift
-let customPane = WIPaneDescriptor(
-    id: "my_custom_pane",
+let customTab = WITab(
     title: "Custom",
-    systemImage: "folder",
+    image: nil,
+    identifier: "my_custom_tab",
     role: .other
-) { context in
+) { tab in
+    _ = tab
     #if canImport(UIKit)
     return UIViewController()
     #else
@@ -98,59 +99,16 @@ let customPane = WIPaneDescriptor(
     #endif
 }
 
-let container = WIContainerViewController(
+let container = WITabViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customPane]
+    tabs: [.dom(), .network(), customTab]
 )
 ```
 
 ## 移行
 
-破壊的変更の詳細は [`MIGRATION.md`](MIGRATION.md) を参照してください。
-
-## テスト
-
-リポジトリルートで `xcodebuild` を実行します。macOS と iOS Simulator の両方のテストを実行してください。
-
-```bash
-# macOS: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=macOS' \
-  test
-
-# macOS: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=macOS' \
-  test
-
-# iOS Simulator: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-
-# iOS Simulator: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-```
-
-手元に destination がない場合は、次で利用可能な Simulator を確認してください。
-
-```bash
-xcrun simctl list devices available
-```
-
-TypeScript テスト（Vitest）はリポジトリルートで次を実行してください。
-
-```bash
-pnpm -s run test:ts
-pnpm -s run typecheck:ts
-```
+破壊的変更の詳細は [`MIGRATION.md`](Docs/MIGRATION.md) を参照してください。
 
 ## ライセンス
 

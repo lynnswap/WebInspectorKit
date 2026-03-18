@@ -1,0 +1,249 @@
+// swift-tools-version: 6.2
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let strictSwiftSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .defaultIsolation(nil),
+    .strictMemorySafety(),
+]
+
+let package = Package(
+    name: "WebInspectorKit",
+    defaultLocalization: "en",
+    platforms: [
+        .iOS(.v18), .macOS(.v15)
+    ],
+    products: [
+        .library(
+            name: "WebInspectorEngine",
+            targets: ["WebInspectorEngine"]
+        ),
+        .library(
+            name: "WKViewport",
+            targets: ["WKViewport"]
+        ),
+        .library(
+            name: "WebInspectorRuntime",
+            targets: ["WebInspectorRuntime"]
+        ),
+        .library(
+            name: "WebInspectorBridge",
+            targets: ["WebInspectorBridge"]
+        ),
+        .library(
+            name: "WebInspectorScripts",
+            targets: ["WebInspectorScripts"]
+        ),
+        .library(
+            name: "WebInspectorUI",
+            targets: ["WebInspectorUI"]
+        ),
+        .library(
+            name: "WebInspectorKit",
+            targets: ["WebInspectorKit"]
+        )
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/lynnswap/ObservationBridge.git",
+            exact: "0.6.0"
+        ),
+        .package(
+            url: "https://github.com/p-x9/MachOKit",
+            exact: "0.46.1"
+        )
+    ],
+    targets: [
+        .target(
+            name: "WebInspectorEngine",
+            dependencies: [
+                "WebInspectorBridge",
+                "WebInspectorScripts",
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WKViewport",
+            dependencies: [],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorRuntime",
+            dependencies: [
+                "WebInspectorEngine",
+                "WebInspectorTransport",
+                "WebInspectorBridge",
+                "WebInspectorScripts",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorBridge",
+            dependencies: [
+                "WebInspectorBridgeObjCShim"
+            ],
+            exclude: ["ObjCShim"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorScripts",
+            exclude: [
+                "TypeScript/Tests"
+            ],
+            resources: [
+                .process("Resources/DOMTreeView")
+            ],
+            swiftSettings: strictSwiftSettings,
+            plugins: [
+                .plugin(name: "WebInspectorKitObfuscatePlugin")
+            ],
+        ),
+        .target(
+            name: "WebInspectorTransport",
+            dependencies: [
+                "WebInspectorEngine",
+                "WebInspectorTransportObjCShim",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorBridgeObjCShim",
+            path: "Sources/WebInspectorBridge/ObjCShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
+        ),
+        .target(
+            name: "WebInspectorTransportObjCShim",
+            path: "Sources/WebInspectorTransportObjCShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
+        ),
+        .target(
+            name: "WebInspectorUI",
+            dependencies: [
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorBridge",
+                "WebInspectorBridgeObjCShim",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            resources: [
+                .process("Localizable.xcstrings")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorKit",
+            dependencies: [
+                "WebInspectorUI",
+                "WebInspectorEngine",
+                "WebInspectorRuntime",
+                "WebInspectorBridge",
+                "WebInspectorScripts"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorTestSupport",
+            dependencies: [
+                "WebInspectorEngine"
+            ],
+            path: "Tests/WebInspectorTestSupport",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WKViewportTests",
+            dependencies: [
+                "WKViewport"
+            ],
+            path: "Tests/WKViewportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorEngineTests",
+            dependencies: [
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorEngineTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorTransportTests",
+            dependencies: [
+                "WebInspectorTransport",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorTransportTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorRuntimeTests",
+            dependencies: [
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorUI",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorRuntimeTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorUITests",
+            dependencies: [
+                "WKViewport",
+                "WebInspectorUI",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorBridge",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorUITests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorIntegrationTests",
+            dependencies: [
+                "WebInspectorKit",
+                "WebInspectorUI",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorIntegrationTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorIntegrationLongTests",
+            dependencies: [
+                "WebInspectorKit",
+                "WebInspectorUI",
+                "WebInspectorRuntime",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorIntegrationLongTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .plugin(
+            name: "WebInspectorKitObfuscatePlugin",
+            capability: .buildTool()
+        )
+
+    ],
+    cxxLanguageStandard: .gnucxx20
+)

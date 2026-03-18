@@ -2,23 +2,25 @@
 
 [日本語版 README](README.ja.md)
 
-![WebInspectorKit preview](WebInspectorKit/Resources/preview.webp)
+![WebInspectorKit preview](Resources/preview.webp)
 
 Web Inspector for `WKWebView` (iOS / macOS).
 
+> This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
+
 ## Products
 
-- `WebInspectorKit`: Container UI, pane descriptors, Observation state
-- `WebInspectorKitCore` (Core): DOM/Network engines, runtime actors, bundled inspector scripts
+- `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
+- `WebInspectorEngine`: DOM/Network engines, runtime actors, bundled inspector scripts
 
-`WebInspectorKit` depends on `WebInspectorKitCore`.
+`WebInspectorKit` depends on `WebInspectorEngine`.
 
 ## Features
 
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
-- Configurable panes via `WIPaneDescriptor`
-- Explicit lifecycle via `WISessionController` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
+- Explicit lifecycle via `WIModel` (`connect(to:)`, `suspend()`, `disconnect()`)
 
 ## Requirements
 
@@ -37,19 +39,18 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WISessionController()
+    private let inspector = WIModel()
 
     @objc private func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         container.modalPresentationStyle = .pageSheet
         if let sheet = container.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
-            sheet.prefersGrabberVisible = true
         }
         present(container, animated: true)
     }
@@ -65,13 +66,13 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WISessionController()
+    let inspector = WIModel()
 
     @objc func presentInspector() {
-        let container = WIContainerViewController(
+        let container = WITabViewController(
             inspector,
             webView: pageWebView,
-            tabs: [.dom(), .element(), .network()]
+            tabs: [.dom(), .network()]
         )
         let inspectorWindow = NSWindow(contentViewController: container)
         inspectorWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -82,15 +83,16 @@ final class BrowserWindowController: NSWindowController {
 }
 ```
 
-## Custom Pane
+## Custom Tab
 
 ```swift
-let customPane = WIPaneDescriptor(
-    id: "my_custom_pane",
+let customTab = WITab(
     title: "Custom",
-    systemImage: "folder",
+    image: nil,
+    identifier: "my_custom_tab",
     role: .other
-) { context in
+) { tab in
+    _ = tab
     #if canImport(UIKit)
     return UIViewController()
     #else
@@ -98,59 +100,16 @@ let customPane = WIPaneDescriptor(
     #endif
 }
 
-let container = WIContainerViewController(
+let container = WITabViewController(
     inspector,
     webView: pageWebView,
-    tabs: [.dom(), .element(), .network(), customPane]
+    tabs: [.dom(), .network(), customTab]
 )
 ```
 
 ## Migration
 
-See [`MIGRATION.md`](MIGRATION.md) for details on breaking changes.
-
-## Testing
-
-Run tests with `xcodebuild` from the repository root. Execute both macOS and iOS Simulator test suites.
-
-```bash
-# macOS: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=macOS' \
-  test
-
-# macOS: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=macOS' \
-  test
-
-# iOS Simulator: Package tests (Core)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitCoreTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-
-# iOS Simulator: Package tests (Feature)
-xcodebuild -workspace WebInspectorKit.xcworkspace \
-  -scheme WebInspectorKitFeatureTests \
-  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
-  test
-```
-
-If the destination does not exist on your machine, check available simulators with:
-
-```bash
-xcrun simctl list devices available
-```
-
-Run TypeScript tests (Vitest) from the repository root:
-
-```bash
-pnpm -s run test:ts
-pnpm -s run typecheck:ts
-```
+See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.
 
 ## License
 

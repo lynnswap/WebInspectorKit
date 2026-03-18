@@ -1,0 +1,15 @@
+{
+  "name": "webinspectorkit-typescript-tests",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.5"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

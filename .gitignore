@@ -9,6 +9,5 @@ DerivedData/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
-AGENTS.md
 /Tools/ObfuscateJS/node_modules/
 node_modules/
