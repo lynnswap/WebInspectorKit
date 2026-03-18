@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import MiniBrowser
+@testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
     @MainActor
@@ -77,6 +78,43 @@ final class BrowserNavigationChromeTests: XCTestCase {
         let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
         XCTAssertGreaterThan(pageViewController.view.safeAreaInsets.bottom, windowSafeAreaBottom)
     }
+
+    @MainActor
+    func testCompactInspectorShowsElementTab() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+        let inspectorContainer = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
+        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+
+        XCTAssertEqual(
+            compactHost.displayedTabIdentifiersForTesting,
+            ["wi_dom", "wi_element", "wi_network"]
+        )
+    }
+
+    @MainActor
+    func testCompactInspectorReopenRestoresLastSelectedTopLevelTab() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+        let firstInspector = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
+        let firstHost = try XCTUnwrap(firstInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+        let domTab = try XCTUnwrap(firstHost.currentUITabsForTesting.first(where: { $0.identifier == "wi_dom" }))
+        let elementTab = try XCTUnwrap(firstHost.currentUITabsForTesting.first(where: { $0.identifier == "wi_element" }))
+
+        XCTAssertTrue(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
+        firstHost.selectedTab = elementTab
+        firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
+        XCTAssertEqual(rootViewController.inspectorController.selectedTab?.identifier, "wi_element")
+
+        dismissPresentedInspector(from: rootViewController)
+
+        let secondInspector = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
+        let secondHost = try XCTUnwrap(secondInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+
+        XCTAssertEqual(secondHost.selectedTab?.identifier, "wi_element")
+    }
 }
 
 private extension BrowserNavigationChromeTests {
@@ -126,6 +164,34 @@ private extension BrowserNavigationChromeTests {
         rootViewController.updateTraitsIfNeeded()
         rootViewController.view.layoutIfNeeded()
         rootViewController.pageViewControllerForTesting?.view.layoutIfNeeded()
+    }
+
+    @MainActor
+    func presentCompactInspector(
+        from pageViewController: BrowserPageViewController,
+        rootViewController: BrowserRootViewController
+    ) throws -> WITabViewController {
+        let buttonItem = pageViewController.compactInspectorButtonItemForTesting
+        let action = try XCTUnwrap(buttonItem.action)
+        XCTAssertTrue(UIApplication.shared.sendAction(action, to: buttonItem.target, from: buttonItem, for: nil))
+        drainMainQueue()
+
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        inspectorContainer.horizontalSizeClassOverrideForTesting = .compact
+        inspectorContainer.loadViewIfNeeded()
+        inspectorContainer.view.layoutIfNeeded()
+        return inspectorContainer
+    }
+
+    @MainActor
+    func dismissPresentedInspector(from rootViewController: BrowserRootViewController) {
+        rootViewController.presentedViewController?.dismiss(animated: false)
+        drainMainQueue()
+    }
+
+    @MainActor
+    func drainMainQueue() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
     }
 }
 #endif

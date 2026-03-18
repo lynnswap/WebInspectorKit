@@ -131,6 +131,26 @@ struct WISessionStateTests {
         Issue.record("selectedTab observation did not emit network selection")
     }
 
+    @Test
+    func compactElementSelectionPersistsAcrossTabReapplicationWhenDOMTabExists() {
+        let controller = WIModel()
+        controller.setTabs([.dom(), .network()])
+
+        let syntheticElementTab = WITab(
+            id: WITab.elementTabID,
+            title: "Element",
+            systemImage: "info.circle"
+        )
+        controller.setSelectedTabFromUI(syntheticElementTab)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+
+        controller.setTabs([.dom(), .network()])
+
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

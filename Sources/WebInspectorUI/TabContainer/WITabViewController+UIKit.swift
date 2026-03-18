@@ -10,6 +10,31 @@ private protocol WIUIKitTabHost where Self: UIViewController {
 }
 
 @MainActor
+func wiCompactDisplayTabs(
+    from tabs: [WITab],
+    synthesizedElementTab: WITab
+) -> [WITab] {
+    let hasDOMTab = tabs.contains { $0.identifier == WITab.domTabID }
+    let hasElementTab = tabs.contains { $0.identifier == WITab.elementTabID }
+    guard hasDOMTab, hasElementTab == false else {
+        return tabs
+    }
+
+    var displayTabs: [WITab] = []
+    displayTabs.reserveCapacity(tabs.count + 1)
+    var didInsertSyntheticElement = false
+    for tab in tabs {
+        displayTabs.append(tab)
+        guard didInsertSyntheticElement == false, tab.identifier == WITab.domTabID else {
+            continue
+        }
+        displayTabs.append(synthesizedElementTab)
+        didInsertSyntheticElement = true
+    }
+    return displayTabs
+}
+
+@MainActor
 final class WIUIKitTabRenderCache {
     private var rootViewControllerByTabID: [ObjectIdentifier: UIViewController] = [:]
     private var compactTabByTabID: [ObjectIdentifier: UITab] = [:]
@@ -114,6 +139,7 @@ public final class WITabViewController: UIViewController {
 
         let currentRequestedTabs = requestedTabs
         let currentSelectedTab = self.inspectorController.selectedTab
+        let currentPreferredCompactSelectedTabIdentifier = self.inspectorController.preferredCompactSelectedTabIdentifier
         let currentPageWebView = self.inspectorController.pageWebViewForUI
         let previousController = self.inspectorController
         renderCache.resetAll()
@@ -122,6 +148,7 @@ public final class WITabViewController: UIViewController {
         self.inspectorController = inspectorController
         inspectorController.setPageWebViewFromUI(currentPageWebView)
         inspectorController.setTabs(currentRequestedTabs)
+        inspectorController.setPreferredCompactSelectedTabIdentifierFromUI(currentPreferredCompactSelectedTabIdentifier)
         inspectorController.setSelectedTabFromUI(currentSelectedTab)
 
         if isViewLoaded {

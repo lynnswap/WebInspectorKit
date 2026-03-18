@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WebKit
 @testable import WebInspectorUI
@@ -243,7 +244,58 @@ struct TabViewControllerUITabTests {
             return
         }
 
-        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.networkTabID])
+        #expect(compactHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+    }
+
+    @Test
+    func compactContainerRecreationRestoresSyntheticElementSelection() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let firstContainer = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        firstContainer.horizontalSizeClassOverrideForTesting = .compact
+        firstContainer.loadViewIfNeeded()
+        firstContainer.beginAppearanceTransition(true, animated: false)
+        firstContainer.endAppearanceTransition()
+
+        guard let firstHost = firstContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected first compact host")
+            return
+        }
+        guard
+            let domTab = firstHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.domTabID }),
+            let elementTab = firstHost.currentUITabsForTesting.first(where: { $0.identifier == WITab.elementTabID })
+        else {
+            Issue.record("Expected DOM and Element tabs")
+            return
+        }
+
+        #expect(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
+        firstHost.selectedTab = elementTab
+        firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+
+        let secondContainer = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+        secondContainer.horizontalSizeClassOverrideForTesting = .compact
+        secondContainer.loadViewIfNeeded()
+        secondContainer.beginAppearanceTransition(true, animated: false)
+        secondContainer.endAppearanceTransition()
+        drainMainQueue()
+
+        guard let secondHost = secondContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected second compact host")
+            return
+        }
+
+        #expect(secondHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.preferredCompactSelectedTabIdentifier == WITab.elementTabID)
     }
 
     @Test
@@ -506,6 +558,10 @@ struct TabViewControllerUITabTests {
     ) {
         container.horizontalSizeClassOverrideForTesting = sizeClass
         container.setTabs(requestedTabs)
+    }
+
+    private func drainMainQueue() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
     }
 }
 #endif
