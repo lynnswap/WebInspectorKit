@@ -3,9 +3,9 @@
 #include <atomic>
 #include <span>
 
-extern "C" void WIKStringFromUTF8Symbol(void) asm("__ZN3WTF6String8fromUTF8ENSt3__14spanIKDuLm18446744073709551615EEE");
-extern "C" NSString *WIKStringImplToNSString(void *stringImpl) asm("__ZN3WTF10StringImplcvP8NSStringEv");
-extern "C" void WIKDestroyStringImpl(void *stringImpl) asm("__ZN3WTF10StringImpl7destroyEPS0_");
+extern "C" void WITransportStringFromUTF8Symbol(void) asm("__ZN3WTF6String8fromUTF8ENSt3__14spanIKDuLm18446744073709551615EEE");
+extern "C" NSString *WITransportStringImplToNSString(void *stringImpl) asm("__ZN3WTF10StringImplcvP8NSStringEv");
+extern "C" void WITransportDestroyStringImpl(void *stringImpl) asm("__ZN3WTF10StringImpl7destroyEPS0_");
 
 namespace WTF {
 
@@ -49,7 +49,7 @@ public:
 
 } // namespace Inspector
 
-namespace WIKInspectorABI {
+namespace WITransportInspectorABI {
 
 struct StringImplRefCountHeader {
     std::atomic<uint32_t> refCount;
@@ -63,7 +63,7 @@ inline NSString *copyNSString(const WTF::String& string)
     if (!string.impl())
         return @"";
 
-    NSString *message = WIKStringImplToNSString(string.impl());
+    NSString *message = WITransportStringImplToNSString(string.impl());
     return [message copy] ?: @"";
 }
 
@@ -73,15 +73,26 @@ inline void constructStringFromUTF8(WTF::String *storage, std::span<const char8_
     register const char8_t *data asm("x0") = characters.data();
     register size_t length asm("x1") = characters.size();
     register WTF::String *result asm("x8") = storage;
-    void *symbol = reinterpret_cast<void *>(WIKStringFromUTF8Symbol);
+    void *symbol = reinterpret_cast<void *>(WITransportStringFromUTF8Symbol);
     asm volatile(
         "blr %3"
         : "+r"(data), "+r"(length), "+r"(result)
         : "r"(symbol)
         : "cc", "memory", "x2", "x3", "x4", "x5", "x6", "x7", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "lr"
     );
+#elif defined(__x86_64__)
+    register WTF::String *result asm("rdi") = storage;
+    register const char8_t *data asm("rsi") = characters.data();
+    register size_t length asm("rdx") = characters.size();
+    void *symbol = reinterpret_cast<void *>(WITransportStringFromUTF8Symbol);
+    asm volatile(
+        "call *%3"
+        : "+r"(result), "+r"(data), "+r"(length)
+        : "r"(symbol)
+        : "cc", "memory", "rax", "rcx", "r8", "r9", "r10", "r11"
+    );
 #else
-#error Unsupported architecture for WIKInspectorABI::constructStringFromUTF8
+#error Unsupported architecture for WITransportInspectorABI::constructStringFromUTF8
 #endif
 }
 
@@ -104,7 +115,7 @@ inline void derefConstructedString(const WTF::String& string)
 
     uint32_t oldRefCount = header->refCount.fetch_sub(stringImplRefCountIncrement, std::memory_order_relaxed);
     if (oldRefCount == stringImplRefCountIncrement)
-        WIKDestroyStringImpl(string.impl());
+        WITransportDestroyStringImpl(string.impl());
 }
 
 class ConstructedString final {
@@ -131,4 +142,4 @@ private:
     WTF::String m_string;
 };
 
-} // namespace WIKInspectorABI
+} // namespace WITransportInspectorABI

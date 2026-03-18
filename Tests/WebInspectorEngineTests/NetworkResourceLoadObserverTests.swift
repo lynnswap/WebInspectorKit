@@ -8,10 +8,8 @@ struct NetworkResourceLoadObserverTests {
     @Test
     func dropsFetchAndXHRResourceTypesFromNativeObserver() {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
-            events.append(event)
-        }
+        let store = NetworkStore()
+        let observer = NetworkResourceLoadObserver(sessionID: "native-session", store: store)
 
         let fetchInfo = FakeResourceLoadInfo(
             loadID: 1,
@@ -41,16 +39,14 @@ struct NetworkResourceLoadObserverTests {
         observer.handleDidSendRequest(webView: webView, resourceLoad: xhrInfo, request: xhrRequest)
         observer.handleDidComplete(webView: webView, resourceLoad: xhrInfo, error: nil, response: nil)
 
-        #expect(events.isEmpty)
+        #expect(store.entries.isEmpty)
     }
 
     @Test
-    func convertsNonXHRNativeCallbacksToHTTPNetworkEvents() throws {
+    func convertsNonXHRNativeCallbacksToStoreUpdates() throws {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
-            events.append(event)
-        }
+        let store = NetworkStore()
+        let observer = NetworkResourceLoadObserver(sessionID: "native-session", store: store)
 
         let info = FakeResourceLoadInfo(
             loadID: 10,
@@ -73,27 +69,21 @@ struct NetworkResourceLoadObserverTests {
         observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
         observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
 
-        #expect(events.count == 3)
-        #expect(events[0].kind == .requestWillBeSent)
-        #expect(events[1].kind == .responseReceived)
-        #expect(events[2].kind == .loadingFinished)
-        #expect(events[0].requestID < 0)
-        #expect(events[0].requestID == events[1].requestID)
-        #expect(events[1].requestID == events[2].requestID)
-        #expect(events[0].sessionID == "native-session")
-        #expect(events[0].requestType == "script")
-        #expect(events[0].url == "https://example.com/app.js")
-        #expect(events[1].statusCode == 200)
-        #expect(events[2].statusCode == 200)
+        #expect(store.entries.count == 1)
+        let entry = try #require(store.entries.first)
+        #expect(entry.requestID < 0)
+        #expect(entry.sessionID == "native-session")
+        #expect(entry.requestType == "script")
+        #expect(entry.url == "https://example.com/app.js")
+        #expect(entry.statusCode == 200)
+        #expect(entry.phase == .completed)
     }
 
     @Test
     func synthesizesStartEventWhenCompleteArrivesBeforeSend() {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
-        let observer = NetworkResourceLoadObserver(sessionID: "native-session") { event in
-            events.append(event)
-        }
+        let store = NetworkStore()
+        let observer = NetworkResourceLoadObserver(sessionID: "native-session", store: store)
 
         let info = FakeResourceLoadInfo(
             loadID: 20,
@@ -110,11 +100,11 @@ struct NetworkResourceLoadObserverTests {
 
         observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
 
-        #expect(events.count == 2)
-        #expect(events[0].kind == .requestWillBeSent)
-        #expect(events[1].kind == .loadingFinished)
-        #expect(events[0].requestID == events[1].requestID)
-        #expect(events[0].requestType == "img")
+        #expect(store.entries.count == 1)
+        let entry = store.entries.first
+        #expect(entry?.phase == .completed)
+        #expect(entry?.requestID ?? 0 < 0)
+        #expect(entry?.requestType == "img")
     }
 
     @Test
@@ -122,9 +112,9 @@ struct NetworkResourceLoadObserverTests {
         let webView = makeWebView()
         let observer = NetworkResourceLoadObserver(
             sessionID: "native-session",
+            store: NetworkStore(),
             supportsResourceLoadDelegate: { _ in false }
-        ) { _ in
-        }
+        )
 
         let attached = observer.attach(to: webView)
 
@@ -134,13 +124,12 @@ struct NetworkResourceLoadObserverTests {
     @Test
     func skipsCallbacksWhenEventEmissionIsDisabled() {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
+        let store = NetworkStore()
         let observer = NetworkResourceLoadObserver(
             sessionID: "native-session",
+            store: store,
             isEventEmissionEnabled: { false }
-        ) { event in
-            events.append(event)
-        }
+        )
 
         let info = FakeResourceLoadInfo(
             loadID: 100,
@@ -161,20 +150,19 @@ struct NetworkResourceLoadObserverTests {
         observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
         observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
 
-        #expect(events.isEmpty)
+        #expect(store.entries.isEmpty)
     }
 
     @Test
     func keepsInFlightCallbacksUntilCompletionAfterEmissionIsDisabled() {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
+        let store = NetworkStore()
         let emissionState = EmissionState(enabled: true)
         let observer = NetworkResourceLoadObserver(
             sessionID: "native-session",
+            store: store,
             isEventEmissionEnabled: { emissionState.enabled }
-        ) { event in
-            events.append(event)
-        }
+        )
 
         let info = FakeResourceLoadInfo(
             loadID: 101,
@@ -195,10 +183,8 @@ struct NetworkResourceLoadObserverTests {
         emissionState.enabled = false
         observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
 
-        #expect(events.count == 2)
-        #expect(events[0].kind == .requestWillBeSent)
-        #expect(events[1].kind == .loadingFinished)
-        #expect(events[0].requestID == events[1].requestID)
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.phase == .completed)
 
         let nextInfo = FakeResourceLoadInfo(
             loadID: 102,
@@ -208,20 +194,19 @@ struct NetworkResourceLoadObserverTests {
         )
         observer.handleDidSendRequest(webView: webView, resourceLoad: nextInfo, request: request)
         observer.handleDidComplete(webView: webView, resourceLoad: nextInfo, error: nil, response: response)
-        #expect(events.count == 2)
+        #expect(store.entries.count == 1)
     }
 
     @Test
     func ignoresFollowUpsForLoadsStartedWhileEmissionWasDisabledAfterReenable() {
         let webView = makeWebView()
-        var events: [HTTPNetworkEvent] = []
+        let store = NetworkStore()
         let emissionState = EmissionState(enabled: false)
         let observer = NetworkResourceLoadObserver(
             sessionID: "native-session",
+            store: store,
             isEventEmissionEnabled: { emissionState.enabled }
-        ) { event in
-            events.append(event)
-        }
+        )
 
         let info = FakeResourceLoadInfo(
             loadID: 103,
@@ -243,7 +228,7 @@ struct NetworkResourceLoadObserverTests {
         observer.handleDidReceiveResponse(webView: webView, resourceLoad: info, response: response)
         observer.handleDidComplete(webView: webView, resourceLoad: info, error: nil, response: response)
 
-        #expect(events.isEmpty)
+        #expect(store.entries.isEmpty)
     }
 
     private func makeWebView() -> WKWebView {

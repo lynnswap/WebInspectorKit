@@ -179,9 +179,7 @@ public final class WIWebViewViewportCoordinator: NSObject {
         installObservationViewIfPossible(in: hostView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
-        if #available(iOS 26.0, *) {
-            hostViewController.setContentScrollView(webView.scrollView)
-        }
+        hostViewController.setContentScrollView(webView.scrollView)
 
         let metrics = metricsProvider.makeChromeMetrics(
             in: hostViewController,
@@ -234,11 +232,9 @@ public final class WIWebViewViewportCoordinator: NSObject {
             return
         }
 
-        if #available(iOS 26.0, *) {
-            if hostViewController.contentScrollView(for: .top) === webView.scrollView
-                || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
-                hostViewController.setContentScrollView(nil)
-            }
+        if hostViewController.contentScrollView(for: .top) === webView.scrollView
+            || hostViewController.contentScrollView(for: .bottom) === webView.scrollView {
+            hostViewController.setContentScrollView(nil)
         }
     }
 

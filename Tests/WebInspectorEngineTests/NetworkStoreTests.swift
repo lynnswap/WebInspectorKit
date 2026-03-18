@@ -15,7 +15,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ], sessionID: "first")
-        store.applyEvent(firstStart)
+        Self.apply(firstStart, to: store, sessionID: "first")
 
         let secondStart = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -24,7 +24,7 @@ struct NetworkStoreTests {
             "method": "POST",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_050.0, wallMs: 1_700_000_000_050.0)
         ], sessionID: "second")
-        store.applyEvent(secondStart)
+        Self.apply(secondStart, to: store, sessionID: "second")
 
         #expect(store.entries.count == 2)
         #expect(store.entry(forRequestID: 1, sessionID: "second")?.url == "https://example.com/api")
@@ -41,7 +41,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(payload)
+        Self.apply(payload, to: store)
 
         #expect(store.entries.isEmpty == false)
 
@@ -60,8 +60,7 @@ struct NetworkStoreTests {
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ], sessionID: "wi_session_123")
 
-        #expect(payload.sessionID == "wi_session_123")
-        #expect(payload.requestID == 42)
+        #expect(payload.requestId == 42)
     }
 
     @Test
@@ -82,7 +81,7 @@ struct NetworkStoreTests {
             ],
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(start)
+        Self.apply(start, to: store)
 
         let finish = try NetworkTestHelpers.decodeEvent([
             "kind": "loadingFinished",
@@ -96,7 +95,7 @@ struct NetworkStoreTests {
             ],
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_200.0, wallMs: 1_700_000_000_200.0)
         ])
-        store.applyEvent(finish)
+        Self.apply(finish, to: store)
 
         let entryCandidate = store.entry(forRequestID: 10, sessionID: nil)
         let entry = try #require(entryCandidate)
@@ -120,7 +119,7 @@ struct NetworkStoreTests {
             "endTime": NetworkTestHelpers.timePayload(monotonicMs: 5_020.0, wallMs: 1_700_000_005_020.0)
         ], sessionID: "resource-session")
 
-        store.applyEvent(event)
+        Self.apply(event, to: store, sessionID: "resource-session")
 
         let entry = try #require(store.entry(forRequestID: 500, sessionID: "resource-session"))
         #expect(entry.method == "GET")
@@ -129,32 +128,44 @@ struct NetworkStoreTests {
     @Test
     func websocketHandshakeAndErrorEventsAreApplied() throws {
         let store = NetworkStore()
-        let createdCandidate = WSNetworkEvent(dictionary: [
-                "type": "wsCreated",
-                "requestId": 1,
-                "url": "wss://example.com/socket",
-                "startTime": 1_000.0,
-                "wallTime": 2_000.0
-            ])
-        let created = try #require(createdCandidate)
-        store.applyEvent(created)
-
-        let handshakeRequestCandidate = WSNetworkEvent(dictionary: [
-                "type": "wsHandshakeRequest",
-                "requestId": 1,
-                "requestHeaders": ["sec-websocket-protocol": "chat"]
-            ])
-        let handshakeRequest = try #require(handshakeRequestCandidate)
-        store.applyEvent(handshakeRequest)
-
-        let frameErrorCandidate = WSNetworkEvent(dictionary: [
-                "type": "wsFrameError",
-                "requestId": 1,
-                "error": "WebSocket error",
-                "endTime": 2_000.0
-            ])
-        let frameError = try #require(frameErrorCandidate)
-        store.applyEvent(frameError)
+        store.apply(
+            .webSocketOpened(
+                .init(
+                    requestID: 1,
+                    url: "wss://example.com/socket",
+                    timestamp: 1,
+                    wallTime: 2
+                )
+            ),
+            sessionID: ""
+        )
+        store.apply(
+            .webSocketHandshake(
+                .init(
+                    requestID: 1,
+                    requestHeaders: NetworkHeaders(dictionary: ["sec-websocket-protocol": "chat"]),
+                    statusCode: nil,
+                    statusText: nil
+                )
+            ),
+            sessionID: ""
+        )
+        store.apply(
+            .webSocketClosed(
+                .init(
+                    requestID: 1,
+                    timestamp: 2,
+                    statusCode: nil,
+                    statusText: nil,
+                    closeCode: nil,
+                    closeReason: nil,
+                    closeWasClean: nil,
+                    errorDescription: "WebSocket error",
+                    failed: true
+                )
+            ),
+            sessionID: ""
+        )
 
         let entryCandidate = store.entry(forRequestID: 1, sessionID: nil)
         let entry = try #require(entryCandidate)
@@ -178,12 +189,12 @@ struct NetworkStoreTests {
             ]]
         ]
 
-        let batchCandidate = NetworkEventBatch.decode(from: payload)
+        let batchCandidate = NetworkWire.PageHook.Batch.decode(from: payload)
         let batch = try #require(batchCandidate)
 
         #expect(batch.sessionID == "batch-session")
         #expect(batch.events.count == 1)
-        #expect(batch.events.first?.kind == .requestWillBeSent)
+        #expect(batch.events.first?.kindValue == .requestWillBeSent)
     }
 
     @Test
@@ -202,12 +213,12 @@ struct NetworkStoreTests {
             ]]
         ]
 
-        let batchCandidate = NetworkEventBatch.decode(from: payload)
+        let batchCandidate = NetworkWire.PageHook.Batch.decode(from: payload)
         let batch = try #require(batchCandidate)
 
         #expect(batch.version == 2)
         #expect(batch.sessionID == "schema-session")
-        #expect(batch.events.first?.requestID == 91)
+        #expect(batch.events.first?.requestId == 91)
     }
 
     @Test
@@ -237,11 +248,11 @@ struct NetworkStoreTests {
             ]
         ]
 
-        let batchCandidate = NetworkEventBatch.decode(from: payload)
+        let batchCandidate = NetworkWire.PageHook.Batch.decode(from: payload)
         let batch = try #require(batchCandidate)
 
         #expect(batch.events.count == 1)
-        #expect(batch.events.first?.requestID == 11)
+        #expect(batch.events.first?.requestId == 11)
     }
 
     @Test
@@ -260,7 +271,7 @@ struct NetworkStoreTests {
                     wallMs: 1_700_000_000_000.0 + Double(requestID)
                 )
             ], sessionID: "batch-session")
-            store.applyEvent(start)
+            Self.apply(start, to: store, sessionID: "batch-session")
         }
 
         var events: [[String: Any]] = []
@@ -287,10 +298,10 @@ struct NetworkStoreTests {
             "events": events
         ]
 
-        let batchCandidate = NetworkEventBatch.decode(from: payload)
+        let batchCandidate = NetworkWire.PageHook.Batch.decode(from: payload)
         let batch = try #require(batchCandidate)
 
-        store.applyBatchedInsertions(batch)
+        store.applyResourceTimingBatch(batch)
 
         #expect(store.entries.count == 3)
         #expect(store.entries.map(\.requestID) == [8, 9, 10])
@@ -314,7 +325,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(first)
+        Self.apply(first, to: store)
         let second = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
             "requestId": 2,
@@ -322,7 +333,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_010.0, wallMs: 1_700_000_000_010.0)
         ])
-        store.applyEvent(second)
+        Self.apply(second, to: store)
 
         let third = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -331,7 +342,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_020.0, wallMs: 1_700_000_000_020.0)
         ])
-        store.applyEvent(third)
+        Self.apply(third, to: store)
 
         #expect(store.entries.count == 2)
         #expect(store.entry(forRequestID: 1, sessionID: nil) == nil)
@@ -352,7 +363,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(payload)
+        Self.apply(payload, to: store)
 
         #expect(store.entries.isEmpty)
         #expect(store.entry(forRequestID: 404, sessionID: nil) == nil)
@@ -370,7 +381,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ], sessionID: sessionID)
-        store.applyEvent(existing)
+        Self.apply(existing, to: store, sessionID: sessionID)
 
         let payload: [String: Any] = [
             "version": 1,
@@ -399,7 +410,7 @@ struct NetworkStoreTests {
         ]
         let batch = try NetworkTestHelpers.decodeBatch(payload)
 
-        store.applyBatchedInsertions(batch)
+        store.applyResourceTimingBatch(batch)
 
         #expect(store.entries.map(\.requestID) == [1, 2])
         #expect(store.entry(forRequestID: 1, sessionID: sessionID)?.url == "https://example.com/existing")
@@ -471,7 +482,7 @@ struct NetworkStoreTests {
             "startTime": NetworkTestHelpers.timePayload(monotonicMs: 7_700.0, wallMs: 1_700_000_007_700.0),
             "endTime": NetworkTestHelpers.timePayload(monotonicMs: 7_710.0, wallMs: 1_700_000_007_710.0)
         ], sessionID: sessionID)
-        store.applyEvent(resourceTiming)
+        Self.apply(resourceTiming, to: store, sessionID: sessionID)
 
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -488,7 +499,7 @@ struct NetworkStoreTests {
             ],
             "time": NetworkTestHelpers.timePayload(monotonicMs: 7_705.0, wallMs: 1_700_000_007_705.0)
         ], sessionID: sessionID)
-        store.applyEvent(start)
+        Self.apply(start, to: store, sessionID: sessionID)
 
         #expect(store.entries.count == 1)
         let entry = try #require(store.entry(forRequestID: 77, sessionID: sessionID))
@@ -511,7 +522,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 8_800.0, wallMs: 1_700_000_008_800.0)
         ], sessionID: sessionID)
-        store.applyEvent(start)
+        Self.apply(start, to: store, sessionID: sessionID)
 
         let resourceTiming = try NetworkTestHelpers.decodeEvent([
             "kind": "resourceTiming",
@@ -520,7 +531,7 @@ struct NetworkStoreTests {
             "startTime": NetworkTestHelpers.timePayload(monotonicMs: 8_790.0, wallMs: 1_700_000_008_790.0),
             "endTime": NetworkTestHelpers.timePayload(monotonicMs: 8_820.0, wallMs: 1_700_000_008_820.0)
         ], sessionID: sessionID)
-        store.applyEvent(resourceTiming)
+        Self.apply(resourceTiming, to: store, sessionID: sessionID)
 
         #expect(store.entries.count == 1)
         let entry = try #require(store.entry(forRequestID: 88, sessionID: sessionID))
@@ -541,7 +552,7 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 9_900.0, wallMs: 1_700_000_009_900.0)
         ], sessionID: sessionID)
-        store.applyEvent(start)
+        Self.apply(start, to: store, sessionID: sessionID)
 
         let batch = try NetworkTestHelpers.decodeBatch([
             "version": 1,
@@ -562,5 +573,15 @@ struct NetworkStoreTests {
         #expect(entry.phase == .completed)
         #expect(abs(entry.startTimestamp - 9.89) < 0.0001)
         #expect(abs((entry.endTimestamp ?? 0) - 9.93) < 0.0001)
+    }
+}
+
+private extension NetworkStoreTests {
+    static func apply(
+        _ payload: NetworkWire.PageHook.Event,
+        to store: NetworkStore,
+        sessionID: String = ""
+    ) {
+        store.apply(payload, sessionID: sessionID)
     }
 }

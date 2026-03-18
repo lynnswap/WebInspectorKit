@@ -1,6 +1,7 @@
 import Observation
 import WebKit
 import WebInspectorEngine
+import WebInspectorTransport
 
 @MainActor
 @Observable
@@ -18,7 +19,13 @@ public final class WIModel {
 
     public init(configuration: WIModelConfiguration = .init()) {
         let domSession = DOMSession(configuration: configuration.dom)
-        let networkSession = NetworkSession(configuration: configuration.network)
+        let networkBackend = WIBackendFactory.makeNetworkBackend(
+            configuration: configuration.network
+        )
+        let networkSession = NetworkSession(
+            configuration: configuration.network,
+            backend: networkBackend
+        )
 
         self.dom = WIDOMModel(session: domSession)
         self.network = WINetworkModel(session: networkSession)

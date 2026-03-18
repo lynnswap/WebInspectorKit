@@ -46,6 +46,10 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
             exact: "0.6.0"
+        ),
+        .package(
+            url: "https://github.com/p-x9/MachOKit",
+            exact: "0.46.1"
         )
     ],
     targets: [
@@ -61,6 +65,7 @@ let package = Package(
             name: "WebInspectorRuntime",
             dependencies: [
                 "WebInspectorEngine",
+                "WebInspectorTransport",
                 "WebInspectorBridge",
                 "WebInspectorScripts",
                 .product(name: "ObservationBridge", package: "ObservationBridge")
@@ -89,11 +94,31 @@ let package = Package(
             ],
         ),
         .target(
+            name: "WebInspectorTransport",
+            dependencies: [
+                "WebInspectorEngine",
+                "WebInspectorTransportObjCShim",
+                .product(name: "MachOKit", package: "MachOKit")
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorBridgeObjCShim",
             path: "Sources/WebInspectorBridge/ObjCShim",
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("AppKit", .when(platforms: [.macOS])),
+            ]
+        ),
+        .target(
+            name: "WebInspectorTransportObjCShim",
+            path: "Sources/WebInspectorTransportObjCShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation"),
+                .linkedFramework("JavaScriptCore"),
                 .linkedFramework("WebKit"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),
             ]
@@ -138,6 +163,16 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorEngineTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorTransportTests",
+            dependencies: [
+                "WebInspectorTransport",
+                "WebInspectorEngine",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorTransportTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
@@ -192,5 +227,6 @@ let package = Package(
             capability: .buildTool()
         )
 
-    ]
+    ],
+    cxxLanguageStandard: .gnucxx20
 )

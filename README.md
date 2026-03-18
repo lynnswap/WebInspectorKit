@@ -116,12 +116,6 @@ let container = WITabViewController(
 )
 ```
 
-## Testing
-
-- `swift test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run test`
-- `pnpm --dir Sources/WebInspectorScripts/TypeScript/Tests run typecheck`
-
 ## Migration
 
 See [`MIGRATION.md`](Docs/MIGRATION.md) for details on breaking changes.

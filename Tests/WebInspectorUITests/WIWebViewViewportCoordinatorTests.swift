@@ -102,6 +102,39 @@ struct WIWebViewViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorRegistersHostedScrollViewForNavigationChrome() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor)
+        ])
+
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setToolbarHidden(false, animated: false)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = WIWebViewViewportCoordinator(
+            hostViewController: hostViewController,
+            webView: webView
+        )
+
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(hostViewController.contentScrollView(for: .bottom) === webView.scrollView)
+        coordinator.invalidate()
+        #expect(hostViewController.contentScrollView(for: .top) == nil)
+        #expect(hostViewController.contentScrollView(for: .bottom) == nil)
+    }
+
+    @Test
     @available(iOS 26.0, *)
     func coordinatorReappliesViewportWhenNavigationStateChangesWithoutGeometryChange() throws {
         let hostViewController = UIViewController()

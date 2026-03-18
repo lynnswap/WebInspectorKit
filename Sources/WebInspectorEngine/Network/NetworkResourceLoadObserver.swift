@@ -38,15 +38,14 @@ final class NetworkResourceLoadObserver: NSObject {
         case other = -1
     }
 
-    typealias EventSink = @MainActor (HTTPNetworkEvent) -> Void
     typealias SupportsResourceLoadDelegate = @MainActor (WKWebView) -> Bool
     typealias SetResourceLoadDelegate = @MainActor (WKWebView, AnyObject?) -> Bool
     typealias IsEventEmissionEnabled = @MainActor () -> Bool
 
     private let sessionID: String
+    private let store: NetworkStore
     private let includeFetchAndXHR: Bool
     private let isEventEmissionEnabled: IsEventEmissionEnabled
-    private let applyEvent: EventSink
     private let supportsResourceLoadDelegate: SupportsResourceLoadDelegate
     private let setResourceLoadDelegate: SetResourceLoadDelegate
     private var statesByLoadID: [UInt64: LoadState] = [:]
@@ -56,6 +55,7 @@ final class NetworkResourceLoadObserver: NSObject {
 
     init(
         sessionID: String,
+        store: NetworkStore,
         includeFetchAndXHR: Bool = false,
         isEventEmissionEnabled: @escaping IsEventEmissionEnabled = { true },
         supportsResourceLoadDelegate: @escaping SupportsResourceLoadDelegate = { webView in
@@ -63,13 +63,12 @@ final class NetworkResourceLoadObserver: NSObject {
         },
         setResourceLoadDelegate: @escaping SetResourceLoadDelegate = { webView, delegate in
             WISPIRuntime.shared.setResourceLoadDelegate(on: webView, delegate: delegate)
-        },
-        applyEvent: @escaping EventSink
+        }
     ) {
         self.sessionID = sessionID
+        self.store = store
         self.includeFetchAndXHR = includeFetchAndXHR
         self.isEventEmissionEnabled = isEventEmissionEnabled
-        self.applyEvent = applyEvent
         self.supportsResourceLoadDelegate = supportsResourceLoadDelegate
         self.setResourceLoadDelegate = setResourceLoadDelegate
         super.init()
@@ -313,23 +312,25 @@ private extension NetworkResourceLoadObserver {
         let method = (request?.httpMethod ?? originalHTTPMethod(from: resourceLoad) ?? "GET").uppercased()
         let headers = request?.allHTTPHeaderFields ?? [:]
 
-        guard let event = makeEvent(
-            kind: .requestWillBeSent,
-            requestID: state.requestID,
-            timestamp: timestamp ?? eventTimestamp(from: resourceLoad),
-            url: url,
-            method: method,
-            statusCode: nil,
-            statusText: nil,
-            mimeType: nil,
-            headers: headers,
-            initiator: initiator(for: state.resourceType),
-            encodedBodyLength: nil,
-            error: nil
-        ) else {
-            return
-        }
-        applyEvent(event)
+        let resolvedTime = makeResolvedTime(from: timestamp ?? eventTimestamp(from: resourceLoad))
+        store.apply(
+            .requestStarted(
+                .init(
+                    requestID: state.requestID,
+                    request: .init(
+                        url: url,
+                        method: method,
+                        headers: NetworkHeaders(dictionary: headers),
+                        body: nil,
+                        bodyBytesSent: nil,
+                        type: initiator(for: state.resourceType),
+                        wallTime: resolvedTime.wallSeconds
+                    ),
+                    timestamp: resolvedTime.monotonicSeconds
+                )
+            ),
+            sessionID: sessionID,
+        )
     }
 
     private func emitResponse(for state: LoadState, response: URLResponse, timestamp: Date?) {
@@ -339,23 +340,25 @@ private extension NetworkResourceLoadObserver {
         let mimeType = response.mimeType
         let headers = headerDictionary(from: httpResponse?.allHeaderFields ?? [:])
 
-        guard let event = makeEvent(
-            kind: .responseReceived,
-            requestID: state.requestID,
-            timestamp: timestamp,
-            url: nil,
-            method: nil,
-            statusCode: statusCode,
-            statusText: statusText,
-            mimeType: mimeType,
-            headers: headers,
-            initiator: initiator(for: state.resourceType),
-            encodedBodyLength: nil,
-            error: nil
-        ) else {
-            return
-        }
-        applyEvent(event)
+        store.apply(
+            .responseReceived(
+                .init(
+                    requestID: state.requestID,
+                    response: .init(
+                        statusCode: statusCode,
+                        statusText: statusText ?? "",
+                        mimeType: mimeType,
+                        headers: NetworkHeaders(dictionary: headers),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: initiator(for: state.resourceType),
+                    timestamp: makeResolvedTime(from: timestamp).monotonicSeconds
+                )
+            ),
+            sessionID: sessionID,
+        )
     }
 
     private func emitFinish(for state: LoadState, response: URLResponse?, timestamp: Date?) {
@@ -373,101 +376,59 @@ private extension NetworkResourceLoadObserver {
             encodedBodyLength = nil
         }
 
-        guard let event = makeEvent(
-            kind: .loadingFinished,
-            requestID: state.requestID,
-            timestamp: timestamp,
-            url: nil,
-            method: nil,
-            statusCode: statusCode,
-            statusText: statusText,
-            mimeType: mimeType,
-            headers: [:],
-            initiator: initiator(for: state.resourceType),
-            encodedBodyLength: encodedBodyLength,
-            error: nil
-        ) else {
-            return
-        }
-        applyEvent(event)
+        store.apply(
+            .completed(
+                .init(
+                    requestID: state.requestID,
+                    response: .init(
+                        statusCode: statusCode,
+                        statusText: statusText ?? "",
+                        mimeType: mimeType,
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: initiator(for: state.resourceType),
+                    timestamp: makeResolvedTime(from: timestamp).monotonicSeconds,
+                    encodedBodyLength: encodedBodyLength,
+                    decodedBodyLength: nil
+                )
+            ),
+            sessionID: sessionID,
+        )
     }
 
     private func emitFailure(for state: LoadState, error: NSError, timestamp: Date?) {
-        guard let event = makeEvent(
-            kind: .loadingFailed,
-            requestID: state.requestID,
-            timestamp: timestamp,
-            url: nil,
-            method: nil,
-            statusCode: nil,
-            statusText: nil,
-            mimeType: nil,
-            headers: [:],
-            initiator: initiator(for: state.resourceType),
-            encodedBodyLength: nil,
-            error: error
-        ) else {
-            return
-        }
-        applyEvent(event)
-    }
-
-    private func makeEvent(
-        kind: HTTPNetworkEventKind,
-        requestID: Int,
-        timestamp: Date?,
-        url: String?,
-        method: String?,
-        statusCode: Int?,
-        statusText: String?,
-        mimeType: String?,
-        headers: [String: String],
-        initiator: String,
-        encodedBodyLength: Int?,
-        error: NSError?
-    ) -> HTTPNetworkEvent? {
-        let payload = NetworkEventPayload(
-            kind: kind.rawValue,
-            requestId: requestID,
-            time: makeTimePayload(from: timestamp),
-            startTime: nil,
-            endTime: nil,
-            url: url,
-            method: method,
-            status: statusCode,
-            statusText: statusText,
-            mimeType: mimeType,
-            headers: headers,
-            initiator: initiator,
-            body: nil,
-            bodySize: nil,
-            encodedBodyLength: encodedBodyLength,
-            decodedBodySize: nil,
-            error: error.map(makeErrorPayload(from:))
-        )
-        return HTTPNetworkEvent(payload: payload, sessionID: sessionID)
-    }
-
-    private func makeErrorPayload(from error: NSError) -> NetworkErrorPayload {
-        let canceled = error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled
-        let timeout = error.domain == NSURLErrorDomain && error.code == NSURLErrorTimedOut
-        return NetworkErrorPayload(
-            domain: "native",
-            code: String(error.code),
-            message: error.localizedDescription,
-            isCanceled: canceled ? true : nil,
-            isTimeout: timeout ? true : nil
+        store.apply(
+            .failed(
+                .init(
+                    requestID: state.requestID,
+                    response: .init(
+                        statusCode: nil,
+                        statusText: "",
+                        mimeType: nil,
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: error.localizedDescription
+                    ),
+                    requestType: initiator(for: state.resourceType),
+                    timestamp: makeResolvedTime(from: timestamp).monotonicSeconds
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
-    private func makeTimePayload(from timestamp: Date?) -> NetworkTimePayload {
+    private func makeResolvedTime(from timestamp: Date?) -> (monotonicSeconds: TimeInterval, wallSeconds: TimeInterval?) {
         let resolvedTimestamp = timestamp ?? Date()
         let wallMs = resolvedTimestamp.timeIntervalSince1970 * 1000.0
         let nowWallMs = Date().timeIntervalSince1970 * 1000.0
         let nowMonotonicMs = ProcessInfo.processInfo.systemUptime * 1000.0
         let candidateMonotonicMs = nowMonotonicMs - (nowWallMs - wallMs)
         let monotonicMs = candidateMonotonicMs.isFinite ? candidateMonotonicMs : nowMonotonicMs
-        return NetworkTimePayload(monotonicMs: monotonicMs, wallMs: wallMs)
+        return (monotonicMs / 1000.0, wallMs / 1000.0)
     }
 
     private func headerDictionary(from rawHeaders: [AnyHashable: Any]) -> [String: String] {

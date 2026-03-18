@@ -42,8 +42,8 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         }
     }
 
-    weak var webView: WKWebView?
-    let store = NetworkStore()
+    package weak var webView: WKWebView?
+    package let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
     private var configureTask: Task<Void, Never>?
     private var clearTask: Task<Void, Never>?
@@ -65,7 +65,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
-    init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
+    package init(controllerStateRegistry: WIUserContentControllerStateRegistry = .shared) {
         runtime = .shared
         self.controllerStateRegistry = controllerStateRegistry
         bridgeMode = runtime.startupMode()
@@ -78,7 +78,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         detachPageWebView()
     }
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    package func setMode(_ mode: NetworkLoggingMode) {
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
@@ -92,7 +92,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
         await configureTask?.value
     }
 
-    func clearNetworkLogs() {
+    package func clearNetworkLogs() {
         store.clear()
         scheduleClear(on: webView)
     }
@@ -101,11 +101,11 @@ public final class NetworkPageAgent: NSObject, PageAgent {
 // MARK: - WIPageAgent
 
 extension NetworkPageAgent {
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    package func attachPageWebView(_ newWebView: WKWebView?) {
         replacePageWebView(with: newWebView)
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) {
+    package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) {
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -207,8 +207,35 @@ extension NetworkPageAgent {
 }
 
 extension NetworkPageAgent: NetworkBodyFetching {
-    package func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
-        await fetchBodyResult(bodyRef: ref, bodyHandle: handle, role: role)
+    package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        switch role {
+        case .request, .response:
+            true
+        }
+    }
+
+    package func fetchBodyResult(
+        locator: NetworkDeferredBodyLocator,
+        role: NetworkBody.Role
+    ) async -> NetworkBodyFetchResult {
+        switch locator {
+        case .networkRequest(let requestID, _):
+            return await fetchBodyResult(bodyRef: requestID, bodyHandle: nil, role: role)
+        case .pageResource:
+            return .bodyUnavailable
+        case .opaqueHandle(let handle):
+            return await fetchBodyResult(bodyRef: nil, bodyHandle: handle, role: role)
+        }
+    }
+}
+
+extension NetworkPageAgent: WINetworkBackend {
+    package var support: WIBackendSupport {
+        WIBackendSupport(
+            availability: .supported,
+            backendKind: .unsupported,
+            failureReason: "Using page-hook network backend."
+        )
     }
 }
 
@@ -636,8 +663,8 @@ private extension NetworkPageAgent {
         }
     }
 
-    func decodeNetworkBatch(from payload: Any?) -> NetworkEventBatch? {
-        NetworkEventBatch.decode(from: payload)
+    func decodeNetworkBatch(from payload: Any?) -> NetworkWire.PageHook.Batch? {
+        NetworkWire.PageHook.Batch.decode(from: payload)
     }
 
     private func validateMessageAuthToken(_ payload: Any?) -> AuthTokenValidationResult {
@@ -816,6 +843,7 @@ private extension NetworkPageAgent {
         let sessionID = "native-\(UUID().uuidString.lowercased())"
         let observer = NetworkResourceLoadObserver(
             sessionID: sessionID,
+            store: store,
             includeFetchAndXHR: nativeObserverIncludesFetchAndXHR,
             isEventEmissionEnabled: { [weak self] in
                 guard let self else {
@@ -823,9 +851,7 @@ private extension NetworkPageAgent {
                 }
                 return self.loggingMode == .active
             }
-        ) { [weak self] event in
-            self?.store.applyEvent(event)
-        }
+        )
         let attached = observer.attach(to: webView)
         nativeObserverEnabled = attached
         nativeSessionID = sessionID

@@ -118,7 +118,8 @@ struct NetworkInspectorTests {
             }
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
         entry.responseBody = makeBody(reference: "resp_ref", role: .response)
@@ -154,7 +155,8 @@ struct NetworkInspectorTests {
         #expect(fetcher.fetchRefs.isEmpty)
         #expect(body.fetchState == .inline)
 
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchRefs == ["resp_ref"]
@@ -170,7 +172,8 @@ struct NetworkInspectorTests {
             self.makeFetchedBody(full: "late body", reference: ref, role: role)
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
         let entry = makeEntry()
 
         inspector.selectEntry(entry)
@@ -202,7 +205,8 @@ struct NetworkInspectorTests {
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         let firstEntry = makeEntry()
         let firstBody = makeBody(reference: "slow-ref", role: .response)
@@ -245,7 +249,8 @@ struct NetworkInspectorTests {
         inspector.selectEntry(entry)
 
         inspector.detach()
-        inspector.attach(to: WKWebView(frame: .zero))
+        let webView = WKWebView(frame: .zero)
+        inspector.attach(to: webView)
 
         for _ in 0..<64 {
             await Task.yield()
@@ -371,7 +376,7 @@ struct NetworkInspectorTests {
                 "wallMs": 1_700_000_000_120.0
             ]
         ])
-        inspector.store.applyEvent(finish)
+        inspector.store.apply(finish, sessionID: "")
 
         inspector.searchText = "buffered-endpoint"
         inspector.activeResourceFilters = [.xhrFetch]
@@ -466,7 +471,7 @@ struct NetworkInspectorTests {
                 "wallMs": 1_700_000_000_020.0
             ]
         ])
-        inspector.store.applyEvent(responseReceived)
+        inspector.store.apply(responseReceived, sessionID: "")
 
         let updated = await waitUntil {
             inspector.displayEntries.first?.statusLabel == "404"
@@ -603,13 +608,13 @@ struct NetworkInspectorTests {
             ]
         ]
         let event = try decodeEvent(payload)
-        inspector.store.applyEvent(event)
+        inspector.store.apply(event, sessionID: "")
     }
 
-    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> HTTPNetworkEvent {
+    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> NetworkWire.PageHook.Event {
+        _ = sessionID
         let data = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(NetworkEventPayload.self, from: data)
-        return try #require(HTTPNetworkEvent(payload: decoded, sessionID: sessionID))
+        return try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
     }
 
     private func waitUntil(
@@ -642,8 +647,17 @@ private final class StubNetworkBodyFetcher: NetworkBodyFetching {
         }
     }
 
-    func fetchBodyResult(ref: String?, handle: AnyObject?, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
-        fetchRefs.append(ref)
-        return await onFetch(ref, handle, role)
+    func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
+        switch role {
+        case .request, .response:
+            true
+        }
+    }
+
+    func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> NetworkBodyFetchResult {
+        let reference = locator.reference
+        let handle = locator.handle
+        fetchRefs.append(reference)
+        return await onFetch(reference, handle, role)
     }
 }

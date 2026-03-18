@@ -27,7 +27,7 @@ struct NetworkPageAgentTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_100.0, wallMs: 1_700_000_000_100.0)
         ])
-        agent.store.applyEvent(start)
+        agent.store.apply(start, sessionID: "")
         #expect(agent.store.entries.count == 1)
 
         agent.setMode(.stopped)
@@ -46,7 +46,7 @@ struct NetworkPageAgentTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_120.0, wallMs: 1_700_000_000_120.0)
         ])
-        agent.store.applyEvent(start)
+        agent.store.apply(start, sessionID: "")
         #expect(agent.store.entries.count == 1)
 
         agent.setMode(.buffering)
@@ -146,7 +146,7 @@ struct NetworkPageAgentTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(payload)
+        store.apply(payload, sessionID: "")
         #expect(store.entries.isEmpty == false)
 
         agent.clearNetworkLogs()
@@ -165,7 +165,7 @@ struct NetworkPageAgentTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
         ])
-        store.applyEvent(payload)
+        store.apply(payload, sessionID: "")
         #expect(store.entries.count == 1)
 
         agent.didClearPageWebView()
@@ -189,7 +189,7 @@ struct NetworkPageAgentTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_010.0, wallMs: 1_700_000_000_010.0)
         ])
-        store.applyEvent(payload)
+        store.apply(payload, sessionID: "")
         #expect(store.entries.count == 1)
 
         agent.detachPageWebView(preparing: .active)
@@ -619,7 +619,7 @@ struct NetworkPageAgentTests {
             "events": payloads
         ]
         let batch = try NetworkTestHelpers.decodeBatch(batchPayload)
-        agent.store.applyBatchedInsertions(batch)
+        agent.store.applyResourceTimingBatch(batch)
 
         let entry = try #require(agent.store.entry(forRequestID: 99, sessionID: "session-1"))
         #expect(entry.phase == .completed)
