@@ -1,3 +1,4 @@
+import Foundation
 import WebInspectorKit
 
 #if canImport(UIKit)
@@ -6,24 +7,152 @@ import UIKit
 import AppKit
 #endif
 
+#if canImport(UIKit)
+struct BrowserInspectorWindowContext {
+    static let sceneActivityType = "lynnpd.minibrowser.web-inspector"
+
+    let browserStore: BrowserStore
+    let inspectorController: WIModel
+    let tabs: [WITab]
+}
+
+struct BrowserInspectorSceneActivationRequester {
+    let activateScene: @MainActor (
+        _ userActivity: NSUserActivity,
+        _ requestingScene: UIScene?,
+        _ errorHandler: @escaping (Error) -> Void
+    ) -> Void
+
+    static let live = BrowserInspectorSceneActivationRequester { userActivity, requestingScene, errorHandler in
+        let options = UIScene.ActivationRequestOptions()
+        options.requestingScene = requestingScene
+        UIApplication.shared.requestSceneSessionActivation(
+            nil,
+            userActivity: userActivity,
+            options: options,
+            errorHandler: errorHandler
+        )
+    }
+}
+#endif
+
 @MainActor
 final class BrowserInspectorCoordinator {
 #if canImport(UIKit)
-    func present(
+    private final class InspectorSheetObserver: NSObject, UIAdaptivePresentationControllerDelegate {
+        var onDismiss: (() -> Void)?
+
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            onDismiss?()
+        }
+    }
+
+    private final class InspectorWindowRegistry {
+        private final class WeakSceneSessionBox {
+            weak var session: UISceneSession?
+
+            init(session: UISceneSession) {
+                self.session = session
+            }
+        }
+
+        private var context: BrowserInspectorWindowContext?
+        private var sceneSessionsByIdentifier: [String: WeakSceneSessionBox] = [:]
+        private var isPendingPresentation = false
+        private var observers: [UUID: (Bool) -> Void] = [:]
+
+        var currentContext: BrowserInspectorWindowContext? {
+            context
+        }
+
+        var currentSceneSessions: [UISceneSession] {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionsByIdentifier.values.compactMap(\.session)
+        }
+
+        var presentationState: Bool {
+            pruneDisconnectedSceneSessions()
+            return isPendingPresentation || sceneSessionsByIdentifier.isEmpty == false
+        }
+
+        func setContext(_ context: BrowserInspectorWindowContext?) {
+            self.context = context
+        }
+
+        func beginPendingPresentation() {
+            let previousState = presentationState
+            isPendingPresentation = true
+            notifyObserversIfNeeded(previousState: previousState)
+        }
+
+        func attachSceneSession(_ sceneSession: UISceneSession) {
+            let previousState = presentationState
+            sceneSessionsByIdentifier[sceneSession.persistentIdentifier] = WeakSceneSessionBox(session: sceneSession)
+            isPendingPresentation = false
+            notifyObserversIfNeeded(previousState: previousState)
+        }
+
+        func sceneDidDisconnect(_ sceneSession: UISceneSession) {
+            let previousState = presentationState
+            sceneSessionsByIdentifier.removeValue(forKey: sceneSession.persistentIdentifier)
+            pruneDisconnectedSceneSessions()
+            if sceneSessionsByIdentifier.isEmpty, isPendingPresentation == false {
+                context = nil
+            }
+            notifyObserversIfNeeded(previousState: previousState)
+        }
+
+        func clear() {
+            let previousState = presentationState
+            context = nil
+            sceneSessionsByIdentifier.removeAll()
+            isPendingPresentation = false
+            notifyObserversIfNeeded(previousState: previousState)
+        }
+
+        func addObserver(_ observer: @escaping (Bool) -> Void) -> UUID {
+            let observerID = UUID()
+            observers[observerID] = observer
+            observer(presentationState)
+            return observerID
+        }
+
+        func removeObserver(_ observerID: UUID) {
+            observers[observerID] = nil
+        }
+
+        private func pruneDisconnectedSceneSessions() {
+            sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
+        }
+
+        private func notifyObserversIfNeeded(previousState: Bool) {
+            let currentState = presentationState
+            guard currentState != previousState else {
+                return
+            }
+            observers.values.forEach { $0(currentState) }
+        }
+    }
+
+    private static let inspectorWindowRegistry = InspectorWindowRegistry()
+
+    private weak var presentedSheetController: WITabViewController?
+    private let sheetObserver = InspectorSheetObserver()
+    private var sceneActivationRequester = BrowserInspectorSceneActivationRequester.live
+
+    var onPresentationStateChange: (() -> Void)?
+
+    func presentSheet(
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIModel,
         tabs: [WITab] = [.dom(), .network()]
     ) -> Bool {
-        let anchor = resolvePresentationAnchor(from: presenter)
-
-        if let existing = findPresentedContainer(from: anchor) {
-            existing.setTabs(tabs)
-            existing.setInspectorController(inspectorController)
-            existing.setPageWebView(browserStore.webView)
-            return true
+        guard isPresentingInspector(presenter: presenter) == false else {
+            return false
         }
 
+        let anchor = resolvePresentationAnchor(from: presenter)
         let container = WITabViewController(
             inspectorController,
             webView: browserStore.webView,
@@ -31,62 +160,122 @@ final class BrowserInspectorCoordinator {
         )
         container.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: container)
+        presentedSheetController = container
+        sheetObserver.onDismiss = { [weak self, weak container] in
+            guard let self else {
+                return
+            }
+            if self.presentedSheetController === container {
+                self.presentedSheetController = nil
+                self.notifyPresentationStateChanged()
+            }
+        }
+        container.presentationController?.delegate = sheetObserver
         anchor.present(container, animated: true)
+        notifyPresentationStateChanged()
         return true
+    }
+
+    func presentWindow(
+        from presenter: UIViewController,
+        browserStore: BrowserStore,
+        inspectorController: WIModel,
+        tabs: [WITab] = [.dom(), .network()]
+    ) -> Bool {
+        guard isPresentingInspector(presenter: presenter) == false else {
+            return false
+        }
+
+        Self.inspectorWindowRegistry.setContext(
+            BrowserInspectorWindowContext(
+                browserStore: browserStore,
+                inspectorController: inspectorController,
+                tabs: tabs
+            )
+        )
+        Self.inspectorWindowRegistry.beginPendingPresentation()
+        let userActivity = Self.makeInspectorWindowUserActivity()
+
+        sceneActivationRequester.activateScene(userActivity, presenter.view.window?.windowScene) { [weak self] _ in
+            Self.inspectorWindowRegistry.clear()
+            self?.notifyPresentationStateChanged()
+        }
+
+        notifyPresentationStateChanged()
+        return true
+    }
+
+    func dismissInspectorWindow() {
+        let sceneSessions = Self.inspectorWindowRegistry.currentSceneSessions
+        if sceneSessions.isEmpty == false {
+            for sceneSession in sceneSessions {
+                UIApplication.shared.requestSceneSessionDestruction(sceneSession, options: nil, errorHandler: nil)
+            }
+            return
+        }
+
+        Self.inspectorWindowRegistry.clear()
+        notifyPresentationStateChanged()
+    }
+
+    func isPresentingInspector(presenter: UIViewController? = nil) -> Bool {
+        reconcilePresentationState(from: presenter)
+        if presentedSheetController != nil {
+            return true
+        }
+        return Self.inspectorWindowRegistry.presentationState
+    }
+
+    func invalidate() {
+        sheetObserver.onDismiss = nil
+        presentedSheetController = nil
+    }
+
+    func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorSceneActivationRequester) {
+        sceneActivationRequester = requester
+    }
+
+    var hasInspectorWindowForTesting: Bool {
+        Self.inspectorWindowRegistry.presentationState
+    }
+
+    static var inspectorWindowSceneActivityType: String {
+        BrowserInspectorWindowContext.sceneActivityType
+    }
+
+    static func inspectorWindowContext() -> BrowserInspectorWindowContext? {
+        inspectorWindowRegistry.currentContext
+    }
+
+    static func attachInspectorWindowSceneSession(_ sceneSession: UISceneSession) {
+        inspectorWindowRegistry.attachSceneSession(sceneSession)
+    }
+
+    static func handleInspectorWindowSceneDidDisconnect(_ sceneSession: UISceneSession) {
+        inspectorWindowRegistry.sceneDidDisconnect(sceneSession)
+    }
+
+    static func observeInspectorWindowPresentation(_ observer: @escaping (Bool) -> Void) -> UUID {
+        inspectorWindowRegistry.addObserver(observer)
+    }
+
+    static func removeInspectorWindowObservation(_ observerID: UUID) {
+        inspectorWindowRegistry.removeObserver(observerID)
+    }
+
+    static func clearInspectorWindowPresentation() {
+        inspectorWindowRegistry.clear()
+    }
+
+    private static func makeInspectorWindowUserActivity() -> NSUserActivity {
+        let userActivity = NSUserActivity(activityType: BrowserInspectorWindowContext.sceneActivityType)
+        userActivity.targetContentIdentifier = BrowserInspectorWindowContext.sceneActivityType
+        return userActivity
     }
 
     private func resolvePresentationAnchor(from presenter: UIViewController) -> UIViewController {
         let baseController = presenter.view.window?.rootViewController ?? presenter.navigationController ?? presenter
         return topViewController(from: baseController) ?? presenter
-    }
-
-    private func findPresentedContainer(from presenter: UIViewController) -> WITabViewController? {
-        if let direct = presenter.presentedViewController.flatMap(inspectorContainer(in:)) {
-            return direct
-        }
-
-        var cursor: UIViewController? = presenter
-        while let current = cursor {
-            if let container = inspectorContainer(in: current) {
-                return container
-            }
-            cursor = current.presentedViewController
-        }
-
-        cursor = presenter
-        while let current = cursor {
-            if let container = inspectorContainer(in: current) {
-                return container
-            }
-            cursor = current.presentingViewController
-        }
-
-        return nil
-    }
-
-    private func inspectorContainer(in viewController: UIViewController) -> WITabViewController? {
-        if let container = viewController as? WITabViewController {
-            return container
-        }
-        if let navigationController = viewController as? UINavigationController {
-            for child in navigationController.viewControllers {
-                if let container = inspectorContainer(in: child) {
-                    return container
-                }
-            }
-        }
-        if let tabController = viewController as? UITabBarController,
-           let selected = tabController.selectedViewController {
-            return inspectorContainer(in: selected)
-        }
-        if let splitController = viewController as? UISplitViewController {
-            for child in splitController.viewControllers {
-                if let container = inspectorContainer(in: child) {
-                    return container
-                }
-            }
-        }
-        return nil
     }
 
     private func applyDefaultDetents(to controller: UIViewController) {
@@ -117,6 +306,37 @@ final class BrowserInspectorCoordinator {
             return topViewController(from: split.viewControllers.last)
         }
         return root
+    }
+
+    private func notifyPresentationStateChanged() {
+        onPresentationStateChange?()
+    }
+
+    private func reconcilePresentationState(from presenter: UIViewController?) {
+        guard let presentedSheetController else {
+            return
+        }
+        if presentedSheetController.presentingViewController != nil {
+            return
+        }
+        guard isPresentedViewControllerInChain(presentedSheetController, from: presenter) == false else {
+            return
+        }
+        self.presentedSheetController = nil
+    }
+
+    private func isPresentedViewControllerInChain(
+        _ target: UIViewController,
+        from presenter: UIViewController?
+    ) -> Bool {
+        var cursor = presenter?.presentedViewController
+        while let current = cursor {
+            if current === target {
+                return true
+            }
+            cursor = current.presentedViewController
+        }
+        return false
     }
 #elseif canImport(AppKit)
     private final class InspectorWindowStore {

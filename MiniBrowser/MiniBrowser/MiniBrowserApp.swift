@@ -13,5 +13,11 @@ struct MiniBrowserApp: App {
         WindowGroup {
             ContentView()
         }
+#if canImport(UIKit)
+        WindowGroup("Web Inspector") {
+            BrowserInspectorWindowSceneView()
+        }
+        .handlesExternalEvents(matching: [BrowserInspectorCoordinator.inspectorWindowSceneActivityType])
+#endif
     }
 }

@@ -243,16 +243,26 @@ private extension WIDOMModel {
                 self.restorePageScrollingState()
 #endif
             }
+            let selectionModeTask = Task { @MainActor in
+                try await self.session.beginSelectionMode()
+            }
             do {
-                let result = try await self.session.beginSelectionMode()
+                await Task.yield()
+                self.activatePageWindowForSelectionIfPossible()
+#if canImport(UIKit)
+                await self.waitForPageWindowActivationIfNeeded()
+#endif
+                let result = try await selectionModeTask.value
                 guard !result.cancelled else { return }
                 if Task.isCancelled { return }
                 let requestedDepth = max(self.session.configuration.snapshotDepth, result.requiredDepth + 1)
                 self.updateSnapshotDepthImpl(requestedDepth)
                 await self.reloadInspectorImpl(preserveState: true)
             } catch is CancellationError {
+                selectionModeTask.cancel()
                 await self.session.cancelSelectionMode()
             } catch {
+                selectionModeTask.cancel()
                 domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
                 errorMessage = error.localizedDescription
             }

@@ -4,6 +4,14 @@ import WebKit
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
+#if canImport(AppKit)
+import AppKit
+#endif
+
 @MainActor
 struct ControllerActivationTests {
     @Test
@@ -315,6 +323,92 @@ struct ControllerActivationTests {
         )
     }
 
+#if canImport(UIKit)
+    @Test
+    func pageWindowActivationMakesPageWindowKeyWithinSameScene() throws {
+        let controller = WIModel()
+        let webView = makeTestWebView()
+        let pageWindow = makeUIKitWindow(containing: webView)
+        defer {
+            tearDownUIKitWindow(pageWindow)
+        }
+
+        controller.connect(to: webView)
+        pageWindow.makeKeyAndVisible()
+        pageWindow.resetRecordedCalls()
+
+        let attachedWindow = try #require(webView.window)
+        #expect(attachedWindow === pageWindow)
+
+        controller.dom.activatePageWindowForSelectionIfPossible()
+
+        #expect(pageWindow.makeKeyCallCount == 1)
+    }
+
+    @Test
+    func pageSceneActivationRequestsExistingSessionWhenSceneIsNotForegroundActive() throws {
+        let controller = WIModel()
+        let webView = makeTestWebView()
+        let pageWindow = makeUIKitWindow(containing: webView)
+        defer {
+            tearDownUIKitWindow(pageWindow)
+        }
+
+        controller.connect(to: webView)
+        pageWindow.makeKeyAndVisible()
+
+        let requester = RecordingSceneActivationRequester()
+        let target = FakeSceneActivationTarget(activationState: .background)
+        requester.error = TestSceneActivationError()
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+        }
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in target }
+
+        controller.dom.activatePageWindowForSelectionIfPossible()
+
+        let requestedTarget = try #require(requester.requestedTargets.first)
+        #expect(requester.requestedTargets.count == 1)
+        #expect(requestedTarget === target)
+    }
+
+    @Test
+    func pageWindowActivationWithoutAttachedWindowIsNoOp() {
+        let controller = WIModel()
+        let webView = makeTestWebView()
+
+        controller.connect(to: webView)
+        controller.dom.activatePageWindowForSelectionIfPossible()
+
+        #expect(webView.window == nil)
+    }
+#endif
+
+#if canImport(AppKit)
+    @Test
+    func pageWindowActivationMakesPageWindowKeyOnMacOS() {
+        let controller = WIModel()
+        let webView = makeTestWebView()
+        let pageWindow = makeAppKitWindow(containing: webView)
+        defer {
+            tearDownAppKitWindow(pageWindow)
+        }
+
+        controller.connect(to: webView)
+        pageWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        pageWindow.resetRecordedCalls()
+
+        controller.dom.activatePageWindowForSelectionIfPossible()
+
+        #expect(pageWindow.makeKeyAndOrderFrontCallCount == 1)
+    }
+#endif
+
     private func makeBoundSession(
         tabs: [WITab],
         selectedTabID: String? = nil
@@ -369,4 +463,112 @@ struct ControllerActivationTests {
 
         Issue.record("Timed out waiting for synchronized controller state")
     }
+
+#if canImport(UIKit)
+    private func makeUIKitWindow(containing webView: WKWebView? = nil) -> RecordingUIKitWindow {
+        let viewController = UIViewController()
+        viewController.loadViewIfNeeded()
+        if let webView {
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            viewController.view.addSubview(webView)
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: viewController.view.topAnchor),
+                webView.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+                webView.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor)
+            ])
+        }
+
+        let window = RecordingUIKitWindow(frame: UIScreen.main.bounds)
+        window.frame = UIScreen.main.bounds
+        window.rootViewController = viewController
+        return window
+    }
+
+    private func tearDownUIKitWindow(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    @MainActor
+    private final class RecordingSceneActivationRequester: WIDOMUIKitSceneActivationRequesting {
+        private(set) var requestedTargets: [any WIDOMUIKitSceneActivationTarget] = []
+        var error: (any Error)?
+
+        func requestActivation(
+            of target: any WIDOMUIKitSceneActivationTarget,
+            errorHandler: ((any Error) -> Void)?
+        ) {
+            requestedTargets.append(target)
+            if let error {
+                errorHandler?(error)
+            }
+        }
+    }
+
+    private struct TestSceneActivationError: Error {}
+
+    @MainActor
+    private final class FakeSceneActivationTarget: WIDOMUIKitSceneActivationTarget {
+        let activationState: UIScene.ActivationState
+        let sceneSession: UISceneSession? = nil
+
+        init(activationState: UIScene.ActivationState) {
+            self.activationState = activationState
+        }
+    }
+
+    private final class RecordingUIKitWindow: UIWindow {
+        private(set) var makeKeyCallCount = 0
+
+        override func makeKey() {
+            makeKeyCallCount += 1
+            super.makeKey()
+        }
+
+        func resetRecordedCalls() {
+            makeKeyCallCount = 0
+        }
+    }
+#endif
+
+#if canImport(AppKit)
+    private func makeAppKitWindow(containing webView: WKWebView? = nil) -> RecordingAppKitWindow {
+        let viewController = NSViewController()
+        viewController.view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        if let webView {
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            viewController.view.addSubview(webView)
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: viewController.view.topAnchor),
+                webView.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+                webView.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor)
+            ])
+        }
+
+        let window = RecordingAppKitWindow(contentViewController: viewController)
+        window.setContentSize(NSSize(width: 800, height: 600))
+        window.styleMask = [.titled, .closable, .resizable]
+        return window
+    }
+
+    private func tearDownAppKitWindow(_ window: NSWindow) {
+        window.orderOut(nil)
+        window.close()
+    }
+
+    private final class RecordingAppKitWindow: NSWindow {
+        private(set) var makeKeyAndOrderFrontCallCount = 0
+
+        override func makeKeyAndOrderFront(_ sender: Any?) {
+            makeKeyAndOrderFrontCallCount += 1
+            super.makeKeyAndOrderFront(sender)
+        }
+
+        func resetRecordedCalls() {
+            makeKeyAndOrderFrontCallCount = 0
+        }
+    }
+#endif
 }
