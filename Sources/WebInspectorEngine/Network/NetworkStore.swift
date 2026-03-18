@@ -22,55 +22,77 @@ public final class NetworkStore {
         }
     }
 
-    package func applyEvent(_ event: HTTPNetworkEvent) {
-        applyHTTPEvent(event)
-    }
-
-    package func applyEvent(_ event: WSNetworkEvent) {
-        applyWSEvent(event)
-    }
-
-    func applyNetworkBatch(_ batch: NetworkEventBatch) {
-        guard isRecording else { return }
-        guard !batch.events.isEmpty else { return }
-
-        var pendingResourceTimingEvents: [HTTPNetworkEvent] = []
-        pendingResourceTimingEvents.reserveCapacity(batch.events.count)
-
-        func flushPendingResourceTimingEvents() {
-            guard !pendingResourceTimingEvents.isEmpty else { return }
-            let resourceTimingBatch = NetworkEventBatch(
-                version: batch.version,
-                sessionID: batch.sessionID,
-                seq: batch.seq,
-                events: pendingResourceTimingEvents,
-                dropped: nil
-            )
-            applyBatchedInsertions(resourceTimingBatch)
-            pendingResourceTimingEvents.removeAll(keepingCapacity: true)
+    package func apply(
+        _ update: NetworkEntry.Update,
+        sessionID: String
+    ) {
+        guard isRecording else {
+            return
         }
 
-        for event in batch.events {
-            if event.kind == .resourceTiming {
-                pendingResourceTimingEvents.append(event)
-                continue
+        switch update {
+        case .requestStarted, .resourceTimingSnapshot:
+            let entry = existingOrNewEntry(for: update, sessionID: sessionID)
+            entry?.apply(update)
+        case .webSocketOpened:
+            guard entry(forRequestID: update.requestID, sessionID: sessionID) == nil else {
+                return
             }
-            flushPendingResourceTimingEvents()
-            applyHTTPEvent(event)
+            appendEntry(NetworkEntry(sessionID: sessionID, update: update))
+        case .responseReceived,
+             .completed,
+             .failed,
+             .webSocketHandshake,
+             .webSocketFrameAdded,
+             .webSocketClosed:
+            guard let entry = entry(forRequestID: update.requestID, sessionID: sessionID) else {
+                return
+            }
+            entry.apply(update)
+        }
+    }
+
+    package func apply(
+        _ payload: NetworkWire.PageHook.Event,
+        sessionID: String
+    ) {
+        guard let update = NetworkEntry.Update(payload: payload) else {
+            return
+        }
+        apply(update, sessionID: sessionID)
+    }
+
+    package func applyResourceTimingBatch(_ batch: NetworkWire.PageHook.Batch) {
+        guard isRecording else {
+            return
         }
 
-        flushPendingResourceTimingEvents()
+        for payload in batch.events where payload.kindValue == .resourceTiming {
+            apply(payload, sessionID: batch.sessionID)
+        }
+    }
+
+    func applyNetworkBatch(_ batch: NetworkWire.PageHook.Batch) {
+        guard isRecording else {
+            return
+        }
+
+        for payload in batch.events {
+            apply(payload, sessionID: batch.sessionID)
+        }
     }
 
     @discardableResult
-    package func applySeeds(_ seeds: [NetworkEntrySeed]) -> [NetworkEntry] {
-        guard isRecording else { return [] }
-        guard !seeds.isEmpty else { return [] }
+    package func applySnapshots(_ snapshots: [NetworkEntry.Snapshot]) -> [NetworkEntry] {
+        guard isRecording, !snapshots.isEmpty else {
+            return []
+        }
 
         var insertedEntries: [NetworkEntry] = []
-        insertedEntries.reserveCapacity(seeds.count)
-        for seed in seeds {
-            let entry = NetworkEntry(seed: seed)
+        insertedEntries.reserveCapacity(snapshots.count)
+
+        for snapshot in snapshots {
+            let entry = NetworkEntry(snapshot: snapshot)
             appendEntry(entry)
             insertedEntries.append(entry)
         }
@@ -171,101 +193,6 @@ public final class NetworkStore {
         )
     }
 
-    func applyBatchedInsertions(_ batch: NetworkEventBatch) {
-        guard isRecording else { return }
-
-        let events = batch.events
-        guard !events.isEmpty else { return }
-
-        let existingBucket = bucket(for: batch.sessionID)
-        var staged: [(requestID: Int, entry: NetworkEntry)] = []
-        var seenRequestIDs = Set<Int>()
-
-        for event in events {
-            guard event.kind == .resourceTiming else { continue }
-            let requestID = event.requestID
-            // Prevent duplicates within the same batch.
-            if seenRequestIDs.contains(requestID) {
-                continue
-            }
-            if let existingEntry = existingBucket.entry(for: requestID) {
-                existingEntry.applyCompletionPayload(event, failed: false)
-                seenRequestIDs.insert(requestID)
-                continue
-            }
-
-            let entry = NetworkEntry(startPayload: event)
-            entry.applyCompletionPayload(event, failed: false)
-            staged.append((requestID, entry))
-            seenRequestIDs.insert(requestID)
-        }
-
-        if staged.isEmpty {
-            return
-        }
-
-        if let maxEntries = maxEntriesStorage, maxEntries > 0 {
-            let totalAfterAppend = entries.count + staged.count
-            let excess = totalAfterAppend - maxEntries
-            if excess > 0 {
-                if excess < entries.count {
-                    entries.removeFirst(excess)
-                    rebuildIndexAndBuckets()
-                } else {
-                    let existingCount = entries.count
-                    reset()
-                    let dropFromStaged = excess - existingCount
-                    if dropFromStaged > 0 {
-                        staged.removeFirst(min(dropFromStaged, staged.count))
-                    }
-                }
-            }
-        }
-
-        let bucket = bucket(for: batch.sessionID)
-        entries.append(contentsOf: staged.map(\.entry))
-
-        for stagedEntry in staged {
-            bucket.set(stagedEntry.entry, requestID: stagedEntry.requestID)
-        }
-    }
-
-    func applyHTTPEvent(_ event: HTTPNetworkEvent) {
-        guard isRecording else { return }
-
-        switch event.kind {
-        case .requestWillBeSent:
-            handleStart(event)
-        case .responseReceived:
-            handleResponse(event)
-        case .loadingFinished:
-            handleFinish(event, failed: false)
-        case .resourceTiming:
-            handleResourceTiming(event)
-        case .loadingFailed:
-            handleFinish(event, failed: true)
-        }
-    }
-
-    func applyWSEvent(_ event: WSNetworkEvent) {
-        guard isRecording else { return }
-
-        switch event.kind {
-        case .created:
-            handleWebSocketCreated(event)
-        case .handshake:
-            handleWebSocketHandshake(event)
-        case .handshakeRequest:
-            handleWebSocketHandshakeRequest(event)
-        case .frame:
-            handleWebSocketFrame(event)
-        case .closed:
-            handleWebSocketCompletion(event, failed: false)
-        case .frameError:
-            handleWebSocketCompletion(event, failed: true)
-        }
-    }
-
     package func reset() {
         sessionBuckets.removeAll()
         entries.removeAll()
@@ -287,129 +214,34 @@ public final class NetworkStore {
         }
         return entry
     }
+}
 
-    private func handleStart(_ event: HTTPNetworkEvent) {
-        let requestID = event.requestID
-        let bucket = bucket(for: event.sessionID)
-        if let existingEntry = bucket.entry(for: requestID) {
-            existingEntry.applyStartPayload(event)
-            return
+private extension NetworkStore {
+    func existingOrNewEntry(
+        for update: NetworkEntry.Update,
+        sessionID: String
+    ) -> NetworkEntry? {
+        if let existing = entry(forRequestID: update.requestID, sessionID: sessionID) {
+            return existing
         }
-        appendEntry(NetworkEntry(startPayload: event))
-    }
 
-    private func handleResponse(_ event: HTTPNetworkEvent) {
-        let requestID = event.requestID
-        guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
-        entry.applyResponsePayload(event)
-    }
-
-    private func handleFinish(_ event: HTTPNetworkEvent, failed: Bool) {
-        let requestID = event.requestID
-        guard let entry = entry(forRequestID: requestID, sessionID: event.sessionID) else { return }
-        entry.applyCompletionPayload(event, failed: failed)
-    }
-
-    private func handleResourceTiming(_ event: HTTPNetworkEvent) {
-        let requestID = event.requestID
-        let bucket = bucket(for: event.sessionID)
-        if let existingEntry = bucket.entry(for: requestID) {
-            existingEntry.applyCompletionPayload(event, failed: false)
-            return
-        }
-        let entry = NetworkEntry(startPayload: event)
-        appendEntry(entry)
-        entry.applyCompletionPayload(event, failed: false)
-    }
-
-    private func handleWebSocketCreated(_ event: WSNetworkEvent) {
-        let bucket = bucket(for: event.sessionID)
-        if bucket.entry(for: event.requestID) != nil {
-            return
-        }
-        let entry = NetworkEntry(
-            sessionID: event.sessionID,
-            requestID: event.requestID,
-            url: event.url ?? "",
-            method: "GET",
-            requestHeaders: NetworkHeaders(),
-            startTimestamp: event.startTimeSeconds,
-            wallTime: event.wallTimeSeconds
-        )
-        entry.requestType = "websocket"
-        entry.webSocket = NetworkWebSocketInfo()
-        entry.refreshFileTypeLabel()
-        appendEntry(entry)
-    }
-
-    private func handleWebSocketHandshakeRequest(_ event: WSNetworkEvent) {
-        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
-            return
-        }
-        if !event.requestHeaders.isEmpty {
-            entry.requestHeaders = event.requestHeaders
-        }
-        entry.phase = .pending
-    }
-
-    private func handleWebSocketHandshake(_ event: WSNetworkEvent) {
-        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
-            return
-        }
-        if let status = event.statusCode {
-            entry.statusCode = status
-        }
-        if let statusText = event.statusText {
-            entry.statusText = statusText
-        }
-        entry.phase = .pending
-    }
-
-    private func handleWebSocketFrame(_ event: WSNetworkEvent) {
-        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
-            return
-        }
-        entry.appendWebSocketFrame(event)
-    }
-
-    private func handleWebSocketCompletion(_ event: WSNetworkEvent, failed: Bool) {
-        guard let entry = entry(forRequestID: event.requestID, sessionID: event.sessionID) else {
-            return
-        }
-        if let status = event.statusCode, entry.statusCode == nil {
-            entry.statusCode = status
-        }
-        if let statusText = event.statusText, entry.statusText.isEmpty {
-            entry.statusText = statusText
-        }
-        let info = entry.webSocket ?? NetworkWebSocketInfo()
-        info.applyClose(
-            code: event.closeCode,
-            reason: event.closeReason,
-            wasClean: event.closeWasClean
-        )
-        entry.webSocket = info
-        if let end = event.endTimeSeconds {
-            entry.endTimestamp = end
-            entry.duration = max(0, end - entry.startTimestamp)
-        }
-        if let errorDescription = event.errorDescription {
-            entry.errorDescription = errorDescription
-        }
-        entry.phase = failed ? .failed : .completed
-        if failed && entry.statusCode == nil {
-            entry.statusCode = 0
+        switch update {
+        case .requestStarted, .resourceTimingSnapshot:
+            let entry = NetworkEntry(sessionID: sessionID, update: update)
+            appendEntry(entry)
+            return entry
+        default:
+            return nil
         }
     }
 
-    private func appendEntry(_ entry: NetworkEntry) {
+    func appendEntry(_ entry: NetworkEntry) {
         pruneIfNeeded(adding: 1)
         entries.append(entry)
-        let bucket = bucket(for: entry.sessionID)
-        bucket.set(entry, requestID: entry.requestID)
+        bucket(for: entry.sessionID).set(entry, requestID: entry.requestID)
     }
 
-    private func entryIsTracked(_ entry: NetworkEntry) -> Bool {
+    func entryIsTracked(_ entry: NetworkEntry) -> Bool {
         let key = sessionKey(for: entry.sessionID)
         guard let bucket = sessionBuckets[key],
               bucket.entry(for: entry.requestID) === entry else {
@@ -418,7 +250,7 @@ public final class NetworkStore {
         return entries.contains { $0 === entry }
     }
 
-    private func bucket(for sessionID: String?) -> SessionBucket {
+    func bucket(for sessionID: String?) -> SessionBucket {
         let key = sessionKey(for: sessionID)
         if let existing = sessionBuckets[key] {
             return existing
@@ -428,14 +260,14 @@ public final class NetworkStore {
         return bucket
     }
 
-    private func sessionKey(for sessionID: String?) -> String {
+    func sessionKey(for sessionID: String?) -> String {
         guard let sessionID, !sessionID.isEmpty else {
             return "__default_session__"
         }
         return sessionID
     }
 
-    private func pruneIfNeeded(adding additionalCount: Int) {
+    func pruneIfNeeded(adding additionalCount: Int) {
         guard let maxEntries = maxEntriesStorage, maxEntries > 0 else {
             return
         }
@@ -452,12 +284,174 @@ public final class NetworkStore {
         rebuildIndexAndBuckets()
     }
 
-    private func rebuildIndexAndBuckets() {
+    func rebuildIndexAndBuckets() {
         sessionBuckets.removeAll()
 
         for entry in entries {
             bucket(for: entry.sessionID).set(entry, requestID: entry.requestID)
         }
+    }
+}
+
+private extension NetworkEntry.Update {
+    init?(payload: NetworkWire.PageHook.Event) {
+        guard let kind = payload.kindValue else {
+            return nil
+        }
+
+        switch kind {
+        case .requestWillBeSent:
+            self = .requestStarted(
+                .init(
+                    requestID: payload.requestId,
+                    request: NetworkEntry.Request(
+                        url: payload.url ?? "",
+                        method: payload.normalizedMethod ?? "UNKNOWN",
+                        headers: NetworkHeaders(dictionary: payload.headers ?? [:]),
+                        body: payload.requestBody,
+                        bodyBytesSent: payload.requestBodyBytesSent,
+                        type: payload.initiator,
+                        wallTime: payload.wallTimeSeconds
+                    ),
+                    timestamp: payload.timeSeconds
+                )
+            )
+        case .responseReceived:
+            self = .responseReceived(
+                .init(
+                    requestID: payload.requestId,
+                    response: NetworkEntry.Response(
+                        statusCode: payload.status,
+                        statusText: payload.statusText ?? "",
+                        mimeType: payload.mimeType,
+                        headers: NetworkHeaders(dictionary: payload.headers ?? [:]),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: payload.initiator,
+                    timestamp: payload.timeSeconds
+                )
+            )
+        case .loadingFinished:
+            self = .completed(
+                .init(
+                    requestID: payload.requestId,
+                    response: NetworkEntry.Response(
+                        statusCode: payload.status,
+                        statusText: payload.statusText ?? "",
+                        mimeType: payload.mimeType,
+                        headers: NetworkHeaders(),
+                        body: payload.responseBody,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: payload.initiator,
+                    timestamp: payload.timeSeconds,
+                    encodedBodyLength: payload.encodedBodyLength,
+                    decodedBodyLength: payload.resolvedDecodedBodySize
+                )
+            )
+        case .loadingFailed:
+            self = .failed(
+                .init(
+                    requestID: payload.requestId,
+                    response: NetworkEntry.Response(
+                        statusCode: payload.status,
+                        statusText: payload.statusText ?? "",
+                        mimeType: payload.mimeType,
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: payload.error?.message ?? ""
+                    ),
+                    requestType: payload.initiator,
+                    timestamp: payload.timeSeconds
+                )
+            )
+        case .resourceTiming:
+            self = .resourceTimingSnapshot(
+                .init(
+                    requestID: payload.requestId,
+                    request: NetworkEntry.Request(
+                        url: payload.url ?? "",
+                        method: payload.normalizedMethod ?? "GET",
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        bodyBytesSent: nil,
+                        type: payload.initiator,
+                        wallTime: payload.resourceTimingWallTimeSeconds
+                    ),
+                    response: NetworkEntry.Response(
+                        statusCode: payload.status,
+                        statusText: payload.statusText ?? "",
+                        mimeType: payload.mimeType,
+                        headers: NetworkHeaders(dictionary: payload.headers ?? [:]),
+                        body: payload.responseBody,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    startTimestamp: payload.resourceTimingStartSeconds,
+                    endTimestamp: payload.resourceTimingEndSeconds,
+                    encodedBodyLength: payload.encodedBodyLength,
+                    decodedBodyLength: payload.resolvedDecodedBodySize
+                )
+            )
+        }
+    }
+}
+
+private extension NetworkWire.PageHook.Event {
+    var timeSeconds: TimeInterval {
+        let nowSeconds = Date().timeIntervalSince1970
+        return time.map { $0.monotonicMs / 1000.0 }
+            ?? startTime.map { $0.monotonicMs / 1000.0 }
+            ?? endTime.map { $0.monotonicMs / 1000.0 }
+            ?? nowSeconds
+    }
+
+    var wallTimeSeconds: TimeInterval? {
+        time.map { $0.wallMs / 1000.0 } ?? startTime.map { $0.wallMs / 1000.0 }
+    }
+
+    var resourceTimingStartSeconds: TimeInterval {
+        startTime.map { $0.monotonicMs / 1000.0 } ?? timeSeconds
+    }
+
+    var resourceTimingEndSeconds: TimeInterval? {
+        endTime.map { $0.monotonicMs / 1000.0 }
+    }
+
+    var resourceTimingWallTimeSeconds: TimeInterval? {
+        startTime.map { $0.wallMs / 1000.0 } ?? wallTimeSeconds
+    }
+
+    var requestBody: NetworkBody? {
+        guard let body else {
+            return nil
+        }
+        return NetworkBody.from(payload: body, role: .request)
+    }
+
+    var responseBody: NetworkBody? {
+        guard let body else {
+            return nil
+        }
+        return NetworkBody.from(payload: body, role: .response)
+    }
+
+    var requestBodyBytesSent: Int? {
+        if let bodySize {
+            return bodySize
+        }
+        return requestBody?.size
+    }
+
+    var resolvedDecodedBodySize: Int? {
+        if let decodedBodySize {
+            return decodedBodySize
+        }
+        return responseBody?.size
     }
 }
 

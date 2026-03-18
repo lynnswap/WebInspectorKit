@@ -42,7 +42,7 @@ struct WITransportSessionTests {
         #expect(session.state == .detached)
 
         do {
-            _ = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 1))
+            _ = try await Self.domGetDocument(using: session, depth: 1)
             Issue.record("Expected transport to reject commands after a fatal backend failure")
         } catch let error as WITransportError {
             guard case .notAttached = error else {
@@ -89,7 +89,7 @@ struct WITransportSessionTests {
                 capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain]
             ),
             compatibilityResponseProvider: { scope, method in
-                guard scope == .page, method == WITransportCommands.DOM.Enable.method else {
+                guard scope == .page, method == WITransportMethod.DOM.enable else {
                     return nil
                 }
                 return Data("{}".utf8)
@@ -102,25 +102,24 @@ struct WITransportSessionTests {
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
-        _ = try await session.page.send(WITransportCommands.DOM.Enable())
+        try await Self.domEnable(using: session)
 
         #expect(backend.sentPageMessageCount == 0)
     }
 
     @Test
-    func compatibilityResponseAllowsCSSEnableWithoutSendingPageMessage() async throws {
-        let backend = FakeSessionBackend(
-            supportSnapshot: .supported(
-                backendKind: .iOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain]
-            ),
-            compatibilityResponseProvider: { scope, method in
-                guard scope == .page, method == TestCSSEnable.method else {
-                    return nil
-                }
-                return Data("{}".utf8)
-            }
-        )
+    func concurrentRootCommandsAreCorrelated() async throws {
+        let backend = FakeSessionBackend()
+        backend.onSendRootMessage = { message in
+            let identifier = try Self.identifier(from: message)
+            let method = try Self.method(from: message)
+            backend.emitRootMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": ["method": method],
+                ])
+            )
+        }
         let session = WITransportSession(
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
@@ -128,16 +127,72 @@ struct WITransportSessionTests {
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
-        _ = try await session.page.send(TestCSSEnable())
 
-        #expect(backend.sentPageMessageCount == 0)
+        async let firstData: Void = Self.targetEnable(using: session)
+        async let secondData = Self.browserGetVersion(using: session)
+
+        try await firstData
+        let second = try await secondData
+
+        #expect(second.method == WITransportMethod.Browser.getVersion)
+    }
+
+    @Test
+    func pageCommandsFollowCommittedTargetWithoutOldIdentifier() async throws {
+        let backend = FakeSessionBackend()
+        let recorder = PageDispatchRecorder()
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            await recorder.record(targetIdentifier: targetIdentifier)
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            backend.emitRootMessage(
+                Self.jsonString([
+                    "id": outerIdentifier,
+                    "result": [:],
+                ])
+            )
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [
+                        "frameTree": [
+                            "frame": [
+                                "id": "frame-\(targetIdentifier)",
+                                "loaderId": "loader-\(targetIdentifier)",
+                                "url": "https://example.com/\(targetIdentifier)",
+                                "securityOrigin": "https://example.com",
+                                "mimeType": "text/html",
+                            ],
+                            "resources": [],
+                        ],
+                    ],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"newTargetId":"page-C"}}"#
+        )
+        backend.waitForPendingMessages()
+
+        _ = try await Self.pageGetResourceTree(using: session)
+
+        #expect(await recorder.snapshot() == ["page-C"])
     }
 
     @Test
     func pageGetResourceTreeDecodesFrameTreePayload() async throws {
         let backend = FakeSessionBackend(
             compatibilityResponseProvider: { scope, method in
-                guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
+                guard scope == .page, method == WITransportMethod.Page.getResourceTree else {
                     return nil
                 }
                 return Data(
@@ -171,7 +226,7 @@ struct WITransportSessionTests {
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
-        let response = try await session.page.send(WITransportCommands.Page.GetResourceTree())
+        let response = try await Self.pageGetResourceTree(using: session)
 
         #expect(response.frameTree.frame.id == "frame-main")
         #expect(response.frameTree.frame.url == "https://example.com/")
@@ -185,7 +240,7 @@ struct WITransportSessionTests {
     func pageGetResourceTreeFallsBackUnknownResourceTypesToOther() async throws {
         let backend = FakeSessionBackend(
             compatibilityResponseProvider: { scope, method in
-                guard scope == .page, method == WITransportCommands.Page.GetResourceTree.method else {
+                guard scope == .page, method == WITransportMethod.Page.getResourceTree else {
                     return nil
                 }
                 return Data(
@@ -219,11 +274,93 @@ struct WITransportSessionTests {
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
-        let response = try await session.page.send(WITransportCommands.Page.GetResourceTree())
+        let response = try await Self.pageGetResourceTree(using: session)
 
         #expect(response.frameTree.resources.count == 1)
         #expect(response.frameTree.resources.first?.type == .other)
         #expect(response.frameTree.resources.first?.mimeType == "application/octet-stream")
+    }
+
+    @Test
+    func inboundQueuePreservesRootThenPageArrivalOrder() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+        )
+        backend.emitPageMessage(
+            #"{"method":"Network.responseReceived","params":{"requestId":"request-1","timestamp":1.0,"type":"Fetch","response":{"url":"https://example.com/data.json","status":200,"statusText":"OK","headers":{},"mimeType":"application/json"}}}"#,
+            targetIdentifier: "page-B"
+        )
+        backend.waitForPendingMessages()
+
+        let events = await Self.nextEvents(from: session, count: 3)
+        #expect(events.map(\.method) == [
+            "Target.targetCreated",
+            "Target.didCommitProvisionalTarget",
+            "Network.responseReceived",
+        ])
+        #expect(events.map(\.targetIdentifier) == ["page-A", "page-B", "page-B"])
+    }
+
+    @Test
+    func waitForPendingMessagesBlocksUntilQueuedInboundMessagesDrain() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+        )
+        backend.waitForPendingMessages()
+
+        let pageTargets = session.pageTargetIdentifiers()
+        #expect(pageTargets.first == "page-B")
+    }
+
+    @Test
+    func nextPageEventReturnsLifecycleAndNetworkEventsInOrder() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+        )
+        backend.emitPageMessage(
+            #"{"method":"Network.responseReceived","params":{"requestId":"request-1","timestamp":1.0,"type":"Fetch","response":{"url":"https://example.com/data.json","status":200,"statusText":"OK","headers":{},"mimeType":"application/json"}}}"#,
+            targetIdentifier: "page-B"
+        )
+        backend.emitRootMessage(
+            #"{"method":"Target.targetDestroyed","params":{"targetId":"page-B"}}"#
+        )
+        backend.waitForPendingMessages()
+
+        let events = await Self.nextEvents(from: session, count: 4)
+        #expect(events.map(\.method) == [
+            "Target.targetCreated",
+            "Target.didCommitProvisionalTarget",
+            "Network.responseReceived",
+            "Target.targetDestroyed",
+        ])
+        #expect(events.map(\.targetIdentifier) == ["page-A", "page-B", "page-B", "page-B"])
     }
 
     @Test
@@ -251,20 +388,19 @@ struct WITransportSessionTests {
     }
 }
 
-private struct TestCSSEnable: WITransportPageCommand, Sendable {
-    typealias Response = WIEmptyTransportResponse
-    let parameters = WIEmptyTransportParameters()
-
-    static let method = "CSS.enable"
+private struct RootMethodEchoResponse: Codable, Sendable {
+    let method: String
 }
 
 @MainActor
 private final class FakeSessionBackend: WITransportPlatformBackend {
     var supportSnapshot: WITransportSupportSnapshot
 
-    private var messageHandlers: WITransportBackendMessageHandlers?
+    private var messageSink: (any WITransportBackendMessageSink)?
     private let supportSnapshotAfterAttach: WITransportSupportSnapshot?
     private let compatibilityResponseProvider: ((WITransportTargetScope, String) -> Data?)?
+    var onSendRootMessage: ((String) throws -> Void)?
+    var onSendPageMessage: ((String, String, Int) async throws -> Void)?
     private(set) var sentPageMessageCount = 0
 
     init(
@@ -280,31 +416,33 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         self.compatibilityResponseProvider = compatibilityResponseProvider
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
         _ = webView
-        self.messageHandlers = messageHandlers
+        self.messageSink = messageSink
         if let supportSnapshotAfterAttach {
             supportSnapshot = supportSnapshotAfterAttach
         }
-        messageHandlers.handleRootMessage(
+        messageSink.didReceiveRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
         )
-        messageHandlers.waitForPendingMessagesForTesting?()
+        messageSink.waitForPendingMessagesForTesting()
     }
 
     func detach() {
-        messageHandlers = nil
+        messageSink = nil
     }
 
     func sendRootMessage(_ message: String) throws {
-        _ = message
+        try onSendRootMessage?(message)
     }
 
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws {
-        _ = message
-        _ = targetIdentifier
-        _ = outerIdentifier
         sentPageMessageCount += 1
+        if let onSendPageMessage {
+            Task {
+                try await onSendPageMessage(message, targetIdentifier, outerIdentifier)
+            }
+        }
     }
 
     func compatibilityResponse(scope: WITransportTargetScope, method: String) -> Data? {
@@ -312,7 +450,19 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
     }
 
     func emitFatalFailure(_ message: String) {
-        messageHandlers?.handleFatalFailure(message)
+        messageSink?.didReceiveFatalFailure(message)
+    }
+
+    func emitRootMessage(_ message: String) {
+        messageSink?.didReceiveRootMessage(message)
+    }
+
+    func emitPageMessage(_ message: String, targetIdentifier: String) {
+        messageSink?.didReceivePageMessage(message, targetIdentifier: targetIdentifier)
+    }
+
+    func waitForPendingMessages() {
+        messageSink?.waitForPendingMessagesForTesting()
     }
 
     private static var defaultSupportedBackendKind: WITransportBackendKind {
@@ -322,4 +472,149 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
         .iOSNativeInspector
 #endif
     }
+}
+
+private extension WITransportSessionTests {
+    static func nextEvents(
+        from session: WITransportSession,
+        count: Int
+    ) async -> [WITransportEventEnvelope] {
+        var events: [WITransportEventEnvelope] = []
+        events.reserveCapacity(count)
+        for _ in 0..<count {
+            guard let event = await session.nextPageEvent() else {
+                break
+            }
+            events.append(event)
+        }
+        return events
+    }
+
+    static func codec() -> WITransportCodec {
+        WITransportCodec.shared
+    }
+
+    static func targetEnable(using session: WITransportSession) async throws {
+        let parametersData = try await codec().encode(
+            TargetSetPauseOnStartParameters(pauseOnStart: false)
+        )
+        _ = try await session.sendRootData(
+            method: WITransportMethod.Target.setPauseOnStart,
+            parametersData: parametersData
+        )
+    }
+
+    static func browserGetVersion(using session: WITransportSession) async throws -> BrowserGetVersionResponse {
+        try await codec().decode(
+            BrowserGetVersionResponse.self,
+            from: try await session.sendRootData(method: WITransportMethod.Browser.getVersion)
+        )
+    }
+
+    static func pageGetResourceTree(
+        using session: WITransportSession,
+        targetIdentifier: String? = nil
+    ) async throws -> PageGetResourceTreeResponse {
+        try await codec().decode(
+            PageGetResourceTreeResponse.self,
+            from: try await session.sendPageData(
+                method: WITransportMethod.Page.getResourceTree,
+                targetIdentifier: targetIdentifier
+            )
+        )
+    }
+
+    static func domEnable(
+        using session: WITransportSession,
+        targetIdentifier: String? = nil
+    ) async throws {
+        _ = try await session.sendPageData(
+            method: WITransportMethod.DOM.enable,
+            targetIdentifier: targetIdentifier
+        )
+    }
+
+    static func domGetDocument(
+        using session: WITransportSession,
+        depth: Int? = nil,
+        pierce: Bool? = nil,
+        targetIdentifier: String? = nil
+    ) async throws -> DOMGetDocumentResponse {
+        let parametersData = try await codec().encode(
+            DOMGetDocumentParameters(depth: depth, pierce: pierce)
+        )
+        return try await codec().decode(
+            DOMGetDocumentResponse.self,
+            from: try await session.sendPageData(
+                method: WITransportMethod.DOM.getDocument,
+                targetIdentifier: targetIdentifier,
+                parametersData: parametersData
+            )
+        )
+    }
+
+    actor PageDispatchRecorder {
+        private(set) var targetIdentifiers: [String] = []
+
+        func record(targetIdentifier: String) {
+            targetIdentifiers.append(targetIdentifier)
+        }
+
+        func snapshot() -> [String] {
+            targetIdentifiers
+        }
+    }
+
+    static func identifier(from message: String) throws -> Int {
+        guard
+            let object = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+            let identifier = object["id"] as? Int
+        else {
+            throw TestError.invalidMessage
+        }
+        return identifier
+    }
+
+    static func method(from message: String) throws -> String {
+        guard
+            let object = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
+            let method = object["method"] as? String
+        else {
+            throw TestError.invalidMessage
+        }
+        return method
+    }
+
+    static func jsonString(_ object: [String: Any]) -> String {
+        String(decoding: jsonData(object), as: UTF8.self)
+    }
+
+    static func jsonData(_ object: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
+
+    enum TestError: Error {
+        case invalidMessage
+    }
+}
+
+private struct TargetSetPauseOnStartParameters: Encodable, Sendable {
+    let pauseOnStart: Bool
+}
+
+private struct BrowserGetVersionResponse: Decodable, Sendable {
+    let method: String
+}
+
+private struct PageGetResourceTreeResponse: Decodable, Sendable {
+    let frameTree: WITransportFrameResourceTree
+}
+
+private struct DOMGetDocumentParameters: Encodable, Sendable {
+    let depth: Int?
+    let pierce: Bool?
+}
+
+private struct DOMGetDocumentResponse: Decodable, Sendable {
+    let root: WITransportDOMNode
 }

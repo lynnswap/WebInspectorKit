@@ -3,31 +3,30 @@ import WebInspectorEngine
 
 @MainActor
 package struct NetworkTransportClient {
+    private let codec = WITransportCodec.shared
+
     package init() {}
 
     package func fetchBodyResult(
-        using lease: WISharedTransportRegistry.Lease,
+        using session: WITransportSession,
         locator: NetworkDeferredBodyLocator,
         role: NetworkBody.Role
     ) async -> WINetworkBodyFetchResult {
         do {
-            try await lease.ensureAttached()
-            try await lease.ensureNetworkEventIngress()
             switch locator {
             case .networkRequest(let requestID, let targetIdentifier):
                 switch role {
                 case .request:
-                    let response: WITransportCommands.Network.GetRequestPostData.Response
-                    if let targetIdentifier {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetRequestPostData(requestId: requestID),
-                            targetIdentifier: targetIdentifier
+                    let response = try await codec.decode(
+                        NetworkGetRequestPostDataResponse.self,
+                        from: try await session.sendPageData(
+                            method: WITransportMethod.Network.getRequestPostData,
+                            targetIdentifier: targetIdentifier,
+                            parametersData: try await codec.encode(
+                                NetworkRequestIDParameters(requestId: requestID)
+                            )
                         )
-                    } else {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetRequestPostData(requestId: requestID)
-                        )
-                    }
+                    )
                     guard !response.postData.isEmpty else {
                         return .bodyUnavailable
                     }
@@ -46,17 +45,16 @@ package struct NetworkTransportClient {
                         )
                     )
                 case .response:
-                    let response: WITransportCommands.Network.GetResponseBody.Response
-                    if let targetIdentifier {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetResponseBody(requestId: requestID),
-                            targetIdentifier: targetIdentifier
+                    let response = try await codec.decode(
+                        NetworkGetResponseBodyResponse.self,
+                        from: try await session.sendPageData(
+                            method: WITransportMethod.Network.getResponseBody,
+                            targetIdentifier: targetIdentifier,
+                            parametersData: try await codec.encode(
+                                NetworkRequestIDParameters(requestId: requestID)
+                            )
                         )
-                    } else {
-                        response = try await lease.sendPage(
-                            WITransportCommands.Network.GetResponseBody(requestId: requestID)
-                        )
-                    }
+                    )
                     return .fetched(
                         NetworkBody(
                             kind: response.base64Encoded ? .binary : .text,
@@ -76,17 +74,16 @@ package struct NetworkTransportClient {
                 guard role == .response else {
                     return .bodyUnavailable
                 }
-                let response: WITransportCommands.Page.GetResourceContent.Response
-                if let targetIdentifier {
-                    response = try await lease.sendPage(
-                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url),
-                        targetIdentifier: targetIdentifier
+                let response = try await codec.decode(
+                    PageGetResourceContentResponse.self,
+                    from: try await session.sendPageData(
+                        method: WITransportMethod.Page.getResourceContent,
+                        targetIdentifier: targetIdentifier,
+                        parametersData: try await codec.encode(
+                            PageGetResourceContentParameters(frameId: frameID, url: url)
+                        )
                     )
-                } else {
-                    response = try await lease.sendPage(
-                        WITransportCommands.Page.GetResourceContent(frameId: frameID, url: url)
-                    )
-                }
+                )
                 return .fetched(
                     NetworkBody(
                         kind: response.base64Encoded ? .binary : .text,
@@ -108,7 +105,7 @@ package struct NetworkTransportClient {
             switch error {
             case .unsupported, .alreadyAttached, .notAttached, .attachFailed, .pageTargetUnavailable, .transportClosed:
                 return .agentUnavailable
-            case .remoteError, .requestTimedOut, .invalidResponse, .invalidCommandEncoding, .invalidChannelScope:
+            case .remoteError, .requestTimedOut, .invalidResponse, .invalidCommandEncoding:
                 return .bodyUnavailable
             }
         } catch {
@@ -117,16 +114,16 @@ package struct NetworkTransportClient {
     }
 
     package func loadBootstrapResources(
-        using lease: WISharedTransportRegistry.Lease,
+        using session: WITransportSession,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?,
         logFailure: @escaping @MainActor (String) -> Void
     ) async throws -> NetworkBootstrapLoad {
-        if lease.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
+        if session.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
             do {
                 return try await StableBootstrapSource().load(
-                    using: lease,
+                    using: session,
                     allocateRequestID: allocateRequestID,
                     defaultSessionID: defaultSessionID,
                     normalizeScopeID: normalizeScopeID
@@ -140,7 +137,7 @@ package struct NetworkTransportClient {
 
         do {
             return try await HistoricalBootstrapSource().load(
-                using: lease,
+                using: session,
                 allocateRequestID: allocateRequestID,
                 defaultSessionID: defaultSessionID,
                 normalizeScopeID: normalizeScopeID
@@ -149,7 +146,30 @@ package struct NetworkTransportClient {
             throw CancellationError()
         } catch {
             logFailure("historical network bootstrap skipped: \(error.localizedDescription)")
-            return NetworkBootstrapLoad(seeds: [])
+            return NetworkBootstrapLoad(snapshots: [])
         }
     }
+}
+
+private struct NetworkRequestIDParameters: Encodable, Sendable {
+    let requestId: String
+}
+
+private struct PageGetResourceContentParameters: Encodable, Sendable {
+    let frameId: String
+    let url: String
+}
+
+private struct NetworkGetResponseBodyResponse: Decodable, Sendable {
+    let body: String
+    let base64Encoded: Bool
+}
+
+private struct NetworkGetRequestPostDataResponse: Decodable, Sendable {
+    let postData: String
+}
+
+private struct PageGetResourceContentResponse: Decodable, Sendable {
+    let content: String
+    let base64Encoded: Bool
 }

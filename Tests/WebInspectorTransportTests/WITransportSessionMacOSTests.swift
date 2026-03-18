@@ -42,12 +42,10 @@ final class WITransportSessionMacOSTests: XCTestCase {
             XCTAssertTrue(session.supportSnapshot.isSupported)
             XCTAssertEqual(session.supportSnapshot.backendKind, .macOSNativeInspector)
 
-            _ = try await session.page.send(WITransportCommands.DOM.Enable())
-            let document = try await session.page.send(WITransportCommands.DOM.GetDocument(depth: 4))
+            try await domEnable(using: session)
+            let document = try await domGetDocument(using: session, depth: 4)
             let outerHTMLNodeID = document.root.children?.first?.nodeId ?? document.root.nodeId
-            let outerHTML = try await session.page.send(
-                WITransportCommands.DOM.GetOuterHTML(nodeId: outerHTMLNodeID)
-            )
+            let outerHTML = try await domGetOuterHTML(using: session, nodeID: outerHTMLNodeID)
 
             XCTAssertEqual(document.root.nodeName, "#document")
             XCTAssertTrue(outerHTML.outerHTML.contains("Hello transport"))
@@ -62,6 +60,47 @@ final class WITransportSessionMacOSTests: XCTestCase {
 
 @MainActor
 private extension WITransportSessionMacOSTests {
+    func codec() -> WITransportCodec {
+        WITransportCodec.shared
+    }
+
+    func domEnable(using session: WITransportSession) async throws {
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+    }
+
+    func domGetDocument(
+        using session: WITransportSession,
+        depth: Int? = nil,
+        pierce: Bool? = nil
+    ) async throws -> DOMGetDocumentResponse {
+        let parametersData = try await codec().encode(
+            DOMGetDocumentParameters(depth: depth, pierce: pierce)
+        )
+        return try await codec().decode(
+            DOMGetDocumentResponse.self,
+            from: try await session.sendPageData(
+                method: WITransportMethod.DOM.getDocument,
+                parametersData: parametersData
+            )
+        )
+    }
+
+    func domGetOuterHTML(
+        using session: WITransportSession,
+        nodeID: Int? = nil
+    ) async throws -> DOMGetOuterHTMLResponse {
+        let parametersData = try await codec().encode(
+            DOMGetOuterHTMLParameters(nodeId: nodeID)
+        )
+        return try await codec().decode(
+            DOMGetOuterHTMLResponse.self,
+            from: try await session.sendPageData(
+                method: WITransportMethod.DOM.getOuterHTML,
+                parametersData: parametersData
+            )
+        )
+    }
+
     func loadHTML(_ html: String, in webView: WKWebView) async throws {
         let delegate = NavigationDelegate()
         webView.navigationDelegate = delegate
@@ -97,6 +136,23 @@ private extension WITransportSessionMacOSTests {
         return window
     }
 
+}
+
+private struct DOMGetDocumentParameters: Encodable, Sendable {
+    let depth: Int?
+    let pierce: Bool?
+}
+
+private struct DOMGetDocumentResponse: Decodable, Sendable {
+    let root: WITransportDOMNode
+}
+
+private struct DOMGetOuterHTMLParameters: Encodable, Sendable {
+    let nodeId: Int?
+}
+
+private struct DOMGetOuterHTMLResponse: Decodable, Sendable {
+    let outerHTML: String
 }
 
 @MainActor

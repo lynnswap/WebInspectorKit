@@ -7,10 +7,408 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     public static nonisolated func == (lhs: NetworkEntry, rhs: NetworkEntry) -> Bool { lhs.id == rhs.id }
     public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
+    public enum Kind: String, Sendable {
+        case resource
+        case webSocket
+    }
+
     public enum Phase: String,Sendable {
         case pending
         case completed
         case failed
+    }
+
+    public struct Identity {
+        public let sessionID: String
+        public let requestID: Int
+        public let createdAt: Date
+
+        package init(sessionID: String, requestID: Int, createdAt: Date) {
+            self.sessionID = sessionID
+            self.requestID = requestID
+            self.createdAt = createdAt
+        }
+    }
+
+    public struct Request {
+        public let url: String
+        public let method: String
+        public let headers: NetworkHeaders
+        public let body: NetworkBody?
+        public let bodyBytesSent: Int?
+        public let type: String?
+        public let wallTime: TimeInterval?
+
+        package init(
+            url: String,
+            method: String,
+            headers: NetworkHeaders,
+            body: NetworkBody?,
+            bodyBytesSent: Int?,
+            type: String?,
+            wallTime: TimeInterval?
+        ) {
+            self.url = url
+            self.method = method
+            self.headers = headers
+            self.body = body
+            self.bodyBytesSent = bodyBytesSent
+            self.type = type
+            self.wallTime = wallTime
+        }
+    }
+
+    public struct Response {
+        public let statusCode: Int?
+        public let statusText: String
+        public let mimeType: String?
+        public let headers: NetworkHeaders
+        public let body: NetworkBody?
+        public let blockedCookies: [String]
+        public let errorDescription: String?
+
+        package init(
+            statusCode: Int?,
+            statusText: String,
+            mimeType: String?,
+            headers: NetworkHeaders,
+            body: NetworkBody?,
+            blockedCookies: [String],
+            errorDescription: String?
+        ) {
+            self.statusCode = statusCode
+            self.statusText = statusText
+            self.mimeType = mimeType
+            self.headers = headers
+            self.body = body
+            self.blockedCookies = blockedCookies
+            self.errorDescription = errorDescription
+        }
+    }
+
+    public struct Transfer {
+        public let startTimestamp: TimeInterval
+        public let endTimestamp: TimeInterval?
+        public let duration: TimeInterval?
+        public let encodedBodyLength: Int?
+        public let decodedBodyLength: Int?
+        public let phase: Phase
+
+        package init(
+            startTimestamp: TimeInterval,
+            endTimestamp: TimeInterval?,
+            duration: TimeInterval?,
+            encodedBodyLength: Int?,
+            decodedBodyLength: Int?,
+            phase: Phase
+        ) {
+            self.startTimestamp = startTimestamp
+            self.endTimestamp = endTimestamp
+            self.duration = duration
+            self.encodedBodyLength = encodedBodyLength
+            self.decodedBodyLength = decodedBodyLength
+            self.phase = phase
+        }
+    }
+
+    public struct WebSocket: Hashable, Sendable {
+        public enum ReadyState: String, Sendable {
+            case connecting
+            case open
+            case closed
+        }
+
+        public struct Frame: Hashable, Sendable {
+            public enum Direction: String, Sendable {
+                case incoming
+                case outgoing
+            }
+
+            public let direction: Direction
+            public let opcode: Int
+            public let payload: String?
+            public let payloadIsBase64: Bool
+            public let payloadSize: Int?
+            public let payloadTruncated: Bool
+            public let timestamp: TimeInterval
+
+            package init(
+                direction: Direction,
+                opcode: Int,
+                payload: String?,
+                payloadIsBase64: Bool,
+                payloadSize: Int?,
+                payloadTruncated: Bool,
+                timestamp: TimeInterval
+            ) {
+                self.direction = direction
+                self.opcode = opcode
+                self.payload = payload
+                self.payloadIsBase64 = payloadIsBase64
+                self.payloadSize = payloadSize
+                self.payloadTruncated = payloadTruncated
+                self.timestamp = timestamp
+            }
+        }
+
+        public internal(set) var readyState: ReadyState
+        public internal(set) var frames: [Frame]
+        public internal(set) var closeCode: Int?
+        public internal(set) var closeReason: String?
+        public internal(set) var closeWasClean: Bool?
+
+        public init(
+            readyState: ReadyState = .connecting,
+            frames: [Frame] = [],
+            closeCode: Int? = nil,
+            closeReason: String? = nil,
+            closeWasClean: Bool? = nil
+        ) {
+            self.readyState = readyState
+            self.frames = frames
+            self.closeCode = closeCode
+            self.closeReason = closeReason
+            self.closeWasClean = closeWasClean
+        }
+
+        mutating func appendFrame(_ frame: Frame) {
+            frames.append(frame)
+        }
+
+        mutating func applyClose(code: Int?, reason: String?, wasClean: Bool?) {
+            readyState = .closed
+            if let code {
+                closeCode = code
+            }
+            if let reason {
+                closeReason = reason
+            }
+            if let wasClean {
+                closeWasClean = wasClean
+            }
+        }
+    }
+
+    public struct Snapshot {
+        public let sessionID: String
+        public let requestID: Int
+        public let request: Request
+        public let response: Response
+        public let transfer: Transfer
+
+        package init(
+            sessionID: String,
+            requestID: Int,
+            request: Request,
+            response: Response,
+            transfer: Transfer
+        ) {
+            self.sessionID = sessionID
+            self.requestID = requestID
+            self.request = request
+            self.response = response
+            self.transfer = transfer
+        }
+    }
+
+    public enum Update {
+        public struct RequestStarted {
+            public let requestID: Int
+            public let request: Request
+            public let timestamp: TimeInterval
+
+            package init(requestID: Int, request: Request, timestamp: TimeInterval) {
+                self.requestID = requestID
+                self.request = request
+                self.timestamp = timestamp
+            }
+        }
+
+        public struct ResponseReceived {
+            public let requestID: Int
+            public let response: Response
+            public let requestType: String?
+            public let timestamp: TimeInterval
+
+            package init(requestID: Int, response: Response, requestType: String?, timestamp: TimeInterval) {
+                self.requestID = requestID
+                self.response = response
+                self.requestType = requestType
+                self.timestamp = timestamp
+            }
+        }
+
+        public struct Completed {
+            public let requestID: Int
+            public let response: Response
+            public let requestType: String?
+            public let timestamp: TimeInterval
+            public let encodedBodyLength: Int?
+            public let decodedBodyLength: Int?
+
+            package init(
+                requestID: Int,
+                response: Response,
+                requestType: String?,
+                timestamp: TimeInterval,
+                encodedBodyLength: Int?,
+                decodedBodyLength: Int?
+            ) {
+                self.requestID = requestID
+                self.response = response
+                self.requestType = requestType
+                self.timestamp = timestamp
+                self.encodedBodyLength = encodedBodyLength
+                self.decodedBodyLength = decodedBodyLength
+            }
+        }
+
+        public struct Failed {
+            public let requestID: Int
+            public let response: Response
+            public let requestType: String?
+            public let timestamp: TimeInterval
+
+            package init(requestID: Int, response: Response, requestType: String?, timestamp: TimeInterval) {
+                self.requestID = requestID
+                self.response = response
+                self.requestType = requestType
+                self.timestamp = timestamp
+            }
+        }
+
+        public struct ResourceTimingSnapshot {
+            public let requestID: Int
+            public let request: Request
+            public let response: Response
+            public let startTimestamp: TimeInterval
+            public let endTimestamp: TimeInterval?
+            public let encodedBodyLength: Int?
+            public let decodedBodyLength: Int?
+
+            package init(
+                requestID: Int,
+                request: Request,
+                response: Response,
+                startTimestamp: TimeInterval,
+                endTimestamp: TimeInterval?,
+                encodedBodyLength: Int?,
+                decodedBodyLength: Int?
+            ) {
+                self.requestID = requestID
+                self.request = request
+                self.response = response
+                self.startTimestamp = startTimestamp
+                self.endTimestamp = endTimestamp
+                self.encodedBodyLength = encodedBodyLength
+                self.decodedBodyLength = decodedBodyLength
+            }
+        }
+
+        public struct WebSocketOpened {
+            public let requestID: Int
+            public let url: String
+            public let timestamp: TimeInterval
+            public let wallTime: TimeInterval?
+
+            package init(requestID: Int, url: String, timestamp: TimeInterval, wallTime: TimeInterval?) {
+                self.requestID = requestID
+                self.url = url
+                self.timestamp = timestamp
+                self.wallTime = wallTime
+            }
+        }
+
+        public struct WebSocketHandshake {
+            public let requestID: Int
+            public let requestHeaders: NetworkHeaders?
+            public let statusCode: Int?
+            public let statusText: String?
+
+            package init(requestID: Int, requestHeaders: NetworkHeaders?, statusCode: Int?, statusText: String?) {
+                self.requestID = requestID
+                self.requestHeaders = requestHeaders
+                self.statusCode = statusCode
+                self.statusText = statusText
+            }
+        }
+
+        public struct WebSocketFrameAdded {
+            public let requestID: Int
+            public let frame: WebSocket.Frame
+
+            package init(requestID: Int, frame: WebSocket.Frame) {
+                self.requestID = requestID
+                self.frame = frame
+            }
+        }
+
+        public struct WebSocketClosed {
+            public let requestID: Int
+            public let timestamp: TimeInterval
+            public let statusCode: Int?
+            public let statusText: String?
+            public let closeCode: Int?
+            public let closeReason: String?
+            public let closeWasClean: Bool?
+            public let errorDescription: String?
+            public let failed: Bool
+
+            package init(
+                requestID: Int,
+                timestamp: TimeInterval,
+                statusCode: Int?,
+                statusText: String?,
+                closeCode: Int?,
+                closeReason: String?,
+                closeWasClean: Bool?,
+                errorDescription: String?,
+                failed: Bool
+            ) {
+                self.requestID = requestID
+                self.timestamp = timestamp
+                self.statusCode = statusCode
+                self.statusText = statusText
+                self.closeCode = closeCode
+                self.closeReason = closeReason
+                self.closeWasClean = closeWasClean
+                self.errorDescription = errorDescription
+                self.failed = failed
+            }
+        }
+
+        case requestStarted(RequestStarted)
+        case responseReceived(ResponseReceived)
+        case completed(Completed)
+        case failed(Failed)
+        case resourceTimingSnapshot(ResourceTimingSnapshot)
+        case webSocketOpened(WebSocketOpened)
+        case webSocketHandshake(WebSocketHandshake)
+        case webSocketFrameAdded(WebSocketFrameAdded)
+        case webSocketClosed(WebSocketClosed)
+
+        public var requestID: Int {
+            switch self {
+            case .requestStarted(let value): value.requestID
+            case .responseReceived(let value): value.requestID
+            case .completed(let value): value.requestID
+            case .failed(let value): value.requestID
+            case .resourceTimingSnapshot(let value): value.requestID
+            case .webSocketOpened(let value): value.requestID
+            case .webSocketHandshake(let value): value.requestID
+            case .webSocketFrameAdded(let value): value.requestID
+            case .webSocketClosed(let value): value.requestID
+            }
+        }
+
+        public var kind: Kind {
+            switch self {
+            case .webSocketOpened, .webSocketHandshake, .webSocketFrameAdded, .webSocketClosed:
+                .webSocket
+            default:
+                .resource
+            }
+        }
     }
 
     nonisolated public let id: UUID
@@ -40,7 +438,50 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
     public internal(set) var phase: Phase
     public internal(set) var requestBody: NetworkBody?
     public internal(set) var responseBody: NetworkBody?
-    public internal(set) var webSocket: NetworkWebSocketInfo?
+    public internal(set) var webSocket: WebSocket?
+
+    public var kind: Kind {
+        webSocket == nil ? .resource : .webSocket
+    }
+
+    public var identity: Identity {
+        Identity(sessionID: sessionID, requestID: requestID, createdAt: createdAt)
+    }
+
+    public var request: Request {
+        Request(
+            url: url,
+            method: method,
+            headers: requestHeaders,
+            body: requestBody,
+            bodyBytesSent: requestBodyBytesSent,
+            type: requestType,
+            wallTime: wallTime
+        )
+    }
+
+    public var response: Response {
+        Response(
+            statusCode: statusCode,
+            statusText: statusText,
+            mimeType: mimeType,
+            headers: responseHeaders,
+            body: responseBody,
+            blockedCookies: [],
+            errorDescription: errorDescription
+        )
+    }
+
+    public var transfer: Transfer {
+        Transfer(
+            startTimestamp: startTimestamp,
+            endTimestamp: endTimestamp,
+            duration: duration,
+            encodedBodyLength: encodedBodyLength,
+            decodedBodyLength: decodedBodyLength,
+            phase: phase
+        )
+    }
 
     init(
         sessionID: String,
@@ -81,75 +522,147 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         refreshFileTypeLabel()
     }
 
-    convenience init(startPayload payload: HTTPNetworkEvent) {
-        let fallbackMethod = payload.kind == .resourceTiming ? "GET" : "UNKNOWN"
-        let method = (payload.method?.isEmpty == false ? payload.method : nil) ?? fallbackMethod
-        let url = payload.url ?? ""
+    convenience init(snapshot: Snapshot) {
         self.init(
-            sessionID: payload.sessionID,
-            requestID: payload.requestID,
+            sessionID: snapshot.sessionID,
+            requestID: snapshot.requestID,
+            url: snapshot.request.url,
+            method: snapshot.request.method,
+            requestHeaders: snapshot.request.headers,
+            startTimestamp: snapshot.transfer.startTimestamp,
+            wallTime: snapshot.request.wallTime
+        )
+        responseHeaders = snapshot.response.headers
+        statusCode = snapshot.response.statusCode
+        statusText = snapshot.response.statusText
+        mimeType = snapshot.response.mimeType
+        encodedBodyLength = snapshot.transfer.encodedBodyLength
+        decodedBodyLength = snapshot.transfer.decodedBodyLength ?? snapshot.response.body?.size
+        errorDescription = snapshot.response.errorDescription
+        requestType = snapshot.request.type
+        requestBodyBytesSent = snapshot.request.bodyBytesSent ?? snapshot.request.body?.size
+        requestBody = snapshot.request.body
+        requestBody?.role = .request
+        responseBody = snapshot.response.body
+        responseBody?.role = .response
+        phase = snapshot.transfer.phase
+        endTimestamp = snapshot.transfer.endTimestamp
+        duration = snapshot.transfer.duration
+        refreshFileTypeLabel()
+    }
+
+    convenience init(sessionID: String, update: Update) {
+        switch update {
+        case .requestStarted(let value):
+            self.init(
+                sessionID: sessionID,
+                requestID: value.requestID,
+                url: value.request.url,
+                method: value.request.method,
+                requestHeaders: value.request.headers,
+                startTimestamp: value.timestamp,
+                wallTime: value.request.wallTime,
+                requestType: value.request.type,
+                requestBody: value.request.body,
+                requestBodyBytesSent: value.request.bodyBytesSent
+            )
+        case .resourceTimingSnapshot(let value):
+            self.init(
+                sessionID: sessionID,
+                requestID: value.requestID,
+                url: value.request.url,
+                method: value.request.method.isEmpty ? "GET" : value.request.method,
+                requestHeaders: value.request.headers,
+                startTimestamp: value.startTimestamp,
+                wallTime: value.request.wallTime,
+                requestType: value.request.type,
+                requestBody: value.request.body,
+                requestBodyBytesSent: value.request.bodyBytesSent
+            )
+            apply(update)
+        case .webSocketOpened(let value):
+            self.init(
+                sessionID: sessionID,
+                requestID: value.requestID,
+                url: value.url,
+                method: "GET",
+                requestHeaders: NetworkHeaders(),
+                startTimestamp: value.timestamp,
+                wallTime: value.wallTime,
+                requestType: "websocket",
+                requestBody: nil,
+                requestBodyBytesSent: nil
+            )
+            webSocket = WebSocket()
+            refreshFileTypeLabel()
+        case .responseReceived, .completed, .failed, .webSocketHandshake, .webSocketFrameAdded, .webSocketClosed:
+            self.init(
+                sessionID: sessionID,
+                requestID: update.requestID,
+                url: "",
+                method: "UNKNOWN",
+                requestHeaders: NetworkHeaders(),
+                startTimestamp: 0,
+                wallTime: nil,
+                requestType: nil,
+                requestBody: nil,
+                requestBodyBytesSent: nil
+            )
+            apply(update)
+        }
+    }
+
+    convenience init(
+        sessionID: String,
+        requestID: Int,
+        url: String,
+        method: String,
+        requestHeaders: NetworkHeaders,
+        startTimestamp: TimeInterval,
+        wallTime: TimeInterval?,
+        requestType: String?,
+        requestBody: NetworkBody?,
+        requestBodyBytesSent: Int?
+    ) {
+        self.init(
+            sessionID: sessionID,
+            requestID: requestID,
             url: url,
             method: method,
-            requestHeaders: payload.requestHeaders,
-            startTimestamp: payload.startTimeSeconds,
-            wallTime: payload.wallTimeSeconds
+            requestHeaders: requestHeaders,
+            startTimestamp: startTimestamp,
+            wallTime: wallTime
         )
-        requestType = payload.requestType
-        requestBody = payload.requestBody
-        requestBody?.role = .request
-        requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size
+        self.requestType = requestType
+        self.requestBody = requestBody
+        self.requestBody?.role = .request
+        self.requestBodyBytesSent = requestBodyBytesSent ?? requestBody?.size
         refreshFileTypeLabel()
     }
 
-    convenience init(seed: NetworkEntrySeed) {
-        self.init(
-            sessionID: seed.sessionID,
-            requestID: seed.requestID,
-            url: seed.url,
-            method: seed.method,
-            requestHeaders: seed.requestHeaders,
-            startTimestamp: seed.startTimestamp,
-            wallTime: seed.wallTime
-        )
-        responseHeaders = seed.responseHeaders
-        statusCode = seed.statusCode
-        statusText = seed.statusText
-        mimeType = seed.mimeType
-        encodedBodyLength = seed.encodedBodyLength
-        decodedBodyLength = seed.decodedBodyLength ?? seed.responseBody?.size
-        errorDescription = seed.errorDescription
-        requestType = seed.requestType
-        requestBodyBytesSent = seed.requestBodyBytesSent ?? seed.requestBody?.size
-        requestBody = seed.requestBody
-        requestBody?.role = .request
-        responseBody = seed.responseBody
-        responseBody?.role = .response
-        phase = seed.phase
-        switch seed.phase {
-        case .pending:
-            endTimestamp = nil
-            duration = nil
-        case .completed, .failed:
-            endTimestamp = seed.startTimestamp
-            duration = 0
-        }
-        refreshFileTypeLabel()
-    }
-
-    func applyStartPayload(_ payload: HTTPNetworkEvent) {
-        if let url = payload.url {
+    func applyRequestStart(
+        url: String?,
+        method: String?,
+        requestHeaders: NetworkHeaders,
+        requestType: String?,
+        requestBody: NetworkBody?,
+        requestBodyBytesSent: Int?,
+        startTimestamp: TimeInterval,
+        wallTime: TimeInterval?
+    ) {
+        if let url {
             self.url = url
         }
-        if let method = payload.method, !method.isEmpty {
+        if let method, !method.isEmpty {
             self.method = method
         }
-        if !payload.requestHeaders.isEmpty {
-            requestHeaders = payload.requestHeaders
+        if !requestHeaders.isEmpty {
+            self.requestHeaders = requestHeaders
         }
-        if let requestType = payload.requestType {
+        if let requestType {
             self.requestType = requestType
         }
-        if let requestBody = payload.requestBody {
+        if let requestBody {
             if let existingRequestBody = self.requestBody,
                existingRequestBody.hasDeferredContent,
                requestBody.hasDeferredContent {
@@ -160,86 +673,222 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
                 self.requestBody?.role = .request
             }
         }
-        if let requestBodyBytesSent = payload.requestBodyBytesSent ?? payload.requestBody?.size {
+        if let requestBodyBytesSent = requestBodyBytesSent ?? requestBody?.size {
             self.requestBodyBytesSent = requestBodyBytesSent
         }
-        if let wallTime = payload.wallTimeSeconds {
+        if let wallTime {
             self.wallTime = wallTime
         }
-        if startTimestamp > payload.startTimeSeconds {
-            startTimestamp = payload.startTimeSeconds
+        if self.startTimestamp > startTimestamp {
+            self.startTimestamp = startTimestamp
         }
         phase = .pending
         refreshFileTypeLabel()
     }
 
-    func applyResponsePayload(_ payload: HTTPNetworkEvent) {
-        if startTimestamp > payload.startTimeSeconds {
-            startTimestamp = payload.startTimeSeconds
+    func applyResponse(
+        statusCode: Int?,
+        statusText: String?,
+        mimeType: String?,
+        responseHeaders: NetworkHeaders,
+        requestType: String?,
+        timestamp: TimeInterval,
+        blockedCookies: [String] = []
+    ) {
+        if startTimestamp > timestamp {
+            startTimestamp = timestamp
         }
-        statusCode = payload.statusCode
-        statusText = payload.statusText ?? ""
-        mimeType = payload.mimeType
-        if !payload.responseHeaders.isEmpty {
-            responseHeaders = payload.responseHeaders
+        self.statusCode = statusCode
+        self.statusText = statusText ?? ""
+        self.mimeType = mimeType
+        if !responseHeaders.isEmpty {
+            self.responseHeaders = responseHeaders
         }
-        if !payload.blockedCookies.isEmpty {
-            responseHeaders.append(
+        if !blockedCookies.isEmpty {
+            self.responseHeaders.append(
                 NetworkHeaderField(
                     name: "blocked-cookies",
-                    value: payload.blockedCookies.joined(separator: ",")
+                    value: blockedCookies.joined(separator: ",")
                 )
             )
         }
-        if let requestType = payload.requestType {
+        if let requestType {
             self.requestType = requestType
         }
         refreshFileTypeLabel()
         phase = .pending
     }
 
-    func applyCompletionPayload(_ payload: HTTPNetworkEvent, failed: Bool) {
-        if startTimestamp > payload.startTimeSeconds {
-            startTimestamp = payload.startTimeSeconds
+    func applyCompletion(
+        statusCode: Int?,
+        statusText: String?,
+        mimeType: String?,
+        encodedBodyLength: Int?,
+        decodedBodySize: Int?,
+        errorDescription: String?,
+        requestType: String?,
+        responseBody: NetworkBody?,
+        timestamp: TimeInterval,
+        failed: Bool
+    ) {
+        if startTimestamp > timestamp {
+            startTimestamp = timestamp
         }
-        if let statusCode = payload.statusCode {
+        if let statusCode {
             self.statusCode = statusCode
         }
-        if let statusText = payload.statusText {
+        if let statusText {
             self.statusText = statusText
         }
-        if let mimeType = payload.mimeType {
+        if let mimeType {
             self.mimeType = mimeType
         }
-        if let encodedBodyLength = payload.encodedBodyLength {
+        if let encodedBodyLength {
             self.encodedBodyLength = encodedBodyLength
         }
-        if let decodedBodySize = payload.decodedBodySize {
+        if let decodedBodySize {
             self.decodedBodyLength = decodedBodySize
         } else if let responseBody {
             self.decodedBodyLength = responseBody.size
         }
-        if let endTime = payload.endTimeSeconds {
-            if startTimestamp > endTime {
-                startTimestamp = endTime
-            }
-            endTimestamp = endTime
-            duration = max(0, endTime - startTimestamp)
-        }
-        if let requestType = payload.requestType {
+        endTimestamp = timestamp
+        duration = max(0, timestamp - startTimestamp)
+        if let requestType {
             self.requestType = requestType
         }
-        if let responseBody = payload.responseBody {
+        if let responseBody {
             self.responseBody = responseBody
             self.responseBody?.role = .response
         } else if failed {
-            responseBody = nil
+            self.responseBody = nil
         }
-        errorDescription = payload.errorDescription
+        self.errorDescription = errorDescription
         refreshFileTypeLabel()
         phase = failed ? .failed : .completed
-        if failed && statusCode == nil {
-            statusCode = 0
+        if failed && self.statusCode == nil {
+            self.statusCode = 0
+        }
+    }
+
+    func apply(_ update: Update) {
+        switch update {
+        case .requestStarted(let value):
+            applyRequestStart(
+                url: value.request.url,
+                method: value.request.method,
+                requestHeaders: value.request.headers,
+                requestType: value.request.type,
+                requestBody: value.request.body,
+                requestBodyBytesSent: value.request.bodyBytesSent,
+                startTimestamp: value.timestamp,
+                wallTime: value.request.wallTime
+            )
+        case .responseReceived(let value):
+            applyResponse(
+                statusCode: value.response.statusCode,
+                statusText: value.response.statusText,
+                mimeType: value.response.mimeType,
+                responseHeaders: value.response.headers,
+                requestType: value.requestType,
+                timestamp: value.timestamp,
+                blockedCookies: value.response.blockedCookies
+            )
+        case .completed(let value):
+            applyCompletion(
+                statusCode: value.response.statusCode,
+                statusText: value.response.statusText,
+                mimeType: value.response.mimeType,
+                encodedBodyLength: value.encodedBodyLength,
+                decodedBodySize: value.decodedBodyLength,
+                errorDescription: value.response.errorDescription,
+                requestType: value.requestType,
+                responseBody: value.response.body,
+                timestamp: value.timestamp,
+                failed: false
+            )
+        case .failed(let value):
+            applyCompletion(
+                statusCode: value.response.statusCode,
+                statusText: value.response.statusText,
+                mimeType: value.response.mimeType,
+                encodedBodyLength: nil,
+                decodedBodySize: nil,
+                errorDescription: value.response.errorDescription,
+                requestType: value.requestType,
+                responseBody: value.response.body,
+                timestamp: value.timestamp,
+                failed: true
+            )
+        case .resourceTimingSnapshot(let value):
+            applyRequestStart(
+                url: value.request.url.isEmpty ? nil : value.request.url,
+                method: value.request.method.isEmpty ? nil : value.request.method,
+                requestHeaders: value.request.headers,
+                requestType: value.request.type,
+                requestBody: value.request.body,
+                requestBodyBytesSent: value.request.bodyBytesSent,
+                startTimestamp: value.startTimestamp,
+                wallTime: value.request.wallTime
+            )
+            applyResponse(
+                statusCode: value.response.statusCode,
+                statusText: value.response.statusText,
+                mimeType: value.response.mimeType,
+                responseHeaders: value.response.headers,
+                requestType: value.request.type,
+                timestamp: value.startTimestamp,
+                blockedCookies: value.response.blockedCookies
+            )
+            applyCompletion(
+                statusCode: value.response.statusCode,
+                statusText: value.response.statusText,
+                mimeType: value.response.mimeType,
+                encodedBodyLength: value.encodedBodyLength,
+                decodedBodySize: value.decodedBodyLength,
+                errorDescription: value.response.errorDescription,
+                requestType: value.request.type,
+                responseBody: value.response.body,
+                timestamp: value.endTimestamp ?? value.startTimestamp,
+                failed: false
+            )
+        case .webSocketOpened(let value):
+            requestType = "websocket"
+            if startTimestamp > value.timestamp {
+                startTimestamp = value.timestamp
+            }
+            if let wallTime = value.wallTime {
+                self.wallTime = wallTime
+            }
+            if url.isEmpty {
+                url = value.url
+            }
+            method = "GET"
+            webSocket = webSocket ?? WebSocket()
+            phase = .pending
+            refreshFileTypeLabel()
+        case .webSocketHandshake(let value):
+            if let requestHeaders = value.requestHeaders {
+                applyWebSocketHandshakeRequest(headers: requestHeaders)
+            }
+            if value.statusCode != nil || value.statusText != nil {
+                applyWebSocketHandshakeResponse(
+                    statusCode: value.statusCode,
+                    statusText: value.statusText
+                )
+            }
+        case .webSocketFrameAdded(let value):
+            appendWebSocketFrame(frame: value.frame)
+        case .webSocketClosed(let value):
+            applyWebSocketCompletion(
+                statusCode: value.statusCode,
+                statusText: value.statusText,
+                closeCode: value.closeCode,
+                closeReason: value.closeReason,
+                closeWasClean: value.closeWasClean,
+                errorDescription: value.errorDescription,
+                timestamp: value.timestamp,
+                failed: value.failed
+            )
         }
     }
 
@@ -371,25 +1020,71 @@ public final class NetworkEntry: Identifiable, Equatable, Hashable {
         return .other
     }
 
+    func applyWebSocketHandshakeRequest(headers: NetworkHeaders) {
+        if !headers.isEmpty {
+            requestHeaders = headers
+        }
+        webSocket = webSocket ?? WebSocket()
+        phase = .pending
+    }
+
+    func applyWebSocketHandshakeResponse(statusCode: Int?, statusText: String?) {
+        if let statusCode {
+            self.statusCode = statusCode
+        }
+        if let statusText {
+            self.statusText = statusText
+        }
+        if webSocket == nil {
+            webSocket = WebSocket()
+        }
+        webSocket?.readyState = .open
+        phase = .pending
+    }
+
     // NOTE: When re-enabling WebSocket capture, ensure this does not mark the entry as completed
     // for every frame. Keep the phase pending until close/error to reflect the live connection state.
-    func appendWebSocketFrame(_ payload: WSNetworkEvent) {
-        let direction = payload.frameDirection ?? .incoming
-        let opcode = payload.frameOpcode ?? 1
-        let size = payload.framePayloadSize
-        let frame = NetworkWebSocketFrame(
-            direction: direction,
-            opcode: opcode,
-            payload: payload.framePayload,
-            payloadIsBase64: payload.framePayloadIsBase64,
-            payloadSize: size,
-            payloadTruncated: payload.framePayloadTruncated,
-            timestamp: payload.endTimeSeconds ?? payload.startTimeSeconds
+    func appendWebSocketFrame(frame: WebSocket.Frame) {
+        if webSocket == nil {
+            webSocket = WebSocket(readyState: .open)
+        }
+        webSocket?.appendFrame(frame)
+        phase = .pending
+    }
+
+    func applyWebSocketCompletion(
+        statusCode: Int?,
+        statusText: String?,
+        closeCode: Int?,
+        closeReason: String?,
+        closeWasClean: Bool?,
+        errorDescription: String?,
+        timestamp: TimeInterval,
+        failed: Bool
+    ) {
+        if let statusCode, self.statusCode == nil {
+            self.statusCode = statusCode
+        }
+        if let statusText, self.statusText.isEmpty {
+            self.statusText = statusText
+        }
+        if webSocket == nil {
+            webSocket = WebSocket()
+        }
+        webSocket?.applyClose(
+            code: closeCode,
+            reason: closeReason,
+            wasClean: closeWasClean
         )
-        let info = webSocket ?? NetworkWebSocketInfo()
-        info.appendFrame(frame)
-        webSocket = info
-        phase = .completed
+        endTimestamp = timestamp
+        duration = max(0, timestamp - startTimestamp)
+        if let errorDescription {
+            self.errorDescription = errorDescription
+        }
+        phase = failed ? .failed : .completed
+        if failed && self.statusCode == nil {
+            self.statusCode = 0
+        }
     }
 }
 
@@ -440,59 +1135,5 @@ extension NetworkEntry {
     }
 }
 
-public struct NetworkWebSocketFrame: Hashable, Sendable {
-    public enum Direction: String, Sendable {
-        case incoming
-        case outgoing
-    }
-
-    public let direction: Direction
-    public let opcode: Int
-    public let payload: String?
-    public let payloadIsBase64: Bool
-    public let payloadSize: Int?
-    public let payloadTruncated: Bool
-    public let timestamp: TimeInterval
-}
-
-@Observable
-public final class NetworkWebSocketInfo: Identifiable, Equatable, Hashable {
-    public static nonisolated func == (lhs: NetworkWebSocketInfo, rhs: NetworkWebSocketInfo) -> Bool { lhs.id == rhs.id }
-    public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
-    nonisolated public let id: UUID
-
-    public internal(set) var frames: [NetworkWebSocketFrame]
-    public internal(set) var closeCode: Int?
-    public internal(set) var closeReason: String?
-    public internal(set) var closeWasClean: Bool?
-
-    public init(
-        frames: [NetworkWebSocketFrame] = [],
-        closeCode: Int? = nil,
-        closeReason: String? = nil,
-        closeWasClean: Bool? = nil
-    ) {
-        self.id = UUID()
-        self.frames = frames
-        self.closeCode = closeCode
-        self.closeReason = closeReason
-        self.closeWasClean = closeWasClean
-    }
-
-    func appendFrame(_ frame: NetworkWebSocketFrame) {
-        frames.append(frame)
-    }
-
-    func applyClose(code: Int?, reason: String?, wasClean: Bool?) {
-        if let code {
-            closeCode = code
-        }
-        if let reason {
-            closeReason = reason
-        }
-        if let wasClean {
-            closeWasClean = wasClean
-        }
-    }
-}
+public typealias NetworkWebSocketFrame = NetworkEntry.WebSocket.Frame
+public typealias NetworkWebSocketInfo = NetworkEntry.WebSocket

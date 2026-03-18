@@ -9,18 +9,15 @@ public enum NetworkTestHelpers {
         ]
     }
 
-    public static func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> HTTPNetworkEvent {
+    public static func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> NetworkWire.PageHook.Event {
+        _ = sessionID
         let data = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(NetworkEventPayload.self, from: data)
-        guard let event = HTTPNetworkEvent(payload: decoded, sessionID: sessionID) else {
-            throw NetworkTestHelperError.invalidEvent
-        }
-        return event
+        return try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
     }
 
-    public static func decodeBatch(_ payload: [String: Any]) throws -> NetworkEventBatch {
+    public static func decodeBatch(_ payload: [String: Any]) throws -> NetworkWire.PageHook.Batch {
         let data = try JSONSerialization.data(withJSONObject: payload)
-        return try JSONDecoder().decode(NetworkEventBatch.self, from: data)
+        return try JSONDecoder().decode(NetworkWire.PageHook.Batch.self, from: data)
     }
 }
 

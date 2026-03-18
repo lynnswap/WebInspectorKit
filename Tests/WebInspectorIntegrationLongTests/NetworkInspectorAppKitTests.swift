@@ -118,13 +118,13 @@ struct NetworkInspectorAppKitTests {
             ]
         ]
         let event = try decodeEvent(payload)
-        inspector.store.applyEvent(event)
+        inspector.store.apply(event, sessionID: "")
     }
 
-    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> HTTPNetworkEvent {
+    private func decodeEvent(_ payload: [String: Any], sessionID: String = "") throws -> NetworkWire.PageHook.Event {
+        _ = sessionID
         let data = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(NetworkEventPayload.self, from: data)
-        return try #require(HTTPNetworkEvent(payload: decoded, sessionID: sessionID))
+        return try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
     }
 }
 #endif

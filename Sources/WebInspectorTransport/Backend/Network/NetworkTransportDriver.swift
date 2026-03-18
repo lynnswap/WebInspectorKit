@@ -9,19 +9,23 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     let store = NetworkStore()
 
     private let logger = Logger(subsystem: "WebInspectorKit", category: "NetworkTransportDriver")
-    private let eventTranslator = NetworkEventTranslator()
+    private let decoder = JSONDecoder()
     private let transportClient = NetworkTransportClient()
-    private let ingressCoordinator: NetworkIngressCoordinator
+    private let transportSessionFactory: @MainActor () -> WITransportSession
     private let resolver = NetworkTimelineResolver()
     private let initialSupport: WIBackendSupport
+    private var deferredEnvelopesByTargetIdentifier: [String: [WITransportEventEnvelope]] = [:]
+    private var transportSession: WITransportSession?
+    private var attachTask: Task<Void, Never>?
+    private var pageEventTask: Task<Void, Never>?
 
     private var loggingMode: NetworkLoggingMode = .buffering
 
     init(
-        registry: WISharedTransportRegistry = .shared,
+        transportSessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() },
         initialSupport: WIBackendSupport = WITransportSession().supportSnapshot.backendSupport
     ) {
-        self.ingressCoordinator = NetworkIngressCoordinator(registry: registry)
+        self.transportSessionFactory = transportSessionFactory
         self.initialSupport = initialSupport
         store.setRecording(true)
     }
@@ -31,15 +35,32 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     package var inspectorTransportCapabilities: Set<InspectorTransportCapability> {
-        ingressCoordinator.inspectorTransportCapabilities
+        guard let supportSnapshot = transportSession?.supportSnapshot else {
+            return []
+        }
+
+        var mapped: Set<InspectorTransportCapability> = []
+        if supportSnapshot.capabilities.contains(.domDomain) {
+            mapped.insert(.domDomain)
+        }
+        if supportSnapshot.capabilities.contains(.networkDomain) {
+            mapped.insert(.networkDomain)
+        }
+        if supportSnapshot.capabilities.contains(.pageTargetRouting) {
+            mapped.insert(.pageTargetRouting)
+        }
+        if supportSnapshot.capabilities.contains(.networkBootstrapSnapshot) {
+            mapped.insert(.networkBootstrapSnapshot)
+        }
+        return mapped
     }
 
     package var inspectorTransportSupportSnapshot: WITransportSupportSnapshot? {
-        ingressCoordinator.supportSnapshot
+        transportSession?.supportSnapshot
     }
 
     var support: WIBackendSupport {
-        ingressCoordinator.supportSnapshot?.backendSupport ?? initialSupport
+        transportSession?.supportSnapshot.backendSupport ?? initialSupport
     }
 
     package func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {
@@ -58,12 +79,12 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     func attachPageWebView(_ newWebView: WKWebView?) {
-        guard webView !== newWebView || ingressCoordinator.currentLease == nil else {
+        guard webView !== newWebView || transportSession == nil else {
             return
         }
 
         let previousWebView = webView
-        ingressCoordinator.detach()
+        detachTransportSession()
         webView = newWebView
 
         if previousWebView !== newWebView {
@@ -74,7 +95,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             return
         }
 
-        startIngressAttachment(for: newWebView)
+        startTransportSessionAttachment(for: newWebView)
     }
 
     func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
@@ -86,7 +107,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
             }
         }
 
-        ingressCoordinator.detach()
+        detachTransportSession()
         webView = nil
     }
 
@@ -95,18 +116,18 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
     }
 
     package func waitForAttachForTesting() async {
-        await ingressCoordinator.waitForAttachForTesting()
+        await attachTask?.value
     }
 
     package func fetchBodyResult(
         locator: NetworkDeferredBodyLocator,
         role: NetworkBody.Role
     ) async -> WINetworkBodyFetchResult {
-        guard let lease = ingressCoordinator.currentLease else {
+        guard let transportSession else {
             return .agentUnavailable
         }
         return await transportClient.fetchBodyResult(
-            using: lease,
+            using: transportSession,
             locator: locator,
             role: role
         )
@@ -115,77 +136,94 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
 
 extension NetworkTransportDriver {
     func prepareForNavigationReconnect() {
-        ingressCoordinator.prepareForNavigationReconnect()
+        resolver.clearCommittedTargetTransitions()
+        deferredEnvelopesByTargetIdentifier.removeAll(keepingCapacity: true)
+        detachTransportSession()
     }
 
     func resumeAfterNavigationReconnect(to webView: WKWebView) {
         self.webView = webView
-        let bootstrapContextID = UUID()
-        resolver.begin(contextID: bootstrapContextID)
-        ingressCoordinator.resumeAfterNavigationReconnect(
-            to: webView,
-            onEnvelope: { [weak self] envelope in
-                self?.handle(envelope)
-            },
-            onAttachWork: { [weak self] lease in
-                guard let self else {
-                    return
-                }
-                try await self.bootstrapExistingResources(using: lease, contextID: bootstrapContextID)
-                self.finishBootstrap(contextID: bootstrapContextID)
-            },
-            onFailure: { [weak self] error, lease in
-                guard let self else {
-                    return
-                }
-                self.finishBootstrap(contextID: bootstrapContextID)
-                guard self.shouldLogAttachFailure(error, lease: lease) else {
-                    return
-                }
-                self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
-            }
-        )
+        startTransportSessionAttachment(for: webView)
     }
 }
 
 private extension NetworkTransportDriver {
     func tearDownLifecycle() {
-        ingressCoordinator.detach()
+        detachTransportSession()
     }
 
-    func startIngressAttachment(for webView: WKWebView) {
+    func detachTransportSession() {
+        attachTask?.cancel()
+        attachTask = nil
+        pageEventTask?.cancel()
+        pageEventTask = nil
+        transportSession?.detach()
+        transportSession = nil
+    }
+
+    func startTransportSessionAttachment(for webView: WKWebView) {
+        detachTransportSession()
         let bootstrapContextID = UUID()
         resolver.begin(contextID: bootstrapContextID)
-        ingressCoordinator.attach(
-            to: webView,
-            onEnvelope: { [weak self] envelope in
-                self?.handle(envelope)
-            },
-            onAttachWork: { [weak self] lease in
-                guard let self else {
-                    return
-                }
-                try await self.bootstrapExistingResources(using: lease, contextID: bootstrapContextID)
+        let transportSession = transportSessionFactory()
+        self.transportSession = transportSession
+
+        attachTask = Task { @MainActor [weak self, weak transportSession] in
+            guard let self, let transportSession else {
+                return
+            }
+
+            do {
+                try await transportSession.attach(to: webView)
+                self.startPageEventLoop(using: transportSession)
+                try await self.enableNetworkIfNeeded(for: transportSession.currentPageTargetIdentifier(), session: transportSession)
+                try await self.bootstrapExistingResources(using: transportSession, contextID: bootstrapContextID)
                 self.finishBootstrap(contextID: bootstrapContextID)
-            },
-            onFailure: { [weak self] error, lease in
-                guard let self else {
-                    return
-                }
+            } catch {
                 self.finishBootstrap(contextID: bootstrapContextID)
-                guard self.shouldLogAttachFailure(error, lease: lease) else {
+                guard self.shouldLogAttachFailure(error, session: transportSession) else {
+                    if self.transportSession === transportSession {
+                        self.pageEventTask?.cancel()
+                        self.pageEventTask = nil
+                        self.transportSession = nil
+                    }
                     return
                 }
                 self.logger.error("network transport attach failed: \(error.localizedDescription, privacy: .public)")
+                if self.transportSession === transportSession {
+                    self.pageEventTask?.cancel()
+                    self.pageEventTask = nil
+                    transportSession.detach()
+                    self.transportSession = nil
+                }
             }
-        )
+
+            self.attachTask = nil
+        }
+    }
+
+    func startPageEventLoop(using transportSession: WITransportSession) {
+        pageEventTask?.cancel()
+        pageEventTask = Task { @MainActor [weak self, weak transportSession] in
+            guard let self, let transportSession else {
+                return
+            }
+
+            while self.transportSession === transportSession,
+                  let envelope = await transportSession.nextPageEvent() {
+                await self.handlePageEvent(envelope, session: transportSession)
+            }
+            if self.transportSession === transportSession {
+                self.pageEventTask = nil
+            }
+        }
     }
 
     func bootstrapExistingResources(
-        using lease: WISharedTransportRegistry.Lease,
+        using transportSession: WITransportSession,
         contextID: UUID
     ) async throws {
-        let load = try await loadBootstrapResources(using: lease)
+        let load = try await loadBootstrapResources(using: transportSession)
         guard resolver.matches(contextID: contextID) else {
             return
         }
@@ -197,13 +235,13 @@ private extension NetworkTransportDriver {
             return
         }
 
-        resolver.finish { [weak self] event in
-            self?.replay(event)
+        resolver.finish { [weak self] envelope in
+            self?.process(envelope)
         }
     }
 
-    func shouldLogAttachFailure(_ error: Error, lease: WISharedTransportRegistry.Lease) -> Bool {
-        if lease !== self.ingressCoordinator.currentLease {
+    func shouldLogAttachFailure(_ error: Error, session: WITransportSession) -> Bool {
+        if session !== self.transportSession {
             return false
         }
         if error is CancellationError {
@@ -216,64 +254,166 @@ private extension NetworkTransportDriver {
         return true
     }
 
+    func handlePageEvent(_ envelope: WITransportEventEnvelope, session: WITransportSession) async {
+        switch envelope.method {
+        case "Target.targetCreated", "Target.didCommitProvisionalTarget":
+            try? await enableNetworkIfNeeded(for: envelope.targetIdentifier, session: session)
+        case "Target.targetDestroyed":
+            try? await enableNetworkIfNeeded(for: session.currentPageTargetIdentifier(), session: session)
+        default:
+            break
+        }
+        handle(envelope)
+    }
+
+    func enableNetworkIfNeeded(for targetIdentifier: String?, session: WITransportSession) async throws {
+        _ = try await session.sendPageData(
+            method: WITransportMethod.Network.enable,
+            targetIdentifier: targetIdentifier
+        )
+    }
+
     func resetStoreState() {
         store.reset()
         resolver.reset()
+        deferredEnvelopesByTargetIdentifier.removeAll(keepingCapacity: true)
     }
 
     func handle(_ envelope: WITransportEventEnvelope) {
-        guard let event = eventTranslator.translate(envelope) else {
+        if resolver.buffersPendingEnvelopes {
+            resolver.buffer(envelope)
             return
         }
-        if resolver.buffersPendingEvents {
-            resolver.buffer(event)
+        process(envelope)
+    }
+
+    func process(_ envelope: WITransportEventEnvelope) {
+        switch envelope.method {
+        case "Target.didCommitProvisionalTarget":
+            guard let params = decodeParams(NetworkWire.Transport.Event.TargetDidCommitProvisionalTarget.self, from: envelope) else {
+                return
+            }
+            handleTargetDidCommitProvisionalTarget(params)
+        case "Target.targetDestroyed":
+            guard let params = decodeParams(NetworkWire.Transport.Event.TargetDestroyed.self, from: envelope) else {
+                return
+            }
+            handleTargetDestroyed(params)
+        case "Network.requestWillBeSent":
+            guard let params = decodeParams(NetworkWire.Transport.Event.RequestWillBeSent.self, from: envelope) else {
+                return
+            }
+            if shouldDeferRequestStart(params, targetIdentifier: envelope.targetIdentifier) {
+                deferEnvelope(envelope, targetIdentifier: envelope.targetIdentifier)
+                return
+            }
+            handleRequestWillBeSent(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.responseReceived":
+            guard let params = decodeParams(NetworkWire.Transport.Event.ResponseReceived.self, from: envelope) else {
+                return
+            }
+            if shouldDeferContinuation(
+                rawRequestID: params.requestId,
+                url: params.response.url,
+                requestType: params.type,
+                targetIdentifier: envelope.targetIdentifier
+            ) {
+                deferEnvelope(envelope, targetIdentifier: envelope.targetIdentifier)
+                return
+            }
+            handleResponseReceived(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.loadingFinished":
+            guard let params = decodeParams(NetworkWire.Transport.Event.LoadingFinished.self, from: envelope) else {
+                return
+            }
+            if shouldDeferContinuation(
+                rawRequestID: params.requestId,
+                url: nil,
+                requestType: nil,
+                targetIdentifier: envelope.targetIdentifier
+            ) {
+                deferEnvelope(envelope, targetIdentifier: envelope.targetIdentifier)
+                return
+            }
+            handleLoadingFinished(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.loadingFailed":
+            guard let params = decodeParams(NetworkWire.Transport.Event.LoadingFailed.self, from: envelope) else {
+                return
+            }
+            if shouldDeferContinuation(
+                rawRequestID: params.requestId,
+                url: nil,
+                requestType: nil,
+                targetIdentifier: envelope.targetIdentifier
+            ) {
+                deferEnvelope(envelope, targetIdentifier: envelope.targetIdentifier)
+                return
+            }
+            handleLoadingFailed(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketCreated":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketCreated.self, from: envelope) else {
+                return
+            }
+            handleWebSocketCreated(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketWillSendHandshakeRequest":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketHandshakeRequest.self, from: envelope) else {
+                return
+            }
+            handleWebSocketHandshakeRequest(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketHandshakeResponseReceived":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketHandshakeResponseReceived.self, from: envelope) else {
+                return
+            }
+            handleWebSocketHandshakeResponseReceived(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketFrameReceived":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketFrame.self, from: envelope) else {
+                return
+            }
+            handleWebSocketFrame(params, direction: .incoming, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketFrameSent":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketFrame.self, from: envelope) else {
+                return
+            }
+            handleWebSocketFrame(params, direction: .outgoing, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketFrameError":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketFrameError.self, from: envelope) else {
+                return
+            }
+            handleWebSocketFrameError(params, targetIdentifier: envelope.targetIdentifier)
+        case "Network.webSocketClosed":
+            guard let params = decodeParams(NetworkWire.Transport.Event.WebSocketClosed.self, from: envelope) else {
+                return
+            }
+            handleWebSocketClosed(params, targetIdentifier: envelope.targetIdentifier)
+        default:
             return
         }
-        replay(event)
     }
 
-    func replay(_ event: NetworkPendingEvent) {
-        switch event {
-        case .targetCreated(let params, _):
-            resolver.recordTargetCreated(
-                identifier: params.targetInfo.targetId,
-                isProvisional: params.targetInfo.isProvisional == true
-            )
-        case .targetDidCommitProvisionalTarget(let params, _):
-            resolver.recordCommittedTargetTransition(
-                from: params.oldTargetId,
-                to: params.newTargetId
-            )
-        case .targetDestroyed(let params, _):
-            resolver.recordTargetDestroyed(identifier: params.targetId)
-        case .requestWillBeSent(let params, let targetIdentifier):
-            handleRequestWillBeSent(params, targetIdentifier: targetIdentifier)
-        case .responseReceived(let params, let targetIdentifier):
-            handleResponseReceived(params, targetIdentifier: targetIdentifier)
-        case .loadingFinished(let params, let targetIdentifier):
-            handleLoadingFinished(params, targetIdentifier: targetIdentifier)
-        case .loadingFailed(let params, let targetIdentifier):
-            handleLoadingFailed(params, targetIdentifier: targetIdentifier)
-        case .webSocketCreated(let params, let targetIdentifier):
-            handleWebSocketCreated(params, targetIdentifier: targetIdentifier)
-        case .webSocketHandshakeRequest(let params, let targetIdentifier):
-            handleWebSocketHandshakeRequest(params, targetIdentifier: targetIdentifier)
-        case .webSocketHandshakeResponseReceived(let params, let targetIdentifier):
-            handleWebSocketHandshakeResponseReceived(params, targetIdentifier: targetIdentifier)
-        case .webSocketFrameReceived(let params, let targetIdentifier):
-            handleWebSocketFrame(params, direction: .incoming, targetIdentifier: targetIdentifier)
-        case .webSocketFrameSent(let params, let targetIdentifier):
-            handleWebSocketFrame(params, direction: .outgoing, targetIdentifier: targetIdentifier)
-        case .webSocketFrameError(let params, let targetIdentifier):
-            handleWebSocketFrameError(params, targetIdentifier: targetIdentifier)
-        case .webSocketClosed(let params, let targetIdentifier):
-            handleWebSocketClosed(params, targetIdentifier: targetIdentifier)
-        }
+    func decodeParams<T: Decodable>(
+        _ type: T.Type,
+        from envelope: WITransportEventEnvelope
+    ) -> T? {
+        try? decoder.decode(T.self, from: envelope.paramsData)
     }
 
-    func handleRequestWillBeSent(_ params: RequestWillBeSentParams, targetIdentifier: String?) {
+    func handleTargetDidCommitProvisionalTarget(_ params: NetworkWire.Transport.Event.TargetDidCommitProvisionalTarget) {
+        resolver.recordCommittedTargetTransition(
+            from: params.oldTargetId,
+            to: params.newTargetId
+        )
+        replayDeferredEnvelopes(for: params.newTargetId)
+    }
+
+    func handleTargetDestroyed(_ params: NetworkWire.Transport.Event.TargetDestroyed) {
+        resolver.recordCommittedTargetDestroyed(identifier: params.targetId)
+        deferredEnvelopesByTargetIdentifier.removeValue(forKey: params.targetId)
+    }
+
+    func handleRequestWillBeSent(_ params: NetworkWire.Transport.Event.RequestWillBeSent, targetIdentifier: String?) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
         let normalizedMethod = params.request.method.uppercased()
+        let normalizedTargetIdentifier = normalizedScopeID(targetIdentifier)
 
         if let redirectResponse = params.redirectResponse,
            let previousRequestID = resolver.resolveEvent(
@@ -281,28 +421,48 @@ private extension NetworkTransportDriver {
                 rawRequestID: params.requestId,
                 url: redirectResponse.url,
                 requestType: params.type,
-                targetIdentifier: normalizedScopeID(targetIdentifier),
+                targetIdentifier: normalizedTargetIdentifier,
                 store: store
            ) {
-            store.applyEvent(
-                makeResponseEvent(
-                    sessionID: sessionID,
-                    requestID: previousRequestID,
-                    timestamp: params.timestamp,
-                    requestType: params.type,
-                    response: redirectResponse
-                )
+            store.apply(
+                .responseReceived(
+                    .init(
+                        requestID: previousRequestID,
+                        response: .init(
+                            statusCode: redirectResponse.status,
+                            statusText: redirectResponse.statusText,
+                            mimeType: redirectResponse.mimeType,
+                            headers: NetworkHeaders(dictionary: redirectResponse.headers),
+                            body: nil,
+                            blockedCookies: [],
+                            errorDescription: nil
+                        ),
+                        requestType: params.type,
+                        timestamp: params.timestamp
+                    )
+                ),
+                sessionID: sessionID,
             )
-            store.applyEvent(
-                makeLoadingFinishedEvent(
-                    sessionID: sessionID,
-                    requestID: previousRequestID,
-                    rawRequestID: params.requestId,
-                    timestamp: params.timestamp,
-                    metrics: nil,
-                    includeResponseBodyPlaceholder: false,
-                    targetIdentifier: normalizedScopeID(targetIdentifier)
-                )
+            store.apply(
+                .completed(
+                    .init(
+                        requestID: previousRequestID,
+                        response: .init(
+                            statusCode: nil,
+                            statusText: "",
+                            mimeType: nil,
+                            headers: NetworkHeaders(),
+                            body: nil,
+                            blockedCookies: [],
+                            errorDescription: nil
+                        ),
+                        requestType: nil,
+                        timestamp: params.timestamp,
+                        encodedBodyLength: nil,
+                        decodedBodyLength: nil
+                    )
+                ),
+                sessionID: sessionID,
             )
             resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
         }
@@ -312,140 +472,165 @@ private extension NetworkTransportDriver {
             rawRequestID: params.requestId,
             url: params.request.url,
             requestType: params.type,
-            targetIdentifier: normalizedScopeID(targetIdentifier),
+            targetIdentifier: normalizedTargetIdentifier,
             store: store
         )
 
-        store.applyEvent(
-            HTTPNetworkEvent(
-                kind: .requestWillBeSent,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: params.request.url,
-                method: normalizedMethod,
-                statusCode: nil,
-                statusText: nil,
-                mimeType: nil,
-                requestHeaders: NetworkHeaders(dictionary: params.request.headers),
-                responseHeaders: NetworkHeaders(),
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: nil,
-                wallTimeSeconds: params.walltime,
-                encodedBodyLength: nil,
-                decodedBodySize: nil,
-                errorDescription: nil,
-                requestType: params.type,
-                requestBody: makeRequestBody(
-                    postData: params.request.postData,
-                    method: params.request.method,
-                    requestID: params.requestId,
-                    targetIdentifier: normalizedScopeID(targetIdentifier)
-                ),
-                requestBodyBytesSent: params.request.postData?.utf8.count,
-                responseBody: nil,
-                blockedCookies: []
-            )
+        store.apply(
+            .requestStarted(
+                .init(
+                    requestID: requestID,
+                    request: .init(
+                        url: params.request.url,
+                        method: normalizedMethod,
+                        headers: NetworkHeaders(dictionary: params.request.headers),
+                        body: makeRequestBody(
+                            postData: params.request.postData,
+                            method: params.request.method,
+                            requestID: params.requestId,
+                            targetIdentifier: normalizedTargetIdentifier
+                        ),
+                        bodyBytesSent: params.request.postData?.utf8.count,
+                        type: params.type,
+                        wallTime: params.walltime
+                    ),
+                    timestamp: params.timestamp
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
-    func handleResponseReceived(_ params: ResponseReceivedParams, targetIdentifier: String?) {
+    func handleResponseReceived(
+        _ params: NetworkWire.Transport.Event.ResponseReceived,
+        targetIdentifier: String?
+    ) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
+        let normalizedTargetIdentifier = normalizedScopeID(targetIdentifier)
         guard let requestID = resolver.resolveEvent(
             sessionID: sessionID,
             rawRequestID: params.requestId,
             url: params.response.url,
             requestType: params.type,
-            targetIdentifier: normalizedScopeID(targetIdentifier),
+            targetIdentifier: normalizedTargetIdentifier,
             store: store
         ) else {
             return
         }
 
-        store.applyEvent(
-            makeResponseEvent(
-                sessionID: sessionID,
-                requestID: requestID,
-                timestamp: params.timestamp,
-                requestType: params.type,
-                response: params.response
-            )
+        store.apply(
+            .responseReceived(
+                .init(
+                    requestID: requestID,
+                    response: .init(
+                        statusCode: params.response.status,
+                        statusText: params.response.statusText,
+                        mimeType: params.response.mimeType,
+                        headers: NetworkHeaders(dictionary: params.response.headers),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: params.type,
+                    timestamp: params.timestamp
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
-    func handleLoadingFinished(_ params: LoadingFinishedParams, targetIdentifier: String?) {
+    func handleLoadingFinished(
+        _ params: NetworkWire.Transport.Event.LoadingFinished,
+        targetIdentifier: String?
+    ) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
+        let normalizedTargetIdentifier = normalizedScopeID(targetIdentifier)
         guard let requestID = resolver.resolveEvent(
             sessionID: sessionID,
             rawRequestID: params.requestId,
             url: nil,
             requestType: nil,
-            targetIdentifier: normalizedScopeID(targetIdentifier),
+            targetIdentifier: normalizedTargetIdentifier,
             store: store
         ) else {
             return
         }
-        let entry = store.entry(requestID: requestID, sessionID: sessionID)
-        let knownTargetIdentifiers = resolver.knownTargetIdentifiers(
+
+        let responseTargetIdentifier = resolver.knownTargetIdentifiers(
             sessionID: sessionID,
             rawRequestID: params.requestId
-        )
+        )?.response ?? normalizedTargetIdentifier
+        let shouldIncludeResponseBodyPlaceholder = store.entry(requestID: requestID, sessionID: sessionID)?.responseBody?.hasDeferredContent != true
+
         resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
 
-        store.applyEvent(
-            makeLoadingFinishedEvent(
-                sessionID: sessionID,
-                requestID: requestID,
-                rawRequestID: params.requestId,
-                timestamp: params.timestamp,
-                metrics: params.metrics,
-                includeResponseBodyPlaceholder: entry?.responseBody?.hasDeferredContent != true,
-                targetIdentifier: knownTargetIdentifiers?.response ?? normalizedScopeID(targetIdentifier)
-            )
+        store.apply(
+            .completed(
+                .init(
+                    requestID: requestID,
+                    response: .init(
+                        statusCode: nil,
+                        statusText: "",
+                        mimeType: nil,
+                        headers: NetworkHeaders(),
+                        body: shouldIncludeResponseBodyPlaceholder
+                            ? makeResponseBodyPlaceholder(
+                                rawRequestID: params.requestId,
+                                decodedBodySize: params.metrics?.responseBodyDecodedSize,
+                                targetIdentifier: responseTargetIdentifier
+                            )
+                            : nil,
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    requestType: nil,
+                    timestamp: params.timestamp,
+                    encodedBodyLength: params.metrics?.responseBodyBytesReceived,
+                    decodedBodyLength: params.metrics?.responseBodyDecodedSize
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
-    func handleLoadingFailed(_ params: LoadingFailedParams, targetIdentifier: String?) {
+    func handleLoadingFailed(_ params: NetworkWire.Transport.Event.LoadingFailed, targetIdentifier: String?) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
+        let normalizedTargetIdentifier = normalizedScopeID(targetIdentifier)
         guard let requestID = resolver.resolveEvent(
             sessionID: sessionID,
             rawRequestID: params.requestId,
             url: nil,
             requestType: nil,
-            targetIdentifier: normalizedScopeID(targetIdentifier),
+            targetIdentifier: normalizedTargetIdentifier,
             store: store
         ) else {
             return
         }
+
         resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
 
-        store.applyEvent(
-            HTTPNetworkEvent(
-                kind: .loadingFailed,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                method: nil,
-                statusCode: nil,
-                statusText: nil,
-                mimeType: nil,
-                requestHeaders: NetworkHeaders(),
-                responseHeaders: NetworkHeaders(),
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: params.timestamp,
-                wallTimeSeconds: nil,
-                encodedBodyLength: nil,
-                decodedBodySize: nil,
-                errorDescription: params.errorText,
-                requestType: nil,
-                requestBody: nil,
-                requestBodyBytesSent: nil,
-                responseBody: nil,
-                blockedCookies: []
-            )
+        store.apply(
+            .failed(
+                .init(
+                    requestID: requestID,
+                    response: .init(
+                        statusCode: nil,
+                        statusText: "",
+                        mimeType: nil,
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        blockedCookies: [],
+                        errorDescription: params.errorText
+                    ),
+                    requestType: nil,
+                    timestamp: params.timestamp
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
-    func handleWebSocketCreated(_ params: WebSocketCreatedParams, targetIdentifier: String?) {
+    func handleWebSocketCreated(_ params: NetworkWire.Transport.Event.WebSocketCreated, targetIdentifier: String?) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
         let requestID = resolver.resolveRequestStart(
             sessionID: sessionID,
@@ -456,34 +641,21 @@ private extension NetworkTransportDriver {
             store: store
         )
 
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .created,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: params.url,
-                startTimeSeconds: params.timestamp ?? 0,
-                endTimeSeconds: nil,
-                wallTimeSeconds: nil,
-                framePayload: nil,
-                framePayloadIsBase64: false,
-                framePayloadSize: nil,
-                frameDirection: nil,
-                frameOpcode: nil,
-                framePayloadTruncated: false,
-                statusCode: nil,
-                statusText: nil,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: nil,
-                requestHeaders: NetworkHeaders(),
-                closeWasClean: nil
-            )
+        store.apply(
+            .webSocketOpened(
+                .init(
+                    requestID: requestID,
+                    url: params.url,
+                    timestamp: params.timestamp ?? 0,
+                    wallTime: nil
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
     func handleWebSocketHandshakeRequest(
-        _ params: WebSocketHandshakeRequestParams,
+        _ params: NetworkWire.Transport.Event.WebSocketHandshakeRequest,
         targetIdentifier: String?
     ) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
@@ -494,34 +666,21 @@ private extension NetworkTransportDriver {
             return
         }
 
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .handshakeRequest,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: nil,
-                wallTimeSeconds: params.walltime,
-                framePayload: nil,
-                framePayloadIsBase64: false,
-                framePayloadSize: nil,
-                frameDirection: nil,
-                frameOpcode: nil,
-                framePayloadTruncated: false,
-                statusCode: nil,
-                statusText: nil,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: nil,
-                requestHeaders: NetworkHeaders(dictionary: params.request.headers),
-                closeWasClean: nil
-            )
+        store.apply(
+            .webSocketHandshake(
+                .init(
+                    requestID: requestID,
+                    requestHeaders: NetworkHeaders(dictionary: params.request.headers),
+                    statusCode: nil,
+                    statusText: nil
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
     func handleWebSocketHandshakeResponseReceived(
-        _ params: WebSocketHandshakeResponseReceivedParams,
+        _ params: NetworkWire.Transport.Event.WebSocketHandshakeResponseReceived,
         targetIdentifier: String?
     ) {
         let sessionID = sessionIdentifier(for: targetIdentifier)
@@ -532,34 +691,21 @@ private extension NetworkTransportDriver {
             return
         }
 
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .handshake,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: params.timestamp,
-                wallTimeSeconds: nil,
-                framePayload: nil,
-                framePayloadIsBase64: false,
-                framePayloadSize: nil,
-                frameDirection: nil,
-                frameOpcode: nil,
-                framePayloadTruncated: false,
-                statusCode: params.response.status,
-                statusText: params.response.statusText,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: nil,
-                requestHeaders: NetworkHeaders(dictionary: params.response.headers),
-                closeWasClean: nil
-            )
+        store.apply(
+            .webSocketHandshake(
+                .init(
+                    requestID: requestID,
+                    requestHeaders: nil,
+                    statusCode: params.response.status,
+                    statusText: params.response.statusText
+                )
+            ),
+            sessionID: sessionID,
         )
     }
 
     func handleWebSocketFrame(
-        _ params: WebSocketFrameParams,
+        _ params: NetworkWire.Transport.Event.WebSocketFrame,
         direction: NetworkWebSocketFrame.Direction,
         targetIdentifier: String?
     ) {
@@ -571,181 +717,100 @@ private extension NetworkTransportDriver {
             return
         }
 
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .frame,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: params.timestamp,
-                wallTimeSeconds: nil,
-                framePayload: params.response.payloadData,
-                framePayloadIsBase64: params.response.opcode == 2,
-                framePayloadSize: params.response.payloadLength,
-                frameDirection: direction,
-                frameOpcode: params.response.opcode,
-                framePayloadTruncated: false,
-                statusCode: nil,
-                statusText: nil,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: nil,
-                requestHeaders: NetworkHeaders(),
-                closeWasClean: nil
-            )
-        )
-    }
-
-    func handleWebSocketFrameError(_ params: WebSocketFrameErrorParams, targetIdentifier: String?) {
-        let sessionID = sessionIdentifier(for: targetIdentifier)
-        guard let requestID = resolver.resolveWebSocketRequestID(
-            sessionID: sessionID,
-            rawRequestID: params.requestId
-        ) else {
-            return
-        }
-        resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
-
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .frameError,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: params.timestamp,
-                wallTimeSeconds: nil,
-                framePayload: nil,
-                framePayloadIsBase64: false,
-                framePayloadSize: nil,
-                frameDirection: nil,
-                frameOpcode: nil,
-                framePayloadTruncated: false,
-                statusCode: nil,
-                statusText: nil,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: params.errorMessage,
-                requestHeaders: NetworkHeaders(),
-                closeWasClean: nil
-            )
-        )
-    }
-
-    func handleWebSocketClosed(_ params: WebSocketClosedParams, targetIdentifier: String?) {
-        let sessionID = sessionIdentifier(for: targetIdentifier)
-        guard let requestID = resolver.resolveWebSocketRequestID(
-            sessionID: sessionID,
-            rawRequestID: params.requestId
-        ) else {
-            return
-        }
-        resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
-
-        store.applyEvent(
-            WSNetworkEvent(
-                kind: .closed,
-                sessionID: sessionID,
-                requestID: requestID,
-                url: nil,
-                startTimeSeconds: params.timestamp,
-                endTimeSeconds: params.timestamp,
-                wallTimeSeconds: nil,
-                framePayload: nil,
-                framePayloadIsBase64: false,
-                framePayloadSize: nil,
-                frameDirection: nil,
-                frameOpcode: nil,
-                framePayloadTruncated: false,
-                statusCode: nil,
-                statusText: nil,
-                closeCode: nil,
-                closeReason: nil,
-                errorDescription: nil,
-                requestHeaders: NetworkHeaders(),
-                closeWasClean: nil
-            )
-        )
-    }
-
-    func makeResponseEvent(
-        sessionID: String,
-        requestID: Int,
-        timestamp: TimeInterval,
-        requestType: String?,
-        response: ResponsePayload
-    ) -> HTTPNetworkEvent {
-        HTTPNetworkEvent(
-            kind: .responseReceived,
-            sessionID: sessionID,
-            requestID: requestID,
-            url: response.url,
-            method: nil,
-            statusCode: response.status,
-            statusText: response.statusText,
-            mimeType: response.mimeType,
-            requestHeaders: NetworkHeaders(),
-            responseHeaders: NetworkHeaders(dictionary: response.headers),
-            startTimeSeconds: timestamp,
-            endTimeSeconds: nil,
-            wallTimeSeconds: nil,
-            encodedBodyLength: nil,
-            decodedBodySize: nil,
-            errorDescription: nil,
-            requestType: requestType,
-            requestBody: nil,
-            requestBodyBytesSent: nil,
-            responseBody: nil,
-            blockedCookies: []
-        )
-    }
-
-    func makeLoadingFinishedEvent(
-        sessionID: String,
-        requestID: Int,
-        rawRequestID: String,
-        timestamp: TimeInterval,
-        metrics: LoadingFinishedParams.Metrics?,
-        includeResponseBodyPlaceholder: Bool,
-        targetIdentifier: String?
-    ) -> HTTPNetworkEvent {
-        HTTPNetworkEvent(
-            kind: .loadingFinished,
-            sessionID: sessionID,
-            requestID: requestID,
-            url: nil,
-            method: nil,
-            statusCode: nil,
-            statusText: nil,
-            mimeType: nil,
-            requestHeaders: NetworkHeaders(),
-            responseHeaders: NetworkHeaders(),
-            startTimeSeconds: timestamp,
-            endTimeSeconds: timestamp,
-            wallTimeSeconds: nil,
-            encodedBodyLength: metrics?.responseBodyBytesReceived,
-            decodedBodySize: metrics?.responseBodyDecodedSize,
-            errorDescription: nil,
-            requestType: nil,
-            requestBody: nil,
-            requestBodyBytesSent: metrics?.requestBodyBytesSent,
-            responseBody: includeResponseBodyPlaceholder
-                ? NetworkBody(
-                    kind: .text,
-                    preview: nil,
-                    full: nil,
-                    size: metrics?.responseBodyDecodedSize,
-                    isBase64Encoded: false,
-                    isTruncated: true,
-                    summary: nil,
-                    deferredLocator: .networkRequest(id: rawRequestID, targetIdentifier: targetIdentifier),
-                    formEntries: [],
-                    fetchState: .inline,
-                    role: .response
+        store.apply(
+            .webSocketFrameAdded(
+                .init(
+                    requestID: requestID,
+                    frame: .init(
+                        direction: direction,
+                        opcode: params.response.opcode,
+                        payload: params.response.payloadData,
+                        payloadIsBase64: params.response.opcode == 2,
+                        payloadSize: params.response.payloadLength,
+                        payloadTruncated: false,
+                        timestamp: params.timestamp
+                    )
                 )
-                : nil,
-            blockedCookies: []
+            ),
+            sessionID: sessionID,
+        )
+    }
+
+    func handleWebSocketFrameError(_ params: NetworkWire.Transport.Event.WebSocketFrameError, targetIdentifier: String?) {
+        let sessionID = sessionIdentifier(for: targetIdentifier)
+        guard let requestID = resolver.resolveWebSocketRequestID(
+            sessionID: sessionID,
+            rawRequestID: params.requestId
+        ) else {
+            return
+        }
+
+        resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
+
+        store.apply(
+            .webSocketClosed(
+                .init(
+                    requestID: requestID,
+                    timestamp: params.timestamp,
+                    statusCode: nil,
+                    statusText: nil,
+                    closeCode: nil,
+                    closeReason: nil,
+                    closeWasClean: nil,
+                    errorDescription: params.errorMessage,
+                    failed: true
+                )
+            ),
+            sessionID: sessionID,
+        )
+    }
+
+    func handleWebSocketClosed(_ params: NetworkWire.Transport.Event.WebSocketClosed, targetIdentifier: String?) {
+        let sessionID = sessionIdentifier(for: targetIdentifier)
+        guard let requestID = resolver.resolveWebSocketRequestID(
+            sessionID: sessionID,
+            rawRequestID: params.requestId
+        ) else {
+            return
+        }
+
+        resolver.complete(sessionID: sessionID, rawRequestID: params.requestId)
+
+        store.apply(
+            .webSocketClosed(
+                .init(
+                    requestID: requestID,
+                    timestamp: params.timestamp,
+                    statusCode: nil,
+                    statusText: nil,
+                    closeCode: nil,
+                    closeReason: nil,
+                    closeWasClean: nil,
+                    errorDescription: nil,
+                    failed: false
+                )
+            ),
+            sessionID: sessionID,
+        )
+    }
+
+    func makeResponseBodyPlaceholder(
+        rawRequestID: String,
+        decodedBodySize: Int?,
+        targetIdentifier: String?
+    ) -> NetworkBody {
+        NetworkBody(
+            kind: .text,
+            preview: nil,
+            full: nil,
+            size: decodedBodySize,
+            isBase64Encoded: false,
+            isTruncated: true,
+            summary: nil,
+            deferredLocator: .networkRequest(id: rawRequestID, targetIdentifier: targetIdentifier),
+            formEntries: [],
+            fetchState: .inline,
+            role: .response
         )
     }
 
@@ -799,10 +864,10 @@ private extension NetworkTransportDriver {
     }
 
     func loadBootstrapResources(
-        using lease: WISharedTransportRegistry.Lease
+        using transportSession: WITransportSession
     ) async throws -> NetworkBootstrapLoad {
         try await transportClient.loadBootstrapResources(
-            using: lease,
+            using: transportSession,
             allocateRequestID: { [resolver] in
                 resolver.allocateCanonicalRequestID()
             },
@@ -827,5 +892,54 @@ private extension NetworkTransportDriver {
             return nil
         }
         return scopeID
+    }
+
+    func shouldDeferRequestStart(
+        _ params: NetworkWire.Transport.Event.RequestWillBeSent,
+        targetIdentifier: String?
+    ) -> Bool {
+        let sessionID = sessionIdentifier(for: targetIdentifier)
+        return resolver.hasPendingUncommittedTargetCandidate(
+            sessionID: sessionID,
+            rawRequestID: params.requestId,
+            url: params.request.url,
+            requestType: params.type,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
+            allowLiveBindings: false
+        )
+    }
+
+    func shouldDeferContinuation(
+        rawRequestID: String,
+        url: String?,
+        requestType: String?,
+        targetIdentifier: String?
+    ) -> Bool {
+        let sessionID = sessionIdentifier(for: targetIdentifier)
+        return resolver.hasPendingUncommittedTargetCandidate(
+            sessionID: sessionID,
+            rawRequestID: rawRequestID,
+            url: url,
+            requestType: requestType,
+            targetIdentifier: normalizedScopeID(targetIdentifier),
+            allowLiveBindings: true
+        )
+    }
+
+    func deferEnvelope(_ envelope: WITransportEventEnvelope, targetIdentifier: String?) {
+        guard let targetIdentifier = normalizedScopeID(targetIdentifier) else {
+            return
+        }
+        deferredEnvelopesByTargetIdentifier[targetIdentifier, default: []].append(envelope)
+    }
+
+    func replayDeferredEnvelopes(for targetIdentifier: String) {
+        guard let deferred = deferredEnvelopesByTargetIdentifier.removeValue(forKey: targetIdentifier) else {
+            return
+        }
+
+        for envelope in deferred {
+            process(envelope)
+        }
     }
 }

@@ -3,6 +3,37 @@ import WebInspectorEngine
 
 @MainActor
 package final class NetworkTimelineResolver {
+    package struct Binding {
+        package let allowsCrossTargetRebind: Bool
+        package let canonicalRequestID: Int
+        package var sessionID: String
+        package var requestTargetIdentifier: String?
+        package var responseTargetIdentifier: String?
+        package let rawRequestID: String
+        package let url: String
+        package let requestType: String?
+
+        package init(
+            allowsCrossTargetRebind: Bool,
+            canonicalRequestID: Int,
+            sessionID: String,
+            requestTargetIdentifier: String?,
+            responseTargetIdentifier: String?,
+            rawRequestID: String,
+            url: String,
+            requestType: String?
+        ) {
+            self.allowsCrossTargetRebind = allowsCrossTargetRebind
+            self.canonicalRequestID = canonicalRequestID
+            self.sessionID = sessionID
+            self.requestTargetIdentifier = requestTargetIdentifier
+            self.responseTargetIdentifier = responseTargetIdentifier
+            self.rawRequestID = rawRequestID
+            self.url = url
+            self.requestType = requestType
+        }
+    }
+
     package struct RequestKey: Hashable {
         package let sessionID: String
         package let rawRequestID: String
@@ -17,13 +48,13 @@ package final class NetworkTimelineResolver {
 
     private var contextID: UUID?
     private var phase: Phase = .idle
-    private var bufferedEvents: [NetworkPendingEvent] = []
-    private var exactBindings: [RequestKey: NetworkContinuationBinding] = [:]
+    private var bufferedEnvelopes: [WITransportEventEnvelope] = []
+    private var exactBindings: [RequestKey: Binding] = [:]
     private var committedTargetPredecessors: [String: String] = [:]
-    private var provisionalTargetIdentifiers: Set<String> = []
+    private var committedTargetIdentifiers: Set<String> = []
     private var nextCanonicalRequestID = 1
 
-    package var buffersPendingEvents: Bool {
+    package var buffersPendingEnvelopes: Bool {
         phase == .buffering
     }
 
@@ -32,10 +63,10 @@ package final class NetworkTimelineResolver {
     package func begin(contextID: UUID) {
         self.contextID = contextID
         phase = .buffering
-        bufferedEvents.removeAll(keepingCapacity: true)
+        bufferedEnvelopes.removeAll(keepingCapacity: true)
         exactBindings.removeAll(keepingCapacity: true)
         committedTargetPredecessors.removeAll(keepingCapacity: true)
-        provisionalTargetIdentifiers.removeAll(keepingCapacity: true)
+        committedTargetIdentifiers.removeAll(keepingCapacity: true)
     }
 
     package func matches(contextID: UUID) -> Bool {
@@ -47,18 +78,18 @@ package final class NetworkTimelineResolver {
         return nextCanonicalRequestID
     }
 
-    package func buffer(_ event: NetworkPendingEvent) {
+    package func buffer(_ envelope: WITransportEventEnvelope) {
         guard phase == .buffering else {
             return
         }
-        bufferedEvents.append(event)
+        bufferedEnvelopes.append(envelope)
     }
 
     package func applyBootstrapLoad(
         _ load: NetworkBootstrapLoad,
         into store: NetworkStore
     ) {
-        let insertedEntries = store.applySeeds(load.seeds)
+        let insertedEntries = store.applySnapshots(load.snapshots)
         let survivingRequestIDs = Set(insertedEntries.map(\.requestID))
         register(
             bindings: load.bindings.filter { survivingRequestIDs.contains($0.canonicalRequestID) }
@@ -66,17 +97,17 @@ package final class NetworkTimelineResolver {
     }
 
     package func finish(
-        replay: (NetworkPendingEvent) -> Void
+        replay: (WITransportEventEnvelope) -> Void
     ) {
         guard phase != .idle else {
             return
         }
 
         phase = .replaying
-        let bufferedEvents = bufferedEvents
-        self.bufferedEvents.removeAll(keepingCapacity: true)
-        for event in bufferedEvents {
-            replay(event)
+        let bufferedEnvelopes = bufferedEnvelopes
+        self.bufferedEnvelopes.removeAll(keepingCapacity: true)
+        for envelope in bufferedEnvelopes {
+            replay(envelope)
         }
         phase = .settled
     }
@@ -84,41 +115,77 @@ package final class NetworkTimelineResolver {
     package func reset() {
         contextID = nil
         phase = .idle
-        bufferedEvents.removeAll(keepingCapacity: true)
+        bufferedEnvelopes.removeAll(keepingCapacity: true)
         exactBindings.removeAll(keepingCapacity: true)
         committedTargetPredecessors.removeAll(keepingCapacity: true)
-        provisionalTargetIdentifiers.removeAll(keepingCapacity: true)
+        committedTargetIdentifiers.removeAll(keepingCapacity: true)
         nextCanonicalRequestID = 1
-    }
-
-    package func recordTargetCreated(
-        identifier: String,
-        isProvisional: Bool
-    ) {
-        if isProvisional {
-            provisionalTargetIdentifiers.insert(identifier)
-        } else {
-            provisionalTargetIdentifiers.remove(identifier)
-        }
     }
 
     package func recordCommittedTargetTransition(
         from oldTargetIdentifier: String?,
         to newTargetIdentifier: String
     ) {
+        committedTargetIdentifiers.insert(newTargetIdentifier)
         guard let oldTargetIdentifier,
               oldTargetIdentifier != newTargetIdentifier else {
-            provisionalTargetIdentifiers.remove(newTargetIdentifier)
+            committedTargetPredecessors.removeValue(forKey: newTargetIdentifier)
             return
         }
-        provisionalTargetIdentifiers.remove(oldTargetIdentifier)
-        provisionalTargetIdentifiers.remove(newTargetIdentifier)
+        committedTargetIdentifiers.insert(oldTargetIdentifier)
         committedTargetPredecessors[newTargetIdentifier] = oldTargetIdentifier
     }
 
-    package func recordTargetDestroyed(identifier: String) {
-        provisionalTargetIdentifiers.remove(identifier)
-        committedTargetPredecessors.removeValue(forKey: identifier)
+    package func recordCommittedTargetDestroyed(identifier: String) {
+        let predecessor = committedTargetPredecessors.removeValue(forKey: identifier)
+        committedTargetIdentifiers.remove(identifier)
+
+        let descendants = committedTargetPredecessors
+            .filter { $0.value == identifier }
+            .map(\.key)
+
+        for descendant in descendants {
+            if let predecessor, predecessor != descendant {
+                committedTargetPredecessors[descendant] = predecessor
+            } else {
+                committedTargetPredecessors.removeValue(forKey: descendant)
+            }
+        }
+    }
+
+    package func clearCommittedTargetTransitions() {
+        committedTargetPredecessors.removeAll(keepingCapacity: true)
+        committedTargetIdentifiers.removeAll(keepingCapacity: true)
+    }
+
+    package func hasPendingUncommittedTargetCandidate(
+        sessionID: String,
+        rawRequestID: String,
+        url: String?,
+        requestType: String?,
+        targetIdentifier: String?,
+        allowLiveBindings: Bool
+    ) -> Bool {
+        guard let targetIdentifier,
+              committedTargetPredecessors[targetIdentifier] == nil,
+              !committedTargetIdentifiers.contains(targetIdentifier) else {
+            return false
+        }
+        guard exactBindings[RequestKey(sessionID: sessionID, rawRequestID: rawRequestID)] == nil else {
+            return false
+        }
+
+        let candidates = matchingBindings(
+            rawRequestID: rawRequestID,
+            url: url,
+            requestType: requestType,
+            allowLiveBindings: allowLiveBindings
+        ).filter { binding in
+            binding.requestTargetIdentifier != targetIdentifier
+                && binding.responseTargetIdentifier != targetIdentifier
+        }
+
+        return candidates.count == 1
     }
 
     package func resolveRequestStart(
@@ -140,21 +207,20 @@ package final class NetworkTimelineResolver {
             exactBindings[key] = existing
             return existing.canonicalRequestID
         }
-        if let rebound = rebindStableContinuation(
+        if let rebound = rebindCommittedContinuation(
             sessionID: sessionID,
             rawRequestID: rawRequestID,
             url: url,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
             store: store,
-            includeLiveBindings: false
+            allowLiveBindings: false
         ) {
             return rebound.canonicalRequestID
         }
 
         let canonicalRequestID = allocateCanonicalRequestID()
-        exactBindings[key] = NetworkContinuationBinding(
-            seedKind: nil,
+        exactBindings[key] = Binding(
             allowsCrossTargetRebind: false,
             canonicalRequestID: canonicalRequestID,
             sessionID: sessionID,
@@ -186,14 +252,14 @@ package final class NetworkTimelineResolver {
             exactBindings[key] = exact
             return exact.canonicalRequestID
         }
-        return rebindStableContinuation(
+        return rebindCommittedContinuation(
             sessionID: sessionID,
             rawRequestID: rawRequestID,
             url: url,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
             store: store,
-            includeLiveBindings: true
+            allowLiveBindings: true
         )?.canonicalRequestID
     }
 
@@ -225,59 +291,51 @@ package final class NetworkTimelineResolver {
 }
 
 private extension NetworkTimelineResolver {
-    func register(bindings: [NetworkContinuationBinding]) {
+    func register(bindings: [Binding]) {
         for binding in bindings {
             exactBindings[RequestKey(sessionID: binding.sessionID, rawRequestID: binding.rawRequestID)] = binding
         }
     }
 
-    func rebindStableContinuation(
+    func rebindCommittedContinuation(
         sessionID: String,
         rawRequestID: String,
         url: String,
         requestType: String?,
         targetIdentifier: String?,
         store: NetworkStore,
-        includeLiveBindings: Bool
-    ) -> NetworkContinuationBinding? {
-        rebindStableContinuation(
+        allowLiveBindings: Bool
+    ) -> Binding? {
+        rebindCommittedContinuation(
             sessionID: sessionID,
             rawRequestID: rawRequestID,
             url: url as String?,
             requestType: requestType,
             targetIdentifier: targetIdentifier,
             store: store,
-            includeLiveBindings: includeLiveBindings
+            allowLiveBindings: allowLiveBindings
         )
     }
 
-    func rebindStableContinuation(
+    func rebindCommittedContinuation(
         sessionID: String,
         rawRequestID: String,
         url: String?,
         requestType: String?,
         targetIdentifier: String?,
         store: NetworkStore,
-        includeLiveBindings: Bool
-    ) -> NetworkContinuationBinding? {
-        let candidates = exactBindings.values.filter { binding in
-            guard binding.rawRequestID == rawRequestID,
-                  (includeLiveBindings || binding.allowsCrossTargetRebind),
-                  allowsTargetRebind(
-                    from: binding,
-                    to: targetIdentifier
-                  ) else {
-                return false
-            }
-            if let url, binding.url != url {
-                return false
-            }
-            if let requestType,
-               let existingRequestType = binding.requestType,
-               existingRequestType != requestType {
-                return false
-            }
-            return true
+        allowLiveBindings: Bool
+    ) -> Binding? {
+        let candidates = matchingBindings(
+            rawRequestID: rawRequestID,
+            url: url,
+            requestType: requestType,
+            allowLiveBindings: allowLiveBindings
+        ).filter { binding in
+            allowsCommittedTargetRebind(
+                from: binding,
+                to: targetIdentifier
+            )
         }
 
         guard candidates.count == 1, var binding = candidates.first else {
@@ -303,8 +361,31 @@ private extension NetworkTimelineResolver {
         return binding
     }
 
-    func allowsTargetRebind(
-        from binding: NetworkContinuationBinding,
+    func matchingBindings(
+        rawRequestID: String,
+        url: String?,
+        requestType: String?,
+        allowLiveBindings: Bool
+    ) -> [Binding] {
+        exactBindings.values.filter { binding in
+            guard binding.rawRequestID == rawRequestID,
+                  (allowLiveBindings || binding.allowsCrossTargetRebind) else {
+                return false
+            }
+            if let url, binding.url != url {
+                return false
+            }
+            if let requestType,
+               let existingRequestType = binding.requestType,
+               existingRequestType != requestType {
+                return false
+            }
+            return true
+        }
+    }
+
+    func allowsCommittedTargetRebind(
+        from binding: Binding,
         to targetIdentifier: String?
     ) -> Bool {
         guard let targetIdentifier else {
@@ -313,10 +394,6 @@ private extension NetworkTimelineResolver {
 
         return isCommittedDescendant(targetIdentifier, of: binding.requestTargetIdentifier)
             || isCommittedDescendant(targetIdentifier, of: binding.responseTargetIdentifier)
-            || allowsProvisionalTargetRebind(
-                targetIdentifier,
-                from: binding
-            )
     }
 
     func isCommittedDescendant(
@@ -340,20 +417,8 @@ private extension NetworkTimelineResolver {
         return false
     }
 
-    func allowsProvisionalTargetRebind(
-        _ targetIdentifier: String,
-        from binding: NetworkContinuationBinding
-    ) -> Bool {
-        guard provisionalTargetIdentifiers.contains(targetIdentifier) == false else {
-            return false
-        }
-
-        return binding.requestTargetIdentifier.map(provisionalTargetIdentifiers.contains) == true
-            || binding.responseTargetIdentifier.map(provisionalTargetIdentifiers.contains) == true
-    }
-
     func syncTargetsIfNeeded(
-        binding: inout NetworkContinuationBinding,
+        binding: inout Binding,
         sessionID: String,
         targetIdentifier: String?,
         store: NetworkStore

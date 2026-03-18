@@ -663,8 +663,8 @@ private extension NetworkPageAgent {
         }
     }
 
-    func decodeNetworkBatch(from payload: Any?) -> NetworkEventBatch? {
-        NetworkEventBatch.decode(from: payload)
+    func decodeNetworkBatch(from payload: Any?) -> NetworkWire.PageHook.Batch? {
+        NetworkWire.PageHook.Batch.decode(from: payload)
     }
 
     private func validateMessageAuthToken(_ payload: Any?) -> AuthTokenValidationResult {
@@ -843,6 +843,7 @@ private extension NetworkPageAgent {
         let sessionID = "native-\(UUID().uuidString.lowercased())"
         let observer = NetworkResourceLoadObserver(
             sessionID: sessionID,
+            store: store,
             includeFetchAndXHR: nativeObserverIncludesFetchAndXHR,
             isEventEmissionEnabled: { [weak self] in
                 guard let self else {
@@ -850,9 +851,7 @@ private extension NetworkPageAgent {
                 }
                 return self.loggingMode == .active
             }
-        ) { [weak self] event in
-            self?.store.applyEvent(event)
-        }
+        )
         let attached = observer.attach(to: webView)
         nativeObserverEnabled = attached
         nativeSessionID = sessionID

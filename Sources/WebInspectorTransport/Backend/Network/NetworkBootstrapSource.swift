@@ -2,14 +2,14 @@ import Foundation
 import WebInspectorEngine
 
 package struct NetworkBootstrapLoad {
-    package let seeds: [NetworkEntrySeed]
-    package let bindings: [NetworkContinuationBinding]
+    package let snapshots: [NetworkEntry.Snapshot]
+    package let bindings: [NetworkTimelineResolver.Binding]
 
     package init(
-        seeds: [NetworkEntrySeed],
-        bindings: [NetworkContinuationBinding] = []
+        snapshots: [NetworkEntry.Snapshot],
+        bindings: [NetworkTimelineResolver.Binding] = []
     ) {
-        self.seeds = seeds
+        self.snapshots = snapshots
         self.bindings = bindings
     }
 }
@@ -17,7 +17,7 @@ package struct NetworkBootstrapLoad {
 @MainActor
 package protocol NetworkBootstrapSource {
     func load(
-        using lease: WISharedTransportRegistry.Lease,
+        using session: WITransportSession,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
@@ -26,21 +26,27 @@ package protocol NetworkBootstrapSource {
 
 @MainActor
 package struct StableBootstrapSource: NetworkBootstrapSource {
+    private let codec = WITransportCodec.shared
+
     package init() {}
 
     package func load(
-        using lease: WISharedTransportRegistry.Lease,
+        using session: WITransportSession,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
-        let result = try await lease.sendPageCapturingCurrentTarget(
-            WITransportCommands.Network.GetBootstrapSnapshot()
+        let result = try await session.sendPageDataCapturingCurrentTarget(
+            method: WITransportMethod.Network.getBootstrapSnapshot
         )
         let capturedTargetIdentifier = result.targetIdentifier
+        let snapshot = try await codec.decode(
+            NetworkGetBootstrapSnapshotResponse.self,
+            from: result.data
+        )
         let syntheticDefaultSessionID = defaultSessionID(nil)
         let now = Date().timeIntervalSince1970
-        let seedsAndBindings = result.response.resources.map { resource -> (NetworkEntrySeed, NetworkContinuationBinding?) in
+        let snapshotsAndBindings = snapshot.resources.map { resource -> (NetworkEntry.Snapshot, NetworkTimelineResolver.Binding?) in
             let normalizedOwnerSessionID = normalizeScopeID(resource.ownerSessionID)
             let resolvedFrameID = normalizeScopeID(resource.bodyFetchDescriptor?.frameId)
                 ?? normalizeScopeID(resource.frameID)
@@ -97,48 +103,58 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
                 }
             }
 
-            let seed = NetworkEntrySeed(
-                kind: .stable,
+            let entrySnapshot = NetworkEntry.Snapshot(
                 sessionID: resolvedOwnerSessionID,
                 requestID: requestID,
-                url: resource.url,
-                method: resource.method.isEmpty ? "UNKNOWN" : resource.method.uppercased(),
-                requestHeaders: NetworkHeaders(dictionary: resource.requestHeaders ?? [:]),
-                responseHeaders: NetworkHeaders(dictionary: resource.responseHeaders ?? [:]),
-                startTimestamp: now,
-                wallTime: nil,
-                statusCode: statusCode,
-                statusText: statusText,
-                mimeType: resource.mimeType,
-                errorDescription: errorDescription,
-                requestType: resource.requestType,
-                phase: phase,
-                requestBody: makeDeferredRequestBody(
-                    method: resource.method,
-                    rawRequestID: normalizeScopeID(resource.rawRequestID),
-                    targetIdentifier: resolvedRequestTargetIdentifier
+                request: .init(
+                    url: resource.url,
+                    method: resource.method.isEmpty ? "UNKNOWN" : resource.method.uppercased(),
+                    headers: NetworkHeaders(dictionary: resource.requestHeaders ?? [:]),
+                    body: makeDeferredRequestBody(
+                        method: resource.method,
+                        rawRequestID: normalizeScopeID(resource.rawRequestID),
+                        targetIdentifier: resolvedRequestTargetIdentifier
+                    ),
+                    bodyBytesSent: nil,
+                    type: resource.requestType,
+                    wallTime: nil
                 ),
-                responseBody: responseBodyLocator.map {
-                    NetworkBody(
-                        kind: .other,
-                        preview: nil,
-                        full: nil,
-                        size: nil,
-                        isBase64Encoded: false,
-                        isTruncated: false,
-                        summary: nil,
-                        deferredLocator: $0,
-                        formEntries: [],
-                        fetchState: .inline,
-                        role: .response
-                    )
-                }
+                response: .init(
+                    statusCode: statusCode,
+                    statusText: statusText,
+                    mimeType: resource.mimeType,
+                    headers: NetworkHeaders(dictionary: resource.responseHeaders ?? [:]),
+                    body: responseBodyLocator.map {
+                        NetworkBody(
+                            kind: .other,
+                            preview: nil,
+                            full: nil,
+                            size: nil,
+                            isBase64Encoded: false,
+                            isTruncated: false,
+                            summary: nil,
+                            deferredLocator: $0,
+                            formEntries: [],
+                            fetchState: .inline,
+                            role: .response
+                        )
+                    },
+                    blockedCookies: [],
+                    errorDescription: errorDescription
+                ),
+                transfer: .init(
+                    startTimestamp: now,
+                    endTimestamp: phase == .pending ? nil : now,
+                    duration: phase == .pending ? nil : 0,
+                    encodedBodyLength: nil,
+                    decodedBodyLength: nil,
+                    phase: phase
+                )
             )
 
-            let binding: NetworkContinuationBinding?
+            let binding: NetworkTimelineResolver.Binding?
             if phase == .pending, let rawRequestID = normalizeScopeID(resource.rawRequestID) {
-                binding = NetworkContinuationBinding(
-                    seedKind: .stable,
+                binding = .init(
                     allowsCrossTargetRebind: true,
                     canonicalRequestID: requestID,
                     sessionID: resolvedOwnerSessionID,
@@ -152,33 +168,43 @@ package struct StableBootstrapSource: NetworkBootstrapSource {
                 binding = nil
             }
 
-            return (seed, binding)
+            return (entrySnapshot, binding)
         }
 
         return NetworkBootstrapLoad(
-            seeds: seedsAndBindings.map(\.0),
-            bindings: seedsAndBindings.compactMap(\.1)
+            snapshots: snapshotsAndBindings.map(\.0),
+            bindings: snapshotsAndBindings.compactMap(\.1)
         )
     }
 }
 
+private struct NetworkGetBootstrapSnapshotResponse: Decodable, Sendable {
+    let resources: [WITransportNetworkBootstrapResource]
+}
+
 @MainActor
 package struct HistoricalBootstrapSource: NetworkBootstrapSource {
+    private let codec = WITransportCodec.shared
+
     package init() {}
 
     package func load(
-        using lease: WISharedTransportRegistry.Lease,
+        using session: WITransportSession,
         allocateRequestID: @escaping () -> Int,
         defaultSessionID: @escaping (String?) -> String,
         normalizeScopeID: @escaping (String?) -> String?
     ) async throws -> NetworkBootstrapLoad {
-        let result = try await lease.sendPageCapturingCurrentTarget(
-            WITransportCommands.Page.GetResourceTree()
+        let result = try await session.sendPageDataCapturingCurrentTarget(
+            method: WITransportMethod.Page.getResourceTree
         )
         let capturedTargetIdentifier = result.targetIdentifier
+        let response = try await codec.decode(
+            WITransportPageGetResourceTreeResponse.self,
+            from: result.data
+        )
         let defaultTargetIdentifier = normalizeScopeID(capturedTargetIdentifier)
         let now = Date().timeIntervalSince1970
-        var seeds: [NetworkEntrySeed] = []
+        var snapshots: [NetworkEntry.Snapshot] = []
 
         func responseBodyLocator(
             targetIdentifier: String?,
@@ -213,65 +239,28 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
             }
             let subtreeSessionID = subtreeTargetIdentifier.map(defaultSessionID) ?? parentSessionID
             let frameID = normalizeScopeID(subtree.frame.id)
-            seeds.append(
-                NetworkEntrySeed(
-                    kind: .historical,
+            snapshots.append(
+                NetworkEntry.Snapshot(
                     sessionID: subtreeSessionID,
                     requestID: allocateRequestID(),
-                    url: subtree.frame.url,
-                    method: "UNKNOWN",
-                    startTimestamp: now,
-                    statusCode: nil,
-                    statusText: "",
-                    mimeType: subtree.frame.mimeType,
-                    requestType: WITransportPageResourceType.document.rawValue,
-                    phase: .completed,
-                    responseBody: responseBodyLocator(
-                        targetIdentifier: subtreeTargetIdentifier,
-                        frameID: frameID,
-                        url: subtree.frame.url
-                    )
-                    .map {
-                        NetworkBody(
-                            kind: .other,
-                            preview: nil,
-                            full: nil,
-                            size: nil,
-                            isBase64Encoded: false,
-                            isTruncated: false,
-                            summary: nil,
-                            deferredLocator: $0,
-                            formEntries: [],
-                            fetchState: .inline,
-                            role: .response
-                        )
-                    }
-                )
-            )
-
-            for resource in subtree.resources {
-                let resourceTargetIdentifier = normalizeScopeID(resource.targetId)
-                let ownerSessionID = resourceTargetIdentifier.map(defaultSessionID) ?? subtreeSessionID
-                let resolvedTargetIdentifier = resourceTargetIdentifier ?? subtreeTargetIdentifier
-                let isFailed = (resource.failed ?? false) || (resource.canceled ?? false)
-                seeds.append(
-                    NetworkEntrySeed(
-                        kind: .historical,
-                        sessionID: ownerSessionID,
-                        requestID: allocateRequestID(),
-                        url: resource.url,
+                    request: .init(
+                        url: subtree.frame.url,
                         method: "UNKNOWN",
-                        startTimestamp: now,
-                        statusCode: isFailed ? 0 : nil,
-                        statusText: resource.canceled == true ? "Canceled" : "",
-                        mimeType: resource.mimeType,
-                        errorDescription: resource.canceled == true ? "Canceled" : nil,
-                        requestType: resource.type.rawValue,
-                        phase: isFailed ? .failed : .completed,
-                        responseBody: isFailed ? nil : responseBodyLocator(
-                            targetIdentifier: resolvedTargetIdentifier,
+                        headers: NetworkHeaders(),
+                        body: nil,
+                        bodyBytesSent: nil,
+                        type: WITransportPageResourceType.document.rawValue,
+                        wallTime: nil
+                    ),
+                    response: .init(
+                        statusCode: nil,
+                        statusText: "",
+                        mimeType: subtree.frame.mimeType,
+                        headers: NetworkHeaders(),
+                        body: responseBodyLocator(
+                            targetIdentifier: subtreeTargetIdentifier,
                             frameID: frameID,
-                            url: resource.url
+                            url: subtree.frame.url
                         )
                         .map {
                             NetworkBody(
@@ -287,7 +276,75 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
                                 fetchState: .inline,
                                 role: .response
                             )
-                        }
+                        },
+                        blockedCookies: [],
+                        errorDescription: nil
+                    ),
+                    transfer: .init(
+                        startTimestamp: now,
+                        endTimestamp: now,
+                        duration: 0,
+                        encodedBodyLength: nil,
+                        decodedBodyLength: nil,
+                        phase: .completed
+                    )
+                )
+            )
+
+            for resource in subtree.resources {
+                let resourceTargetIdentifier = normalizeScopeID(resource.targetId)
+                let ownerSessionID = resourceTargetIdentifier.map(defaultSessionID) ?? subtreeSessionID
+                let resolvedTargetIdentifier = resourceTargetIdentifier ?? subtreeTargetIdentifier
+                let isFailed = (resource.failed ?? false) || (resource.canceled ?? false)
+                snapshots.append(
+                    NetworkEntry.Snapshot(
+                        sessionID: ownerSessionID,
+                        requestID: allocateRequestID(),
+                        request: .init(
+                            url: resource.url,
+                            method: "UNKNOWN",
+                            headers: NetworkHeaders(),
+                            body: nil,
+                            bodyBytesSent: nil,
+                            type: resource.type.rawValue,
+                            wallTime: nil
+                        ),
+                        response: .init(
+                            statusCode: isFailed ? 0 : nil,
+                            statusText: resource.canceled == true ? "Canceled" : "",
+                            mimeType: resource.mimeType,
+                            headers: NetworkHeaders(),
+                            body: isFailed ? nil : responseBodyLocator(
+                                targetIdentifier: resolvedTargetIdentifier,
+                                frameID: frameID,
+                                url: resource.url
+                            )
+                            .map {
+                                NetworkBody(
+                                    kind: .other,
+                                    preview: nil,
+                                    full: nil,
+                                    size: nil,
+                                    isBase64Encoded: false,
+                                    isTruncated: false,
+                                    summary: nil,
+                                    deferredLocator: $0,
+                                    formEntries: [],
+                                    fetchState: .inline,
+                                    role: .response
+                                )
+                            },
+                            blockedCookies: [],
+                            errorDescription: resource.canceled == true ? "Canceled" : nil
+                        ),
+                        transfer: .init(
+                            startTimestamp: now,
+                            endTimestamp: now,
+                            duration: 0,
+                            encodedBodyLength: nil,
+                            decodedBodyLength: nil,
+                            phase: isFailed ? .failed : .completed
+                        )
                     )
                 )
             }
@@ -302,11 +359,11 @@ package struct HistoricalBootstrapSource: NetworkBootstrapSource {
         }
 
         appendResources(
-            from: result.response.frameTree,
+            from: response.frameTree,
             parentSessionID: defaultSessionID(capturedTargetIdentifier),
             parentTargetIdentifier: defaultTargetIdentifier
         )
-        return NetworkBootstrapLoad(seeds: seeds)
+        return NetworkBootstrapLoad(snapshots: snapshots)
     }
 }
 

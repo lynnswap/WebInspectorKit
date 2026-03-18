@@ -34,7 +34,7 @@ struct NetworkSessionTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 4_100.0, wallMs: 1_700_000_004_100.0)
         ])
-        session.store.applyEvent(start)
+        session.store.apply(start, sessionID: "")
         #expect(session.store.entries.count == 1)
 
         session.attach(pageWebView: secondWebView)

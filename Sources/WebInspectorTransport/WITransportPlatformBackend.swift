@@ -6,7 +6,7 @@ import WebKit
 protocol WITransportPlatformBackend: AnyObject {
     var supportSnapshot: WITransportSupportSnapshot { get }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws
     func detach()
     func sendRootMessage(_ message: String) throws
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws
@@ -21,18 +21,23 @@ extension WITransportPlatformBackend {
     }
 }
 
-struct WITransportBackendMessageHandlers {
-    let handleRootMessage: (String) -> Void
-    let handlePageMessage: (String, String) -> Void
-    let handleFatalFailure: (String) -> Void
-    let waitForPendingMessagesForTesting: (() -> Void)?
+package enum WITransportInboundMessage: Sendable {
+    case root(String)
+    case page(message: String, targetIdentifier: String)
+}
+
+protocol WITransportBackendMessageSink: AnyObject {
+    func didReceiveRootMessage(_ message: String)
+    func didReceivePageMessage(_ message: String, targetIdentifier: String)
+    func didReceiveFatalFailure(_ message: String)
+    func waitForPendingMessagesForTesting()
 }
 
 @MainActor
 protocol WITransportMessageEndpoint: AnyObject {
     var supportSnapshot: WITransportSupportSnapshot { get }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) throws
     func detach()
     func sendRootMessage(_ message: String) throws
     func sendPageMessage(_ message: String, targetIdentifier: String, outerIdentifier: Int) throws
@@ -63,9 +68,9 @@ private final class WITransportUnsupportedPlatformBackend: WITransportPlatformBa
         supportSnapshot = .unsupported(reason: reason)
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
         _ = webView
-        _ = messageHandlers
+        _ = messageSink
         throw WITransportError.unsupported(supportSnapshot.failureReason ?? "WebInspectorTransport is unsupported.")
     }
 
@@ -100,8 +105,8 @@ private final class WITransportIOSPlatformBackend: WITransportPlatformBackend {
         endpoint.supportSnapshot
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
-        try endpoint.attach(to: webView, messageHandlers: messageHandlers)
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
+        try endpoint.attach(to: webView, messageSink: messageSink)
     }
 
     func detach() {
@@ -144,8 +149,8 @@ final class WITransportMacNativeInspectorPlatformBackend: WITransportPlatformBac
         endpoint.supportSnapshot
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
-        try endpoint.attach(to: webView, messageHandlers: messageHandlers)
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
+        try endpoint.attach(to: webView, messageSink: messageSink)
     }
 
     func detach() {
@@ -178,7 +183,7 @@ private enum WITransportCompatibilityResponse {
         guard scope == .page else {
             return nil
         }
-        if method == WITransportCommands.DOM.Enable.method {
+        if method == WITransportMethod.DOM.enable {
             return Data("{}".utf8)
         }
         if allowsCSSEnableCompatibilityResponse && method == "CSS.enable" {
@@ -203,11 +208,15 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
         resolution.supportSnapshot
     }
 
-    func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) throws {
+    func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) throws {
         let bridge = WITransportBridge(webView: webView)
-        bridge.rootMessageHandler = messageHandlers.handleRootMessage
-        bridge.pageMessageHandler = messageHandlers.handlePageMessage
-        bridge.fatalFailureHandler = messageHandlers.handleFatalFailure
+        bridge.rootMessageHandler = { message in
+            messageSink.didReceiveRootMessage(message)
+        }
+        bridge.pageMessageHandler = { message, targetIdentifier in
+            messageSink.didReceivePageMessage(message, targetIdentifier: targetIdentifier)
+        }
+        bridge.fatalFailureHandler = messageSink.didReceiveFatalFailure
 
         do {
             try bridge.attach(

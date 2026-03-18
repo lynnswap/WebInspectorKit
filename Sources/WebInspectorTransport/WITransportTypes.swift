@@ -21,14 +21,6 @@ public enum WITransportCapability: String, Hashable, Sendable {
     case networkBootstrapSnapshot
 }
 
-public struct WIEmptyTransportParameters: Codable, Hashable, Sendable {
-    public init() {}
-}
-
-public struct WIEmptyTransportResponse: Codable, Hashable, Sendable {
-    public init() {}
-}
-
 public struct WITransportSupportSnapshot: Sendable {
     public enum Availability: String, Sendable {
         case supported
@@ -136,7 +128,6 @@ public enum WITransportError: Error, LocalizedError, Sendable {
     case requestTimedOut(scope: WITransportTargetScope, method: String)
     case invalidResponse(String)
     case invalidCommandEncoding(String)
-    case invalidChannelScope(expected: WITransportTargetScope, actual: WITransportTargetScope)
     case transportClosed
 
     public var errorDescription: String? {
@@ -159,25 +150,11 @@ public enum WITransportError: Error, LocalizedError, Sendable {
             "The inspector response was invalid: \(reason)"
         case .invalidCommandEncoding(let reason):
             "Failed to encode the inspector command: \(reason)"
-        case .invalidChannelScope(let expected, let actual):
-            "The \(actual.rawValue) channel cannot send a command that requires the \(expected.rawValue) scope."
         case .transportClosed:
             "The inspector transport is closed."
         }
     }
 }
-
-public protocol WITransportCommand {
-    associatedtype Response: Decodable & Sendable
-    associatedtype Parameters: Encodable & Sendable = WIEmptyTransportParameters
-
-    static var method: String { get }
-    var parameters: Parameters { get }
-}
-
-public protocol WITransportRootCommand: WITransportCommand {}
-
-public protocol WITransportPageCommand: WITransportCommand {}
 
 public struct WITransportEventEnvelope: Sendable {
     public let method: String
@@ -198,23 +175,4 @@ public struct WITransportEventEnvelope: Sendable {
     ) throws -> T {
         try decoder.decode(T.self, from: paramsData)
     }
-}
-
-package struct WITransportPageTargetChange: Sendable {
-    let targetIdentifier: String?
-    let reason: String
-}
-
-package enum WITransportPageTargetLifecycleKind: Sendable, Equatable {
-    case created
-    case committedProvisional
-    case destroyed
-}
-
-package struct WITransportPageTargetLifecycleEvent: Sendable, Equatable {
-    let kind: WITransportPageTargetLifecycleKind
-    let targetIdentifier: String
-    let oldTargetIdentifier: String?
-    let targetType: String
-    let isProvisional: Bool
 }

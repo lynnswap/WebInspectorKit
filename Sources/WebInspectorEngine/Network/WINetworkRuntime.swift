@@ -131,7 +131,7 @@ package final class WINetworkRuntime {
 #if DEBUG
 extension WINetworkRuntime {
     func wiApplyPreviewBatch(_ payload: NSDictionary) {
-        guard let batch = NetworkEventBatch.decode(from: payload) else {
+        guard let batch = NetworkWire.PageHook.Batch.decode(from: payload) else {
             return
         }
         store.applyNetworkBatch(batch)
