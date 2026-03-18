@@ -118,10 +118,8 @@ extension NetworkTransportDriver {
         ingressCoordinator.prepareForNavigationReconnect()
     }
 
-    func resumeAfterNavigationReconnect() {
-        guard let webView else {
-            return
-        }
+    func resumeAfterNavigationReconnect(to webView: WKWebView) {
+        self.webView = webView
         let bootstrapContextID = UUID()
         resolver.begin(contextID: bootstrapContextID)
         ingressCoordinator.resumeAfterNavigationReconnect(

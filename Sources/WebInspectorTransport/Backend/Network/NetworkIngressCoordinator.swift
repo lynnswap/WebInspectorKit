@@ -56,6 +56,9 @@ package final class NetworkIngressCoordinator {
                 try await onAttachWork(lease)
             } catch {
                 onFailure(error, lease)
+                if self.lease === lease {
+                    self.releaseCurrentLease()
+                }
             }
 
             self.attachTask = nil

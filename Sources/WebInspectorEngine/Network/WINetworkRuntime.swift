@@ -124,7 +124,7 @@ package final class WINetworkRuntime {
 
     package func resumeAfterNavigationReconnect(to webView: WKWebView) {
         lastPageWebView = webView
-        backend.resumeAfterNavigationReconnect()
+        backend.resumeAfterNavigationReconnect(to: webView)
     }
 }
 

@@ -139,6 +139,51 @@ struct NetworkTransportDriverTests {
     }
 
     @Test
+    func networkTransportDriverRetriesAttachAfterTransientFailureOnSameWebView() async {
+        let backend = FakeRegistryBackend(failingAttachCount: 1)
+        let driver = NetworkTransportDriver(registry: makeRegistry(using: backend))
+        let webView = makeIsolatedTestWebView()
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(backend.attachCallCount == 1)
+
+        driver.attachPageWebView(webView)
+        await driver.waitForAttachForTesting()
+
+        #expect(backend.attachCallCount == 2)
+
+        driver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func networkTransportDriverReconnectsUsingReplacementWebView() async {
+        let backend = FakeRegistryBackend()
+        let driver = NetworkTransportDriver(registry: makeRegistry(using: backend))
+        let session = NetworkSession(configuration: .init(), backend: driver)
+        let firstWebView = makeIsolatedTestWebView()
+        let secondWebView = makeIsolatedTestWebView()
+
+        session.attach(pageWebView: firstWebView)
+        await driver.waitForAttachForTesting()
+
+        session.prepareForNavigationReconnect()
+        session.resumeAfterNavigationReconnect(to: secondWebView)
+        await driver.waitForAttachForTesting()
+
+        #expect(driver.webView === secondWebView)
+        #expect(
+            backend.attachedWebViewIDs == [
+                ObjectIdentifier(firstWebView),
+                ObjectIdentifier(secondWebView),
+            ]
+        )
+
+        session.detach()
+    }
+
+    @Test
     func networkTransportDriverKeepsBootstrapAndLiveRequestsWhenSameURLStartsDuringBootstrap() async {
         var backend: FakeRegistryBackend!
         backend = FakeRegistryBackend(
@@ -434,17 +479,20 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
 
     private(set) var attachCallCount = 0
     private(set) var detachCallCount = 0
+    private(set) var attachedWebViewIDs: [ObjectIdentifier] = []
     private(set) var sentPageMethods: [String] = []
     private(set) var sentPageTargets: [SentPageTarget] = []
 
     fileprivate var pageResultProvider: ((String, [String: Any]) -> [String: Any]?)?
     fileprivate var pageTargetedResultProvider: ((String, [String: Any], String) -> [String: Any]?)?
+    private var failingAttachCount: Int
 
     private var messageHandlers: WITransportBackendMessageHandlers?
     private var ownsWebKitTestIsolation = false
 
     init(
         capabilities: Set<WITransportCapability> = [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain],
+        failingAttachCount: Int = 0,
         pageResultProvider: ((String, [String: Any]) -> [String: Any]?)? = nil,
         pageTargetedResultProvider: ((String, [String: Any], String) -> [String: Any]?)? = nil
     ) {
@@ -452,6 +500,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             backendKind: .macOSNativeInspector,
             capabilities: capabilities
         )
+        self.failingAttachCount = failingAttachCount
         self.pageResultProvider = pageResultProvider
         self.pageTargetedResultProvider = pageTargetedResultProvider
     }
@@ -466,7 +515,6 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
     }
 
     func attach(to webView: WKWebView, messageHandlers: WITransportBackendMessageHandlers) async throws {
-        _ = webView
         if isWebKitTestIsolationActive {
             ownsWebKitTestIsolation = false
         } else {
@@ -474,6 +522,11 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             ownsWebKitTestIsolation = true
         }
         attachCallCount += 1
+        attachedWebViewIDs.append(ObjectIdentifier(webView))
+        if failingAttachCount > 0 {
+            failingAttachCount -= 1
+            throw WITransportError.attachFailed("simulated attach failure")
+        }
         self.messageHandlers = messageHandlers
         messageHandlers.handleRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#

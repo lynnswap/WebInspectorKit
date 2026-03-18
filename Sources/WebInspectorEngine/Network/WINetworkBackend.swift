@@ -35,11 +35,13 @@ package protocol WINetworkBackend: AnyObject, NetworkBodyFetching {
     func clearNetworkLogs()
 
     func prepareForNavigationReconnect()
-    func resumeAfterNavigationReconnect()
+    func resumeAfterNavigationReconnect(to webView: WKWebView)
 }
 
 package extension WINetworkBackend {
     func prepareForNavigationReconnect() {}
 
-    func resumeAfterNavigationReconnect() {}
+    func resumeAfterNavigationReconnect(to webView: WKWebView) {
+        _ = webView
+    }
 }
