@@ -9,7 +9,7 @@ final class BrowserPageViewController: NSViewController {
     private let inspectorController: WIModel
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let logger = Logger(subsystem: "MiniBrowser", category: "BrowserPageViewController")
+    private let logger = Logger(subsystem: "Webspector", category: "BrowserPageViewController")
 
     private let progressIndicator = NSProgressIndicator()
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
@@ -181,7 +181,7 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
         state = .active
         wantsLayer = true
         layer?.cornerRadius = 10
-        identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.panel")
+        identifier = NSUserInterfaceItemIdentifier("Webspector.diagnostics.panel")
 
         let stackView = NSStackView(views: [
             terminationCountLabel,
@@ -200,10 +200,10 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
             label.maximumNumberOfLines = 2
         }
 
-        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.terminationCount")
-        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.didFinishCount")
-        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.currentURL")
-        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.lastNavigationError")
+        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("Webspector.diagnostics.terminationCount")
+        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("Webspector.diagnostics.didFinishCount")
+        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("Webspector.diagnostics.currentURL")
+        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("Webspector.diagnostics.lastNavigationError")
 
         addSubview(stackView)
         NSLayoutConstraint.activate([

@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-               BuildableName = "MiniBrowser.app"
-               BlueprintName = "MiniBrowser"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
+               BuildableName = "Webspector.app"
+               BlueprintName = "Webspector"
+               ReferencedContainer = "container:Webspector.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Webspector.app"
+            BlueprintName = "Webspector"
+            ReferencedContainer = "container:Webspector.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -45,9 +45,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353D42EDFF1ED00489A00"
-               BuildableName = "MiniBrowserTests.xctest"
-               BlueprintName = "MiniBrowserTests"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
+               BuildableName = "WebspectorTests.xctest"
+               BlueprintName = "WebspectorTests"
+               ReferencedContainer = "container:Webspector.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -67,9 +67,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Webspector.app"
+            BlueprintName = "Webspector"
+            ReferencedContainer = "container:Webspector.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -84,9 +84,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Webspector.app"
+            BlueprintName = "Webspector"
+            ReferencedContainer = "container:Webspector.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

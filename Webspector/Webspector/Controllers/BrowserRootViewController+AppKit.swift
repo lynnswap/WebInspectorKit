@@ -5,8 +5,8 @@ import WebInspectorKit
 @MainActor
 final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSToolbarItemValidation {
     private enum ToolbarItemIdentifier {
-        static let navigation = NSToolbarItem.Identifier("MiniBrowser.Toolbar.Navigation")
-        static let inspector = NSToolbarItem.Identifier("MiniBrowser.Toolbar.Inspector")
+        static let navigation = NSToolbarItem.Identifier("Webspector.Toolbar.Navigation")
+        static let inspector = NSToolbarItem.Identifier("Webspector.Toolbar.Inspector")
     }
 
     let store: BrowserStore
@@ -196,7 +196,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             return
         }
 
-        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("MiniBrowser.Toolbar"))
+        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("Webspector.Toolbar"))
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false

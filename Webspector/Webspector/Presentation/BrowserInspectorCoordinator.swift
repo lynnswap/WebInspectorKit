@@ -9,7 +9,7 @@ import AppKit
 
 #if canImport(UIKit)
 struct BrowserInspectorWindowContext {
-    static let sceneActivityType = "lynnpd.minibrowser.web-inspector"
+    static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
     let browserStore: BrowserStore
     let inspectorController: WIModel
