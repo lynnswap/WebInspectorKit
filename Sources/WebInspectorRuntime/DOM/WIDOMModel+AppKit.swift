@@ -1,7 +1,20 @@
 #if canImport(AppKit)
 import AppKit
+import WebInspectorBridge
 
 extension WIDOMModel {
+    func activatePageWindowForSelectionIfPossible() {
+        guard
+            let pageWebView = session.pageWebView,
+            let pageWindow = WIAppKitBridge.window(for: pageWebView)
+        else {
+            return
+        }
+
+        pageWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
         withFrontendStore { frontendStore in
             frontendStore.setDOMContextMenuProvider(provider)

@@ -9,6 +9,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     func testCompactSizeClassUsesBottomToolbar() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
 
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
@@ -26,6 +27,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     func testRegularSizeClassUsesNavigationBarItems() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "regularNavigationBar")
@@ -39,12 +41,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularBackButtonItemForTesting })
         XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularForwardButtonItemForTesting })
         XCTAssertTrue(trailingItems.contains { $0 === pageViewController.regularInspectorButtonItemForTesting })
+        XCTAssertTrue(pageViewController.regularInspectorHasPrimaryActionForTesting)
+        XCTAssertEqual(
+            pageViewController.regularInspectorMenuActionTitlesForTesting,
+            ["Open as Sheet", "Open in New Window"]
+        )
     }
 
     @MainActor
     func testChromePlacementTransitionsBetweenCompactAndRegular() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
@@ -73,6 +81,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     func testCompactToolbarContributesAdditionalBottomSafeArea() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
 
         let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
@@ -83,6 +92,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     func testCompactInspectorShowsElementTab() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
         let inspectorContainer = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
         let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController)
@@ -97,6 +107,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
     func testCompactInspectorReopenRestoresLastSelectedTopLevelTab() throws {
         let (rootViewController, pageViewController) = try makeHostedRootViewController()
 
+        pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
         let firstInspector = try presentCompactInspector(from: pageViewController, rootViewController: rootViewController)
         let firstHost = try XCTUnwrap(firstInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
@@ -114,6 +125,110 @@ final class BrowserNavigationChromeTests: XCTestCase {
         let secondHost = try XCTUnwrap(secondInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
 
         XCTAssertEqual(secondHost.selectedTab?.identifier, "wi_element")
+    }
+
+    @MainActor
+    func testRegularInspectorPrimaryActionPresentsSheetAndDisablesButtonWhileOpen() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+        XCTAssertTrue(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+
+        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        drainMainQueue()
+
+        XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
+        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+
+        dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
+    func testRegularInspectorSheetInstallsDismissDelegateOnPresentationController() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        drainMainQueue()
+
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
+    }
+
+    @MainActor
+    func testRegularInspectorWindowActionCreatesWindowAndPreventsReentry() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        var activationCount = 0
+        var requestedActivity: NSUserActivity?
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+        pageViewController.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { userActivity, _, _ in
+                    requestedActivity = userActivity
+                    activationCount += 1
+                }
+            )
+        )
+
+        XCTAssertTrue(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
+        XCTAssertEqual(requestedActivity?.targetContentIdentifier, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
+
+        XCTAssertTrue(pageViewController.hasInspectorWindowForTesting)
+        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+
+        XCTAssertFalse(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertEqual(activationCount, 1)
+        pageViewController.dismissInspectorWindowForTesting()
+    }
+
+    @MainActor
+    func testInspectorWindowPresentationStateIgnoresAttachedScenesWithoutContext() {
+        XCTAssertFalse(
+            BrowserInspectorCoordinator.inspectorWindowPresentationStateForTesting(
+                hasContext: false,
+                isPendingPresentation: false,
+                attachedSceneCount: 1
+            )
+        )
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.inspectorWindowPresentationStateForTesting(
+                hasContext: true,
+                isPendingPresentation: false,
+                attachedSceneCount: 1
+            )
+        )
+    }
+
+    @MainActor
+    func testRegularInspectorUsesPlainButtonWhenMultipleScenesUnsupported() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertFalse(pageViewController.regularInspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(pageViewController.regularInspectorMenuActionTitlesForTesting.isEmpty)
+    }
+
+    @MainActor
+    func testCompactInspectorUsesMenuWhenMultipleScenesSupported() throws {
+        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(pageViewController.compactInspectorHasPrimaryActionForTesting)
+        XCTAssertEqual(
+            pageViewController.compactInspectorMenuActionTitlesForTesting,
+            ["Open as Sheet", "Open in New Window"]
+        )
     }
 }
 

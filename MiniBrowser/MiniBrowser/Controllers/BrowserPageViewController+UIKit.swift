@@ -67,10 +67,12 @@ final class BrowserPageViewController: UIViewController {
 
     private var viewportCoordinator: ViewportCoordinator?
     private var storeObserverID: UUID?
+    private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
     private var progressHeightConstraint: NSLayoutConstraint?
     private var currentChromePlacement: ChromePlacement?
+    private var supportsMultipleScenesOverrideForTesting: Bool?
 
     init(
         store: BrowserStore,
@@ -81,6 +83,10 @@ final class BrowserPageViewController: UIViewController {
         self.inspectorController = inspectorController
         self.launchConfiguration = launchConfiguration
         super.init(nibName: nil, bundle: nil)
+        inspectorCoordinator.onPresentationStateChange = { [weak self] in
+            self?.syncNavigationButtonStates()
+            self?.refreshInspectorButtonConfigurations()
+        }
     }
 
     @available(*, unavailable)
@@ -93,6 +99,10 @@ final class BrowserPageViewController: UIViewController {
         if let storeObserverID {
             store.removeStateObserver(storeObserverID)
         }
+        if let inspectorWindowObserverID {
+            BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
+        }
+        inspectorCoordinator.invalidate()
     }
 
     override func viewDidLoad() {
@@ -104,6 +114,10 @@ final class BrowserPageViewController: UIViewController {
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
             self?.maybeAutoPresentInspectorIfNeeded()
+        }
+        inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
+            self?.syncNavigationButtonStates()
+            self?.refreshInspectorButtonConfigurations()
         }
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -119,6 +133,8 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        syncNavigationButtonStates()
+        refreshInspectorButtonConfigurations()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
     }
@@ -138,7 +154,7 @@ final class BrowserPageViewController: UIViewController {
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = openInspector(tabs: [.dom(), .network()])
+        _ = openInspectorAsSheet(tabs: [.dom(), .network()])
     }
 
     private func configureViewHierarchy() {
@@ -202,7 +218,6 @@ final class BrowserPageViewController: UIViewController {
         )
         configureNavigationButtonItem(
             regularInspectorButtonItem,
-            action: #selector(handleOpenInspectorAction(_:)),
             accessibilityIdentifier: "MiniBrowser.openInspectorButton.regular"
         )
         configureNavigationButtonItem(
@@ -215,8 +230,16 @@ final class BrowserPageViewController: UIViewController {
             action: #selector(handleForwardAction(_:)),
             accessibilityIdentifier: "MiniBrowser.navigation.forward.regular"
         )
+        refreshInspectorButtonConfigurations()
 
         applyChromePlacement(force: true)
+    }
+
+    private func configureNavigationButtonItem(
+        _ item: UIBarButtonItem,
+        accessibilityIdentifier: String
+    ) {
+        item.accessibilityIdentifier = accessibilityIdentifier
     }
 
     private func configureNavigationButtonItem(
@@ -227,6 +250,72 @@ final class BrowserPageViewController: UIViewController {
         item.target = self
         item.action = action
         item.accessibilityIdentifier = accessibilityIdentifier
+    }
+
+    private var supportsMultipleScenesForInspectorMenu: Bool {
+        supportsMultipleScenesOverrideForTesting ?? UIApplication.shared.supportsMultipleScenes
+    }
+
+    private func refreshInspectorButtonConfigurations() {
+        configureInspectorButtonItem(compactInspectorButtonItem)
+        configureInspectorButtonItem(regularInspectorButtonItem)
+    }
+
+    private func configureInspectorButtonItem(_ item: UIBarButtonItem) {
+        if supportsMultipleScenesForInspectorMenu {
+            item.target = nil
+            item.action = nil
+            item.primaryAction = makeInspectorPrimaryAction()
+            item.preferredMenuElementOrder = .fixed
+            item.menu = makeInspectorMenu()
+            return
+        }
+
+        item.primaryAction = nil
+        item.menu = nil
+        item.target = self
+        item.action = #selector(handleOpenInspectorAction(_:))
+    }
+
+    private func makeInspectorPrimaryAction() -> UIAction {
+        UIAction(
+            title: "",
+            image: UIImage(systemName: "chevron.left.forwardslash.chevron.right")
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+        }
+    }
+
+    private func makeInspectorMenu() -> UIMenu {
+        let isInspectorOpen = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
+        let openAsSheetAttributes: UIMenuElement.Attributes = isInspectorOpen ? [.disabled] : []
+        let openInWindowAttributes: UIMenuElement.Attributes = isInspectorOpen ? [.disabled] : []
+
+        let openAsSheet = UIAction(
+            title: "Open as Sheet",
+            image: UIImage(systemName: "rectangle.bottomthird.inset.filled"),
+            attributes: openAsSheetAttributes
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+        }
+        let openInWindow = UIAction(
+            title: "Open in New Window",
+            image: UIImage(systemName: "macwindow.on.rectangle"),
+            attributes: openInWindowAttributes
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            _ = self.openInspectorInNewWindow(tabs: [.dom(), .network()])
+        }
+
+        return UIMenu(title: "", children: [openAsSheet, openInWindow])
     }
 
     private func applyChromePlacement(force: Bool = false) {
@@ -265,11 +354,14 @@ final class BrowserPageViewController: UIViewController {
     private func syncNavigationButtonStates() {
         let canGoBack = store.canGoBack
         let canGoForward = store.canGoForward
+        let canOpenInspector = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self) == false
 
         compactBackButtonItem.isEnabled = canGoBack
         regularBackButtonItem.isEnabled = canGoBack
         compactForwardButtonItem.isEnabled = canGoForward
         regularForwardButtonItem.isEnabled = canGoForward
+        compactInspectorButtonItem.isEnabled = canOpenInspector
+        regularInspectorButtonItem.isEnabled = canOpenInspector
     }
 
     private func renderState() {
@@ -306,13 +398,26 @@ final class BrowserPageViewController: UIViewController {
             return
         }
 
-        let didPresent = openInspector(tabs: launchConfiguration.autoOpenInspectorTabs)
+        let didPresent = openInspectorAsSheet(tabs: launchConfiguration.autoOpenInspectorTabs)
         didAutoPresentInspector = didPresent
         maybeAutoStartSelectionIfNeeded(didPresent: didPresent)
     }
 
-    private func openInspector(tabs: [WITab]) -> Bool {
-        inspectorCoordinator.present(
+    private func openInspectorAsSheet(tabs: [WITab]) -> Bool {
+        inspectorCoordinator.presentSheet(
+            from: navigationController ?? self,
+            browserStore: store,
+            inspectorController: inspectorController,
+            tabs: tabs
+        )
+    }
+
+    private func openInspectorInNewWindow(tabs: [WITab]) -> Bool {
+        guard supportsMultipleScenesForInspectorMenu else {
+            return false
+        }
+
+        return inspectorCoordinator.presentWindow(
             from: navigationController ?? self,
             browserStore: store,
             inspectorController: inspectorController,
@@ -369,6 +474,14 @@ final class BrowserPageViewController: UIViewController {
         compactInspectorButtonItem
     }
 
+    var compactInspectorMenuActionTitlesForTesting: [String] {
+        compactInspectorButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    }
+
+    var compactInspectorHasPrimaryActionForTesting: Bool {
+        compactInspectorButtonItem.primaryAction != nil
+    }
+
     var regularBackButtonItemForTesting: UIBarButtonItem {
         regularBackButtonItem
     }
@@ -379,6 +492,47 @@ final class BrowserPageViewController: UIViewController {
 
     var regularInspectorButtonItemForTesting: UIBarButtonItem {
         regularInspectorButtonItem
+    }
+
+    var regularInspectorMenuActionTitlesForTesting: [String] {
+        regularInspectorButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    }
+
+    var regularInspectorHasPrimaryActionForTesting: Bool {
+        regularInspectorButtonItem.primaryAction != nil
+    }
+
+    @discardableResult
+    func triggerRegularInspectorPrimaryActionForTesting() -> Bool {
+        openInspectorAsSheet(tabs: [.dom(), .network()])
+    }
+
+    @discardableResult
+    func triggerRegularInspectorWindowActionForTesting() -> Bool {
+        openInspectorInNewWindow(tabs: [.dom(), .network()])
+    }
+
+    func refreshInspectorControlsForTesting() {
+        syncNavigationButtonStates()
+        refreshInspectorButtonConfigurations()
+    }
+
+    var hasInspectorWindowForTesting: Bool {
+        inspectorCoordinator.hasInspectorWindowForTesting
+    }
+
+    func dismissInspectorWindowForTesting() {
+        inspectorCoordinator.dismissInspectorWindow()
+    }
+
+    func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorSceneActivationRequester) {
+        inspectorCoordinator.setSceneActivationRequesterForTesting(requester)
+    }
+
+    func setSupportsMultipleScenesForTesting(_ value: Bool?) {
+        supportsMultipleScenesOverrideForTesting = value
+        refreshInspectorButtonConfigurations()
+        syncNavigationButtonStates()
     }
 }
 
