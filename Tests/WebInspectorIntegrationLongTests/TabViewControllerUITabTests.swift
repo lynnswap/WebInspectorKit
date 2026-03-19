@@ -502,6 +502,53 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func domSplitReappliesNavigationItemsWhenRegularHostAppearsAfterCompactSwitch() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+
+        guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
+            Issue.record("Expected regular host")
+            return
+        }
+        guard let domViewController = regularHost.displayedRootViewControllerForTesting as? WIDOMViewController else {
+            Issue.record("Expected DOM root to be displayed in regular host")
+            return
+        }
+        guard let rootContainerViewController = regularHost.viewControllers.first else {
+            Issue.record("Expected regular host root container")
+            return
+        }
+        let hostNavigationItem = rootContainerViewController.navigationItem
+
+        regularHost.loadViewIfNeeded()
+        rootContainerViewController.loadViewIfNeeded()
+        #expect(domViewController.parent === rootContainerViewController)
+        drainMainQueue()
+
+        let buttonIdentifiers = hostNavigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
+        #expect(buttonIdentifiers == ["WI.DOM.PickButton", "WI.DOM.MenuButton"])
+    }
+
+    @Test
     func domTabProviderReturnsSplitControllerWhenSizeClassIsUnspecified() {
         let controller = WIModel()
         let container = WITabViewController(

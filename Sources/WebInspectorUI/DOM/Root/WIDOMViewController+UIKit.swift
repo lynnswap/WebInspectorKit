@@ -144,6 +144,16 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         applyInitialRegularColumnWidthIfNeeded()
     }
 
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        updateNavigationItemState()
+    }
+
+    public override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        updateNavigationItemState()
+    }
+
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         applyInitialRegularColumnWidthIfNeeded()
