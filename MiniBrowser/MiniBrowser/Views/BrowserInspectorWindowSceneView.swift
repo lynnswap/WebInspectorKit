@@ -7,6 +7,7 @@ import WebInspectorKit
 struct BrowserInspectorWindowSceneView: View {
     var body: some View {
         BrowserInspectorWindowControllerRepresentable()
+            .ignoresSafeArea()
             .onContinueUserActivity(BrowserInspectorCoordinator.inspectorWindowSceneActivityType) { _ in }
     }
 }
