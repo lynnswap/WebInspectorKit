@@ -43,6 +43,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     func prepareForRemoval() {
         delegate = nil
         tabObservationHandles.removeAll()
+        releaseInstalledTabsIfNeeded()
     }
 
     var displayedTabIdentifiersForTesting: [String] {
@@ -224,7 +225,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
-        if let cached = renderCache.rootViewController(for: tab) {
+        if let cached = renderCache.rootViewController(for: tab),
+           cached is UISplitViewController == false {
             applyHorizontalSizeClassOverrideIfNeeded(to: cached)
             return cached
         }
@@ -264,7 +266,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func wrappedInNavigationControllerIfNeeded(_ viewController: UIViewController) -> UIViewController {
-        if viewController is UINavigationController {
+        if viewController is UINavigationController || viewController is UISplitViewController {
             return viewController
         }
         if let compactNavigationHosting = viewController as? (any WICompactNavigationHosting),
@@ -275,6 +277,15 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         let navigationController = UINavigationController(rootViewController: viewController)
         wiApplyClearNavigationBarStyle(to: navigationController)
         return navigationController
+    }
+
+    private func releaseInstalledTabsIfNeeded() {
+        guard tabs.isEmpty == false else {
+            return
+        }
+        isApplyingSelectionFromModel = true
+        setTabs([], animated: false)
+        isApplyingSelectionFromModel = false
     }
 }
 

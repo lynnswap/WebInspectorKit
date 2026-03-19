@@ -5,9 +5,19 @@ import XCTest
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
+    private var retainedWindows: [UIWindow] = []
+
+    private struct HostedRootViewControllerFixture {
+        let window: UIWindow
+        let rootViewController: BrowserRootViewController
+        let pageViewController: BrowserPageViewController
+    }
+
     @MainActor
     func testCompactSizeClassUsesBottomToolbar() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -25,7 +35,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testRegularSizeClassUsesNavigationBarItems() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
@@ -50,7 +62,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testChromePlacementTransitionsBetweenCompactAndRegular() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -79,7 +93,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testCompactToolbarContributesAdditionalBottomSafeArea() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -90,7 +106,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testCompactInspectorShowsElementTab() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -101,11 +119,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
             compactHost.displayedTabIdentifiersForTesting,
             ["wi_dom", "wi_element", "wi_network"]
         )
+
+        dismissPresentedInspector(from: rootViewController)
     }
 
     @MainActor
     func testCompactInspectorReopenRestoresLastSelectedTopLevelTab() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -125,11 +147,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
         let secondHost = try XCTUnwrap(secondInspector.activeHostViewControllerForTesting as? WICompactTabHostViewController)
 
         XCTAssertEqual(secondHost.selectedTab?.identifier, "wi_element")
+
+        dismissPresentedInspector(from: rootViewController)
     }
 
     @MainActor
     func testRegularInspectorPrimaryActionPresentsSheetAndDisablesButtonWhileOpen() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
@@ -146,7 +172,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testRegularInspectorSheetInstallsDismissDelegateOnPresentationController() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
@@ -156,11 +184,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
         XCTAssertNotNil(inspectorContainer.presentationController?.delegate)
+
+        dismissPresentedInspector(from: rootViewController)
     }
 
     @MainActor
     func testRegularInspectorWindowActionCreatesWindowAndPreventsReentry() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
         var activationCount = 0
         var requestedActivity: NSUserActivity?
 
@@ -208,7 +240,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testRegularInspectorUsesPlainButtonWhenMultipleScenesUnsupported() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.regular, to: rootViewController)
@@ -219,7 +253,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
     @MainActor
     func testCompactInspectorUsesMenuWhenMultipleScenesSupported() throws {
-        let (rootViewController, pageViewController) = try makeHostedRootViewController()
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.compact, to: rootViewController)
@@ -234,30 +270,42 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
 private extension BrowserNavigationChromeTests {
     @MainActor
-    func makeHostedRootViewController() throws -> (BrowserRootViewController, BrowserPageViewController) {
+    private func makeHostedRootViewController() throws -> HostedRootViewControllerFixture {
         let rootViewController = BrowserRootViewController(
             launchConfiguration: BrowserLaunchConfiguration(
                 initialURL: URL(string: "about:blank")!
             )
         )
         let window = try makeWindow()
+        retainedWindows.append(window)
         addTeardownBlock { [window] in
+            if let rootViewController = window.rootViewController as? BrowserRootViewController {
+                self.dismissPresentedInspector(from: rootViewController)
+            } else {
+                window.rootViewController?.dismiss(animated: false)
+                self.drainMainQueue()
+            }
             window.isHidden = true
             window.rootViewController = nil
+            self.drainMainQueue()
+            self.retainedWindows.removeAll { $0 === window }
         }
         window.rootViewController = rootViewController
         rootViewController.loadViewIfNeeded()
-        rootViewController.beginAppearanceTransition(true, animated: false)
         window.isHidden = false
         window.makeKeyAndVisible()
-        rootViewController.endAppearanceTransition()
+        drainMainQueue()
         rootViewController.view.layoutIfNeeded()
 
         let pageViewController = try XCTUnwrap(rootViewController.pageViewControllerForTesting)
         pageViewController.loadViewIfNeeded()
         pageViewController.view.layoutIfNeeded()
 
-        return (rootViewController, pageViewController)
+        return HostedRootViewControllerFixture(
+            window: window,
+            rootViewController: rootViewController,
+            pageViewController: pageViewController
+        )
     }
 
     @MainActor
@@ -301,6 +349,10 @@ private extension BrowserNavigationChromeTests {
     @MainActor
     func dismissPresentedInspector(from rootViewController: BrowserRootViewController) {
         rootViewController.presentedViewController?.dismiss(animated: false)
+        let deadline = Date().addingTimeInterval(1)
+        while rootViewController.presentedViewController != nil, Date() < deadline {
+            drainMainQueue()
+        }
         drainMainQueue()
     }
 

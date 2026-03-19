@@ -10,8 +10,6 @@ final class WIRegularTabHostViewController: UINavigationController {
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
 
-    private let placeholderViewController: UIViewController
-
     private var tabs: [WITab] {
         model.tabs.filter { $0.identifier != WITab.elementTabID }
     }
@@ -26,15 +24,12 @@ final class WIRegularTabHostViewController: UINavigationController {
     init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
         self.model = model
         self.renderCache = renderCache
-        let placeholder = UIViewController()
-        placeholder.navigationItem.title = ""
-        self.placeholderViewController = placeholder
-        super.init(rootViewController: placeholder)
+        super.init(nibName: nil, bundle: nil)
 
         normalizeModelSelectionToDisplayedTabIfNeeded()
         if let initialTab = selectedTabForDisplay(),
            let initialRoot = makeTabRootViewController(for: initialTab) {
-            setViewControllers([initialRoot], animated: false)
+            setViewControllers([wrappedForRegularNavigationIfNeeded(initialRoot)], animated: false)
         }
     }
 
@@ -58,10 +53,18 @@ final class WIRegularTabHostViewController: UINavigationController {
 
     func prepareForRemoval() {
         tabObservationHandles.removeAll()
+        detachDisplayedRootViewControllerIfNeeded()
     }
 
     var displayedTabIDsForTesting: [String] {
         tabs.map(\.identifier)
+    }
+
+    var displayedRootViewControllerForTesting: UIViewController? {
+        if let container = viewControllers.first as? WIRegularSplitRootContainerViewController {
+            return container.contentViewController
+        }
+        return viewControllers.first
     }
 
     @objc
@@ -149,17 +152,35 @@ final class WIRegularTabHostViewController: UINavigationController {
 
     private func displaySelectionIfNeeded(selectedTab: WITab?) {
         guard let selectedTab else {
-            if viewControllers.first !== placeholderViewController {
-                setViewControllers([placeholderViewController], animated: false)
-            }
+            detachDisplayedRootViewControllerIfNeeded()
             return
         }
 
         let rootViewController = makeTabRootViewController(for: selectedTab) ?? UIViewController()
+        let presentedViewController = wrappedForRegularNavigationIfNeeded(rootViewController)
 
-        if viewControllers.first !== rootViewController {
-            setViewControllers([rootViewController], animated: false)
+        if viewControllers.first !== presentedViewController {
+            setViewControllers([presentedViewController], animated: false)
         }
+    }
+
+    private func detachDisplayedRootViewControllerIfNeeded() {
+        guard viewControllers.isEmpty == false else {
+            return
+        }
+        viewControllers.first?.navigationItem.titleView = nil
+        setViewControllers([], animated: false)
+    }
+
+    private func wrappedForRegularNavigationIfNeeded(_ viewController: UIViewController) -> UIViewController {
+        guard viewController is UISplitViewController else {
+            return viewController
+        }
+        if let existingContainer = viewControllers.first as? WIRegularSplitRootContainerViewController,
+           existingContainer.contentViewController === viewController {
+            return existingContainer
+        }
+        return WIRegularSplitRootContainerViewController(contentViewController: viewController)
     }
 
     private func makeTabRootViewController(for tab: WITab) -> UIViewController? {
@@ -203,7 +224,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     }
 
     private func updateNavigationUI() {
-        let navigationItem = viewControllers.first?.navigationItem ?? placeholderViewController.navigationItem
+        let navigationItem = viewControllers.first?.navigationItem ?? self.navigationItem
         let desiredTitleView: UIView? = tabs.isEmpty ? nil : segmentedControl
         if navigationItem.titleView !== desiredTitleView {
             navigationItem.titleView = desiredTitleView
@@ -239,6 +260,43 @@ final class WIRegularTabHostViewController: UINavigationController {
             return domTab
         }
         return visibleTabs.first
+    }
+}
+
+@MainActor
+private final class WIRegularSplitRootContainerViewController: UIViewController {
+    let contentViewController: UIViewController
+
+    init(contentViewController: UIViewController) {
+        self.contentViewController = contentViewController
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        installContentViewControllerIfNeeded()
+    }
+
+    private func installContentViewControllerIfNeeded() {
+        guard contentViewController.parent == nil else {
+            return
+        }
+
+        addChild(contentViewController)
+        contentViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(contentViewController.view)
+        NSLayoutConstraint.activate([
+            contentViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            contentViewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            contentViewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            contentViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        contentViewController.didMove(toParent: self)
     }
 }
 

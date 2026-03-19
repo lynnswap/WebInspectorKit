@@ -6,42 +6,42 @@ import WebInspectorRuntime
 import UIKit
 
 @MainActor
-public final class WINetworkViewController: UIViewController, WICompactNavigationHosting {
-    private enum HostKind {
-        case compact
-        case regular
-    }
-
-    private let inspector: WINetworkModel
-    private let queryModel: WINetworkQueryModel
+public final class WINetworkViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let compactHostViewController: WINetworkCompactViewController
-    private let regularHostViewController: WINetworkRegularSplitViewController
+    private let listPaneViewController: WINetworkListViewController
+    private let listNavigationController: UINavigationController
+    private let detailViewController: WINetworkDetailViewController
+    private let detailNavigationController: UINavigationController
 
-    private weak var activeHostViewController: UIViewController?
-    private var activeHostKind: HostKind?
-    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
-
-    private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
-        horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
-    }
-
-    var activeHostKindForTesting: String? {
-        switch activeHostKind {
-        case .compact:
-            return "compact"
-        case .regular:
-            return "regular"
-        case nil:
-            return nil
+    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
+        didSet {
+            traitOverrides.horizontalSizeClass = horizontalSizeClassOverrideForTesting ?? .unspecified
         }
     }
 
-    var activeHostViewControllerForTesting: UIViewController? {
-        activeHostViewController
+    var activeHostKindForTesting: String? {
+        let sizeClass = horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
+        return sizeClass == .compact ? "compact" : "regular"
     }
 
-    var providesCompactNavigationController: Bool {
-        true
+    var activeHostViewControllerForTesting: UIViewController? {
+        self
+    }
+
+    var splitViewControllerForTesting: UISplitViewController {
+        self
+    }
+
+    var primaryColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .primary)
+    }
+
+    var secondaryColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .secondary)
+    }
+
+    var compactColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .compact)
     }
 
     public convenience init(inspector: WINetworkModel) {
@@ -52,18 +52,38 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
     }
 
     init(inspector: WINetworkModel, queryModel: WINetworkQueryModel) {
-        self.inspector = inspector
-        self.queryModel = queryModel
         self.compactHostViewController = WINetworkCompactViewController(
             inspector: inspector,
             queryModel: queryModel
         )
-        self.regularHostViewController = WINetworkRegularSplitViewController(
+        let listPaneViewController = WINetworkListViewController(inspector: inspector, queryModel: queryModel)
+        self.listPaneViewController = listPaneViewController
+        let listNavigationController = UINavigationController(rootViewController: listPaneViewController)
+        wiApplyClearNavigationBarStyle(to: listNavigationController)
+        listNavigationController.navigationBar.prefersLargeTitles = false
+        self.listNavigationController = listNavigationController
+        let detailViewController = WINetworkDetailViewController(
             inspector: inspector,
-            queryModel: queryModel
+            showsNavigationControls: false
         )
+        self.detailViewController = detailViewController
+        let detailNavigationController = UINavigationController(rootViewController: detailViewController)
+        wiApplyClearNavigationBarStyle(to: detailNavigationController)
+        detailNavigationController.setNavigationBarHidden(true, animated: false)
+        self.detailNavigationController = detailNavigationController
 
-        super.init(nibName: nil, bundle: nil)
+        super.init(style: .doubleColumn)
+
+        delegate = self
+        title = nil
+        preferredSplitBehavior = .tile
+        presentsWithGesture = false
+        displayModeButtonVisibility = .never
+        preferredDisplayMode = .oneBesideSecondary
+
+        setViewController(listNavigationController, for: .primary)
+        setViewController(detailNavigationController, for: .secondary)
+        setViewController(compactHostViewController, for: .compact)
     }
 
     @available(*, unavailable)
@@ -73,61 +93,65 @@ public final class WINetworkViewController: UIViewController, WICompactNavigatio
 
     public override func viewDidLoad() {
         super.viewDidLoad()
-        rebuildHost(force: true)
-
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.rebuildHost()
+            self.listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
+            self.updateNavigationItemState()
         }
+        listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
+        updateNavigationItemState()
     }
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        rebuildHost()
+        listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
+        updateNavigationItemState()
     }
 
-    private func rebuildHost(force: Bool = false) {
-        let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
-        guard force || activeHostKind != targetHostKind else {
-            return
-        }
-        activeHostKind = targetHostKind
-
-        let nextHost: UIViewController
-        switch targetHostKind {
-        case .compact:
-            nextHost = compactHostViewController
-        case .regular:
-            nextHost = regularHostViewController
-        }
-        installHost(nextHost)
+    public override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
+        updateNavigationItemState()
     }
 
-    private func installHost(_ host: UIViewController) {
-        if let current = activeHostViewController, current !== host {
-            current.willMove(toParent: nil)
-            current.view.removeFromSuperview()
-            current.removeFromParent()
-            activeHostViewController = nil
-        }
-
-        guard activeHostViewController !== host else {
+    private func updateNavigationItemState() {
+        if let hostNavigationItem = parent?.navigationItem,
+           parent?.navigationController != nil {
+            clearNavigationItemState(on: navigationItem)
+            applyNavigationItemState(to: hostNavigationItem)
             return
         }
 
-        addChild(host)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-        host.didMove(toParent: self)
-        activeHostViewController = host
+        applyNavigationItemState(to: navigationItem)
     }
 
+    private func applyNavigationItemState(to navigationItem: UINavigationItem) {
+        navigationItem.searchController = nil
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.setLeftBarButtonItems(nil, animated: false)
+        navigationItem.setRightBarButtonItems([listPaneViewController.filterNavigationItem], animated: false)
+        navigationItem.additionalOverflowItems = listPaneViewController.hostOverflowItemsForRegularNavigation
+    }
+
+    private func clearNavigationItemState(on navigationItem: UINavigationItem) {
+        navigationItem.searchController = nil
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.setLeftBarButtonItems(nil, animated: false)
+        navigationItem.setRightBarButtonItems(nil, animated: false)
+        navigationItem.additionalOverflowItems = nil
+    }
+
+    public func splitViewController(
+        _ splitViewController: UISplitViewController,
+        topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column
+    ) -> UISplitViewController.Column {
+        _ = splitViewController
+        _ = proposedTopColumn
+        return .compact
+    }
 }
+
 @MainActor
 func networkStatusColor(for severity: NetworkStatusSeverity) -> UIColor {
     switch severity {

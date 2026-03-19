@@ -4,124 +4,10 @@ import ObservationBridge
 import WebInspectorRuntime
 
 @MainActor
-public final class WIDOMViewController: UIViewController, WICompactNavigationHosting {
-    private enum HostKind {
-        case compact
-        case regular
-    }
-
+public final class WIDOMViewController: UISplitViewController, UISplitViewControllerDelegate {
     private let inspector: WIDOMModel
     private let compactRootViewController: WIDOMTreeViewController
     private let compactNavigationController: UINavigationController
-    private let regularHostViewController: WIDOMRegularSplitViewController
-
-    private weak var activeHostViewController: UIViewController?
-    private var activeHostKind: HostKind?
-    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
-
-    private var effectiveHorizontalSizeClass: UIUserInterfaceSizeClass {
-        horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
-    }
-
-    var activeHostKindForTesting: String? {
-        switch activeHostKind {
-        case .compact:
-            return "compact"
-        case .regular:
-            return "regular"
-        case nil:
-            return nil
-        }
-    }
-
-    var activeHostViewControllerForTesting: UIViewController? {
-        activeHostViewController
-    }
-
-    var providesCompactNavigationController: Bool {
-        true
-    }
-
-    public init(inspector: WIDOMModel) {
-        self.inspector = inspector
-        self.compactRootViewController = WIDOMTreeViewController(
-            inspector: inspector,
-            showsNavigationControls: true
-        )
-        let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
-        wiApplyClearNavigationBarStyle(to: compactNavigationController)
-        self.compactNavigationController = compactNavigationController
-        self.regularHostViewController = WIDOMRegularSplitViewController(inspector: inspector)
-
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    @available(*, unavailable)
-    public required init?(coder: NSCoder) {
-        nil
-    }
-
-    public override func viewDidLoad() {
-        super.viewDidLoad()
-        rebuildHost(force: true)
-
-        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.rebuildHost()
-        }
-    }
-
-    public override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        rebuildHost()
-    }
-
-    private func rebuildHost(force: Bool = false) {
-        let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
-        guard force || activeHostKind != targetHostKind else {
-            return
-        }
-        activeHostKind = targetHostKind
-
-        let nextHost: UIViewController
-        switch targetHostKind {
-        case .compact:
-            nextHost = compactNavigationController
-        case .regular:
-            nextHost = regularHostViewController
-        }
-        installHost(nextHost)
-    }
-
-    private func installHost(_ host: UIViewController) {
-        if let current = activeHostViewController, current !== host {
-            current.willMove(toParent: nil)
-            current.view.removeFromSuperview()
-            current.removeFromParent()
-            activeHostViewController = nil
-        }
-
-        guard activeHostViewController !== host else {
-            return
-        }
-
-        addChild(host)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-        host.didMove(toParent: self)
-        activeHostViewController = host
-    }
-
-}
-
-@MainActor
-private final class WIDOMRegularSplitViewController: UISplitViewController, UISplitViewControllerDelegate {
-    private let inspector: WIDOMModel
     private let domTreeViewController: WIDOMTreeViewController
     private let domTreeNavigationController: UINavigationController
     private let elementDetailsViewController: WIDOMDetailViewController
@@ -131,6 +17,37 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     private var navigationObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because this navigation state is recomputed from multiple observation streams.
     private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
+
+    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
+        didSet {
+            traitOverrides.horizontalSizeClass = horizontalSizeClassOverrideForTesting ?? .unspecified
+        }
+    }
+
+    var activeHostKindForTesting: String? {
+        let sizeClass = horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
+        return sizeClass == .compact ? "compact" : "regular"
+    }
+
+    var activeHostViewControllerForTesting: UIViewController? {
+        self
+    }
+
+    var splitViewControllerForTesting: UISplitViewController {
+        self
+    }
+
+    var primaryColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .primary)
+    }
+
+    var secondaryColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .secondary)
+    }
+
+    var compactColumnViewControllerForTesting: UIViewController? {
+        viewController(for: .compact)
+    }
 
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
@@ -152,8 +69,18 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         return item
     }()
 
-    init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMModel) {
         self.inspector = inspector
+
+        let compactRootViewController = WIDOMTreeViewController(
+            inspector: inspector,
+            showsNavigationControls: true
+        )
+        self.compactRootViewController = compactRootViewController
+        let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
+        wiApplyClearNavigationBarStyle(to: compactNavigationController)
+        self.compactNavigationController = compactNavigationController
+
         let domTreeViewController = WIDOMTreeViewController(
             inspector: inspector,
             showsNavigationControls: false
@@ -173,6 +100,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         wiApplyClearNavigationBarStyle(to: elementDetailsNavigationController)
         elementDetailsNavigationController.setNavigationBarHidden(true, animated: false)
         self.elementDetailsNavigationController = elementDetailsNavigationController
+
         super.init(style: .doubleColumn)
 
         delegate = self
@@ -184,6 +112,7 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
 
         setViewController(domTreeNavigationController, for: .primary)
         setViewController(elementDetailsNavigationController, for: .secondary)
+        setViewController(compactNavigationController, for: .compact)
 
         minimumPrimaryColumnWidth = 320
         maximumPrimaryColumnWidth = .greatestFiniteMagnitude
@@ -191,11 +120,11 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
+    public required init?(coder: NSCoder) {
         nil
     }
 
-    override func viewDidLoad() {
+    public override func viewDidLoad() {
         super.viewDidLoad()
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -210,12 +139,22 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         updateNavigationItemState()
     }
 
-    override func viewDidLayoutSubviews() {
+    public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         applyInitialRegularColumnWidthIfNeeded()
     }
 
-    override func viewDidAppear(_ animated: Bool) {
+    public override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        updateNavigationItemState()
+    }
+
+    public override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        updateNavigationItemState()
+    }
+
+    public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         applyInitialRegularColumnWidthIfNeeded()
     }
@@ -226,10 +165,14 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         menuItem.menu = makeDOMSecondaryMenu()
 
-        applyNavigationItemState(to: navigationItem)
-        if let hostNavigationItem = parent?.navigationItem {
+        if let hostNavigationItem = parent?.navigationItem,
+           parent?.navigationController != nil {
+            clearNavigationItemState(on: navigationItem)
             applyNavigationItemState(to: hostNavigationItem)
+            return
         }
+
+        applyNavigationItemState(to: navigationItem)
     }
 
     private func applyNavigationItemState(to navigationItem: UINavigationItem) {
@@ -238,6 +181,15 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.setLeftBarButtonItems(nil, animated: false)
         navigationItem.setRightBarButtonItems([pickItem, menuItem], animated: false)
+        navigationItem.additionalOverflowItems = nil
+    }
+
+    private func clearNavigationItemState(on navigationItem: UINavigationItem) {
+        navigationItem.searchController = nil
+        navigationItem.preferredSearchBarPlacement = .automatic
+        navigationItem.hidesSearchBarWhenScrolling = false
+        navigationItem.setLeftBarButtonItems(nil, animated: false)
+        navigationItem.setRightBarButtonItems(nil, animated: false)
         navigationItem.additionalOverflowItems = nil
     }
 
@@ -329,11 +281,13 @@ private final class WIDOMRegularSplitViewController: UISplitViewController, UISp
         inspector.toggleSelectionMode()
     }
 
-    func splitViewController(
+    public func splitViewController(
         _ splitViewController: UISplitViewController,
         topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column
     ) -> UISplitViewController.Column {
-        .primary
+        _ = splitViewController
+        _ = proposedTopColumn
+        return .compact
     }
 }
 

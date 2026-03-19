@@ -440,7 +440,7 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
-    func domTabProviderReturnsDOMHostControllerInCompactSizeClass() {
+    func domTabProviderUsesCompactSplitColumnInCompactSizeClass() {
         let controller = WIModel()
         let container = WITabViewController(
             controller,
@@ -456,12 +456,29 @@ struct TabViewControllerUITabTests {
             return
         }
         domViewController.loadViewIfNeeded()
+
+        guard let compactColumn = domViewController.compactColumnViewControllerForTesting as? UINavigationController else {
+            Issue.record("Expected compact DOM split column to be a navigation controller")
+            return
+        }
+        guard let primaryColumn = domViewController.primaryColumnViewControllerForTesting as? UINavigationController else {
+            Issue.record("Expected primary DOM split column to be a navigation controller")
+            return
+        }
+        guard let secondaryColumn = domViewController.secondaryColumnViewControllerForTesting as? UINavigationController else {
+            Issue.record("Expected secondary DOM split column to be a navigation controller")
+            return
+        }
+
         #expect(domViewController.activeHostKindForTesting == "compact")
-        #expect(domViewController.activeHostViewControllerForTesting is UINavigationController)
+        #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
+        #expect(compactColumn.topViewController is WIDOMTreeViewController)
+        #expect(primaryColumn.topViewController is WIDOMTreeViewController)
+        #expect(secondaryColumn.topViewController is WIDOMDetailViewController)
     }
 
     @Test
-    func domTabProviderReturnsSplitControllerInRegularSizeClass() {
+    func domTabProviderRetainsSplitColumnsInRegularSizeClass() {
         let controller = WIModel()
         let container = WITabViewController(
             controller,
@@ -471,7 +488,64 @@ struct TabViewControllerUITabTests {
         container.horizontalSizeClassOverrideForTesting = .regular
         let viewController = container.makeTabRootViewController(for: .dom())
 
-        #expect(viewController is WIDOMViewController)
+        guard let domViewController = viewController as? WIDOMViewController else {
+            Issue.record("Expected regular DOM tab root to be WIDOMViewController")
+            return
+        }
+        domViewController.loadViewIfNeeded()
+
+        #expect(domViewController.activeHostKindForTesting == "regular")
+        #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
+        #expect(domViewController.primaryColumnViewControllerForTesting is UINavigationController)
+        #expect(domViewController.secondaryColumnViewControllerForTesting is UINavigationController)
+        #expect(domViewController.compactColumnViewControllerForTesting is UINavigationController)
+    }
+
+    @Test
+    func domSplitReappliesNavigationItemsWhenRegularHostAppearsAfterCompactSwitch() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+
+        guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
+            Issue.record("Expected regular host")
+            return
+        }
+        guard let domViewController = regularHost.displayedRootViewControllerForTesting as? WIDOMViewController else {
+            Issue.record("Expected DOM root to be displayed in regular host")
+            return
+        }
+        guard let rootContainerViewController = regularHost.viewControllers.first else {
+            Issue.record("Expected regular host root container")
+            return
+        }
+        let hostNavigationItem = rootContainerViewController.navigationItem
+
+        regularHost.loadViewIfNeeded()
+        rootContainerViewController.loadViewIfNeeded()
+        #expect(domViewController.parent === rootContainerViewController)
+        drainMainQueue()
+
+        let buttonIdentifiers = hostNavigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
+        #expect(buttonIdentifiers == ["WI.DOM.PickButton", "WI.DOM.MenuButton"])
     }
 
     @Test
@@ -488,7 +562,7 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
-    func networkTabProviderReturnsHostControllerInCompactSizeClass() {
+    func networkTabProviderUsesCompactSplitColumnInCompactSizeClass() {
         let controller = WIModel()
         let container = WITabViewController(
             controller,
@@ -503,12 +577,29 @@ struct TabViewControllerUITabTests {
             return
         }
         networkViewController.loadViewIfNeeded()
+
+        guard let compactColumn = networkViewController.compactColumnViewControllerForTesting as? WINetworkCompactViewController else {
+            Issue.record("Expected compact Network split column to be WINetworkCompactViewController")
+            return
+        }
+        guard let primaryColumn = networkViewController.primaryColumnViewControllerForTesting as? UINavigationController else {
+            Issue.record("Expected primary Network split column to be a navigation controller")
+            return
+        }
+        guard let secondaryColumn = networkViewController.secondaryColumnViewControllerForTesting as? UINavigationController else {
+            Issue.record("Expected secondary Network split column to be a navigation controller")
+            return
+        }
+
         #expect(networkViewController.activeHostKindForTesting == "compact")
-        #expect(networkViewController.activeHostViewControllerForTesting is UINavigationController)
+        #expect(networkViewController.activeHostViewControllerForTesting is UISplitViewController)
+        #expect(compactColumn.topViewController is WINetworkListViewController)
+        #expect(primaryColumn.topViewController is WINetworkListViewController)
+        #expect(secondaryColumn.topViewController is WINetworkDetailViewController)
     }
 
     @Test
-    func networkTabProviderReturnsSplitControllerInRegularSizeClass() {
+    func networkTabProviderRetainsSplitColumnsInRegularSizeClass() {
         let controller = WIModel()
         let container = WITabViewController(
             controller,
@@ -518,7 +609,129 @@ struct TabViewControllerUITabTests {
         container.horizontalSizeClassOverrideForTesting = .regular
         let viewController = container.makeTabRootViewController(for: .network())
 
-        #expect(viewController is WINetworkViewController)
+        guard let networkViewController = viewController as? WINetworkViewController else {
+            Issue.record("Expected regular Network tab root to be WINetworkViewController")
+            return
+        }
+        networkViewController.loadViewIfNeeded()
+
+        #expect(networkViewController.activeHostKindForTesting == "regular")
+        #expect(networkViewController.activeHostViewControllerForTesting is UISplitViewController)
+        #expect(networkViewController.primaryColumnViewControllerForTesting is UINavigationController)
+        #expect(networkViewController.secondaryColumnViewControllerForTesting is UINavigationController)
+        #expect(networkViewController.compactColumnViewControllerForTesting is WINetworkCompactViewController)
+    }
+
+    @Test
+    func networkSplitReappliesNavigationItemsWhenRegularHostAppearsAfterCompactSwitch() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
+        controller.setSelectedTabFromUI(networkTab)
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+
+        guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
+            Issue.record("Expected regular host")
+            return
+        }
+        guard let networkViewController = regularHost.displayedRootViewControllerForTesting as? WINetworkViewController else {
+            Issue.record("Expected Network root to be displayed in regular host")
+            return
+        }
+        guard let rootContainerViewController = regularHost.viewControllers.first else {
+            Issue.record("Expected regular host root container")
+            return
+        }
+        let hostNavigationItem = rootContainerViewController.navigationItem
+
+        regularHost.loadViewIfNeeded()
+        rootContainerViewController.loadViewIfNeeded()
+        #expect(networkViewController.parent === rootContainerViewController)
+        drainMainQueue()
+
+        #expect(hostNavigationItem.rightBarButtonItems?.count == 1)
+        #expect(hostNavigationItem.additionalOverflowItems != nil)
+    }
+
+    @Test
+    func regularHostPrepareForRemovalDetachesDisplayedRootController() {
+        let controller = WIModel()
+        let tabs: [WITab] = [.dom(), .network()]
+        controller.setTabs(tabs)
+        let host = WIRegularTabHostViewController(model: controller, renderCache: WIUIKitTabRenderCache())
+
+        host.loadViewIfNeeded()
+
+        #expect(host.displayedRootViewControllerForTesting is WIDOMViewController)
+
+        host.prepareForRemoval()
+
+        #expect(host.displayedRootViewControllerForTesting == nil)
+    }
+
+    @Test
+    func compactHostPrepareForRemovalClearsInstalledTabs() {
+        let controller = WIModel()
+        controller.setTabs([.dom(), .network()])
+        let host = WICompactTabHostViewController(model: controller, renderCache: WIUIKitTabRenderCache())
+
+        host.loadViewIfNeeded()
+        #expect(host.currentUITabsForTesting.isEmpty == false)
+
+        host.prepareForRemoval()
+
+        #expect(host.currentUITabsForTesting.isEmpty)
+    }
+
+    @Test
+    func builtInTabsSurviveCompactRegularCompactSwitchWithoutRetainingOldTabs() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: requestedTabs
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+
+        guard let firstCompactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected first compact host")
+            return
+        }
+        #expect(firstCompactHost.currentUITabsForTesting.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        #expect(firstCompactHost.currentUITabsForTesting.isEmpty)
+
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+
+        guard let secondCompactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected second compact host")
+            return
+        }
+
+        #expect(firstCompactHost !== secondCompactHost)
+        #expect(secondCompactHost.currentUITabsForTesting.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
     }
 
     private func makeTab(id: String, title: String) -> WITab {

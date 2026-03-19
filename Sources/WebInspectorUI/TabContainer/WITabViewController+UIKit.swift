@@ -104,7 +104,13 @@ public final class WITabViewController: UIViewController {
     private var activeHost: (UIViewController & WIUIKitTabHost)?
     private var activeHostKind: HostKind?
 
-    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass?
+    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
+        didSet {
+            if isViewLoaded {
+                handleHorizontalSizeClassChange()
+            }
+        }
+    }
 
     public init(
         _ inspectorController: WIModel,
