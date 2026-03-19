@@ -623,6 +623,55 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func networkSplitReappliesNavigationItemsWhenRegularHostAppearsAfterCompactSwitch() {
+        let controller = WIModel()
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
+        controller.setSelectedTabFromUI(networkTab)
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+
+        guard let regularHost = container.activeHostViewControllerForTesting as? WIRegularTabHostViewController else {
+            Issue.record("Expected regular host")
+            return
+        }
+        guard let networkViewController = regularHost.displayedRootViewControllerForTesting as? WINetworkViewController else {
+            Issue.record("Expected Network root to be displayed in regular host")
+            return
+        }
+        guard let rootContainerViewController = regularHost.viewControllers.first else {
+            Issue.record("Expected regular host root container")
+            return
+        }
+        let hostNavigationItem = rootContainerViewController.navigationItem
+
+        regularHost.loadViewIfNeeded()
+        rootContainerViewController.loadViewIfNeeded()
+        #expect(networkViewController.parent === rootContainerViewController)
+        drainMainQueue()
+
+        #expect(hostNavigationItem.rightBarButtonItems?.count == 1)
+        #expect(hostNavigationItem.additionalOverflowItems != nil)
+    }
+
+    @Test
     func regularHostPrepareForRemovalDetachesDisplayedRootController() {
         let controller = WIModel()
         let tabs: [WITab] = [.dom(), .network()]

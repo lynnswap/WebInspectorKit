@@ -107,6 +107,12 @@ public final class WINetworkViewController: UISplitViewController, UISplitViewCo
         updateNavigationItemState()
     }
 
+    public override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
+        updateNavigationItemState()
+    }
+
     private func updateNavigationItemState() {
         if let hostNavigationItem = parent?.navigationItem,
            parent?.navigationController != nil {
