@@ -34,8 +34,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         case grey
     }
 
-    private final class RenderRequest {}
-
     private let entry: NetworkEntry
     private let inspector: WINetworkModel
     private let bodyState: NetworkBody
@@ -44,8 +42,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private var hasUserSelectedMode = false
     private var renderModel: NetworkBodyPreviewRenderModel?
 
-    private var renderTask: Task<Void, Never>?
-    private var activeRenderRequest: RenderRequest?
     private var hasAppliedInitialTreeSnapshot = false
     private var bodyObservationHandles: Set<ObservationHandle> = []
 
@@ -86,7 +82,6 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     isolated deinit {
-        renderTask?.cancel()
         bodyObservationHandles.removeAll()
     }
 
@@ -137,30 +132,11 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private func requestRenderModelUpdate() {
-        renderTask?.cancel()
-        let request = RenderRequest()
-        activeRenderRequest = request
         let input = NetworkBodyPreviewRenderModel.Input(
             body: bodyState,
             unavailableText: wiLocalized("network.body.unavailable", default: "Body unavailable")
         )
-
-        renderTask = Task.detached(priority: .userInitiated) { [weak self, request] in
-            let model = NetworkBodyPreviewRenderModel.make(from: input)
-            guard !Task.isCancelled else {
-                return
-            }
-            await MainActor.run {
-                guard
-                    Task.isCancelled == false,
-                    let self,
-                    self.activeRenderRequest === request
-                else {
-                    return
-                }
-                self.applyRenderModel(model)
-            }
-        }
+        applyRenderModel(NetworkBodyPreviewRenderModel.make(from: input))
     }
 
     private func applyRenderModel(_ model: NetworkBodyPreviewRenderModel) {

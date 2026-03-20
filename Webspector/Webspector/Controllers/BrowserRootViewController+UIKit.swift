@@ -87,7 +87,7 @@ final class BrowserRootViewController: UINavigationController {
 }
 
 private extension BrowserRootViewController {
-    func requestInspectorSessionState(_ state: InspectorSessionState) {
+    private func requestInspectorSessionState(_ state: InspectorSessionState) {
         if isFinalizingInspectorSession, state != .disconnected {
             return
         }
