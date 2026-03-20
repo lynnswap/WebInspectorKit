@@ -31,8 +31,6 @@ final class DOMFrontendStore: NSObject {
         }
     }
 
-    private final class MatchedStylesRequest {}
-
     let session: DOMSession
     private(set) var webView: InspectorWebView?
     private var isReady = false
@@ -43,7 +41,9 @@ final class DOMFrontendStore: NSObject {
     private var configurationNeedsApply = false
     private var matchedStylesTask: Task<Void, Never>?
     private var matchedStylesRequestCount = 0
-    private var activeMatchedStylesRequest: MatchedStylesRequest?
+#if DEBUG
+    private var matchedStylesFetchOverride: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)?
+#endif
     private var pendingWorkTask: Task<Void, Never>?
     private var isRunningPendingStateLoop = false
     private var protocolWorkTask: Task<Void, Never>?
@@ -381,33 +381,58 @@ private extension DOMFrontendStore {
     private func startMatchedStylesRequest(nodeID: Int, selectionID: DOMEntryID) {
         cancelMatchedStylesRequest()
         matchedStylesRequestCount += 1
-        let request = MatchedStylesRequest()
-        activeMatchedStylesRequest = request
+        let requestGeneration = matchedStylesRequestCount
         session.graphStore.beginMatchedStylesLoading(for: selectionID.localID)
 
-        matchedStylesTask = Task { [weak self, request] in
+        matchedStylesTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let payload = try await self.session.matchedStyles(nodeId: nodeID)
-                guard !Task.isCancelled else { return }
-                guard self.activeMatchedStylesRequest === request else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
+                let payload = try await self.fetchMatchedStyles(nodeID: nodeID)
+                if Task.isCancelled {
+                    return
+                }
+                guard self.isCurrentMatchedStylesRequest(
+                    generation: requestGeneration,
+                    selectionID: selectionID
+                ) else {
+                    return
+                }
                 self.session.graphStore.applyMatchedStyles(payload, for: selectionID.localID)
             } catch is CancellationError {
                 return
             } catch {
-                guard self.activeMatchedStylesRequest === request else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
+                if Task.isCancelled {
+                    return
+                }
+                guard self.isCurrentMatchedStylesRequest(
+                    generation: requestGeneration,
+                    selectionID: selectionID
+                ) else {
+                    return
+                }
                 self.session.graphStore.clearMatchedStyles(for: selectionID.localID)
                 inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
+    private func fetchMatchedStyles(nodeID: Int) async throws -> DOMMatchedStylesPayload {
+#if DEBUG
+        if let matchedStylesFetchOverride {
+            return try await matchedStylesFetchOverride(nodeID)
+        }
+#endif
+        return try await session.matchedStyles(nodeId: nodeID)
+    }
+
+    private func isCurrentMatchedStylesRequest(generation: Int, selectionID: DOMEntryID) -> Bool {
+        matchedStylesRequestCount == generation
+            && session.graphStore.selectedID == selectionID
+    }
+
     private func cancelMatchedStylesRequest() {
         matchedStylesTask?.cancel()
         matchedStylesTask = nil
-        activeMatchedStylesRequest = nil
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
@@ -678,6 +703,11 @@ extension DOMFrontendStore {
 
     func testHandleDOMSelectionMessage(_ payload: Any) {
         handleDOMSelectionMessage(payload)
+    }
+
+    var testMatchedStylesFetcher: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)? {
+        get { matchedStylesFetchOverride }
+        set { matchedStylesFetchOverride = newValue }
     }
 
     func testProtocolRequestWantsDocumentReset(method: String?, payload: Any?) -> Bool {
