@@ -10,41 +10,41 @@ import WebInspectorEngine
 struct DOMInspectorTests {
     @Test
     func exposesSelectedItemFromSessionGraphStore() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.session.graphStore.selectedEntry == nil)
     }
 
     @Test
-    func hasPageWebViewReflectsAttachAndDetach() {
-        let controller = WIModel()
+    func hasPageWebViewReflectsAttachAndDetach() async {
+        let controller = WIInspectorController()
         let inspector = controller.dom
         let webView = makeTestWebView()
 
         #expect(inspector.hasPageWebView == false)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         #expect(inspector.hasPageWebView == true)
         #expect(inspector.session.lastPageWebView === webView)
 
-        inspector.detach()
+        await inspector.detach()
         #expect(inspector.hasPageWebView == false)
         #expect(inspector.session.lastPageWebView == nil)
         #expect(inspector.selectedEntry == nil)
     }
 
     @Test
-    func attachSwitchingPageClearsPendingMutationBundles() {
-        let controller = WIModel()
+    func attachSwitchingPageClearsPendingMutationBundles() async {
+        let controller = WIInspectorController()
         let inspector = controller.dom
         let firstWebView = makeTestWebView()
         let secondWebView = makeTestWebView()
 
-        inspector.attach(to: firstWebView)
+        await inspector.attach(to: firstWebView)
         inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
         #expect(inspector.pendingMutationBundleCount == 1)
 
-        inspector.attach(to: secondWebView)
+        await inspector.attach(to: secondWebView)
 
         #expect(inspector.session.lastPageWebView === secondWebView)
         #expect(inspector.pendingMutationBundleCount == 0)
@@ -52,7 +52,7 @@ struct DOMInspectorTests {
 
     @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         #expect(inspector.errorMessage == nil)
 
@@ -62,19 +62,19 @@ struct DOMInspectorTests {
     }
 
     @Test
-    func updateSnapshotDepthClampsAndUpdatesConfiguration() {
-        let controller = WIModel()
+    func updateSnapshotDepthClampsAndUpdatesConfiguration() async {
+        let controller = WIInspectorController()
         let inspector = controller.dom
-        inspector.updateSnapshotDepth(0)
+        await inspector.updateSnapshotDepth(0)
         #expect(inspector.session.configuration.snapshotDepth == 1)
 
-        inspector.updateSnapshotDepth(6)
+        await inspector.updateSnapshotDepth(6)
         #expect(inspector.session.configuration.snapshotDepth == 6)
     }
 
     @Test
-    func updateAndRemoveAttributeMutateSelectionState() {
-        let controller = WIModel()
+    func updateAndRemoveAttributeMutateSelectionState() async {
+        let controller = WIInspectorController()
         let inspector = controller.dom
         inspector.session.graphStore.applySelectionSnapshot(
             .init(
@@ -90,28 +90,28 @@ struct DOMInspectorTests {
             )
         )
 
-        inspector.updateAttributeValue(name: "class", value: "new")
+        await inspector.updateAttributeValue(name: "class", value: "new")
         #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
 
-        inspector.removeAttribute(name: "id")
+        await inspector.removeAttribute(name: "id")
         #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
     }
 
     @Test
     func detachClearsErrorMessage() async {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         await inspector.reloadInspector()
         #expect(inspector.errorMessage != nil)
 
-        inspector.detach()
+        await inspector.detach()
 
         #expect(inspector.errorMessage == nil)
     }
 
     @Test
-    func detachClearsMatchedStylesState() {
-        let controller = WIModel()
+    func detachClearsMatchedStylesState() async {
+        let controller = WIInspectorController()
         let inspector = controller.dom
         inspector.session.graphStore.applySelectionSnapshot(
             .init(
@@ -141,7 +141,7 @@ struct DOMInspectorTests {
         )
         inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
 
-        inspector.detach()
+        await inspector.detach()
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.session.graphStore.entriesByID.isEmpty)
@@ -149,7 +149,7 @@ struct DOMInspectorTests {
 
     @Test
     func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let inspector = controller.dom
         let webView = makeTestWebView()
         let undoManager = UndoManager()
@@ -162,7 +162,7 @@ struct DOMInspectorTests {
         </html>
         """
 
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         await loadHTML(html, in: webView)
 
         let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
@@ -173,8 +173,8 @@ struct DOMInspectorTests {
             return
         }
 
-        inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-        inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
+        await inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
+        await inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
 
         let bothDeleted = await waitForCondition {
             let firstExists = await domNodeExists(withID: "first", in: webView)

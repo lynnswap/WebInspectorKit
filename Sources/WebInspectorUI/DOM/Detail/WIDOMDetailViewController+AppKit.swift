@@ -112,7 +112,9 @@ private struct ElementDetailsMacRootView: View {
                             attributeEditorState = nil
                         }
                         Button(wiLocalized("save", default: "Save")) {
-                            inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
+                            Task.immediateIfAvailable { [inspector] in
+                                await inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
+                            }
                             attributeEditorState = nil
                         }
                         .keyboardShortcut(.defaultAction)
@@ -215,7 +217,9 @@ private struct ElementDetailsMacRootView: View {
                         attributeEditorDraft = attribute.value
                     }
                     Button(wiLocalized("dom.element.attributes.delete", default: "Delete Attribute"), role: .destructive) {
-                        inspector.removeAttribute(name: attribute.name)
+                        Task.immediateIfAvailable { [inspector] in
+                            await inspector.removeAttribute(name: attribute.name)
+                        }
                     }
                 }
             }

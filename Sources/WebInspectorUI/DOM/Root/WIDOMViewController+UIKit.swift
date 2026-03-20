@@ -15,6 +15,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private var hasAppliedInitialRegularColumnWidth = false
     private var hasStartedObservingNavigationState = false
     private var navigationObservationHandles: Set<ObservationHandle> = []
+    private var isSelectionActionPending = false
     // Keep coalescing because this navigation state is recomputed from multiple observation streams.
     private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
 
@@ -160,9 +161,9 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     private func updateNavigationItemState() {
-        pickItem.isEnabled = inspector.hasPageWebView
+        pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
         pickItem.image = UIImage(systemName: pickSymbolName)
-        pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+        pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
         menuItem.menu = makeDOMSecondaryMenu()
 
         if let hostNavigationItem = parent?.navigationItem,
@@ -251,13 +252,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             hasSelection: inspector.selectedEntry != nil,
             hasPageWebView: inspector.hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 guard let self else {
@@ -271,14 +272,56 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
                 self?.inspector.session.reloadPage()
             },
             onDeleteNode: { [weak self] in
-                self?.inspector.deleteSelectedNode(undoManager: self?.undoManager)
+                self?.deleteSelectedNode()
             }
         )
     }
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        guard isSelectionActionPending == false else {
+            return
+        }
+
+        isSelectionActionPending = true
+        updateNavigationItemState()
+
+        Task.immediateIfAvailable { [weak self, inspector] in
+            defer {
+                if let self {
+                    self.isSelectionActionPending = false
+                    self.scheduleNavigationStateUpdate()
+                }
+            }
+            if inspector.isSelectingElement {
+                await inspector.cancelSelectionMode()
+            } else {
+                _ = try? await inspector.beginSelectionMode()
+            }
+        }
+    }
+
+    private func deleteSelectedNode() {
+        let inspector = inspector
+        let undoManager = undoManager
+        Task.immediateIfAvailable {
+            await inspector.deleteSelectedNode(undoManager: undoManager)
+        }
+    }
+
+    private func copySelection(_ kind: DOMSelectionCopyKind) {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelection(kind)
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
     }
 
     public func splitViewController(

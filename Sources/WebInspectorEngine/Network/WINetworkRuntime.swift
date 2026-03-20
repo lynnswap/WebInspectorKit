@@ -14,18 +14,6 @@ package final class WINetworkRuntime {
     package private(set) weak var lastPageWebView: WKWebView?
 
     private let backend: any WINetworkBackend
-    private lazy var bodyLoader = NetworkBodyLoader(
-        bodyFetcher: backend,
-        hasAttachedPageWebView: { [weak self] in
-            self?.hasAttachedPageWebView ?? false
-        },
-        entryLookup: { [weak self] id in
-            self?.entry(forID: id)
-        },
-        bodyLookup: { [weak self] entry, role in
-            self?.body(for: entry, role: role)
-        }
-    )
 
     package init(
         configuration: NetworkConfiguration = .init(),
@@ -66,42 +54,35 @@ package final class WINetworkRuntime {
         backend.support.capabilities
     }
 
-    package func attach(pageWebView webView: WKWebView) {
+    package func attach(pageWebView webView: WKWebView) async {
         if let currentWebView = backend.webView, currentWebView !== webView {
-            backend.detachPageWebView(preparing: mode)
+            await backend.detachPageWebView(preparing: mode)
         }
-        backend.setMode(mode)
-        backend.attachPageWebView(webView)
+        await backend.setMode(mode)
+        await backend.attachPageWebView(webView)
         lastPageWebView = webView
     }
 
-    package func suspend() {
-        bodyLoader.cancelAll()
+    package func suspend() async {
         mode = .stopped
-        backend.setMode(.stopped)
-        backend.detachPageWebView(preparing: .stopped)
+        await backend.setMode(.stopped)
+        await backend.detachPageWebView(preparing: .stopped)
     }
 
-    package func detach() {
-        bodyLoader.cancelAll()
+    package func detach() async {
         mode = .stopped
-        backend.setMode(.stopped)
-        backend.detachPageWebView(preparing: .stopped)
+        await backend.setMode(.stopped)
+        await backend.detachPageWebView(preparing: .stopped)
         lastPageWebView = nil
     }
 
-    package func setMode(_ mode: NetworkLoggingMode) {
+    package func setMode(_ mode: NetworkLoggingMode) async {
         self.mode = mode
-        backend.setMode(mode)
+        await backend.setMode(mode)
     }
 
-    package func clearNetworkLogs() {
-        bodyLoader.cancelAll()
-        backend.clearNetworkLogs()
-    }
-
-    package func cancelBodyFetches(for entry: NetworkEntry) {
-        bodyLoader.cancelBodyFetches(for: entry)
+    package func clearNetworkLogs() async {
+        await backend.clearNetworkLogs()
     }
 
     package func fetchBody(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> NetworkBody? {
@@ -113,18 +94,30 @@ package final class WINetworkRuntime {
         }
     }
 
-    package func requestBodyIfNeeded(for entry: NetworkEntry, role: NetworkBody.Role) {
-        bodyLoader.requestBodyIfNeeded(for: entry, role: role)
+    package func loadBodyIfNeeded(for entry: NetworkEntry, role: NetworkBody.Role) async throws -> NetworkBody {
+        guard let body = body(for: entry, role: role) else {
+            throw WINetworkBodyLoadError.bodyUnavailable
+        }
+        return try await loadBodyIfNeeded(for: entry, body: body)
+    }
+
+    package func loadBodyIfNeeded(for entry: NetworkEntry, body: NetworkBody) async throws -> NetworkBody {
+        return try await backend.loadBodyIfNeeded(for: entry, body: body)
     }
 
     package func prepareForNavigationReconnect() {
-        bodyLoader.cancelAll()
         backend.prepareForNavigationReconnect()
     }
 
     package func resumeAfterNavigationReconnect(to webView: WKWebView) {
         lastPageWebView = webView
         backend.resumeAfterNavigationReconnect(to: webView)
+    }
+
+    package func tearDownForDeinit() {
+        mode = .stopped
+        backend.tearDownForDeinit()
+        lastPageWebView = nil
     }
 }
 
@@ -150,10 +143,6 @@ extension WINetworkRuntime {
 #endif
 
 private extension WINetworkRuntime {
-    func entry(forID id: UUID) -> NetworkEntry? {
-        store.entries.first { $0.id == id }
-    }
-
     func body(for entry: NetworkEntry, role: NetworkBody.Role) -> NetworkBody? {
         switch role {
         case .request:
@@ -175,24 +164,30 @@ private final class WINetworkUnavailableBackend: WINetworkBackend {
         failureReason: "No backend was provided."
     )
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    func setMode(_ mode: NetworkLoggingMode) async {
         store.setRecording(mode != .stopped)
         if mode == .stopped {
             store.reset()
         }
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    func attachPageWebView(_ newWebView: WKWebView?) async {
         webView = newWebView
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
+    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
         _ = modeBeforeDetach
         webView = nil
     }
 
-    func clearNetworkLogs() {
+    func clearNetworkLogs() async {
         store.clear()
+    }
+
+    func tearDownForDeinit() {
+        webView = nil
+        store.setRecording(false)
+        store.reset()
     }
 
     func fetchBodyResult(locator: NetworkDeferredBodyLocator, role: NetworkBody.Role) async -> WINetworkBodyFetchResult {
@@ -218,24 +213,30 @@ private final class WINetworkBodyFetchingBackend: WINetworkBackend {
         self.bodyFetcher = bodyFetcher
     }
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    func setMode(_ mode: NetworkLoggingMode) async {
         store.setRecording(mode != .stopped)
         if mode == .stopped {
             store.reset()
         }
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    func attachPageWebView(_ newWebView: WKWebView?) async {
         webView = newWebView
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
+    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
         _ = modeBeforeDetach
         webView = nil
     }
 
-    func clearNetworkLogs() {
+    func clearNetworkLogs() async {
         store.clear()
+    }
+
+    func tearDownForDeinit() {
+        webView = nil
+        store.setRecording(false)
+        store.reset()
     }
 
     func supportsDeferredLoading(for role: NetworkBody.Role) -> Bool {

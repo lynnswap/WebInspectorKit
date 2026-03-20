@@ -34,24 +34,25 @@ struct WISessionStateTests {
     }
 
     @Test
-    func lifecycleTransitionsKeepSelectionOrdering() {
-        let controller = WIModel()
-        controller.setTabs([.dom(), .network()])
-        selectTab("wi_network", in: controller)
+    func lifecycleTransitionsKeepSelectionOrdering() async {
+        let store = WIModel()
+        let controller = WIInspectorController(model: store)
+        store.setTabs([.dom(), .network()])
+        selectTab("wi_network", in: store)
         let webView = makeTestWebView()
 
-        controller.connect(to: webView)
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
 
         #expect(controller.lifecycle == .active)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(store.selectedTab?.id == "wi_network")
 
-        controller.connect(to: nil)
+        await controller.applyHostState(pageWebView: webView, visibility: .hidden)
         #expect(controller.lifecycle == .suspended)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(store.selectedTab?.id == "wi_network")
 
-        controller.disconnect()
+        await controller.finalize()
         #expect(controller.lifecycle == .disconnected)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(store.selectedTab?.id == "wi_network")
     }
 
     @Test

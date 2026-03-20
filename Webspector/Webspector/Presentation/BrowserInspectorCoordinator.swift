@@ -12,7 +12,7 @@ struct BrowserInspectorWindowContext {
     static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
     let browserStore: BrowserStore
-    let inspectorController: WIModel
+    let inspectorController: WIInspectorController
     let tabs: [WITab]
 }
 
@@ -157,7 +157,7 @@ final class BrowserInspectorCoordinator {
     func presentSheet(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         tabs: [WITab] = [.dom(), .network()]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -191,7 +191,7 @@ final class BrowserInspectorCoordinator {
     func presentWindow(
         from presenter: UIViewController,
         browserStore: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         tabs: [WITab] = [.dom(), .network()]
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
@@ -369,17 +369,17 @@ final class BrowserInspectorCoordinator {
 
     private static let inspectorWindowStore = InspectorWindowStore()
 
-    func present(
+    static func present(
         from parentWindow: NSWindow?,
         browserStore: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         tabs: [WITab] = [.dom(), .network()]
     ) -> Bool {
         if let existingWindow = Self.inspectorWindowStore.window,
            let existingContainer = existingWindow.contentViewController as? WITabViewController {
             existingContainer.setTabs(tabs)
-            existingContainer.setInspectorController(inspectorController)
             existingContainer.setPageWebView(browserStore.webView)
+            existingContainer.setInspectorController(inspectorController)
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return true

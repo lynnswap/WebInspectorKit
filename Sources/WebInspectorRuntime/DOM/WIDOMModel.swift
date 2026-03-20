@@ -10,18 +10,21 @@ import UIKit
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMModel")
 private let domDeleteUndoHistoryLimit = 128
 
+public typealias DOMSelectionResult = DOMPageAgent.SelectionModeResult
+
 @MainActor
 @Observable
 public final class WIDOMModel {
+    private final class SelectionRequest {}
+
     public let session: DOMSession
     private let frontendStore: DOMFrontendStore
 
     public private(set) var errorMessage: String?
     public private(set) var isSelectingElement = false
 
-    @ObservationIgnored private var selectionTask: Task<Void, Never>?
+    @ObservationIgnored private var activeSelectionRequest: SelectionRequest?
     @ObservationIgnored private var pendingDeleteTask: Task<Void, Never>?
-    @ObservationIgnored private var pendingDeleteGeneration: UInt64 = 0
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -37,7 +40,6 @@ public final class WIDOMModel {
     }
 
     isolated deinit {
-        selectionTask?.cancel()
         pendingDeleteTask?.cancel()
         clearDeleteUndoHistory()
 #if canImport(UIKit)
@@ -73,76 +75,88 @@ public final class WIDOMModel {
         body(frontendStore)
     }
 
-    func attach(to webView: WKWebView) {
-        resetInteractionState()
+    func attach(to webView: WKWebView) async {
+        await resetInteractionState()
         if let previousPageWebView = session.lastPageWebView, previousPageWebView !== webView {
             frontendStore.clearPendingMutationBundles()
         }
-        let outcome = session.attach(to: webView)
+        let outcome = await session.attach(to: webView)
         if outcome.shouldReload {
-            Task {
-                await self.reloadInspectorImpl(preserveState: outcome.preserveState)
-            }
+            await reloadInspectorImpl(preserveState: outcome.preserveState)
         }
     }
 
-    func suspend() {
-        resetInteractionState()
-        session.suspend()
+    func suspend() async {
+        await resetInteractionState()
+        await session.suspend()
     }
 
-    func detach() {
-        resetInteractionState()
-        session.detach()
+    func detach() async {
+        await resetInteractionState()
+        await session.detach()
         frontendStore.detachInspectorWebView()
         errorMessage = nil
     }
 
-    func setAutoSnapshotEnabled(_ enabled: Bool) {
+    func setAutoSnapshotEnabled(_ enabled: Bool) async {
         guard session.hasPageWebView else {
             return
         }
-        session.setAutoSnapshot(enabled: enabled)
+        await session.setAutoSnapshot(enabled: enabled)
     }
 
     public func reloadInspector(preserveState: Bool = false) async {
         await reloadInspectorImpl(preserveState: preserveState)
     }
 
-    public func updateSnapshotDepth(_ depth: Int) {
-        updateSnapshotDepthImpl(depth)
+    public func updateSnapshotDepth(_ depth: Int) async {
+        await updateSnapshotDepthImpl(depth)
     }
 
-    public func toggleSelectionMode() {
-        toggleSelectionModeImpl()
+    public func cancelSelectionMode() async {
+        await cancelSelectionModeImpl()
     }
 
-    public func cancelSelectionMode() {
-        cancelSelectionModeImpl()
+    public func beginSelectionMode() async throws -> DOMSelectionResult {
+        try await beginSelectionModeImpl()
     }
 
-    public func copySelection(_ kind: DOMSelectionCopyKind) {
-        copySelectionImpl(kind)
+    func tearDownForDeinit() {
+        activeSelectionRequest = nil
+        pendingDeleteTask?.cancel()
+        pendingDeleteTask = nil
+        frontendStore.detachInspectorWebView()
+        session.tearDownForDeinit()
+        errorMessage = nil
+        isSelectingElement = false
+        clearDeleteUndoHistory()
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
     }
 
-    public func deleteSelectedNode() {
-        deleteSelectedNode(undoManager: nil)
+    public func copySelection(_ kind: DOMSelectionCopyKind) async throws -> String {
+        try await copySelectionImpl(kind)
     }
 
-    public func deleteSelectedNode(undoManager: UndoManager?) {
-        deleteNodeImpl(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
+    public func deleteSelectedNode() async {
+        await deleteSelectedNode(undoManager: nil)
     }
 
-    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) {
-        deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
+    public func deleteSelectedNode(undoManager: UndoManager?) async {
+        await deleteNodeImpl(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
     }
 
-    public func updateAttributeValue(name: String, value: String) {
-        updateAttributeValueImpl(name: name, value: value)
+    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async {
+        await deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
     }
 
-    public func removeAttribute(name: String) {
-        removeAttributeImpl(name: name)
+    public func updateAttributeValue(name: String, value: String) async {
+        await updateAttributeValueImpl(name: name, value: value)
+    }
+
+    public func removeAttribute(name: String) async {
+        await removeAttributeImpl(name: name)
     }
 }
 
@@ -157,120 +171,102 @@ private extension WIDOMModel {
         }
 
         let depth = session.configuration.snapshotDepth
-        frontendStore.updateConfiguration(session.configuration)
-        frontendStore.setPreferredDepth(depth)
-        frontendStore.requestDocument(depth: depth, preserveState: preserveState)
+        await frontendStore.updateConfiguration(session.configuration)
+        await frontendStore.setPreferredDepth(depth)
+        await frontendStore.requestDocument(depth: depth, preserveState: preserveState)
     }
 
-    func updateSnapshotDepthImpl(_ depth: Int) {
+    func updateSnapshotDepthImpl(_ depth: Int) async {
         let clamped = max(1, depth)
         var configuration = session.configuration
         configuration.snapshotDepth = clamped
-        session.updateConfiguration(configuration)
-        frontendStore.updateConfiguration(configuration)
-        frontendStore.setPreferredDepth(clamped)
+        await session.updateConfiguration(configuration)
+        await frontendStore.updateConfiguration(configuration)
+        await frontendStore.setPreferredDepth(clamped)
     }
 
-    func toggleSelectionModeImpl() {
-        if isSelectingElement {
-            cancelSelectionModeImpl()
-        } else {
-            startSelectionMode()
-        }
-    }
-
-    func cancelSelectionModeImpl() {
-        guard isSelectingElement || selectionTask != nil else { return }
-        selectionTask?.cancel()
-        selectionTask = nil
+    func cancelSelectionModeImpl() async {
+        guard isSelectingElement else { return }
+        activeSelectionRequest = nil
+        isSelectingElement = false
 #if canImport(UIKit)
         restorePageScrollingState()
 #endif
-        Task {
-            await session.cancelSelectionMode()
-        }
-        isSelectingElement = false
+        await session.cancelSelectionMode()
     }
 
-    func copySelectionImpl(_ kind: DOMSelectionCopyKind) {
-        guard let nodeId = selectedEntry?.backendNodeID else { return }
-        Task {
-            do {
-                let text = try await session.selectionCopyText(nodeId: nodeId, kind: kind)
-                guard !text.isEmpty else { return }
-                copyToPasteboard(text)
-            } catch {
-                domViewLogger.error("copy \(kind.rawValue, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            }
+    func copySelectionImpl(_ kind: DOMSelectionCopyKind) async throws -> String {
+        guard let nodeId = selectedEntry?.backendNodeID else {
+            return ""
         }
+        return try await session.selectionCopyText(nodeId: nodeId, kind: kind)
     }
 
-    func deleteNodeImpl(nodeId: Int?, undoManager: UndoManager?) {
+    func deleteNodeImpl(nodeId: Int?, undoManager: UndoManager?) async {
         guard let nodeId else { return }
-        enqueueDelete(nodeId: nodeId, undoManager: undoManager)
+        await enqueueDelete(nodeId: nodeId, undoManager: undoManager)
     }
 
-    func updateAttributeValueImpl(name: String, value: String) {
+    func updateAttributeValueImpl(name: String, value: String) async {
         guard let nodeId = selectedEntry?.backendNodeID else { return }
         session.graphStore.updateSelectedAttribute(name: name, value: value)
-        Task {
-            await session.setAttribute(nodeId: nodeId, name: name, value: value)
-        }
+        await session.setAttribute(nodeId: nodeId, name: name, value: value)
     }
 
-    func removeAttributeImpl(name: String) {
+    func removeAttributeImpl(name: String) async {
         guard let nodeId = selectedEntry?.backendNodeID else { return }
         session.graphStore.removeSelectedAttribute(name: name)
-        Task {
-            await session.removeAttribute(nodeId: nodeId, name: name)
-        }
+        await session.removeAttribute(nodeId: nodeId, name: name)
     }
 
-    func startSelectionMode() {
-        guard session.hasPageWebView else { return }
-#if canImport(UIKit)
-        disablePageScrollingForSelection()
-#endif
-        isSelectingElement = true
-        Task { await session.hideHighlight() }
-        selectionTask?.cancel()
-        selectionTask = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                self.isSelectingElement = false
-                self.selectionTask = nil
-#if canImport(UIKit)
-                self.restorePageScrollingState()
-#endif
-            }
-            let selectionModeTask = Task { @MainActor in
-                try await self.session.beginSelectionMode()
-            }
-            do {
-                await Task.yield()
-                self.activatePageWindowForSelectionIfPossible()
-#if canImport(UIKit)
-                await self.waitForPageWindowActivationIfNeeded()
-#endif
-                let result = try await selectionModeTask.value
-                guard !result.cancelled else { return }
-                if Task.isCancelled { return }
-                let requestedDepth = max(self.session.configuration.snapshotDepth, result.requiredDepth + 1)
-                self.updateSnapshotDepthImpl(requestedDepth)
-                await self.reloadInspectorImpl(preserveState: true)
-            } catch is CancellationError {
-                selectionModeTask.cancel()
-                await self.session.cancelSelectionMode()
-            } catch {
-                selectionModeTask.cancel()
-                domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-                errorMessage = error.localizedDescription
-            }
+    func beginSelectionModeImpl() async throws -> DOMSelectionResult {
+        guard session.hasPageWebView else {
+            throw WebInspectorCoreError.scriptUnavailable
         }
+        if isSelectingElement {
+            await cancelSelectionModeImpl()
+        }
+        let request = SelectionRequest()
+        beginSelectionRequest(request)
+        await session.hideHighlight()
+        errorMessage = nil
+        defer {
+            finishSelectionRequest(request)
+        }
+        activatePageWindowForSelectionIfPossible()
+#if canImport(UIKit)
+        await waitForPageWindowActivationIfNeeded()
+#endif
+        let result: DOMSelectionResult
+        do {
+            result = try await session.beginSelectionMode()
+        } catch is CancellationError {
+            if activeSelectionRequest === request {
+                await session.cancelSelectionMode()
+            }
+            throw CancellationError()
+        } catch {
+            domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        try Task.checkCancellation()
+        try ensureSelectionRequestIsCurrent(request)
+        guard !result.cancelled else {
+            return result
+        }
+
+        let requestedDepth = max(session.configuration.snapshotDepth, result.requiredDepth + 1)
+        await updateSnapshotDepthImpl(requestedDepth)
+        try Task.checkCancellation()
+        try ensureSelectionRequestIsCurrent(request)
+        await reloadInspectorImpl(preserveState: true)
+        return result
     }
 
-    func resetInteractionState() {
-        cancelSelectionModeImpl()
+    func resetInteractionState() async {
+        await cancelSelectionModeImpl()
         pendingDeleteTask?.cancel()
         pendingDeleteTask = nil
         clearDeleteUndoHistory()
@@ -279,21 +275,14 @@ private extension WIDOMModel {
 #endif
     }
 
-    func enqueueDelete(nodeId: Int, undoManager: UndoManager?) {
+    func enqueueDelete(nodeId: Int, undoManager: UndoManager?) async {
         let previousTask = pendingDeleteTask
-        pendingDeleteGeneration &+= 1
-        let generation = pendingDeleteGeneration
-        pendingDeleteTask = Task { @MainActor [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
             if let previousTask {
                 await previousTask.value
             }
             guard !Task.isCancelled else { return }
-            defer {
-                if pendingDeleteGeneration == generation {
-                    pendingDeleteTask = nil
-                }
-            }
 
             guard let undoManager else {
                 await session.removeNode(nodeId: nodeId)
@@ -310,6 +299,8 @@ private extension WIDOMModel {
                 undoManager: undoManager
             )
         }
+        pendingDeleteTask = task
+        await task.value
     }
 
     func copyToPasteboard(_ text: String) {
@@ -334,7 +325,7 @@ private extension WIDOMModel {
             nodeId: nodeId,
             undoManager: undoManager
         )
-        Task { @MainActor [weak self] in
+        Task.immediateIfAvailable { [weak self] in
             guard let self else { return }
             let restored = await session.undoRemoveNode(undoToken: undoToken)
             guard restored else {
@@ -375,7 +366,7 @@ private extension WIDOMModel {
             nodeId: nodeId,
             undoManager: undoManager
         )
-        Task { @MainActor [weak self] in
+        Task.immediateIfAvailable { [weak self] in
             guard let self else { return }
             let removed = await session.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
             guard removed else {
@@ -393,6 +384,31 @@ private extension WIDOMModel {
             undoManager.levelsOfUndo = domDeleteUndoHistoryLimit
         }
         deleteUndoManager = undoManager
+    }
+
+    private func beginSelectionRequest(_ request: SelectionRequest) {
+        activeSelectionRequest = request
+#if canImport(UIKit)
+        disablePageScrollingForSelection()
+#endif
+        isSelectingElement = true
+    }
+
+    private func finishSelectionRequest(_ request: SelectionRequest) {
+        guard activeSelectionRequest === request else {
+            return
+        }
+        activeSelectionRequest = nil
+        isSelectingElement = false
+#if canImport(UIKit)
+        restorePageScrollingState()
+#endif
+    }
+
+    private func ensureSelectionRequestIsCurrent(_ request: SelectionRequest) throws {
+        guard activeSelectionRequest === request else {
+            throw CancellationError()
+        }
     }
 
     func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {

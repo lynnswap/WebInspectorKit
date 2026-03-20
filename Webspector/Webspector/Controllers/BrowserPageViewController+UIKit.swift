@@ -12,7 +12,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private let store: BrowserStore
-    private let inspectorController: WIModel
+    private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
     private let logger = Logger(subsystem: "Webspector", category: "BrowserPageViewController")
@@ -76,7 +76,7 @@ final class BrowserPageViewController: UIViewController {
 
     init(
         store: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         self.store = store
@@ -438,18 +438,30 @@ final class BrowserPageViewController: UIViewController {
 
         didAutoStartSelection = true
 
-        Task { @MainActor in
-            logger.notice("auto-starting DOM selection mode for diagnostics")
+        Task.immediateIfAvailable { [self] in
+            var didCompleteAutoStart = false
+            defer {
+                if didCompleteAutoStart == false {
+                    self.didAutoStartSelection = false
+                }
+            }
+            self.logger.notice("auto-starting DOM selection mode for diagnostics")
             for _ in 0..<100 {
-                if inspectorController.dom.hasPageWebView {
-                    inspectorController.dom.toggleSelectionMode()
-                    return
+                if self.inspectorController.dom.hasPageWebView {
+                    do {
+                        let result = try await self.inspectorController.dom.beginSelectionMode()
+                        didCompleteAutoStart = !result.cancelled
+                        if didCompleteAutoStart {
+                            return
+                        }
+                    } catch {
+                        // Keep retrying until the page bridge is ready or we time out.
+                    }
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
 
-            logger.error("auto-starting DOM selection mode timed out before page web view became available")
-            didAutoStartSelection = false
+            self.logger.error("auto-starting DOM selection mode timed out before page web view became available")
         }
     }
 

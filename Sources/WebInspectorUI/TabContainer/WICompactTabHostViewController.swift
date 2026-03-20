@@ -6,15 +6,51 @@ import WebInspectorRuntime
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
     private let model: WIModel
+    private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
+    private let onSelectionChange: @MainActor () -> Void
     private let synthesizedElementTab = WITab.element()
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
-    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+    init(
+        model: WIModel,
+        inspector: WIInspectorController,
+        renderCache: WIUIKitTabRenderCache,
+        onSelectionChange: @escaping @MainActor () -> Void
+    ) {
         self.model = model
+        self.inspector = inspector
         self.renderCache = renderCache
+        self.onSelectionChange = onSelectionChange
         super.init(nibName: nil, bundle: nil)
+    }
+
+    convenience init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: model,
+            inspector: WIInspectorController(model: model),
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
+    }
+
+    convenience init(model inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: inspector.model,
+            inspector: inspector,
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
+    }
+
+    convenience init(inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: inspector.model,
+            inspector: inspector,
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
     }
 
     @available(*, unavailable)
@@ -180,6 +216,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     private func applyUserSelection(selectedTab: WITab) {
         model.setPreferredCompactSelectedTabIdentifierFromUI(selectedTab.identifier)
         model.setSelectedTabFromUI(selectedTab)
+        onSelectionChange()
     }
 
     private func restoreModelSelectionIfNeeded(displayTabs: [WITab]) {
@@ -193,6 +230,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
             return
         }
         model.setSelectedTabFromUI(preferredTab)
+        onSelectionChange()
     }
 
     private func resolveDisplayedModelTab(from requestedTab: WITab?, in displayTabs: [WITab]) -> WITab? {
@@ -237,11 +275,11 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         } else {
             switch tab.identifier {
             case WITab.domTabID:
-                viewController = WIDOMViewController(inspector: model.dom)
+                viewController = WIDOMViewController(inspector: inspector.dom)
             case WITab.elementTabID:
-                viewController = WIDOMDetailViewController(inspector: model.dom)
+                viewController = WIDOMDetailViewController(inspector: inspector.dom)
             case WITab.networkTabID:
-                viewController = WINetworkViewController(inspector: model.network)
+                viewController = WINetworkViewController(inspector: inspector.network)
             default:
                 viewController = nil
             }
@@ -293,10 +331,15 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 import SwiftUI
 #Preview("Compact Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIModel()
-        session.setTabs([.dom(), .element(), .network()])
-        let host = WICompactTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedTabFromUI(.dom())
+        let session = WIInspectorController()
+        session.model.setTabs([.dom(), .element(), .network()])
+        let host = WICompactTabHostViewController(
+            model: session.model,
+            inspector: session,
+            renderCache: WIUIKitTabRenderCache(),
+            onSelectionChange: {}
+        )
+        session.model.setSelectedTab(.dom())
         return host
     }
 }

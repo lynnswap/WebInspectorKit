@@ -26,7 +26,7 @@ struct NetworkSessionTests {
         let firstWebView = WKWebView(frame: .zero)
         let secondWebView = WKWebView(frame: .zero)
 
-        session.attach(pageWebView: firstWebView)
+        await session.attach(pageWebView: firstWebView)
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
             "requestId": 41,
@@ -37,7 +37,7 @@ struct NetworkSessionTests {
         session.store.apply(start, sessionID: "")
         #expect(session.store.entries.count == 1)
 
-        session.attach(pageWebView: secondWebView)
+        await session.attach(pageWebView: secondWebView)
 
         #expect(session.lastPageWebView === secondWebView)
         #expect(session.store.entries.count == 1)
@@ -62,13 +62,13 @@ struct NetworkSessionTests {
         }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let fetched = await waitUntil {
             body.fetchState == .full && body.full == "body"
@@ -78,9 +78,10 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func requestBodyIfNeededRereadsLocatorBeforeDispatchingFetch() async {
-        let fetcher = StubNetworkBodyFetcher { ref, _, role in
-            NetworkBody(
+    func requestBodyIfNeededDiscardsInFlightFetchWhenLocatorChanges() async {
+        let fetcher = StubNetworkBodyFetcher(onFetch: { ref, _, role in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            return NetworkBody(
                 kind: .text,
                 preview: nil,
                 full: "body-\(ref ?? "nil")",
@@ -93,23 +94,28 @@ struct NetworkSessionTests {
                 fetchState: .full,
                 role: role
             )
-        }
+        })
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
-        body.reference = "resp_ref_committed"
-
-        let fetched = await waitUntil {
-            body.fetchState == .full && body.full == "body-resp_ref_committed"
+        let loadTask = Task<Void, Never> {
+            _ = try? await session.loadBodyIfNeeded(for: entry, role: NetworkBody.Role.response)
         }
-        #expect(fetched)
-        #expect(fetcher.fetchRefs == ["resp_ref_committed"])
+        await Task.yield()
+        body.reference = "resp_ref_committed"
+        await loadTask.value
+
+        let reset = await waitUntil {
+            body.fetchState == .inline
+        }
+        #expect(reset)
+        #expect(body.full == nil)
+        #expect(fetcher.fetchRefs == ["resp_ref"])
     }
 
     @Test
@@ -123,7 +129,7 @@ struct NetworkSessionTests {
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         for _ in 0..<64 {
             await Task.yield()
@@ -138,13 +144,13 @@ struct NetworkSessionTests {
         let fetcher = StubNetworkBodyFetcher { _, _, _ in nil }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let failed = await waitUntil {
             body.fetchState == .failed(.unavailable)
@@ -152,7 +158,7 @@ struct NetworkSessionTests {
         #expect(failed)
         #expect(fetcher.fetchRefs.count == 1)
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
         for _ in 0..<64 {
             await Task.yield()
         }
@@ -167,13 +173,13 @@ struct NetworkSessionTests {
         })
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let failed = await waitUntil {
             body.fetchState == .failed(.unavailable)
@@ -202,20 +208,23 @@ struct NetworkSessionTests {
         }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        let loadTask = Task<Void, Never> {
+            _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
+        }
 
         let started = await waitUntil {
             body.fetchState == .fetching
         }
         #expect(started)
 
-        session.cancelBodyFetches(for: entry)
+        loadTask.cancel()
+        await loadTask.value
         try? await Task.sleep(nanoseconds: 150_000_000)
 
         #expect(body.fetchState == .inline)
@@ -223,7 +232,7 @@ struct NetworkSessionTests {
     }
 
     @Test
-    func requestBodyIfNeededIgnoresLateFetchWhenLocatorChanges() async {
+    func requestBodyIfNeededLeavesBodyInlineWhenLocatorChangesWithoutCancellation() async {
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             try? await Task.sleep(nanoseconds: 100_000_000)
             return NetworkBody(
@@ -242,13 +251,15 @@ struct NetworkSessionTests {
         }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref", role: .response)
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        let loadTask = Task<Void, Never> {
+            _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
+        }
 
         let started = await waitUntil {
             body.fetchState == .fetching && fetcher.fetchRefs == ["resp_ref"]
@@ -256,6 +267,7 @@ struct NetworkSessionTests {
         #expect(started)
 
         body.reference = "resp_ref_committed"
+        await loadTask.value
 
         let reset = await waitUntil {
             body.fetchState == .inline
@@ -273,24 +285,24 @@ struct NetworkSessionTests {
         }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
 
         let fetchingBody = makeBody(reference: "fetching-ref", role: .response)
         fetchingBody.fetchState = .fetching
         entry.responseBody = fetchingBody
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let fullBody = makeBody(reference: "full-ref", role: .response)
         fullBody.fetchState = .full
         entry.responseBody = fullBody
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let failedBody = makeBody(reference: "failed-ref", role: .response)
         failedBody.fetchState = .failed(.unavailable)
         entry.responseBody = failedBody
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         for _ in 0..<64 {
             await Task.yield()
@@ -310,7 +322,7 @@ struct NetworkSessionTests {
         }
         let session = NetworkSession(bodyFetcher: fetcher)
         let webView = WKWebView(frame: .zero)
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         let entry = makeEntry()
         let body = NetworkBody(
@@ -329,7 +341,7 @@ struct NetworkSessionTests {
         )
         entry.responseBody = body
 
-        session.requestBodyIfNeeded(for: entry, role: .response)
+        _ = try? await session.loadBodyIfNeeded(for: entry, role: .response)
 
         let failed = await waitUntil {
             body.fetchState == .failed(.unavailable)

@@ -7,18 +7,18 @@ import WebInspectorTestSupport
 @MainActor
 struct NetworkPageAgentTests {
     @Test
-    func setRecordingUpdatesStoreFlag() {
+    func setRecordingUpdatesStoreFlag() async {
         let agent = NetworkPageAgent()
 
         #expect(agent.store.isRecording == true)
-        agent.setMode(.stopped)
+        await agent.setMode(.stopped)
         #expect(agent.store.isRecording == false)
-        agent.setMode(.active)
+        await agent.setMode(.active)
         #expect(agent.store.isRecording == true)
     }
 
     @Test
-    func setModeStoppedClearsExistingEntriesImmediately() throws {
+    func setModeStoppedClearsExistingEntriesImmediately() async throws {
         let agent = NetworkPageAgent()
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -30,14 +30,14 @@ struct NetworkPageAgentTests {
         agent.store.apply(start, sessionID: "")
         #expect(agent.store.entries.count == 1)
 
-        agent.setMode(.stopped)
+        await agent.setMode(.stopped)
 
         #expect(agent.store.entries.isEmpty)
         #expect(agent.store.isRecording == false)
     }
 
     @Test
-    func setModeBufferingKeepsExistingEntriesAndRecordingEnabled() throws {
+    func setModeBufferingKeepsExistingEntriesAndRecordingEnabled() async throws {
         let agent = NetworkPageAgent()
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -49,14 +49,14 @@ struct NetworkPageAgentTests {
         agent.store.apply(start, sessionID: "")
         #expect(agent.store.entries.count == 1)
 
-        agent.setMode(.buffering)
+        await agent.setMode(.buffering)
 
         #expect(agent.store.entries.count == 1)
         #expect(agent.store.isRecording == true)
     }
 
     @Test
-    func modeTransitionsPreserveBatchApplicationBoundaries() throws {
+    func modeTransitionsPreserveBatchApplicationBoundaries() async throws {
         let agent = NetworkPageAgent()
         let firstBatch = try NetworkTestHelpers.decodeBatch([
             "version": 1,
@@ -71,7 +71,7 @@ struct NetworkPageAgentTests {
             ]]
         ])
 
-        agent.setMode(.buffering)
+        await agent.setMode(.buffering)
         agent.store.applyNetworkBatch(firstBatch)
         #expect(agent.store.entry(forRequestID: 30, sessionID: "mode-session") != nil)
 
@@ -87,12 +87,12 @@ struct NetworkPageAgentTests {
                 "endTime": NetworkTestHelpers.timePayload(monotonicMs: 2_030.0, wallMs: 1_700_000_001_030.0)
             ]]
         ])
-        agent.setMode(.active)
+        await agent.setMode(.active)
         agent.store.applyNetworkBatch(secondBatch)
         #expect(agent.store.entry(forRequestID: 31, sessionID: "mode-session") != nil)
 
         let beforeStoppedCount = agent.store.entries.count
-        agent.setMode(.stopped)
+        await agent.setMode(.stopped)
         let thirdBatch = try NetworkTestHelpers.decodeBatch([
             "version": 1,
             "sessionId": "mode-session",
@@ -135,7 +135,7 @@ struct NetworkPageAgentTests {
     }
 
     @Test
-    func clearNetworkLogsResetsEntriesAndSelection() throws {
+    func clearNetworkLogsResetsEntriesAndSelection() async throws {
         let agent = NetworkPageAgent()
         let store = agent.store
 
@@ -149,7 +149,7 @@ struct NetworkPageAgentTests {
         store.apply(payload, sessionID: "")
         #expect(store.entries.isEmpty == false)
 
-        agent.clearNetworkLogs()
+        await agent.clearNetworkLogs()
 
         #expect(store.entries.isEmpty)
     }
@@ -178,7 +178,6 @@ struct NetworkPageAgentTests {
         let agent = NetworkPageAgent()
         let store = agent.store
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
 
@@ -192,18 +191,18 @@ struct NetworkPageAgentTests {
         store.apply(payload, sessionID: "")
         #expect(store.entries.count == 1)
 
-        agent.detachPageWebView(preparing: .active)
+        await agent.detachPageWebView(preparing: .active)
         #expect(store.entries.count == 1)
 
         await attachAndWait(agent, to: webView)
         #expect(store.entries.count == 1)
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func attachRegistersHandlersAndInstallsScripts() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
 
@@ -213,6 +212,7 @@ struct NetworkPageAgentTests {
         #expect(controller.addedHandlers.allSatisfy { $0.world == .page })
         #expect(controller.userScripts.count == 3)
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorNetworkAgent") })
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -222,7 +222,7 @@ struct NetworkPageAgentTests {
 
         await attachAndWait(agent, to: webView)
         let removedBefore = controller.removedHandlers.count
-        agent.detachPageWebView(preparing: .stopped)
+        await agent.detachPageWebView(preparing: .stopped)
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
         #expect(controller.removedHandlers.count > removedBefore)
@@ -236,7 +236,6 @@ struct NetworkPageAgentTests {
     func attachInstallsNetworkAgentIntoPage() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>hello</p></body></html>", in: webView)
@@ -248,6 +247,7 @@ struct NetworkPageAgentTests {
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -278,7 +278,6 @@ struct NetworkPageAgentTests {
     func attachPatchesXHRAndFetchInPageWorld() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>patch-check</p></body></html>", in: webView)
@@ -298,19 +297,20 @@ struct NetworkPageAgentTests {
         let fetchPatched = (payload?["fetchPatched"] as? Bool) ?? ((payload?["fetchPatched"] as? NSNumber)?.boolValue ?? false)
         #expect(xhrPatched == true)
         #expect(fetchPatched == true)
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func fetchBodyUsesHandlePathWhenHandleIsProvided() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>handle</p></body></html>", in: webView)
 
         let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
         #expect(body?.full == "token")
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -321,10 +321,6 @@ struct NetworkPageAgentTests {
         registry.setNetworkBridgeScriptInstalled(true, on: controller)
 
         let agent = NetworkPageAgent(controllerStateRegistry: registry)
-        defer {
-            agent.detachPageWebView(preparing: .stopped)
-            registry.clearState(for: controller)
-        }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>self-heal</p></body></html>", in: webView)
@@ -339,13 +335,14 @@ struct NetworkPageAgentTests {
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+        await agent.detachPageWebView(preparing: .stopped)
+        registry.clearState(for: controller)
     }
 
     @Test
     func fetchBodyRetriesHandleAfterTransientAgentFailure() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>handle retry</p></body></html>", in: webView)
@@ -382,13 +379,13 @@ struct NetworkPageAgentTests {
 
         let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
         #expect(body?.full == "token")
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func fetchBodySkipsRepairAfterLegacyFallbackLocksBridgeMode() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>fallback without repair</p></body></html>", in: webView)
@@ -476,13 +473,13 @@ struct NetworkPageAgentTests {
         if handleDisabled {
             #expect(repairCount == repairCountAfterFirstFetch)
         }
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func fetchBodyFallsBackToReferenceWhenHandleAPIIsUnavailable() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>fallback</p></body></html>", in: webView)
@@ -529,13 +526,13 @@ struct NetworkPageAgentTests {
         if modeBeforeFallback != .legacyJSON, handleDisabled {
             #expect(agent.currentBridgeMode == .legacyJSON)
         }
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func reattachKeepsControlTokenValidForBodyFetch() async throws {
         let agent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>first</p></body></html>", in: webView)
@@ -543,36 +540,34 @@ struct NetworkPageAgentTests {
         let firstBody = await agent.fetchBody(bodyRef: nil, bodyHandle: "first" as NSString, role: .response)
         #expect(firstBody?.full == "first")
 
-        agent.detachPageWebView(preparing: .active)
+        await agent.detachPageWebView(preparing: .active)
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>second</p></body></html>", in: webView)
 
         let secondBody = await agent.fetchBody(bodyRef: nil, bodyHandle: "second" as NSString, role: .response)
         #expect(secondBody?.full == "second")
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func repeatedConfigureWithSameTokenDoesNotDuplicateBootstrapScript() async {
         let agent = NetworkPageAgent()
         let (webView, controller) = makeTestWebView()
-        defer { agent.detachPageWebView(preparing: .stopped) }
 
         await attachAndWait(agent, to: webView)
         let firstScriptCount = controller.userScripts.count
 
-        agent.setMode(.active)
+        await agent.setMode(.active)
         await agent.waitForPendingConfigurationForTesting()
 
         #expect(controller.userScripts.count == firstScriptCount)
+        await agent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
     func replacingAgentOnExistingWebViewRefreshesControlToken() async throws {
         let firstAgent = NetworkPageAgent()
         let (webView, _) = makeTestWebView()
-        defer {
-            firstAgent.detachPageWebView(preparing: .stopped)
-        }
 
         await attachAndWait(firstAgent, to: webView)
         await loadHTML("<html><body><p>first-agent</p></body></html>", in: webView)
@@ -580,20 +575,18 @@ struct NetworkPageAgentTests {
         let firstBody = await firstAgent.fetchBody(bodyRef: nil, bodyHandle: "first-agent" as NSString, role: .response)
         #expect(firstBody?.full == "first-agent")
 
-        firstAgent.detachPageWebView(preparing: .active)
+        await firstAgent.detachPageWebView(preparing: .active)
 
         let secondAgent = NetworkPageAgent()
-        defer {
-            secondAgent.detachPageWebView(preparing: .stopped)
-        }
         await attachAndWait(secondAgent, to: webView)
-        secondAgent.setMode(.active)
+        await secondAgent.setMode(.active)
         await secondAgent.waitForPendingConfigurationForTesting()
         await loadHTML("<html><body><p>second-agent</p></body></html>", in: webView)
         await secondAgent.waitForPendingConfigurationForTesting()
 
         let secondBody = await secondAgent.fetchBody(bodyRef: nil, bodyHandle: "second-agent" as NSString, role: .response)
         #expect(secondBody?.full == "second-agent")
+        await secondAgent.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -641,7 +634,7 @@ struct NetworkPageAgentTests {
     }
 
     private func attachAndWait(_ agent: NetworkPageAgent, to webView: WKWebView) async {
-        agent.attachPageWebView(webView)
+        await agent.attachPageWebView(webView)
         await agent.waitForPendingConfigurationForTesting()
     }
 

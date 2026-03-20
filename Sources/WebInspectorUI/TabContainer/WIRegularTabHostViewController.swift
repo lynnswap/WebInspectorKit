@@ -6,7 +6,9 @@ import WebInspectorRuntime
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
     private let model: WIModel
+    private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
+    private let onSelectionChange: @MainActor () -> Void
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
 
@@ -21,9 +23,16 @@ final class WIRegularTabHostViewController: UINavigationController {
         return control
     }()
 
-    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+    init(
+        model: WIModel,
+        inspector: WIInspectorController,
+        renderCache: WIUIKitTabRenderCache,
+        onSelectionChange: @escaping @MainActor () -> Void
+    ) {
         self.model = model
+        self.inspector = inspector
         self.renderCache = renderCache
+        self.onSelectionChange = onSelectionChange
         super.init(nibName: nil, bundle: nil)
 
         normalizeModelSelectionToDisplayedTabIfNeeded()
@@ -31,6 +40,33 @@ final class WIRegularTabHostViewController: UINavigationController {
            let initialRoot = makeTabRootViewController(for: initialTab) {
             setViewControllers([wrappedForRegularNavigationIfNeeded(initialRoot)], animated: false)
         }
+    }
+
+    convenience init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: model,
+            inspector: WIInspectorController(model: model),
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
+    }
+
+    convenience init(model inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: inspector.model,
+            inspector: inspector,
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
+    }
+
+    convenience init(inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            model: inspector.model,
+            inspector: inspector,
+            renderCache: renderCache,
+            onSelectionChange: {}
+        )
     }
 
     @available(*, unavailable)
@@ -78,7 +114,9 @@ final class WIRegularTabHostViewController: UINavigationController {
             return
         }
 
-        model.setSelectedTabFromUI(visibleTabs[selectedIndex])
+        let selectedTab = visibleTabs[selectedIndex]
+        model.setSelectedTabFromUI(selectedTab)
+        onSelectionChange()
     }
 
     func handleSegmentSelectionChangedForTesting(_ sender: UISegmentedControl) {
@@ -195,11 +233,11 @@ final class WIRegularTabHostViewController: UINavigationController {
         } else {
             switch tab.identifier {
             case WITab.domTabID:
-                viewController = WIDOMViewController(inspector: model.dom)
+                viewController = WIDOMViewController(inspector: inspector.dom)
             case WITab.elementTabID:
-                viewController = WIDOMDetailViewController(inspector: model.dom)
+                viewController = WIDOMDetailViewController(inspector: inspector.dom)
             case WITab.networkTabID:
-                viewController = WINetworkViewController(inspector: model.network)
+                viewController = WINetworkViewController(inspector: inspector.network)
             default:
                 viewController = nil
             }
@@ -239,6 +277,7 @@ final class WIRegularTabHostViewController: UINavigationController {
             return
         }
         model.setSelectedTabFromUI(displayedTab)
+        onSelectionChange()
     }
 
     private func selectedTabForDisplay() -> WITab? {
@@ -304,10 +343,15 @@ private final class WIRegularSplitRootContainerViewController: UIViewController 
 import SwiftUI
 #Preview("Regular Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIModel()
-        session.setTabs([.dom(), .network()])
-        let host = WIRegularTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedTabFromUI(.dom())
+        let session = WIInspectorController()
+        session.model.setTabs([.dom(), .network()])
+        let host = WIRegularTabHostViewController(
+            model: session.model,
+            inspector: session,
+            renderCache: WIUIKitTabRenderCache(),
+            onSelectionChange: {}
+        )
+        session.model.setSelectedTab(.dom())
         return host
     }
 }

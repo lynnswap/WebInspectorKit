@@ -119,7 +119,7 @@ struct NetworkInspectorTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         let entry = makeEntry()
         entry.requestBody = makeBody(reference: "req_ref", role: .request)
         entry.responseBody = makeBody(reference: "resp_ref", role: .response)
@@ -156,7 +156,7 @@ struct NetworkInspectorTests {
         #expect(body.fetchState == .inline)
 
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchRefs == ["resp_ref"]
@@ -173,7 +173,7 @@ struct NetworkInspectorTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         let entry = makeEntry()
 
         inspector.selectEntry(entry)
@@ -206,7 +206,7 @@ struct NetworkInspectorTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
 
         let firstEntry = makeEntry()
         let firstBody = makeBody(reference: "slow-ref", role: .response)
@@ -248,9 +248,9 @@ struct NetworkInspectorTests {
         entry.responseBody = body
         inspector.selectEntry(entry)
 
-        inspector.detach()
+        await inspector.detach()
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
 
         for _ in 0..<64 {
             await Task.yield()
@@ -312,7 +312,7 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func clearResetsSelectedEntry() throws {
+    func clearResetsSelectedEntry() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
@@ -325,7 +325,7 @@ struct NetworkInspectorTests {
         let selectedEntry = try #require(inspector.store.entries.first)
         inspector.selectEntry(selectedEntry)
 
-        inspector.clear()
+        await inspector.clear()
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)
@@ -333,7 +333,7 @@ struct NetworkInspectorTests {
     }
 
     @Test
-    func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() throws {
+    func clearKeepsSearchAndResourceFiltersWhileResettingEntriesAndSelection() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
             to: inspector,
@@ -347,7 +347,7 @@ struct NetworkInspectorTests {
         inspector.searchText = "filter-target"
         inspector.activeResourceFilters = [.script]
 
-        inspector.clear()
+        await inspector.clear()
 
         #expect(inspector.selectedEntry == nil)
         #expect(inspector.store.entries.isEmpty)

@@ -7,7 +7,7 @@ struct NetworkBodyPreviewRenderModel: Sendable {
         case objectTree = 1
     }
 
-    struct Input: Sendable {
+    struct Input: Sendable, Equatable {
         let kind: NetworkBody.Kind
         let full: String?
         let preview: String?
@@ -22,6 +22,15 @@ struct NetworkBodyPreviewRenderModel: Sendable {
             summary = body.summary
             isBase64Encoded = body.isBase64Encoded
             self.unavailableText = unavailableText
+        }
+
+        static func == (lhs: Input, rhs: Input) -> Bool {
+            lhs.kind == rhs.kind
+                && lhs.full == rhs.full
+                && lhs.preview == rhs.preview
+                && lhs.summary == rhs.summary
+                && lhs.isBase64Encoded == rhs.isBase64Encoded
+                && lhs.unavailableText == rhs.unavailableText
         }
     }
 
@@ -116,19 +125,5 @@ struct NetworkBodyPreviewRenderModel: Sendable {
             return nil
         }
         return pretty
-    }
-}
-
-@MainActor
-final class NetworkBodyPreviewRenderGeneration {
-    private var currentValue: UInt64 = 0
-
-    func advance() -> UInt64 {
-        currentValue &+= 1
-        return currentValue
-    }
-
-    func shouldApply(_ generation: UInt64) -> Bool {
-        generation == currentValue
     }
 }

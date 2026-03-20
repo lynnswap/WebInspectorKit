@@ -75,11 +75,15 @@ public final class DOMPageAgent: NSObject, PageAgent {
     }
 
     isolated deinit {
-        detachPageWebView()
+        tearDownPageWebViewForDeinit()
     }
 
     public func updateConfiguration(_ configuration: DOMConfiguration) {
         self.configuration = configuration
+    }
+
+    func tearDownForDeinit() {
+        tearDownPageWebViewForDeinit()
     }
 }
 
@@ -382,21 +386,26 @@ public extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
-    func willDetachPageWebView(_ webView: WKWebView) {
-        // Stop observers if the script is installed. This is best-effort.
-        Task {
-            try? await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
-                contentWorld: bridgeWorld
-            )
+    func ensureDOMAgentScriptInstalled(on webView: WKWebView) async {
+        await installDOMAgentScriptIfNeeded(on: webView)
+    }
+
+    func detachPageWebViewAndWaitForCleanup() async {
+        let detachedWebView = webView
+        detachPageWebView()
+        guard let detachedWebView else {
+            return
         }
+        await performDetachCleanup(on: detachedWebView)
+    }
+
+    func willDetachPageWebView(_ webView: WKWebView) {
         detachMessageHandlers(from: webView)
     }
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
         resolveBridgeModeIfNeeded(with: webView)
         registerMessageHandlers(on: webView)
-        installDOMAgentScriptIfNeeded(on: webView)
     }
 
     func didClearPageWebView() {
@@ -407,6 +416,32 @@ extension DOMPageAgent {
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func performDetachCleanup(on webView: WKWebView) async {
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            domLogger.debug("detach cleanup skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func tearDownPageWebViewForDeinit() {
+        guard let webView else {
+            return
+        }
+        webView.evaluateJavaScript(
+            "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
+            in: nil,
+            in: bridgeWorld,
+            completionHandler: nil
+        )
+        detachMessageHandlers(from: webView)
+        self.webView = nil
+        handleCache.clear()
+    }
+
     func resolveBridgeModeIfNeeded(with webView: WKWebView) {
         guard !bridgeModeLocked else {
             return
@@ -470,7 +505,7 @@ private extension DOMPageAgent {
         domLogger.debug("detached DOM message handlers")
     }
 
-    func installDOMAgentScriptIfNeeded(on webView: WKWebView) {
+    func installDOMAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
         if controllerStateRegistry.domBridgeScriptInstalled(on: controller) {
             return
@@ -502,11 +537,14 @@ private extension DOMPageAgent {
         )
         controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
 
-        // Install into already-loaded documents too.
-        Task {
-            _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: bridgeWorld)
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                scriptSource,
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            controllerStateRegistry.setDOMBridgeScriptInstalled(false, on: controller)
         }
-        domLogger.debug("installed DOM agent user script")
     }
 
     func evaluateStringScript(_ script: String, nodeId: Int) async throws -> String {

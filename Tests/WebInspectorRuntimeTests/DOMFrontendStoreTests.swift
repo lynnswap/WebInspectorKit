@@ -331,16 +331,16 @@ struct DOMFrontendStoreTests {
     }
 
     @Test
-    func bundleFlushIntervalClampsToExpectedRange() {
+    func bundleFlushIntervalClampsToExpectedRange() async {
         let store = makeStore(autoUpdateDebounce: 0.01)
         #expect(abs(store.testBundleFlushInterval - 0.05) < 0.0001)
 
-        store.updateConfiguration(
+        await store.updateConfiguration(
             .init(snapshotDepth: 4, subtreeDepth: 3, autoUpdateDebounce: 0.4)
         )
         #expect(abs(store.testBundleFlushInterval - 0.1) < 0.0001)
 
-        store.updateConfiguration(
+        await store.updateConfiguration(
             .init(snapshotDepth: 4, subtreeDepth: 3, autoUpdateDebounce: 2.0)
         )
         #expect(abs(store.testBundleFlushInterval - 0.2) < 0.0001)

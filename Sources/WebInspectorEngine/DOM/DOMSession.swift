@@ -31,13 +31,11 @@ public final class DOMSession {
         pageAgent = DOMPageAgent(configuration: configuration)
     }
 
-    public func updateConfiguration(_ configuration: DOMConfiguration) {
+    public func updateConfiguration(_ configuration: DOMConfiguration) async {
         self.configuration = configuration
         pageAgent.updateConfiguration(configuration)
         if autoSnapshotEnabled {
-            Task {
-                await pageAgent.setAutoSnapshot(enabled: true)
-            }
+            await pageAgent.setAutoSnapshot(enabled: true)
         }
     }
 
@@ -50,10 +48,14 @@ public final class DOMSession {
     }
 
     @discardableResult
-    public func attach(to webView: WKWebView) -> AttachmentResult {
+    public func attach(to webView: WKWebView) async -> AttachmentResult {
         if pageAgent.webView === webView {
             lastPageWebView = webView
             return (false, false)
+        }
+
+        if let attachedWebView = pageAgent.webView, attachedWebView !== webView {
+            await pageAgent.detachPageWebViewAndWaitForCleanup()
         }
 
         graphStore.resetForDocumentUpdate()
@@ -62,23 +64,22 @@ public final class DOMSession {
         let shouldPreserveState = pageAgent.webView == nil && previousWebView === webView
         let shouldReload = shouldPreserveState || previousWebView !== webView
         pageAgent.attachPageWebView(webView)
+        await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
         lastPageWebView = webView
 
         if autoSnapshotEnabled {
-            Task {
-                await self.pageAgent.setAutoSnapshot(enabled: true)
-            }
+            await pageAgent.setAutoSnapshot(enabled: true)
         }
 
         return (shouldReload, shouldPreserveState)
     }
 
-    public func suspend() {
-        pageAgent.detachPageWebView()
+    public func suspend() async {
+        await pageAgent.detachPageWebViewAndWaitForCleanup()
     }
 
-    public func detach() {
-        suspend()
+    public func detach() async {
+        await suspend()
         graphStore.resetForDocumentUpdate()
         lastPageWebView = nil
     }
@@ -87,14 +88,19 @@ public final class DOMSession {
         pageAgent.webView?.reload()
     }
 
-    public func setAutoSnapshot(enabled: Bool) {
+    public func setAutoSnapshot(enabled: Bool) async {
         autoSnapshotEnabled = enabled
         guard pageAgent.webView != nil else {
             return
         }
-        Task {
-            await self.pageAgent.setAutoSnapshot(enabled: enabled)
-        }
+        await pageAgent.setAutoSnapshot(enabled: enabled)
+    }
+
+    package func tearDownForDeinit() {
+        pageAgent.tearDownForDeinit()
+        graphStore.resetForDocumentUpdate()
+        lastPageWebView = nil
+        autoSnapshotEnabled = false
     }
 }
 

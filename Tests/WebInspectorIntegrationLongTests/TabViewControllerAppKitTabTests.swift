@@ -18,7 +18,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func loadViewIfNeededRendersInitialContentAndSelection() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
@@ -35,7 +35,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func appKitNormalizesStandaloneElementTabToDOM() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: WITab.elementTabID, title: "Element")
         ]
@@ -47,13 +47,13 @@ struct TabViewControllerAppKitTabTests {
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
         #expect(container.visibleContentTabIDForTesting == WITab.domTabID)
         #expect(container.visibleContentViewControllerForTesting is WIDOMViewController)
-        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID])
-        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.model.tabs.map(\.identifier) == [WITab.elementTabID])
+        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
     }
 
     @Test
     func appKitKeepsSyntheticDOMFallbackWhenElementAndNetworkAreConfiguredWithoutDOM() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: WITab.elementTabID, title: "Element"),
             makeDescriptor(id: WITab.networkTabID, title: "Network")
@@ -64,12 +64,12 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.model.tabs.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
     }
 
     @Test
-    func standaloneElementProxyKeepsDOMAutoSnapshotEnabled() {
-        let controller = WIModel()
+    func standaloneElementProxyKeepsDOMAutoSnapshotEnabled() async {
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: WITab.elementTabID, title: "Element")
         ]
@@ -80,14 +80,16 @@ struct TabViewControllerAppKitTabTests {
             _ = window
         }
 
+        await container.waitForRuntimeStateSyncForTesting()
+
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
-        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
     }
 
     @Test
     func appKitRemovesElementWhenDOMTabExists() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: WITab.domTabID, title: "DOM"),
             makeDescriptor(id: WITab.elementTabID, title: "Element"),
@@ -102,7 +104,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.model.tabs.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
 
         selectTabViaPicker(index: 1, in: window)
         #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
@@ -112,25 +114,25 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func appKitHiddenElementSelectionNormalizesToDOMWhenDOMExists() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let dom = makeDescriptor(id: WITab.domTabID, title: "DOM")
         let element = makeDescriptor(id: WITab.elementTabID, title: "Element")
         let network = makeDescriptor(id: WITab.networkTabID, title: "Network")
         let container = WITabViewController(controller, webView: nil, tabs: [dom, element, network])
 
-        controller.setSelectedTabFromUI(element)
-        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
+        controller.model.setSelectedTabFromUI(element)
+        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
 
         container.loadViewIfNeeded()
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.selectedTab?.identifier == WITab.domTabID)
+        #expect(controller.model.selectedTab?.identifier == WITab.domTabID)
     }
 
     @Test
     func toolbarContainsTabPickerAndUsesDescriptorTitles() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "tab_a", title: "A"),
             makeDescriptor(id: "tab_b", title: "B")
@@ -158,7 +160,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func pickerSelectionUpdatesVisibleContentAndModelSelectionWhenConnected() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -174,12 +176,12 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.selectedTabIdentifierForTesting == "wi_network")
         #expect(container.visibleContentTabIDForTesting == "wi_network")
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.model.selectedTab?.id == "wi_network")
     }
 
     @Test
     func pickerCanSwitchBackFromNetworkToDOM() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -200,13 +202,13 @@ struct TabViewControllerAppKitTabTests {
         #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
         drainMainQueue()
-        #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(controller.model.selectedTab?.id == "wi_dom")
         #expect(container.hasVisibleContentForTesting == true)
     }
 
     @Test
     func rebuildingTabsKeepsVisibleContentBoundToSelectedTab() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -220,7 +222,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
-        controller.setTabs([
+        controller.model.setTabs([
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ])
@@ -233,7 +235,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func emptyTabsClearSelectionAndHideVisibleContent() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -248,7 +250,7 @@ struct TabViewControllerAppKitTabTests {
         container.setTabs([])
         drainMainQueue()
 
-        #expect(controller.selectedTab == nil)
+        #expect(controller.model.selectedTab == nil)
         #expect(container.selectedTabIdentifierForTesting == nil)
         #expect(container.visibleContentTabIDForTesting == nil)
         #expect(container.hasVisibleContentForTesting == false)
@@ -256,7 +258,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func toolbarLayoutTracksSelectedTab() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -276,7 +278,7 @@ struct TabViewControllerAppKitTabTests {
         ])
 
         selectTabViaPicker(index: 1, in: window)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.model.selectedTab?.id == "wi_network")
         drainMainQueue()
 
         #expect(toolbarIdentifierRawValues(in: window) == [
@@ -290,7 +292,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkSearchToolbarFieldUpdatesSearchText() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -303,7 +305,7 @@ struct TabViewControllerAppKitTabTests {
         }
 
         selectTabViaPicker(index: 1, in: window)
-        #expect(controller.selectedTab?.id == "wi_network")
+        #expect(controller.model.selectedTab?.id == "wi_network")
         guard
             let searchItem = window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == networkSearchIdentifierRaw }) as? NSSearchToolbarItem,
             let action = searchItem.searchField.action
@@ -320,7 +322,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func networkFilterToolbarItemBecomesProminentWhenFiltering() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -381,7 +383,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func replacingDescriptorWithSameIdentifierRebuildsCachedContentController() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let firstController = MarkerViewController(marker: "first")
         let secondController = MarkerViewController(marker: "second")
 
@@ -412,7 +414,7 @@ struct TabViewControllerAppKitTabTests {
 
     @Test
     func duplicateIdentifierTabsUseDistinctCachedContentControllers() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let firstController = MarkerViewController(marker: "first")
         let secondController = MarkerViewController(marker: "second")
         let firstDescriptor = WITab(
@@ -448,13 +450,13 @@ struct TabViewControllerAppKitTabTests {
         let switchedVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
         #expect(switchedVisible?.marker == "second")
         #expect(initialVisible !== switchedVisible)
-        #expect(controller.selectedTab === secondDescriptor)
+        #expect(controller.model.selectedTab === secondDescriptor)
         #expect(tabPicker(in: window)?.selectedSegment == 1)
     }
 
     @Test
     func appKitSplitViewsUseStableAutosaveNamesAcrossTabSwitches() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         let descriptors = [
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
@@ -493,10 +495,13 @@ struct TabViewControllerAppKitTabTests {
         let window = NSWindow(contentViewController: container)
         container.loadViewIfNeeded()
         container.viewWillAppear()
+        window.makeKeyAndOrderFront(nil)
+        drainMainQueue()
         return window
     }
 
     private func tabPicker(in window: NSWindow) -> NSSegmentedControl? {
+        waitForToolbarItemsIfNeeded(in: window)
         guard let toolbar = window.toolbar else {
             return nil
         }
@@ -510,16 +515,31 @@ struct TabViewControllerAppKitTabTests {
     }
 
     private func toolbarIdentifierRawValues(in window: NSWindow) -> [String] {
-        window.toolbar?.items.map { $0.itemIdentifier.rawValue } ?? []
+        waitForToolbarItemsIfNeeded(in: window)
+        return window.toolbar?.items.map { $0.itemIdentifier.rawValue } ?? []
     }
 
     private func tabPickerToolbarItem(in window: NSWindow) -> NSToolbarItem? {
-        window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == tabPickerIdentifierRaw })
+        waitForToolbarItemsIfNeeded(in: window)
+        return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == tabPickerIdentifierRaw })
     }
 
     private func networkFilterToolbarItem(in window: NSWindow) -> NSMenuToolbarItem? {
-        window.toolbar?.items
+        waitForToolbarItemsIfNeeded(in: window)
+        return window.toolbar?.items
             .first(where: { $0.itemIdentifier.rawValue == networkFilterIdentifierRaw }) as? NSMenuToolbarItem
+    }
+
+    private func waitForToolbarItemsIfNeeded(in window: NSWindow, cycles: Int = 5) {
+        guard window.toolbar?.items.isEmpty != false else {
+            return
+        }
+        for _ in 0..<cycles {
+            drainMainQueue()
+            if window.toolbar?.items.isEmpty == false {
+                return
+            }
+        }
     }
 
     private func drainMainQueue() {
