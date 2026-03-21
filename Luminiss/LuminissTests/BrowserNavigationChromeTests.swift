@@ -1,7 +1,7 @@
 #if os(iOS)
 import UIKit
 import XCTest
-@testable import Webspector
+@testable import Luminiss
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
@@ -139,7 +139,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
         firstHost.selectedTab = elementTab
         firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
-        XCTAssertEqual(rootViewController.inspectorController.selectedTab?.identifier, "wi_element")
+        XCTAssertEqual(rootViewController.inspectorController.model.selectedTab?.identifier, "wi_element")
 
         dismissPresentedInspector(from: rootViewController)
 

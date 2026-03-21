@@ -13,7 +13,7 @@ typealias BrowserPlatformColor = NSColor
 #endif
 
 private let logger = Logger(
-    subsystem: "Webspector",
+    subsystem: "Luminiss",
     category: "BrowserStore"
 )
 
@@ -56,7 +56,7 @@ private let logger = Logger(
             }
             return currentURL.absoluteString
         }
-        return "Webspector"
+        return "Luminiss"
     }
 
     init(url: URL, automaticallyLoadsInitialRequest: Bool = true) {
@@ -319,7 +319,7 @@ extension BrowserStore: WKUIDelegate {
             }
 
             let openInAppAction = UIAction(
-                title: "Open in Webspector",
+                title: "Open in Luminiss",
                 image: UIImage(systemName: "safari")
             ) { _ in
                 guard let webView else {

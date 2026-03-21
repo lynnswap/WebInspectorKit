@@ -112,7 +112,7 @@ public final class WIInspectorController {
         await applyHostState(pageWebView: webView, visibility: .visible)
     }
 
-    @_spi(Webspector) public func tearDownForDeinit() {
+    @_spi(Luminiss) public func tearDownForDeinit() {
         connectedPageWebView = nil
         dom.tearDownForDeinit()
         network.tearDownForDeinit()

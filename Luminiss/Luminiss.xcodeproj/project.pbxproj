@@ -17,24 +17,24 @@
 			containerPortal = ABA353C02EDFF1EC00489A00 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = ABA353C72EDFF1EC00489A00;
-			remoteInfo = Webspector;
+			remoteInfo = Luminiss;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		ABA353C82EDFF1EC00489A00 /* Webspector.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Webspector.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		ABA353D52EDFF1ED00489A00 /* WebspectorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WebspectorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABA353C82EDFF1EC00489A00 /* Luminiss.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Luminiss.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		ABA353D52EDFF1ED00489A00 /* LuminissTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LuminissTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		77B94B4D0F2A4D0A8B64C01A /* WebspectorTests */ = {
+		77B94B4D0F2A4D0A8B64C01A /* LuminissTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = WebspectorTests;
+			path = LuminissTests;
 			sourceTree = "<group>";
 		};
-		ABA353CA2EDFF1EC00489A00 /* Webspector */ = {
+		ABA353CA2EDFF1EC00489A00 /* Luminiss */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Webspector;
+			path = Luminiss;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -62,8 +62,8 @@
 		ABA353BF2EDFF1EC00489A00 = {
 			isa = PBXGroup;
 			children = (
-				ABA353CA2EDFF1EC00489A00 /* Webspector */,
-				77B94B4D0F2A4D0A8B64C01A /* WebspectorTests */,
+				ABA353CA2EDFF1EC00489A00 /* Luminiss */,
+				77B94B4D0F2A4D0A8B64C01A /* LuminissTests */,
 				ABA353C92EDFF1EC00489A00 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -71,8 +71,8 @@
 		ABA353C92EDFF1EC00489A00 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				ABA353C82EDFF1EC00489A00 /* Webspector.app */,
-				ABA353D52EDFF1ED00489A00 /* WebspectorTests.xctest */,
+				ABA353C82EDFF1EC00489A00 /* Luminiss.app */,
+				ABA353D52EDFF1ED00489A00 /* LuminissTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,9 +80,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		ABA353C72EDFF1EC00489A00 /* Webspector */ = {
+		ABA353C72EDFF1EC00489A00 /* Luminiss */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = ABA353E92EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "Webspector" */;
+			buildConfigurationList = ABA353E92EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "Luminiss" */;
 			buildPhases = (
 				ABA353C42EDFF1EC00489A00 /* Sources */,
 				ABA353C52EDFF1EC00489A00 /* Frameworks */,
@@ -93,20 +93,20 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				ABA353CA2EDFF1EC00489A00 /* Webspector */,
+				ABA353CA2EDFF1EC00489A00 /* Luminiss */,
 			);
-			name = Webspector;
+			name = Luminiss;
 			packageProductDependencies = (
 				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
 				F0A100022F00000100000001 /* WKViewport */,
 			);
-			productName = Webspector;
-			productReference = ABA353C82EDFF1EC00489A00 /* Webspector.app */;
+			productName = Luminiss;
+			productReference = ABA353C82EDFF1EC00489A00 /* Luminiss.app */;
 			productType = "com.apple.product-type.application";
 		};
-		ABA353D42EDFF1ED00489A00 /* WebspectorTests */ = {
+		ABA353D42EDFF1ED00489A00 /* LuminissTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = ABA353EC2EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "WebspectorTests" */;
+			buildConfigurationList = ABA353EC2EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "LuminissTests" */;
 			buildPhases = (
 				ABA353D12EDFF1ED00489A00 /* Sources */,
 				ABA353D22EDFF1ED00489A00 /* Frameworks */,
@@ -118,13 +118,13 @@
 				ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				77B94B4D0F2A4D0A8B64C01A /* WebspectorTests */,
+				77B94B4D0F2A4D0A8B64C01A /* LuminissTests */,
 			);
-			name = WebspectorTests;
+			name = LuminissTests;
 			packageProductDependencies = (
 			);
-			productName = WebspectorTests;
-			productReference = ABA353D52EDFF1ED00489A00 /* WebspectorTests.xctest */;
+			productName = LuminissTests;
+			productReference = ABA353D52EDFF1ED00489A00 /* LuminissTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -146,7 +146,7 @@
 					};
 				};
 			};
-			buildConfigurationList = ABA353C32EDFF1EC00489A00 /* Build configuration list for PBXProject "Webspector" */;
+			buildConfigurationList = ABA353C32EDFF1EC00489A00 /* Build configuration list for PBXProject "Luminiss" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -163,8 +163,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				ABA353C72EDFF1EC00489A00 /* Webspector */,
-				ABA353D42EDFF1ED00489A00 /* WebspectorTests */,
+				ABA353C72EDFF1EC00489A00 /* Luminiss */,
+				ABA353D42EDFF1ED00489A00 /* LuminissTests */,
 			);
 		};
 /* End PBXProject section */
@@ -206,7 +206,7 @@
 /* Begin PBXTargetDependency section */
 		ABA353D72EDFF1ED00489A00 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = ABA353C72EDFF1EC00489A00 /* Webspector */;
+			target = ABA353C72EDFF1EC00489A00 /* Luminiss */;
 			targetProxy = ABA353D62EDFF1ED00489A00 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -374,7 +374,7 @@
 					"-framework",
 					JavaScriptCore,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.Webspector;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.Luminiss;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -434,7 +434,7 @@
 					"-framework",
 					JavaScriptCore,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.Webspector;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.Luminiss;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -461,7 +461,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.WebspectorTests;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.LuminissTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -471,7 +471,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Webspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Webspector";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Luminiss.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Luminiss";
 				XROS_DEPLOYMENT_TARGET = 26.1;
 			};
 			name = Debug;
@@ -487,7 +487,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.WebspectorTests;
+				PRODUCT_BUNDLE_IDENTIFIER = lynnpd.LuminissTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -497,7 +497,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Webspector.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Webspector";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Luminiss.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Luminiss";
 				XROS_DEPLOYMENT_TARGET = 26.1;
 			};
 			name = Release;
@@ -505,7 +505,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		ABA353C32EDFF1EC00489A00 /* Build configuration list for PBXProject "Webspector" */ = {
+		ABA353C32EDFF1EC00489A00 /* Build configuration list for PBXProject "Luminiss" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				ABA353E72EDFF1ED00489A00 /* Debug */,
@@ -514,7 +514,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		ABA353E92EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "Webspector" */ = {
+		ABA353E92EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "Luminiss" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				ABA353EA2EDFF1ED00489A00 /* Debug */,
@@ -523,7 +523,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		ABA353EC2EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "WebspectorTests" */ = {
+		ABA353EC2EDFF1ED00489A00 /* Build configuration list for PBXNativeTarget "LuminissTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				ABA353ED2EDFF1ED00489A00 /* Debug */,

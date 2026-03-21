@@ -15,7 +15,7 @@ final class BrowserPageViewController: UIViewController {
     private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let logger = Logger(subsystem: "Webspector", category: "BrowserPageViewController")
+    private let logger = Logger(subsystem: "Luminiss", category: "BrowserPageViewController")
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -204,31 +204,31 @@ final class BrowserPageViewController: UIViewController {
         configureNavigationButtonItem(
             compactInspectorButtonItem,
             action: #selector(handleOpenInspectorAction(_:)),
-            accessibilityIdentifier: "Webspector.openInspectorButton.compact"
+            accessibilityIdentifier: "Luminiss.openInspectorButton.compact"
         )
         configureNavigationButtonItem(
             compactBackButtonItem,
             action: #selector(handleBackAction(_:)),
-            accessibilityIdentifier: "Webspector.navigation.back.compact"
+            accessibilityIdentifier: "Luminiss.navigation.back.compact"
         )
         configureNavigationButtonItem(
             compactForwardButtonItem,
             action: #selector(handleForwardAction(_:)),
-            accessibilityIdentifier: "Webspector.navigation.forward.compact"
+            accessibilityIdentifier: "Luminiss.navigation.forward.compact"
         )
         configureNavigationButtonItem(
             regularInspectorButtonItem,
-            accessibilityIdentifier: "Webspector.openInspectorButton.regular"
+            accessibilityIdentifier: "Luminiss.openInspectorButton.regular"
         )
         configureNavigationButtonItem(
             regularBackButtonItem,
             action: #selector(handleBackAction(_:)),
-            accessibilityIdentifier: "Webspector.navigation.back.regular"
+            accessibilityIdentifier: "Luminiss.navigation.back.regular"
         )
         configureNavigationButtonItem(
             regularForwardButtonItem,
             action: #selector(handleForwardAction(_:)),
-            accessibilityIdentifier: "Webspector.navigation.forward.regular"
+            accessibilityIdentifier: "Luminiss.navigation.forward.regular"
         )
         refreshInspectorButtonConfigurations()
 
@@ -559,7 +559,7 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         translatesAutoresizingMaskIntoConstraints = false
         layer.cornerRadius = 10
         clipsToBounds = true
-        accessibilityIdentifier = "Webspector.diagnostics.panel"
+        accessibilityIdentifier = "Luminiss.diagnostics.panel"
 
         let stackView = UIStackView(arrangedSubviews: [
             terminationCountLabel,
@@ -578,10 +578,10 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
             label.numberOfLines = 2
         }
 
-        terminationCountLabel.accessibilityIdentifier = "Webspector.diagnostics.terminationCount"
-        didFinishCountLabel.accessibilityIdentifier = "Webspector.diagnostics.didFinishCount"
-        currentURLLabel.accessibilityIdentifier = "Webspector.diagnostics.currentURL"
-        lastErrorLabel.accessibilityIdentifier = "Webspector.diagnostics.lastNavigationError"
+        terminationCountLabel.accessibilityIdentifier = "Luminiss.diagnostics.terminationCount"
+        didFinishCountLabel.accessibilityIdentifier = "Luminiss.diagnostics.didFinishCount"
+        currentURLLabel.accessibilityIdentifier = "Luminiss.diagnostics.currentURL"
+        lastErrorLabel.accessibilityIdentifier = "Luminiss.diagnostics.lastNavigationError"
 
         NSLayoutConstraint.activate([
             stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),

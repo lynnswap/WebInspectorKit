@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-               BuildableName = "Webspector.app"
-               BlueprintName = "Webspector"
-               ReferencedContainer = "container:Webspector.xcodeproj">
+               BuildableName = "Luminiss.app"
+               BlueprintName = "Luminiss"
+               ReferencedContainer = "container:Luminiss.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "Webspector.app"
-            BlueprintName = "Webspector"
-            ReferencedContainer = "container:Webspector.xcodeproj">
+            BuildableName = "Luminiss.app"
+            BlueprintName = "Luminiss"
+            ReferencedContainer = "container:Luminiss.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -45,9 +45,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353D42EDFF1ED00489A00"
-               BuildableName = "WebspectorTests.xctest"
-               BlueprintName = "WebspectorTests"
-               ReferencedContainer = "container:Webspector.xcodeproj">
+               BuildableName = "LuminissTests.xctest"
+               BlueprintName = "LuminissTests"
+               ReferencedContainer = "container:Luminiss.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -67,9 +67,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "Webspector.app"
-            BlueprintName = "Webspector"
-            ReferencedContainer = "container:Webspector.xcodeproj">
+            BuildableName = "Luminiss.app"
+            BlueprintName = "Luminiss"
+            ReferencedContainer = "container:Luminiss.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -84,9 +84,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "Webspector.app"
-            BlueprintName = "Webspector"
-            ReferencedContainer = "container:Webspector.xcodeproj">
+            BuildableName = "Luminiss.app"
+            BlueprintName = "Luminiss"
+            ReferencedContainer = "container:Luminiss.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

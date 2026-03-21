@@ -1,6 +1,6 @@
 //
-//  WebspectorApp.swift
-//  Webspector
+//  LuminissApp.swift
+//  Luminiss
 //
 //  Created by lynnswap on 2025/12/03.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct WebspectorApp: App {
+struct LuminissApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

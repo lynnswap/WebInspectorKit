@@ -3,7 +3,7 @@ import AppKit
 import WebInspectorKit
 import WebKit
 import XCTest
-@testable import Webspector
+@testable import Luminiss
 
 @MainActor
 final class BrowserStoreInspectorRegressionTests: XCTestCase {
@@ -235,7 +235,7 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         browserController.forceWindowAttachmentForTesting(in: browserWindow)
         browserController.forceWindowAttachmentForTesting(in: browserWindow)
 
-        XCTAssertTrue(browserWindow.toolbar != nil, "The Webspector window did not install its NSToolbar after attaching to a window.")
+        XCTAssertTrue(browserWindow.toolbar != nil, "The Luminiss window did not install its NSToolbar after attaching to a window.")
         XCTAssertEqual(browserController.toolbarInstallationCountForTesting, 1)
     }
 
@@ -381,7 +381,7 @@ private extension BrowserStoreInspectorRegressionTests {
         let window = NSWindow(contentViewController: controller)
         window.setContentSize(NSSize(width: 1024, height: 768))
         window.styleMask = NSWindow.StyleMask([.titled, .closable, .resizable])
-        window.title = "Webspector Test Host"
+        window.title = "Luminiss Test Host"
         retainedWindows.append(window)
         return (window, controller)
     }
@@ -403,7 +403,7 @@ private extension BrowserStoreInspectorRegressionTests {
 
     func makeTemporaryHTMLURL(named name: String, html: String) throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("WebspectorInspectorRegression-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("LuminissInspectorRegression-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         temporaryDirectories.append(directoryURL)
 

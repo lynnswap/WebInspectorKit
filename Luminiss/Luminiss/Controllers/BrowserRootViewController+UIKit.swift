@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import UIKit
-@_spi(Webspector) import WebInspectorKit
+@_spi(Luminiss) import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: UINavigationController {

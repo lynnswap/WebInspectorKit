@@ -12,7 +12,7 @@
 - `Tests/WebInspectorTestSupport`: shared Swift test helpers.
 - `Sources/WebInspectorScripts/TypeScript/Tests`: Vitest suites for DOM/network helper scripts.
 - `Tools/WebInspectorScriptsTypeScriptTests`: pnpm/vitest harness so `node_modules` stays out of `Sources/`.
-- `MiniBrowser/`: sample host app.
+- `Luminiss/`: app project.
 - `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/`: JavaScript bundling toolchain used by `./Scripts/generate-bundled-js.sh`.
 
 ## Test Commands
@@ -52,4 +52,4 @@ Run from repository root:
   - Purpose and change summary
   - Linked issue/task (if available)
   - Test commands executed and results
-  - Screenshots for MiniApp UI changes
+  - Screenshots for app UI changes

@@ -1,6 +1,6 @@
 #if canImport(AppKit)
 import AppKit
-@_spi(Webspector) import WebInspectorKit
+@_spi(Luminiss) import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSToolbarItemValidation {
@@ -11,8 +11,8 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     }
 
     private enum ToolbarItemIdentifier {
-        static let navigation = NSToolbarItem.Identifier("Webspector.Toolbar.Navigation")
-        static let inspector = NSToolbarItem.Identifier("Webspector.Toolbar.Inspector")
+        static let navigation = NSToolbarItem.Identifier("Luminiss.Toolbar.Navigation")
+        static let inspector = NSToolbarItem.Identifier("Luminiss.Toolbar.Inspector")
     }
 
     let store: BrowserStore
@@ -224,7 +224,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             return
         }
 
-        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("Webspector.Toolbar"))
+        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("Luminiss.Toolbar"))
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
