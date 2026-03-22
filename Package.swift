@@ -51,8 +51,8 @@ let package = Package(
             exact: "0.6.1"
         ),
         .package(
-            url: "https://github.com/p-x9/MachOKit",
-            exact: "0.46.1"
+            url: "https://github.com/lynnswap/MachOKit.git",
+            revision: "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
         )
     ],
     targets: [
@@ -164,7 +164,8 @@ let package = Package(
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorEngine"
+                "WebInspectorEngine",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings

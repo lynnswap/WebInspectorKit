@@ -1,13 +1,21 @@
 {
-  "originHash" : "bc7c8a0946997e70995d91cfdd4e7b635d503302f438de316731cd29a4a5005a",
+  "originHash" : "491012bf8c8ceace4bbd777c3cdd4b0cfbda2480e92f6bf8a597be4e6ac5233b",
   "pins" : [
     {
       "identity" : "machokit",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/p-x9/MachOKit",
+      "location" : "https://github.com/lynnswap/MachOKit.git",
       "state" : {
-        "revision" : "a17885f09c038957a7ec70cb3099f4a423af4c40",
-        "version" : "0.46.1"
+        "revision" : "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
+      }
+    },
+    {
+      "identity" : "objectarchivekit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/p-x9/ObjectArchiveKit.git",
+      "state" : {
+        "revision" : "c47d1b2df06168bacb396a1765ae5bf7fa2868fb",
+        "version" : "0.3.0"
       }
     },
     {

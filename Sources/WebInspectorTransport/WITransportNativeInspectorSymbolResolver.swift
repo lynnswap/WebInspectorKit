@@ -12,6 +12,7 @@ private enum WITransportNativeInspectorSymbolFailure: String {
     case connectDisconnectSymbolMissing = "connect/disconnect symbol missing"
     case runtimeFunctionSymbolMissing = "runtime function symbol missing"
     case resolvedAddressOutsideWebKitText = "resolved address outside WebKit text"
+    case resolvedAddressImageMismatch = "resolved address outside expected image"
 }
 
 private struct WITransportLoadedWebKitImage {
@@ -220,7 +221,9 @@ private enum WITransportNativeInspectorResolver {
         if let resolution = finalizeResolution(
             loadedImageResults,
             successLog: "resolved symbol via MachOKit loaded image symbol table",
-            imagePath: loadedImage.path
+            imagePath: loadedImage.path,
+            webKitHeaderAddress: loadedImage.headerAddress,
+            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
         ) {
             return resolution
         }
@@ -241,14 +244,13 @@ private enum WITransportNativeInspectorResolver {
         javaScriptCorePathSuffixes: [String],
         symbols: WITransportNativeInspectorSymbolNames
     ) -> WITransportNativeInspectorSymbolResolution {
-        var sharedCacheSize: UInt = 0
-        guard let sharedCachePointer = unsafe _dyld_get_shared_cache_range(&sharedCacheSize) else {
+        guard let sharedCacheRange = unsafe WITransportDyldRuntime.sharedCacheRange() else {
             return failure(.sharedCacheUnavailable)
         }
 
         let cache: DyldCacheLoaded
         do {
-            cache = try unsafe DyldCacheLoaded(ptr: sharedCachePointer)
+            cache = try unsafe DyldCacheLoaded(ptr: sharedCacheRange.pointer)
         } catch {
             return failure(.sharedCacheUnavailable, detail: error.localizedDescription)
         }
@@ -352,12 +354,14 @@ private enum WITransportNativeInspectorResolver {
                         )
                     )
                     lastResolvedSymbols = resolvedSymbols
-                    if let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) {
-                        return successResolution(
-                            functionAddresses,
+                    if resolvedFunctionAddresses(from: resolvedSymbols) != nil {
+                        return finalizeResolution(
+                            resolvedSymbols,
                             successLog: "resolved symbol via dyld local symbols",
-                            imagePath: loadedImage.path
-                        )
+                            imagePath: loadedImage.path,
+                            webKitHeaderAddress: loadedImage.headerAddress,
+                            javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
+                        ) ?? failure(.runtimeFunctionSymbolMissing)
                     }
                 }
             }
@@ -433,29 +437,49 @@ private enum WITransportNativeInspectorResolver {
                 )
             )
             lastResolvedSymbols = resolvedSymbols
-            if let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) {
-                return successResolution(
-                    functionAddresses,
+            if resolvedFunctionAddresses(from: resolvedSymbols) != nil {
+                return finalizeResolution(
+                    resolvedSymbols,
                     successLog: "resolved symbol via dyld local symbols (file-backed)",
-                    imagePath: "\(loadedImage.path) cache=\(fileBackedSymbols.cachePath),\(javaScriptCoreFileBackedSymbols.cachePath)"
-                )
+                    imagePath: "\(loadedImage.path) cache=\(fileBackedSymbols.cachePath),\(javaScriptCoreFileBackedSymbols.cachePath)",
+                    webKitHeaderAddress: loadedImage.headerAddress,
+                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
+                ) ?? failure(.runtimeFunctionSymbolMissing)
             }
         } catch let lookupFailure as WITransportLookupFailure {
             if let lastResolvedSymbols {
-                return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+                return finalizeResolution(
+                    lastResolvedSymbols,
+                    successLog: "",
+                    imagePath: loadedImage.path,
+                    webKitHeaderAddress: loadedImage.headerAddress,
+                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
+                )
                     ?? failure(lookupFailure.kind, detail: lookupFailure.detail)
             }
             return failure(lookupFailure.kind, detail: lookupFailure.detail)
         } catch {
             if let lastResolvedSymbols {
-                return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+                return finalizeResolution(
+                    lastResolvedSymbols,
+                    successLog: "",
+                    imagePath: loadedImage.path,
+                    webKitHeaderAddress: loadedImage.headerAddress,
+                    javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
+                )
                     ?? failure(.localSymbolsUnavailable, detail: error.localizedDescription)
             }
             return failure(.localSymbolsUnavailable, detail: error.localizedDescription)
         }
 
         if let lastResolvedSymbols {
-            return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+            return finalizeResolution(
+                lastResolvedSymbols,
+                successLog: "",
+                imagePath: loadedImage.path,
+                webKitHeaderAddress: loadedImage.headerAddress,
+                javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
+            )
                 ?? failure(.runtimeFunctionSymbolMissing)
         }
         return failure(.runtimeFunctionSymbolMissing)
@@ -523,7 +547,9 @@ private enum WITransportNativeInspectorResolver {
     private static func finalizeResolution(
         _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
         successLog: String,
-        imagePath: String
+        imagePath: String,
+        webKitHeaderAddress: UInt,
+        javaScriptCoreHeaderAddress: UInt
     ) -> WITransportNativeInspectorSymbolResolution? {
         let allResults: [(String, WITransportResolvedAddress)] = [
             ("connectFrontend", resolvedSymbols.connectFrontend),
@@ -539,6 +565,26 @@ private enum WITransportNativeInspectorResolver {
                 return failure(
                     .resolvedAddressOutsideWebKitText,
                     detail: unsafe String(format: "%@ resolved address 0x%llx.", label, address)
+                )
+            }
+        }
+
+        let expectedHeadersBySymbol: [(String, WITransportResolvedAddress, [UInt])] = [
+            ("connectFrontend", resolvedSymbols.connectFrontend, [webKitHeaderAddress]),
+            ("disconnectFrontend", resolvedSymbols.disconnectFrontend, [webKitHeaderAddress]),
+            ("stringFromUTF8", resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
+            ("stringImplToNSString", resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
+            ("destroyStringImpl", resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
+            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
+        ]
+        for (label, result, expectedHeaders) in expectedHeadersBySymbol {
+            guard case let .found(address) = result else {
+                continue
+            }
+            guard resolvedAddress(address, belongsToAnyOf: expectedHeaders) else {
+                return failure(
+                    .resolvedAddressImageMismatch,
+                    detail: "\(label) resolved into an unexpected image header."
                 )
             }
         }
@@ -583,7 +629,7 @@ private enum WITransportNativeInspectorResolver {
         return successResolution(functionAddresses, successLog: successLog, imagePath: imagePath)
     }
 
-    private static func loadedWebKitImage(pathSuffixes: [String]) -> WITransportLoadedWebKitImage? {
+    fileprivate static func loadedWebKitImage(pathSuffixes: [String]) -> WITransportLoadedWebKitImage? {
         let imageCount = _dyld_image_count()
         for imageIndex in 0 ..< imageCount {
             guard let imageName = unsafe _dyld_get_image_name(imageIndex) else {
@@ -617,8 +663,26 @@ private enum WITransportNativeInspectorResolver {
     }
 
     private static func sharedCacheSymbolFileURLs() -> [URL] {
+        sharedCacheSymbolFileURLs(activeSharedCachePath: unsafe WITransportDyldRuntime.sharedCacheFilePath())
+    }
+
+    fileprivate static func sharedCacheSymbolFileURLs(activeSharedCachePath: String?) -> [URL] {
         let fileManager = FileManager.default
         var urls = [URL]()
+        var seenPaths = Set<String>()
+
+        func appendURL(_ url: URL) {
+            let standardizedPath = url.standardizedFileURL.path
+            guard seenPaths.insert(standardizedPath).inserted else {
+                return
+            }
+            urls.append(url)
+        }
+
+        if let activeSharedCacheSymbolURL = activeSharedCacheSymbolFileURL(activeSharedCachePath: activeSharedCachePath) {
+            appendURL(activeSharedCacheSymbolURL)
+        }
+
         for directoryPath in sharedCacheDirectoryCandidates {
             guard let entries = try? fileManager.contentsOfDirectory(atPath: directoryPath) else {
                 continue
@@ -632,11 +696,27 @@ private enum WITransportNativeInspectorResolver {
                     sharedCacheSortKey(for: lhs) < sharedCacheSortKey(for: rhs)
                 }
 
-            urls.append(contentsOf: sortedEntries.map {
-                URL(fileURLWithPath: directoryPath, isDirectory: true).appendingPathComponent($0)
-            })
+            for entry in sortedEntries {
+                appendURL(
+                    URL(fileURLWithPath: directoryPath, isDirectory: true)
+                        .appendingPathComponent(entry)
+                )
+            }
         }
         return urls
+    }
+
+    private static func activeSharedCacheSymbolFileURL(activeSharedCachePath: String?) -> URL? {
+        guard let activeSharedCachePath,
+              !activeSharedCachePath.isEmpty else {
+            return nil
+        }
+
+        if activeSharedCachePath.hasSuffix(".symbols") {
+            return URL(fileURLWithPath: activeSharedCachePath)
+        }
+
+        return URL(fileURLWithPath: "\(activeSharedCachePath).symbols")
     }
 
     private static func sharedCacheSortKey(for fileName: String) -> Int {
@@ -799,6 +879,16 @@ private enum WITransportNativeInspectorResolver {
         return .missing
     }
 
+    fileprivate static func resolvedAddress(
+        _ address: UInt64,
+        belongsToAnyOf expectedHeaderAddresses: [UInt]
+    ) -> Bool {
+        guard let header = unsafe WITransportDyldRuntime.imageHeader(containingAddress: address) else {
+            return false
+        }
+        return expectedHeaderAddresses.contains(UInt(bitPattern: header))
+    }
+
     private static func failure(
         _ kind: WITransportNativeInspectorSymbolFailure,
         detail: String? = nil
@@ -876,6 +966,43 @@ enum WITransportNativeInspectorSymbolResolver {
                 destroyStringImplSymbol: destroyStringImplSymbol,
                 backendDispatcherDispatchSymbol: backendDispatcherDispatchSymbol
             )
+        )
+    }
+
+    static func loadedImageHeaderAddressesForTesting() -> (webKit: UInt, javaScriptCore: UInt)? {
+        guard let loadedImage = WITransportNativeInspectorResolver.loadedWebKitImage(
+            pathSuffixes: [
+                "/System/Library/Frameworks/WebKit.framework/WebKit",
+                "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+            ]
+        ), let loadedJavaScriptCoreImage = WITransportNativeInspectorResolver.loadedWebKitImage(
+            pathSuffixes: [
+                "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
+                "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
+            ]
+        ) else {
+            return nil
+        }
+
+        return (
+            webKit: loadedImage.headerAddress,
+            javaScriptCore: loadedJavaScriptCoreImage.headerAddress
+        )
+    }
+
+    static func resolvedAddressMatchesExpectedImageForTesting(
+        _ address: UInt64,
+        expectedHeaderAddresses: [UInt]
+    ) -> Bool {
+        WITransportNativeInspectorResolver.resolvedAddress(
+            address,
+            belongsToAnyOf: expectedHeaderAddresses
+        )
+    }
+
+    static func sharedCacheSymbolFileURLsForTesting(activeSharedCachePath: String?) -> [URL] {
+        WITransportNativeInspectorResolver.sharedCacheSymbolFileURLs(
+            activeSharedCachePath: activeSharedCachePath
         )
     }
 
