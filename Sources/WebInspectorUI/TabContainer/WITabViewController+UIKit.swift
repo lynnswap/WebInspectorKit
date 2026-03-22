@@ -224,6 +224,9 @@ public final class WITabViewController: UIViewController {
     }
 
     public func setInspectorController(_ model: WIModel) {
+        guard inspectorController.model !== model else {
+            return
+        }
         setInspectorController(WIInspectorController(model: model))
     }
 

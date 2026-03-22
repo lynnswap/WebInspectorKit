@@ -186,6 +186,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     public func setInspectorController(_ model: WIModel) {
+        guard inspectorController.model !== model else {
+            return
+        }
         setInspectorController(WIInspectorController(model: model))
     }
 

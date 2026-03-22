@@ -466,6 +466,37 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func setInspectorControllerWithSameModelKeepsExistingController() async {
+        let model = WIModel()
+        let controller = WIInspectorController(model: model)
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        container.setInspectorController(model)
+        await container.waitForRuntimeStateSyncForTesting()
+
+        #expect(container.inspectorController === controller)
+        #expect(controller.lifecycle == .active)
+    }
+
+    @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
         let requestedTabs: [WITab] = [

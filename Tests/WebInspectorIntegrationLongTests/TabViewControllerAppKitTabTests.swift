@@ -542,6 +542,36 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func setInspectorControllerWithSameModelKeepsExistingController() async {
+        let model = WIModel()
+        let controller = WIInspectorController(model: model)
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        container.setInspectorController(model)
+        await container.waitForRuntimeStateSyncForTesting()
+
+        #expect(container.inspectorController === controller)
+        #expect(controller.lifecycle == .active)
+    }
+
+    @Test
     func appKitProgrammaticSelectionReappliesRuntimeState() async {
         let controller = WIInspectorController()
         let container = WITabViewController(
