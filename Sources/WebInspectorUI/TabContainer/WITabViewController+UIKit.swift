@@ -160,6 +160,7 @@ public final class WITabViewController: UIViewController {
         }
 
         let previousController = self.inspectorController
+        previousController.model.selectedTabDidChange = nil
         let activeUIStateApplyTask = uiStateApplyTask
         uiStateApplyTask = nil
         runtimeStateSyncPending = false
@@ -238,6 +239,7 @@ public final class WITabViewController: UIViewController {
         super.viewDidLoad()
 
         rebuildLayout(forceHostReplacement: true)
+        bindRuntimeSelectionSync()
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.handleHorizontalSizeClassChange()
@@ -271,6 +273,7 @@ public final class WITabViewController: UIViewController {
             return
         }
 
+        bindRuntimeSelectionSync()
         rebuildLayout(forceHostReplacement: true)
         _ = syncRuntimeState
     }
@@ -293,8 +296,15 @@ public final class WITabViewController: UIViewController {
     }
 
     isolated deinit {
+        model.selectedTabDidChange = nil
         controllerSwapTask?.cancel()
         uiStateApplyTask?.cancel()
+    }
+
+    private func bindRuntimeSelectionSync() {
+        model.selectedTabDidChange = { [weak self] _ in
+            self?.scheduleRuntimeStateSync()
+        }
     }
 
     private func scheduleRuntimeStateSync() {

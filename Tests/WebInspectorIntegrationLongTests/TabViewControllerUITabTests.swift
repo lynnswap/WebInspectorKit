@@ -193,6 +193,45 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func compactHostProgrammaticSelectionReappliesRuntimeState() async {
+        let controller = WIInspectorController()
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        drainMainQueue()
+        await container.waitForRuntimeStateSyncForTesting()
+
+        guard let networkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+
+        controller.model.setSelectedTab(networkTab)
+        await waitForRuntimeState(
+            in: container,
+            inspector: controller,
+            selectedTabID: WITab.networkTabID,
+            networkMode: .active
+        )
+
+        #expect(controller.model.selectedTab?.id == WITab.networkTabID)
+        #expect(controller.network.session.mode == .active)
+    }
+
+    @Test
     func compactHostPreservesSelectionWhenTabIdentifiersDuplicate() {
         let controller = WIInspectorController()
         let firstCustom = makeTab(id: "custom", title: "First")
@@ -803,6 +842,23 @@ struct TabViewControllerUITabTests {
 
     private func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    private func waitForRuntimeState(
+        in container: WITabViewController,
+        inspector: WIInspectorController,
+        selectedTabID: String,
+        networkMode: NetworkLoggingMode,
+        attempts: Int = 20
+    ) async {
+        for _ in 0..<attempts {
+            drainMainQueue()
+            await container.waitForRuntimeStateSyncForTesting()
+            if inspector.model.selectedTab?.identifier == selectedTabID,
+               inspector.network.session.mode == networkMode {
+                return
+            }
+        }
     }
 }
 #endif

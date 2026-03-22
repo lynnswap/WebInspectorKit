@@ -226,6 +226,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
         model.observe(\.selectedTab) { [weak self] _ in
             self?.render()
+            self?.scheduleRuntimeStateSync()
         }
         .store(in: &sessionObservationHandles)
     }

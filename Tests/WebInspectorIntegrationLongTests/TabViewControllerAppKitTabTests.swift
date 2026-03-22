@@ -472,6 +472,37 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func appKitProgrammaticSelectionReappliesRuntimeState() async {
+        let controller = WIInspectorController()
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await container.waitForRuntimeStateSyncForTesting()
+
+        guard let networkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+
+        controller.model.setSelectedTab(networkTab)
+        await container.waitForRuntimeStateSyncForTesting()
+
+        #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
+        #expect(controller.network.session.mode == .active)
+    }
+
+    @Test
     func duplicateIdentifierTabsUseDistinctCachedContentControllers() {
         let controller = WIInspectorController()
         let firstController = MarkerViewController(marker: "first")

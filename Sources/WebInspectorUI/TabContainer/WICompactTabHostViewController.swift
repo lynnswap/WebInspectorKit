@@ -116,6 +116,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
                 return
             }
             self.syncNativeSelection(with: newValue)
+            self.onSelectionChange()
         }
         .store(in: &tabObservationHandles)
     }

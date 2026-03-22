@@ -8,6 +8,7 @@ public final class WIModel {
     public private(set) var selectedTab: WITab?
     package private(set) var preferredCompactSelectedTabIdentifier: String?
     package private(set) var hasExplicitTabsConfiguration = false
+    @ObservationIgnored package var selectedTabDidChange: (@MainActor (WITab?) -> Void)?
 
     public init() {}
 
@@ -77,6 +78,7 @@ private extension WIModel {
 
         if normalizedTab !== selectedTab {
             selectedTab = normalizedTab
+            selectedTabDidChange?(normalizedTab)
         }
         syncPreferredCompactSelectionAfterNormalization(normalizedTab)
     }
