@@ -5,41 +5,47 @@ import WebKit
 import XCTest
 @testable import Monocly
 
-@MainActor
 final class BrowserStoreInspectorRegressionTests: XCTestCase {
-    private var retainedWindows: [NSWindow] = []
-    private var retainedInspectors: [WIInspectorController] = []
-    private var temporaryDirectories: [URL] = []
+    @MainActor
+    private final class RetainedState {
+        var windows: [NSWindow] = []
+        var inspectors: [WIInspectorController] = []
+        var temporaryDirectories: [URL] = []
+    }
+
+    private let retainedState = RetainedState()
 
     override func tearDown() {
-        let (windowsToClose, inspectorsToDisconnect, directoriesToDelete) = MainActor.assumeIsolated { [self] in
-            let windows = retainedWindows
-            retainedWindows.removeAll()
-            let inspectors = retainedInspectors
-            retainedInspectors.removeAll()
-            let directories = temporaryDirectories
-            temporaryDirectories.removeAll()
-            return (windows, inspectors, directories)
-        }
-
-        windowsToClose.forEach { window in
-            window.orderOut(nil)
-            window.toolbar = nil
-            window.contentViewController = nil
-            window.close()
-        }
-
-        NSApp.windows
-            .filter { $0.title == "Web Inspector" }
-            .forEach { window in
+        let retainedState = retainedState
+        let performMainActorCleanup: @MainActor () async -> Void = {
+            @MainActor
+            func closeWindow(_ window: NSWindow) {
                 window.orderOut(nil)
                 window.toolbar = nil
                 window.contentViewController = nil
                 window.close()
             }
 
-        let disconnectExpectation = expectation(description: "disconnect inspectors")
-        Task {
+            @MainActor
+            func drainMainRunLoop(cycles: Int = 5, interval: TimeInterval = 0.05) {
+                for _ in 0..<cycles {
+                    RunLoop.main.run(until: Date().addingTimeInterval(interval))
+                }
+            }
+
+            let windowsToClose = retainedState.windows
+            retainedState.windows.removeAll()
+            let inspectorsToDisconnect = retainedState.inspectors
+            retainedState.inspectors.removeAll()
+            let directoriesToDelete = retainedState.temporaryDirectories
+            retainedState.temporaryDirectories.removeAll()
+
+            windowsToClose.forEach(closeWindow)
+
+            NSApp.windows
+                .filter { $0.title == "Web Inspector" }
+                .forEach(closeWindow)
+
             for _ in 0..<10 {
                 await Task.yield()
             }
@@ -47,18 +53,25 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
             for inspector in inspectorsToDisconnect {
                 await inspector.disconnect()
             }
-            disconnectExpectation.fulfill()
-        }
-        wait(for: [disconnectExpectation], timeout: 5)
-        drainMainRunLoop()
-
-        for directoryURL in directoriesToDelete {
-            try? FileManager.default.removeItem(at: directoryURL)
+            drainMainRunLoop()
+            for directoryURL in directoriesToDelete {
+                try? FileManager.default.removeItem(at: directoryURL)
+            }
         }
 
+        let cleanupExpectation = XCTestExpectation(description: "run tearDown cleanup on MainActor")
+        Task { @MainActor in
+            await performMainActorCleanup()
+            cleanupExpectation.fulfill()
+        }
+        let cleanupWaitResult = XCTWaiter().wait(for: [cleanupExpectation], timeout: 10)
+        if cleanupWaitResult != .completed {
+            XCTFail("Timed out while running MainActor tearDown cleanup.")
+        }
         super.tearDown()
     }
 
+    @MainActor
     func testOpeningInspectorKeepsMainWebViewAliveAcrossFollowUpNavigation() async throws {
         let initialURL = try makeTemporaryHTMLURL(
             named: "initial",
@@ -83,7 +96,7 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
 
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let (browserWindow, _) = makeBrowserWindow(model: model, inspectorController: inspectorController)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -137,13 +150,14 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testOpeningInspectorKeepsMainWebViewAliveAcrossCrossOriginHTTPSNavigation() async throws {
         let initialURL = try XCTUnwrap(URL(string: "https://example.com/"))
         let followUpURL = try XCTUnwrap(URL(string: "https://example.org/"))
 
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let (browserWindow, _) = makeBrowserWindow(model: model, inspectorController: inspectorController)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -207,23 +221,26 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testOpeningDOMOnlyInspectorCharacterizesHTTPSAttachRegression() async throws {
         try await assertInspectorAttachBehaviorAcrossHTTPSNavigation(
             tabs: [.dom()]
         )
     }
 
+    @MainActor
     func testOpeningNetworkOnlyInspectorCharacterizesHTTPSAttachRegression() async throws {
         try await assertInspectorAttachBehaviorAcrossHTTPSNavigation(
             tabs: [.network()]
         )
     }
 
+    @MainActor
     func testBrowserWindowInstallsToolbarOnceAfterWindowAttachment() async throws {
         let initialURL = try XCTUnwrap(URL(string: "about:blank"))
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let placeholderController = NSViewController()
         placeholderController.view = NSView()
         let (browserWindow, browserController) = makeBrowserWindow(
@@ -239,11 +256,12 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         XCTAssertEqual(browserController.toolbarInstallationCountForTesting, 1)
     }
 
+    @MainActor
     func testFinalizingBrowserRootDisconnectsInspectorWithoutDisappear() async throws {
         let initialURL = try XCTUnwrap(URL(string: "about:blank"))
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let (browserWindow, browserController) = makeBrowserWindow(model: model, inspectorController: inspectorController)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -262,11 +280,12 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         XCTAssertTrue(disconnected, "Finalizing the browser root did not disconnect the inspector session.")
     }
 
+    @MainActor
     func testBrowserRootDisappearOnlySuspendsInspectorUntilVisibleAgain() async throws {
         let initialURL = try XCTUnwrap(URL(string: "about:blank"))
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let (browserWindow, browserController) = makeBrowserWindow(model: model, inspectorController: inspectorController)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -302,7 +321,7 @@ private extension BrowserStoreInspectorRegressionTests {
 
         let model = BrowserStore(url: initialURL)
         let inspectorController = WIInspectorController()
-        retainedInspectors.append(inspectorController)
+        retainedState.inspectors.append(inspectorController)
         let (browserWindow, _) = makeBrowserWindow(model: model, inspectorController: inspectorController)
 
         browserWindow.makeKeyAndOrderFront(nil)
@@ -382,7 +401,7 @@ private extension BrowserStoreInspectorRegressionTests {
         window.setContentSize(NSSize(width: 1024, height: 768))
         window.styleMask = NSWindow.StyleMask([.titled, .closable, .resizable])
         window.title = "Monocly Test Host"
-        retainedWindows.append(window)
+        retainedState.windows.append(window)
         return (window, controller)
     }
 
@@ -405,7 +424,7 @@ private extension BrowserStoreInspectorRegressionTests {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MonoclyInspectorRegression-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        temporaryDirectories.append(directoryURL)
+        retainedState.temporaryDirectories.append(directoryURL)
 
         let fileURL = directoryURL.appendingPathComponent("\(name).html")
         try html.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -466,12 +485,6 @@ private extension BrowserStoreInspectorRegressionTests {
             return number.stringValue
         }
         return nil
-    }
-
-    func drainMainRunLoop(cycles: Int = 5, interval: TimeInterval = 0.05) {
-        for _ in 0..<cycles {
-            RunLoop.main.run(until: Date().addingTimeInterval(interval))
-        }
     }
 }
 #endif
