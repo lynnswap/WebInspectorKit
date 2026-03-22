@@ -110,11 +110,12 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     public override func viewDidDisappear() {
         super.viewDidDisappear()
+        guard Self.window(for: view) == nil else {
+            return
+        }
         shouldDriveRuntimeStateFromUI = false
         scheduleRuntimeStateSync()
-        if Self.window(for: view) == nil {
-            tearDownToolbarStateIfNeeded()
-        }
+        tearDownToolbarStateIfNeeded()
     }
 
     public func setPageWebView(_ webView: WKWebView?) {

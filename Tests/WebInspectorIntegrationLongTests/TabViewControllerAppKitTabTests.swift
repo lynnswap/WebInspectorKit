@@ -472,6 +472,37 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func transientDisappearWhileWindowIsStillAttachedKeepsRuntimeActive() async {
+        let controller = WIInspectorController()
+        let container = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        container.viewDidDisappear()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        #expect(controller.lifecycle == .active)
+    }
+
+    @Test
     func consecutiveInspectorControllerSwapsKeepEarlierApplyTasksSequenced() async {
         let firstController = WIInspectorController()
         let secondController = WIInspectorController()
