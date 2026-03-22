@@ -130,8 +130,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         let previousController = self.inspectorController
+        // Keep the shared reference so later swap requests still chain behind
+        // any host-state apply task that was already in flight.
         let activeUIStateApplyTask = uiStateApplyTask
-        uiStateApplyTask = nil
         runtimeStateSyncPending = false
         controllerSwapTask?.cancel()
         invalidatePresentationStateForControllerSwap()

@@ -425,6 +425,47 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func consecutiveInspectorControllerSwapsKeepEarlierApplyTasksSequenced() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let thirdController = WIInspectorController()
+        let initialWebView = makeTestWebView()
+        let container = WITabViewController(
+            firstController,
+            webView: initialWebView,
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        await container.waitForRuntimeStateSyncForTesting()
+
+        container.setPageWebView(makeTestWebView())
+        container.setInspectorController(secondController)
+        container.setInspectorController(thirdController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .disconnected),
+                (thirdController, .active)
+            ]
+        )
+
+        #expect(container.inspectorController === thirdController)
+        #expect(firstController.lifecycle == .disconnected)
+        #expect(secondController.lifecycle == .disconnected)
+        #expect(thirdController.lifecycle == .active)
+    }
+
+    @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
         let requestedTabs: [WITab] = [
@@ -856,6 +897,22 @@ struct TabViewControllerUITabTests {
             await container.waitForRuntimeStateSyncForTesting()
             if inspector.model.selectedTab?.identifier == selectedTabID,
                inspector.network.session.mode == networkMode {
+                return
+            }
+        }
+    }
+
+    private func waitForControllerLifecycles(
+        in container: WITabViewController,
+        states: [(WIInspectorController, WISessionLifecycle)],
+        attempts: Int = 20
+    ) async {
+        for _ in 0..<attempts {
+            drainMainQueue()
+            await container.waitForRuntimeStateSyncForTesting()
+            if states.allSatisfy({ controller, lifecycle in
+                controller.lifecycle == lifecycle
+            }) {
                 return
             }
         }

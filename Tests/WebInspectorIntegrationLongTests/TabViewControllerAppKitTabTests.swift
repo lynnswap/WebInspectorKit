@@ -472,6 +472,45 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func consecutiveInspectorControllerSwapsKeepEarlierApplyTasksSequenced() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let thirdController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await container.waitForRuntimeStateSyncForTesting()
+
+        container.setPageWebView(makeTestWebView())
+        container.setInspectorController(secondController)
+        container.setInspectorController(thirdController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .disconnected),
+                (thirdController, .active)
+            ]
+        )
+
+        #expect(container.inspectorController === thirdController)
+        #expect(firstController.lifecycle == .disconnected)
+        #expect(secondController.lifecycle == .disconnected)
+        #expect(thirdController.lifecycle == .active)
+    }
+
+    @Test
     func appKitProgrammaticSelectionReappliesRuntimeState() async {
         let controller = WIInspectorController()
         let container = WITabViewController(
@@ -647,6 +686,22 @@ struct TabViewControllerAppKitTabTests {
         picker.selectedSegment = index
         picker.sendAction(action, to: picker.target)
         drainMainQueue()
+    }
+
+    private func waitForControllerLifecycles(
+        in container: WITabViewController,
+        states: [(WIInspectorController, WISessionLifecycle)],
+        attempts: Int = 20
+    ) async {
+        for _ in 0..<attempts {
+            drainMainQueue()
+            await container.waitForRuntimeStateSyncForTesting()
+            if states.allSatisfy({ controller, lifecycle in
+                controller.lifecycle == lifecycle
+            }) {
+                return
+            }
+        }
     }
 }
 

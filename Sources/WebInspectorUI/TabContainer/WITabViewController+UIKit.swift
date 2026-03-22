@@ -161,8 +161,9 @@ public final class WITabViewController: UIViewController {
 
         let previousController = self.inspectorController
         previousController.model.selectedTabDidChange = nil
+        // Keep the shared reference so later swap requests still chain behind
+        // any host-state apply task that was already in flight.
         let activeUIStateApplyTask = uiStateApplyTask
-        uiStateApplyTask = nil
         runtimeStateSyncPending = false
         controllerSwapTask?.cancel()
         invalidatePresentationStateForControllerSwap()
