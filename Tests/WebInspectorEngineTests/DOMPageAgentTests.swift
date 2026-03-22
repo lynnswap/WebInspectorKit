@@ -1,6 +1,7 @@
 import Testing
 import WebKit
 @testable import WebInspectorEngine
+@testable import WebInspectorBridge
 
 @MainActor
 struct DOMSessionTests {
@@ -213,6 +214,34 @@ struct DOMSessionTests {
         #expect(firstScriptCount == 2)
 
         _ = await secondSession.attach(to: webView)
+
+        #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
+    func installFailureKeepsBridgeScriptMarkedInstalled() async {
+        struct InstallFailure: Error {}
+
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry,
+            installDOMBridgeScript: { _, _, _ in
+                throw InstallFailure()
+            }
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        let firstScriptCount = controller.userScripts.count
+
+        #expect(firstScriptCount == 2)
+        #expect(registry.domBridgeScriptInstalled(on: controller) == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
 
         #expect(controller.userScripts.count == firstScriptCount)
     }

@@ -11,6 +11,7 @@ private let domAgentPresenceProbeScript: String = """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
 private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
+private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKContentWorld) async throws -> Void
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
@@ -51,6 +52,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
+    private let installDOMBridgeScript: DOMBridgeScriptInstaller
     private let handleCache = WIJSHandleCache(capacity: 128)
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
@@ -60,16 +62,22 @@ public final class DOMPageAgent: NSObject, PageAgent {
     }
 
     public convenience init(configuration: DOMConfiguration) {
-        self.init(configuration: configuration, controllerStateRegistry: .shared)
+        self.init(
+            configuration: configuration,
+            controllerStateRegistry: .shared,
+            installDOMBridgeScript: DOMPageAgent.evaluateDOMBridgeScript
+        )
     }
 
     package init(
         configuration: DOMConfiguration,
-        controllerStateRegistry: WIUserContentControllerStateRegistry
+        controllerStateRegistry: WIUserContentControllerStateRegistry,
+        installDOMBridgeScript: @escaping @MainActor (WKWebView, String, WKContentWorld) async throws -> Void = DOMPageAgent.evaluateDOMBridgeScript
     ) {
         self.configuration = configuration
         runtime = .shared
         self.controllerStateRegistry = controllerStateRegistry
+        self.installDOMBridgeScript = installDOMBridgeScript
         bridgeMode = runtime.startupMode()
         bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
@@ -84,6 +92,17 @@ public final class DOMPageAgent: NSObject, PageAgent {
 
     func tearDownForDeinit() {
         tearDownPageWebViewForDeinit()
+    }
+
+    private static func evaluateDOMBridgeScript(
+        on webView: WKWebView,
+        scriptSource: String,
+        contentWorld: WKContentWorld
+    ) async throws {
+        try await webView.callAsyncVoidJavaScript(
+            scriptSource,
+            contentWorld: contentWorld
+        )
     }
 }
 
@@ -538,12 +557,11 @@ private extension DOMPageAgent {
         controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
 
         do {
-            try await webView.callAsyncVoidJavaScript(
-                scriptSource,
-                contentWorld: bridgeWorld
-            )
+            try await installDOMBridgeScript(webView, scriptSource, bridgeWorld)
         } catch {
-            controllerStateRegistry.setDOMBridgeScriptInstalled(false, on: controller)
+            domLogger.error(
+                "failed to evaluate DOM agent script after registration: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 
