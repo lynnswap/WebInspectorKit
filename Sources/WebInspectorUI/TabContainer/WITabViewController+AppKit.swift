@@ -130,6 +130,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         let currentSelectedTab = model.selectedTab
+        let currentHasExplicitTabsConfiguration = model.hasExplicitTabsConfiguration
 
         let previousController = self.inspectorController
         let activeUIStateApplyTask = uiStateApplyTask
@@ -164,6 +165,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             self.applyInspectorController(
                 inspectorController,
                 requestedTabs: currentRequestedTabs,
+                tabsExplicitlyConfigured: currentHasExplicitTabsConfiguration,
                 selectedTab: currentSelectedTab,
                 pageWebView: currentPageWebView,
                 syncRuntimeState: false
@@ -664,6 +666,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private func applyInspectorController(
         _ inspectorController: WIInspectorController,
         requestedTabs: [WITab],
+        tabsExplicitlyConfigured: Bool,
         selectedTab: WITab?,
         pageWebView: WKWebView?,
         syncRuntimeState: Bool
@@ -673,7 +676,10 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         self.requestedPageWebView = pageWebView
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         let model = inspectorController.model
-        model.setTabsFromUI(requestedTabs)
+        model.setTabsFromUI(
+            requestedTabs,
+            marksExplicitConfiguration: tabsExplicitlyConfigured
+        )
         if let selectedTab {
             _ = model.projectSelectedTabFromUI(selectedTab)
         }

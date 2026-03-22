@@ -7,11 +7,12 @@ public final class WIModel {
     public private(set) var tabs: [WITab] = []
     public private(set) var selectedTab: WITab?
     package private(set) var preferredCompactSelectedTabIdentifier: String?
+    package private(set) var hasExplicitTabsConfiguration = false
 
     public init() {}
 
     public func setTabs(_ tabs: [WITab]) {
-        setTabsFromUI(tabs)
+        setTabsFromUI(tabs, marksExplicitConfiguration: true)
     }
 
     public func setSelectedTab(_ tab: WITab?) {
@@ -32,7 +33,13 @@ extension WIModel {
         _ = projectSelectedTabFromUI(tab)
     }
 
-    package func setTabsFromUI(_ tabs: [WITab]) {
+    package func setTabsFromUI(
+        _ tabs: [WITab],
+        marksExplicitConfiguration: Bool = true
+    ) {
+        if marksExplicitConfiguration {
+            hasExplicitTabsConfiguration = true
+        }
         self.tabs = tabs
         applyNormalizedSelection(preferredTab: selectedTab)
     }

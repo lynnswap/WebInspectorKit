@@ -71,6 +71,20 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func connectWithExplicitEmptyTabsDoesNotAttachInspectorSessions() async {
+        let (controller, _) = makeBoundSession(tabs: [])
+        let webView = makeTestWebView()
+
+        await controller.connect(to: webView)
+
+        #expect(controller.dom.session.hasPageWebView == false)
+        #expect(controller.dom.session.lastPageWebView == nil)
+        #expect(controller.network.session.hasAttachedPageWebView == false)
+        #expect(controller.network.session.lastPageWebView == nil)
+        #expect(controller.network.session.mode == .stopped)
+    }
+
+    @Test
     func selectedTabSwitchesNetworkModeBetweenBufferingAndActive() async {
         let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()

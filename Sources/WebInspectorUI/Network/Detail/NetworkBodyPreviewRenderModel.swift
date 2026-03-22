@@ -40,10 +40,19 @@ struct NetworkBodyPreviewRenderModel: Sendable {
     let preferredMode: Mode
 
     static func make(from input: Input) -> NetworkBodyPreviewRenderModel {
+        if Task.isCancelled {
+            return cancelledFallback(unavailableText: input.unavailableText)
+        }
         let decoded = decodedText(from: input)
         let contentText = decoded ?? input.full ?? input.preview
         let displaySource = contentText ?? input.summary
+        if Task.isCancelled {
+            return cancelledFallback(text: displaySource, unavailableText: input.unavailableText)
+        }
         let objectTreeNodes = contentText.flatMap(NetworkJSONNode.nodes(from:)) ?? []
+        if Task.isCancelled {
+            return cancelledFallback(text: displaySource, unavailableText: input.unavailableText)
+        }
         let displayText = formattedText(from: contentText) ?? displaySource ?? input.unavailableText
 
         if objectTreeNodes.isEmpty {
@@ -125,5 +134,17 @@ struct NetworkBodyPreviewRenderModel: Sendable {
             return nil
         }
         return pretty
+    }
+
+    private static func cancelledFallback(
+        text: String? = nil,
+        unavailableText: String
+    ) -> NetworkBodyPreviewRenderModel {
+        NetworkBodyPreviewRenderModel(
+            text: text ?? unavailableText,
+            objectTreeNodes: [],
+            availableModes: [.text],
+            preferredMode: .text
+        )
     }
 }

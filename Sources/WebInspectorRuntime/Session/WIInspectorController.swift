@@ -198,7 +198,10 @@ private extension WIInspectorController {
     ) {
         let tabs = model.tabs
         let selectedTab = model.selectedTab
-        guard tabs.isEmpty == false else {
+        if tabs.isEmpty {
+            guard model.hasExplicitTabsConfiguration == false else {
+                return (false, false, false, .stopped)
+            }
             return (true, true, true, .active)
         }
         let domEnabled = tabs.contains { $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID }

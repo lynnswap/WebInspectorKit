@@ -42,6 +42,8 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private var hasUserSelectedMode = false
     private var renderModel: NetworkBodyPreviewRenderModel?
 
+    private var renderTask: Task<Void, Never>?
+    private var renderGeneration: UInt64 = 0
     private var hasAppliedInitialTreeSnapshot = false
     private var bodyObservationHandles: Set<ObservationHandle> = []
 
@@ -82,6 +84,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     isolated deinit {
+        renderTask?.cancel()
         bodyObservationHandles.removeAll()
     }
 
@@ -132,11 +135,32 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     }
 
     private func requestRenderModelUpdate() {
+        renderTask?.cancel()
+        renderGeneration &+= 1
+        let generation = renderGeneration
         let input = NetworkBodyPreviewRenderModel.Input(
             body: bodyState,
             unavailableText: wiLocalized("network.body.unavailable", default: "Body unavailable")
         )
-        applyRenderModel(NetworkBodyPreviewRenderModel.make(from: input))
+
+        renderTask = Task(priority: .userInitiated) { [weak self, generation, input] in
+            let workerTask = Task.detached(priority: .userInitiated) {
+                NetworkBodyPreviewRenderModel.make(from: input)
+            }
+            let model = await withTaskCancellationHandler {
+                await workerTask.value
+            } onCancel: {
+                workerTask.cancel()
+            }
+            guard
+                Task.isCancelled == false,
+                let self,
+                self.renderGeneration == generation
+            else {
+                return
+            }
+            self.applyRenderModel(model)
+        }
     }
 
     private func applyRenderModel(_ model: NetworkBodyPreviewRenderModel) {
@@ -208,6 +232,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         }
         .store(in: &bodyObservationHandles)
     }
+
     private func makeTreeLayout() -> UICollectionViewLayout {
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.showsSeparators = true
