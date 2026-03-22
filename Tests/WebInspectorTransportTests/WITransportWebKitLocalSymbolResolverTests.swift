@@ -12,6 +12,10 @@ struct WITransportNativeInspectorSymbolResolverTests {
         #expect(resolution.failureReason == nil)
         #expect(resolution.connectFrontendAddress != 0)
         #expect(resolution.disconnectFrontendAddress != 0)
+        #expect(resolution.stringFromUTF8Address != 0)
+        #expect(resolution.stringImplToNSStringAddress != 0)
+        #expect(resolution.destroyStringImplAddress != 0)
+        #expect(resolution.backendDispatcherDispatchAddress != 0)
         #expect(resolution.supportSnapshot.isSupported)
         #expect(resolution.supportSnapshot.capabilities.contains(.networkBootstrapSnapshot))
         #if os(iOS)
@@ -25,13 +29,16 @@ struct WITransportNativeInspectorSymbolResolverTests {
     @Test
     func resolveForTestingReportsFailureReasonForMissingSymbol() {
         let resolution = WITransportNativeInspectorSymbolResolver.resolveForTesting(
-            connectSymbol: "__ZN6WebKit26WebPageInspectorController27definitelyMissingConnectFooEv",
-            disconnectSymbol: "__ZN6WebKit26WebPageInspectorController30definitelyMissingDisconnectBarEv"
+            stringFromUTF8Symbol: "__ZN3WTF6String27definitelyMissingFromUTF8FooEv"
         )
 
         #expect(resolution.failureReason != nil)
         #expect(resolution.connectFrontendAddress == 0)
         #expect(resolution.disconnectFrontendAddress == 0)
+        #expect(resolution.stringFromUTF8Address == 0)
+        #expect(resolution.stringImplToNSStringAddress == 0)
+        #expect(resolution.destroyStringImplAddress == 0)
+        #expect(resolution.backendDispatcherDispatchAddress == 0)
         #expect(resolution.supportSnapshot.isSupported == false)
     }
 }

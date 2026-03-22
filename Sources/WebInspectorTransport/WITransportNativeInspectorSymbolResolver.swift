@@ -7,8 +7,10 @@ private enum WITransportNativeInspectorSymbolFailure: String {
     case sharedCacheUnavailable = "shared cache unavailable"
     case localSymbolsUnavailable = "local symbols unavailable"
     case webKitImageMissing = "WebKit image missing"
+    case javaScriptCoreImageMissing = "JavaScriptCore image missing"
     case webKitLocalSymbolEntryMissing = "WebKit local symbol entry missing"
     case connectDisconnectSymbolMissing = "connect/disconnect symbol missing"
+    case runtimeFunctionSymbolMissing = "runtime function symbol missing"
     case resolvedAddressOutsideWebKitText = "resolved address outside WebKit text"
 }
 
@@ -38,10 +40,45 @@ private enum WITransportResolvedAddress {
     case outsideText(UInt64)
 }
 
-private struct WITransportNativeInspectorSymbolResolution: Sendable {
+private struct WITransportResolvedFunctionAddresses: Sendable {
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
+    let stringFromUTF8Address: UInt64
+    let stringImplToNSStringAddress: UInt64
+    let destroyStringImplAddress: UInt64
+    let backendDispatcherDispatchAddress: UInt64
+
+    static let zero = WITransportResolvedFunctionAddresses(
+        connectFrontendAddress: 0,
+        disconnectFrontendAddress: 0,
+        stringFromUTF8Address: 0,
+        stringImplToNSStringAddress: 0,
+        destroyStringImplAddress: 0,
+        backendDispatcherDispatchAddress: 0
+    )
+}
+
+private struct WITransportNativeInspectorSymbolResolution: Sendable {
+    let functionAddresses: WITransportResolvedFunctionAddresses
     let failureReason: String?
+}
+
+private struct WITransportNativeInspectorSymbolNames {
+    let connectFrontend: String
+    let disconnectFrontend: String
+    let stringFromUTF8: String
+    let stringImplToNSString: String
+    let destroyStringImpl: String
+    let backendDispatcherDispatch: String
+}
+
+private struct WITransportNativeInspectorResolvedSymbols {
+    let connectFrontend: WITransportResolvedAddress
+    let disconnectFrontend: WITransportResolvedAddress
+    let stringFromUTF8: WITransportResolvedAddress
+    let stringImplToNSString: WITransportResolvedAddress
+    let destroyStringImpl: WITransportResolvedAddress
+    let backendDispatcherDispatch: WITransportResolvedAddress
 }
 
 private enum WITransportNativeInspectorResolver {
@@ -49,10 +86,40 @@ private enum WITransportNativeInspectorResolver {
         "/System/Library/Frameworks/WebKit.framework/WebKit",
         "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
     ]
+    private static let javaScriptCoreImagePathSuffixes = [
+        "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
+        "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
+    ]
     private static let textSegmentName = "__TEXT"
     private static let sharedCacheFilePrefix = "dyld_shared_cache_"
     private static let connectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb"
     private static let disconnectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE"
+    private static let symbolObfuscationKey: UInt8 = 0x5A
+    private static let stringFromUTF8Bytes: [UInt8] = [
+        0x05, 0x05, 0x00, 0x14, 0x69, 0x0D, 0x0E, 0x1C, 0x6C, 0x09, 0x2E, 0x28,
+        0x33, 0x34, 0x3D, 0x62, 0x3C, 0x28, 0x35, 0x37, 0x0F, 0x0E, 0x1C, 0x62,
+        0x1F, 0x14, 0x09, 0x2E, 0x69, 0x05, 0x05, 0x6B, 0x6E, 0x29, 0x2A, 0x3B,
+        0x34, 0x13, 0x11, 0x1E, 0x2F, 0x16, 0x37, 0x6B, 0x62, 0x6E, 0x6E, 0x6C,
+        0x6D, 0x6E, 0x6E, 0x6A, 0x6D, 0x69, 0x6D, 0x6A, 0x63, 0x6F, 0x6F, 0x6B,
+        0x6C, 0x6B, 0x6F, 0x1F, 0x1F, 0x1F,
+    ]
+    private static let stringImplToNSStringBytes: [UInt8] = [
+        0x05, 0x05, 0x00, 0x14, 0x69, 0x0D, 0x0E, 0x1C, 0x6B, 0x6A, 0x09, 0x2E,
+        0x28, 0x33, 0x34, 0x3D, 0x13, 0x37, 0x2A, 0x36, 0x39, 0x2C, 0x0A, 0x62,
+        0x14, 0x09, 0x09, 0x2E, 0x28, 0x33, 0x34, 0x3D, 0x1F, 0x2C,
+    ]
+    private static let destroyStringImplBytes: [UInt8] = [
+        0x05, 0x05, 0x00, 0x14, 0x69, 0x0D, 0x0E, 0x1C, 0x6B, 0x6A, 0x09, 0x2E,
+        0x28, 0x33, 0x34, 0x3D, 0x13, 0x37, 0x2A, 0x36, 0x6D, 0x3E, 0x3F, 0x29,
+        0x2E, 0x28, 0x35, 0x23, 0x1F, 0x0A, 0x09, 0x6A, 0x05,
+    ]
+    private static let backendDispatcherDispatchBytes: [UInt8] = [
+        0x05, 0x05, 0x00, 0x14, 0x63, 0x13, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E,
+        0x35, 0x28, 0x6B, 0x6D, 0x18, 0x3B, 0x39, 0x31, 0x3F, 0x34, 0x3E, 0x1E,
+        0x33, 0x29, 0x2A, 0x3B, 0x2E, 0x39, 0x32, 0x3F, 0x28, 0x62, 0x3E, 0x33,
+        0x29, 0x2A, 0x3B, 0x2E, 0x39, 0x32, 0x1F, 0x08, 0x11, 0x14, 0x69, 0x0D,
+        0x0E, 0x1C, 0x6C, 0x09, 0x2E, 0x28, 0x33, 0x34, 0x3D, 0x1F,
+    ]
 
     #if os(iOS)
     fileprivate static let backendKind: WITransportBackendKind = .iOSNativeInspector
@@ -72,8 +139,8 @@ private enum WITransportNativeInspectorResolver {
 
     private static let cachedResolution = resolve(
         imagePathSuffixes: webKitImagePathSuffixes,
-        connectSymbol: connectFrontendSymbol,
-        disconnectSymbol: disconnectFrontendSymbol
+        javaScriptCorePathSuffixes: javaScriptCoreImagePathSuffixes,
+        symbols: currentSymbolNames()
     )
 
     static func resolveCurrentWebKitAttachSymbols() -> WITransportNativeInspectorSymbolResolution {
@@ -83,56 +150,96 @@ private enum WITransportNativeInspectorResolver {
     static func resolveForTesting(
         imagePathSuffixes: [String] = webKitImagePathSuffixes,
         connectSymbol: String = connectFrontendSymbol,
-        disconnectSymbol: String = disconnectFrontendSymbol
+        disconnectSymbol: String = disconnectFrontendSymbol,
+        stringFromUTF8Symbol: String? = nil,
+        stringImplToNSStringSymbol: String? = nil,
+        destroyStringImplSymbol: String? = nil,
+        backendDispatcherDispatchSymbol: String? = nil
     ) -> WITransportNativeInspectorSymbolResolution {
         resolve(
             imagePathSuffixes: imagePathSuffixes,
-            connectSymbol: connectSymbol,
-            disconnectSymbol: disconnectSymbol
+            javaScriptCorePathSuffixes: javaScriptCoreImagePathSuffixes,
+            symbols: WITransportNativeInspectorSymbolNames(
+                connectFrontend: connectSymbol,
+                disconnectFrontend: disconnectSymbol,
+                stringFromUTF8: stringFromUTF8Symbol ?? decodeSymbolName(stringFromUTF8Bytes),
+                stringImplToNSString: stringImplToNSStringSymbol ?? decodeSymbolName(stringImplToNSStringBytes),
+                destroyStringImpl: destroyStringImplSymbol ?? decodeSymbolName(destroyStringImplBytes),
+                backendDispatcherDispatch: backendDispatcherDispatchSymbol ?? decodeSymbolName(backendDispatcherDispatchBytes)
+            )
         )
+    }
+
+    private static func currentSymbolNames() -> WITransportNativeInspectorSymbolNames {
+        WITransportNativeInspectorSymbolNames(
+            connectFrontend: connectFrontendSymbol,
+            disconnectFrontend: disconnectFrontendSymbol,
+            stringFromUTF8: decodeSymbolName(stringFromUTF8Bytes),
+            stringImplToNSString: decodeSymbolName(stringImplToNSStringBytes),
+            destroyStringImpl: decodeSymbolName(destroyStringImplBytes),
+            backendDispatcherDispatch: decodeSymbolName(backendDispatcherDispatchBytes)
+        )
+    }
+
+    private static func decodeSymbolName(_ encodedBytes: [UInt8]) -> String {
+        String(decoding: encodedBytes.map { $0 ^ symbolObfuscationKey }, as: UTF8.self)
     }
 
     private static func resolve(
         imagePathSuffixes: [String],
-        connectSymbol: String,
-        disconnectSymbol: String
+        javaScriptCorePathSuffixes: [String],
+        symbols: WITransportNativeInspectorSymbolNames
     ) -> WITransportNativeInspectorSymbolResolution {
         guard let loadedImage = loadedWebKitImage(pathSuffixes: imagePathSuffixes) else {
             return failure(.webKitImageMissing)
+        }
+        guard let loadedJavaScriptCoreImage = loadedWebKitImage(pathSuffixes: javaScriptCorePathSuffixes) else {
+            return failure(.javaScriptCoreImageMissing)
         }
 
         let image = unsafe MachOImage(ptr: loadedImage.header)
         guard image.is64Bit, let text = textSegment(in: image) else {
             return failure(.webKitImageMissing, detail: "Missing a 64-bit __TEXT segment.")
         }
+        let javaScriptCoreImage = unsafe MachOImage(ptr: loadedJavaScriptCoreImage.header)
+        guard javaScriptCoreImage.is64Bit, let javaScriptCoreText = textSegment(in: javaScriptCoreImage) else {
+            return failure(.javaScriptCoreImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+        }
 
-        let connectFromImage = resolveLoadedImageSymbol(named: connectSymbol, in: image, text: text)
-        let disconnectFromImage = resolveLoadedImageSymbol(named: disconnectSymbol, in: image, text: text)
-        switch (connectFromImage, disconnectFromImage) {
-        case (.found, .found):
-            return finalizeResolution(
-                connectResult: connectFromImage,
-                disconnectResult: disconnectFromImage,
-                successLog: "resolved symbol via MachOKit loaded image symbol table",
-                imagePath: loadedImage.path
+        let loadedImageResults = WITransportNativeInspectorResolvedSymbols(
+            connectFrontend: resolveLoadedImageSymbol(named: symbols.connectFrontend, in: image, text: text),
+            disconnectFrontend: resolveLoadedImageSymbol(named: symbols.disconnectFrontend, in: image, text: text),
+            stringFromUTF8: resolveLoadedImageSymbol(named: symbols.stringFromUTF8, in: javaScriptCoreImage, text: javaScriptCoreText),
+            stringImplToNSString: resolveLoadedImageSymbol(named: symbols.stringImplToNSString, in: javaScriptCoreImage, text: javaScriptCoreText),
+            destroyStringImpl: resolveLoadedImageSymbol(named: symbols.destroyStringImpl, in: javaScriptCoreImage, text: javaScriptCoreText),
+            backendDispatcherDispatch: preferredResolvedAddress(
+                resolveLoadedImageSymbol(named: symbols.backendDispatcherDispatch, in: image, text: text),
+                fallback: resolveLoadedImageSymbol(named: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
             )
-        default:
-            break
+        )
+        if let resolution = finalizeResolution(
+            loadedImageResults,
+            successLog: "resolved symbol via MachOKit loaded image symbol table",
+            imagePath: loadedImage.path
+        ) {
+            return resolution
         }
 
         return resolveUsingSharedCache(
             loadedImage: loadedImage,
             imagePathSuffixes: imagePathSuffixes,
-            connectSymbol: connectSymbol,
-            disconnectSymbol: disconnectSymbol
+            loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
+            javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
+            symbols: symbols
         )
     }
 
     private static func resolveUsingSharedCache(
         loadedImage: WITransportLoadedWebKitImage,
         imagePathSuffixes: [String],
-        connectSymbol: String,
-        disconnectSymbol: String
+        loadedJavaScriptCoreImage: WITransportLoadedWebKitImage,
+        javaScriptCorePathSuffixes: [String],
+        symbols: WITransportNativeInspectorSymbolNames
     ) -> WITransportNativeInspectorSymbolResolution {
         var sharedCacheSize: UInt = 0
         guard let sharedCachePointer = unsafe _dyld_get_shared_cache_range(&sharedCacheSize) else {
@@ -149,8 +256,14 @@ private enum WITransportNativeInspectorResolver {
         guard let webKitImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: imagePathSuffixes) }) else {
             return failure(.webKitImageMissing)
         }
+        guard let javaScriptCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: javaScriptCorePathSuffixes) }) else {
+            return failure(.javaScriptCoreImageMissing)
+        }
         guard webKitImage.is64Bit, let text = textSegment(in: webKitImage) else {
             return failure(.webKitImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+        }
+        guard javaScriptCoreImage.is64Bit, let javaScriptCoreText = textSegment(in: javaScriptCoreImage) else {
+            return failure(.javaScriptCoreImageMissing, detail: "Missing a 64-bit __TEXT segment.")
         }
         guard let slide = cache.slide, slide >= 0 else {
             return failure(.sharedCacheUnavailable, detail: "The dyld cache slide was unavailable.")
@@ -159,43 +272,95 @@ private enum WITransportNativeInspectorResolver {
         let textStart = UInt64(loadedImage.headerAddress)
         let textRange = textStart ..< textStart + UInt64(text.virtualMemorySize)
         let dylibOffset = UInt64(text.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
+        let javaScriptCoreTextStart = UInt64(loadedJavaScriptCoreImage.headerAddress)
+        let javaScriptCoreTextRange = javaScriptCoreTextStart ..< javaScriptCoreTextStart + UInt64(javaScriptCoreText.virtualMemorySize)
+        let javaScriptCoreDylibOffset = UInt64(javaScriptCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
+        var lastResolvedSymbols: WITransportNativeInspectorResolvedSymbols?
 
         if let localSymbolsInfo = cache.localSymbolsInfo {
-            guard let entry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == dylibOffset }) else {
-                return failure(.webKitLocalSymbolEntryMissing)
+            if let entry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == dylibOffset }),
+               let javaScriptCoreEntry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == javaScriptCoreDylibOffset }),
+               let symbols64 = localSymbolsInfo.symbols64(in: cache) {
+                let lowerBound = entry.nlistStartIndex
+                let upperBound = lowerBound + entry.nlistCount
+                let javaScriptCoreLowerBound = javaScriptCoreEntry.nlistStartIndex
+                let javaScriptCoreUpperBound = javaScriptCoreLowerBound + javaScriptCoreEntry.nlistCount
+                if lowerBound >= 0,
+                   upperBound >= lowerBound,
+                   upperBound <= symbols64.count,
+                   javaScriptCoreLowerBound >= 0,
+                   javaScriptCoreUpperBound >= javaScriptCoreLowerBound,
+                   javaScriptCoreUpperBound <= symbols64.count {
+                    let resolvedSymbols = WITransportNativeInspectorResolvedSymbols(
+                        connectFrontend: resolveSharedCacheSymbol(
+                            named: symbols.connectFrontend,
+                            symbols: symbols64,
+                            symbolRange: lowerBound ..< upperBound,
+                            textVMAddress: UInt64(text.virtualMemoryAddress),
+                            textRange: textRange,
+                            slide: UInt64(slide)
+                        ),
+                        disconnectFrontend: resolveSharedCacheSymbol(
+                            named: symbols.disconnectFrontend,
+                            symbols: symbols64,
+                            symbolRange: lowerBound ..< upperBound,
+                            textVMAddress: UInt64(text.virtualMemoryAddress),
+                            textRange: textRange,
+                            slide: UInt64(slide)
+                        ),
+                        stringFromUTF8: resolveSharedCacheSymbol(
+                            named: symbols.stringFromUTF8,
+                            symbols: symbols64,
+                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
+                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                            textRange: javaScriptCoreTextRange,
+                            slide: UInt64(slide)
+                        ),
+                        stringImplToNSString: resolveSharedCacheSymbol(
+                            named: symbols.stringImplToNSString,
+                            symbols: symbols64,
+                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
+                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                            textRange: javaScriptCoreTextRange,
+                            slide: UInt64(slide)
+                        ),
+                        destroyStringImpl: resolveSharedCacheSymbol(
+                            named: symbols.destroyStringImpl,
+                            symbols: symbols64,
+                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
+                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                            textRange: javaScriptCoreTextRange,
+                            slide: UInt64(slide)
+                        ),
+                        backendDispatcherDispatch: preferredResolvedAddress(
+                            resolveSharedCacheSymbol(
+                                named: symbols.backendDispatcherDispatch,
+                                symbols: symbols64,
+                                symbolRange: lowerBound ..< upperBound,
+                                textVMAddress: UInt64(text.virtualMemoryAddress),
+                                textRange: textRange,
+                                slide: UInt64(slide)
+                            ),
+                            fallback: resolveSharedCacheSymbol(
+                                named: symbols.backendDispatcherDispatch,
+                                symbols: symbols64,
+                                symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
+                                textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                                textRange: javaScriptCoreTextRange,
+                                slide: UInt64(slide)
+                            )
+                        )
+                    )
+                    lastResolvedSymbols = resolvedSymbols
+                    if let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) {
+                        return successResolution(
+                            functionAddresses,
+                            successLog: "resolved symbol via dyld local symbols",
+                            imagePath: loadedImage.path
+                        )
+                    }
+                }
             }
-            guard let symbols = localSymbolsInfo.symbols64(in: cache) else {
-                return failure(.localSymbolsUnavailable, detail: "The loaded dyld cache could not materialize 64-bit local symbols.")
-            }
-
-            let lowerBound = entry.nlistStartIndex
-            let upperBound = lowerBound + entry.nlistCount
-            guard lowerBound >= 0, upperBound >= lowerBound, upperBound <= symbols.count else {
-                return failure(.localSymbolsUnavailable, detail: "The WebKit local symbol entry range was invalid.")
-            }
-
-            let connectResult = resolveSharedCacheSymbol(
-                named: connectSymbol,
-                symbols: symbols,
-                symbolRange: lowerBound ..< upperBound,
-                textVMAddress: UInt64(text.virtualMemoryAddress),
-                textRange: textRange,
-                slide: UInt64(slide)
-            )
-            let disconnectResult = resolveSharedCacheSymbol(
-                named: disconnectSymbol,
-                symbols: symbols,
-                symbolRange: lowerBound ..< upperBound,
-                textVMAddress: UInt64(text.virtualMemoryAddress),
-                textRange: textRange,
-                slide: UInt64(slide)
-            )
-            return finalizeResolution(
-                connectResult: connectResult,
-                disconnectResult: disconnectResult,
-                successLog: "resolved symbol via dyld local symbols",
-                imagePath: loadedImage.path
-            )
         }
 
         do {
@@ -203,64 +368,219 @@ private enum WITransportNativeInspectorResolver {
                 mainCacheHeader: cache.mainCacheHeader,
                 dylibOffset: dylibOffset
             )
-            let connectResult = resolveSharedCacheSymbol(
-                named: connectSymbol,
-                symbols: fileBackedSymbols.symbols,
-                symbolRange: fileBackedSymbols.symbolRange,
-                textVMAddress: UInt64(text.virtualMemoryAddress),
-                textRange: textRange,
-                slide: UInt64(slide)
+            let javaScriptCoreFileBackedSymbols = try fileBackedLocalSymbols(
+                mainCacheHeader: cache.mainCacheHeader,
+                dylibOffset: javaScriptCoreDylibOffset
             )
-            let disconnectResult = resolveSharedCacheSymbol(
-                named: disconnectSymbol,
-                symbols: fileBackedSymbols.symbols,
-                symbolRange: fileBackedSymbols.symbolRange,
-                textVMAddress: UInt64(text.virtualMemoryAddress),
-                textRange: textRange,
-                slide: UInt64(slide)
+            let resolvedSymbols = WITransportNativeInspectorResolvedSymbols(
+                connectFrontend: resolveSharedCacheSymbol(
+                    named: symbols.connectFrontend,
+                    symbols: fileBackedSymbols.symbols,
+                    symbolRange: fileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(text.virtualMemoryAddress),
+                    textRange: textRange,
+                    slide: UInt64(slide)
+                ),
+                disconnectFrontend: resolveSharedCacheSymbol(
+                    named: symbols.disconnectFrontend,
+                    symbols: fileBackedSymbols.symbols,
+                    symbolRange: fileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(text.virtualMemoryAddress),
+                    textRange: textRange,
+                    slide: UInt64(slide)
+                ),
+                stringFromUTF8: resolveSharedCacheSymbol(
+                    named: symbols.stringFromUTF8,
+                    symbols: javaScriptCoreFileBackedSymbols.symbols,
+                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                    textRange: javaScriptCoreTextRange,
+                    slide: UInt64(slide)
+                ),
+                stringImplToNSString: resolveSharedCacheSymbol(
+                    named: symbols.stringImplToNSString,
+                    symbols: javaScriptCoreFileBackedSymbols.symbols,
+                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                    textRange: javaScriptCoreTextRange,
+                    slide: UInt64(slide)
+                ),
+                destroyStringImpl: resolveSharedCacheSymbol(
+                    named: symbols.destroyStringImpl,
+                    symbols: javaScriptCoreFileBackedSymbols.symbols,
+                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                    textRange: javaScriptCoreTextRange,
+                    slide: UInt64(slide)
+                ),
+                backendDispatcherDispatch: preferredResolvedAddress(
+                    resolveSharedCacheSymbol(
+                        named: symbols.backendDispatcherDispatch,
+                        symbols: fileBackedSymbols.symbols,
+                        symbolRange: fileBackedSymbols.symbolRange,
+                        textVMAddress: UInt64(text.virtualMemoryAddress),
+                        textRange: textRange,
+                        slide: UInt64(slide)
+                    ),
+                    fallback: resolveSharedCacheSymbol(
+                        named: symbols.backendDispatcherDispatch,
+                        symbols: javaScriptCoreFileBackedSymbols.symbols,
+                        symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
+                        textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                        textRange: javaScriptCoreTextRange,
+                        slide: UInt64(slide)
+                    )
+                )
             )
-            return finalizeResolution(
-                connectResult: connectResult,
-                disconnectResult: disconnectResult,
-                successLog: "resolved symbol via dyld local symbols (file-backed)",
-                imagePath: "\(loadedImage.path) cache=\(fileBackedSymbols.cachePath)"
-            )
+            lastResolvedSymbols = resolvedSymbols
+            if let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) {
+                return successResolution(
+                    functionAddresses,
+                    successLog: "resolved symbol via dyld local symbols (file-backed)",
+                    imagePath: "\(loadedImage.path) cache=\(fileBackedSymbols.cachePath),\(javaScriptCoreFileBackedSymbols.cachePath)"
+                )
+            }
         } catch let lookupFailure as WITransportLookupFailure {
+            if let lastResolvedSymbols {
+                return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+                    ?? failure(lookupFailure.kind, detail: lookupFailure.detail)
+            }
             return failure(lookupFailure.kind, detail: lookupFailure.detail)
         } catch {
+            if let lastResolvedSymbols {
+                return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+                    ?? failure(.localSymbolsUnavailable, detail: error.localizedDescription)
+            }
             return failure(.localSymbolsUnavailable, detail: error.localizedDescription)
+        }
+
+        if let lastResolvedSymbols {
+            return finalizeResolution(lastResolvedSymbols, successLog: "", imagePath: loadedImage.path)
+                ?? failure(.runtimeFunctionSymbolMissing)
+        }
+        return failure(.runtimeFunctionSymbolMissing)
+    }
+
+    private static func preferredResolvedAddress(
+        _ primary: WITransportResolvedAddress,
+        fallback: WITransportResolvedAddress
+    ) -> WITransportResolvedAddress {
+        switch primary {
+        case .missing:
+            return fallback
+        default:
+            return primary
         }
     }
 
-    private static func finalizeResolution(
-        connectResult: WITransportResolvedAddress,
-        disconnectResult: WITransportResolvedAddress,
+    private static func resolvedFunctionAddresses(
+        from resolvedSymbols: WITransportNativeInspectorResolvedSymbols
+    ) -> WITransportResolvedFunctionAddresses? {
+        guard
+            case let .found(connectAddress) = resolvedSymbols.connectFrontend,
+            case let .found(disconnectAddress) = resolvedSymbols.disconnectFrontend,
+            case let .found(stringFromUTF8Address) = resolvedSymbols.stringFromUTF8,
+            case let .found(stringImplToNSStringAddress) = resolvedSymbols.stringImplToNSString,
+            case let .found(destroyStringImplAddress) = resolvedSymbols.destroyStringImpl,
+            case let .found(backendDispatcherDispatchAddress) = resolvedSymbols.backendDispatcherDispatch
+        else {
+            return nil
+        }
+
+        return WITransportResolvedFunctionAddresses(
+            connectFrontendAddress: connectAddress,
+            disconnectFrontendAddress: disconnectAddress,
+            stringFromUTF8Address: stringFromUTF8Address,
+            stringImplToNSStringAddress: stringImplToNSStringAddress,
+            destroyStringImplAddress: destroyStringImplAddress,
+            backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
+        )
+    }
+
+    private static func successResolution(
+        _ functionAddresses: WITransportResolvedFunctionAddresses,
         successLog: String,
         imagePath: String
     ) -> WITransportNativeInspectorSymbolResolution {
-        switch (connectResult, disconnectResult) {
-        case let (.found(connectAddress), .found(disconnectAddress)):
-            NSLog(
-                "[WebInspectorTransport] %@ image=%@ backend=%@ connect=0x%llx disconnect=0x%llx",
-                successLog,
-                imagePath,
-                backendKind.rawValue,
-                connectAddress,
-                disconnectAddress
-            )
-            return WITransportNativeInspectorSymbolResolution(
-                connectFrontendAddress: connectAddress,
-                disconnectFrontendAddress: disconnectAddress,
-                failureReason: nil
-            )
-        case let (.outsideText(address), _), let (_, .outsideText(address)):
-            return failure(
-                .resolvedAddressOutsideWebKitText,
-                detail: unsafe String(format: "Resolved address 0x%llx.", address)
-            )
-        case (.missing, _), (_, .missing):
-            return failure(.connectDisconnectSymbolMissing)
+        NSLog(
+            "[WebInspectorTransport] %@ image=%@ backend=%@ connect=0x%llx disconnect=0x%llx from_utf8=0x%llx to_nsstring=0x%llx destroy=0x%llx dispatch=0x%llx",
+            successLog,
+            imagePath,
+            backendKind.rawValue,
+            functionAddresses.connectFrontendAddress,
+            functionAddresses.disconnectFrontendAddress,
+            functionAddresses.stringFromUTF8Address,
+            functionAddresses.stringImplToNSStringAddress,
+            functionAddresses.destroyStringImplAddress,
+            functionAddresses.backendDispatcherDispatchAddress
+        )
+        return WITransportNativeInspectorSymbolResolution(
+            functionAddresses: functionAddresses,
+            failureReason: nil
+        )
+    }
+
+    private static func finalizeResolution(
+        _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
+        successLog: String,
+        imagePath: String
+    ) -> WITransportNativeInspectorSymbolResolution? {
+        let allResults: [(String, WITransportResolvedAddress)] = [
+            ("connectFrontend", resolvedSymbols.connectFrontend),
+            ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
+            ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
+            ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
+            ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
+            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
+        ]
+
+        for (label, result) in allResults {
+            if case let .outsideText(address) = result {
+                return failure(
+                    .resolvedAddressOutsideWebKitText,
+                    detail: unsafe String(format: "%@ resolved address 0x%llx.", label, address)
+                )
+            }
         }
+
+        let missingConnectDisconnect = [
+            ("connectFrontend", resolvedSymbols.connectFrontend),
+            ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
+        ].compactMap { label, result in
+            if case .missing = result {
+                return label
+            }
+            return nil
+        }
+        if !missingConnectDisconnect.isEmpty {
+            return failure(
+                .connectDisconnectSymbolMissing,
+                detail: missingConnectDisconnect.joined(separator: ", ")
+            )
+        }
+
+        let missingRuntimeFunctions = [
+            ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
+            ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
+            ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
+            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
+        ].compactMap { label, result in
+            if case .missing = result {
+                return label
+            }
+            return nil
+        }
+        if !missingRuntimeFunctions.isEmpty {
+            return failure(
+                .runtimeFunctionSymbolMissing,
+                detail: missingRuntimeFunctions.joined(separator: ", ")
+            )
+        }
+
+        guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) else {
+            return failure(.runtimeFunctionSymbolMissing)
+        }
+        return successResolution(functionAddresses, successLog: successLog, imagePath: imagePath)
     }
 
     private static func loadedWebKitImage(pathSuffixes: [String]) -> WITransportLoadedWebKitImage? {
@@ -491,8 +811,7 @@ private enum WITransportNativeInspectorResolver {
         }
         NSLog("[WebInspectorTransport] local symbol resolution failed backend=%@ reason=%@", backendKind.rawValue, reason)
         return WITransportNativeInspectorSymbolResolution(
-            connectFrontendAddress: 0,
-            disconnectFrontendAddress: 0,
+            functionAddresses: .zero,
             failureReason: reason
         )
     }
@@ -502,6 +821,10 @@ struct WITransportAttachSymbolResolution: Sendable {
     let backendKind: WITransportBackendKind
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
+    let stringFromUTF8Address: UInt64
+    let stringImplToNSStringAddress: UInt64
+    let destroyStringImplAddress: UInt64
+    let backendDispatcherDispatchAddress: UInt64
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
@@ -516,7 +839,13 @@ struct WITransportAttachSymbolResolution: Sendable {
     }
 
     var isSupported: Bool {
-        connectFrontendAddress != 0 && disconnectFrontendAddress != 0 && failureReason == nil
+        connectFrontendAddress != 0
+            && disconnectFrontendAddress != 0
+            && stringFromUTF8Address != 0
+            && stringImplToNSStringAddress != 0
+            && destroyStringImplAddress != 0
+            && backendDispatcherDispatchAddress != 0
+            && failureReason == nil
     }
 }
 
@@ -531,13 +860,21 @@ enum WITransportNativeInspectorSymbolResolver {
             "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
         ],
         connectSymbol: String = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb",
-        disconnectSymbol: String = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE"
+        disconnectSymbol: String = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE",
+        stringFromUTF8Symbol: String? = nil,
+        stringImplToNSStringSymbol: String? = nil,
+        destroyStringImplSymbol: String? = nil,
+        backendDispatcherDispatchSymbol: String? = nil
     ) -> WITransportAttachSymbolResolution {
         makeAttachResolution(
             from: WITransportNativeInspectorResolver.resolveForTesting(
                 imagePathSuffixes: imagePathSuffixes,
                 connectSymbol: connectSymbol,
-                disconnectSymbol: disconnectSymbol
+                disconnectSymbol: disconnectSymbol,
+                stringFromUTF8Symbol: stringFromUTF8Symbol,
+                stringImplToNSStringSymbol: stringImplToNSStringSymbol,
+                destroyStringImplSymbol: destroyStringImplSymbol,
+                backendDispatcherDispatchSymbol: backendDispatcherDispatchSymbol
             )
         )
     }
@@ -545,8 +882,12 @@ enum WITransportNativeInspectorSymbolResolver {
     private static func makeAttachResolution(from resolution: WITransportNativeInspectorSymbolResolution) -> WITransportAttachSymbolResolution {
         WITransportAttachSymbolResolution(
             backendKind: WITransportNativeInspectorResolver.backendKind,
-            connectFrontendAddress: resolution.connectFrontendAddress,
-            disconnectFrontendAddress: resolution.disconnectFrontendAddress,
+            connectFrontendAddress: resolution.functionAddresses.connectFrontendAddress,
+            disconnectFrontendAddress: resolution.functionAddresses.disconnectFrontendAddress,
+            stringFromUTF8Address: resolution.functionAddresses.stringFromUTF8Address,
+            stringImplToNSStringAddress: resolution.functionAddresses.stringImplToNSStringAddress,
+            destroyStringImplAddress: resolution.functionAddresses.destroyStringImplAddress,
+            backendDispatcherDispatchAddress: resolution.functionAddresses.backendDispatcherDispatchAddress,
             failureReason: resolution.failureReason
         )
     }
@@ -558,6 +899,10 @@ struct WITransportAttachSymbolResolution: Sendable {
     let backendKind: WITransportBackendKind
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
+    let stringFromUTF8Address: UInt64
+    let stringImplToNSStringAddress: UInt64
+    let destroyStringImplAddress: UInt64
+    let backendDispatcherDispatchAddress: UInt64
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
@@ -573,6 +918,10 @@ enum WITransportNativeInspectorSymbolResolver {
             backendKind: .unsupported,
             connectFrontendAddress: 0,
             disconnectFrontendAddress: 0,
+            stringFromUTF8Address: 0,
+            stringImplToNSStringAddress: 0,
+            destroyStringImplAddress: 0,
+            backendDispatcherDispatchAddress: 0,
             failureReason: "WebInspectorTransport is only available on iOS and macOS."
         )
     }
@@ -580,9 +929,20 @@ enum WITransportNativeInspectorSymbolResolver {
     static func resolveForTesting(
         imagePathSuffixes: [String] = [],
         connectSymbol: String = "",
-        disconnectSymbol: String = ""
+        disconnectSymbol: String = "",
+        stringFromUTF8Symbol: String? = nil,
+        stringImplToNSStringSymbol: String? = nil,
+        destroyStringImplSymbol: String? = nil,
+        backendDispatcherDispatchSymbol: String? = nil
     ) -> WITransportAttachSymbolResolution {
-        currentAttachResolution()
+        _ = imagePathSuffixes
+        _ = connectSymbol
+        _ = disconnectSymbol
+        _ = stringFromUTF8Symbol
+        _ = stringImplToNSStringSymbol
+        _ = destroyStringImplSymbol
+        _ = backendDispatcherDispatchSymbol
+        return currentAttachResolution()
     }
 }
 #endif

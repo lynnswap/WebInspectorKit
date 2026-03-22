@@ -9,6 +9,15 @@ typedef void (^WITransportPageMessageHandler)(NSString *message, NSString *targe
 typedef void (^WITransportFatalFailureHandler)(NSString *message);
 
 typedef struct {
+    uint64_t connectFrontendAddress;
+    uint64_t disconnectFrontendAddress;
+    uint64_t stringFromUTF8Address;
+    uint64_t stringImplToNSStringAddress;
+    uint64_t destroyStringImplAddress;
+    uint64_t backendDispatcherDispatchAddress;
+} WITransportResolvedFunctions;
+
+typedef struct {
     BOOL found;
     BOOL usedFallbackRange;
     NSInteger resolvedOffset;
@@ -27,8 +36,7 @@ typedef struct {
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
 
-- (BOOL)attachWithConnectFrontendAddress:(uint64_t)connectFrontendAddress
-              disconnectFrontendAddress:(uint64_t)disconnectFrontendAddress
+- (BOOL)attachWithResolvedFunctions:(WITransportResolvedFunctions)resolvedFunctions
                                   error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)sendRootJSONString:(NSString *)message error:(NSError * _Nullable * _Nullable)error;
 - (BOOL)sendPageJSONString:(NSString *)message
