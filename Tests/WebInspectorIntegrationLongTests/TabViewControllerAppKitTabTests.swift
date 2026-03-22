@@ -413,6 +413,33 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func setInspectorControllerClearsContentControllerCacheAcrossImmediateRender() {
+        var createdCount = 0
+        let requestedTabs = [
+            WITab(
+                id: "custom",
+                title: "Custom",
+                systemImage: "circle",
+                viewControllerProvider: { _ in
+                    createdCount += 1
+                    return MarkerViewController(marker: "\(createdCount)")
+                }
+            )
+        ]
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(firstController, webView: nil, tabs: requestedTabs)
+
+        container.loadViewIfNeeded()
+        #expect(createdCount == 1)
+
+        container.setInspectorController(secondController)
+        container.setTabs(requestedTabs)
+
+        #expect(createdCount == 2)
+    }
+
+    @Test
     func duplicateIdentifierTabsUseDistinctCachedContentControllers() {
         let controller = WIInspectorController()
         let firstController = MarkerViewController(marker: "first")

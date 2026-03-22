@@ -167,6 +167,7 @@ public final class WITabViewController: UIViewController {
         uiStateApplyTask = nil
         runtimeStateSyncPending = false
         controllerSwapTask?.cancel()
+        invalidatePresentationStateForControllerSwap()
         let request = ControllerSwapRequest()
         activeControllerSwapRequest = request
         controllerSwapTask = Task { [weak self, request] in
@@ -206,6 +207,18 @@ public final class WITabViewController: UIViewController {
                 visibility: self.shouldDriveRuntimeStateFromUI ? .visible : .hidden
             )
         }
+    }
+
+    private func invalidatePresentationStateForControllerSwap() {
+        renderCache.resetAll()
+        if let activeHost {
+            activeHost.prepareForRemoval()
+            activeHost.willMove(toParent: nil)
+            activeHost.view.removeFromSuperview()
+            activeHost.removeFromParent()
+        }
+        activeHost = nil
+        activeHostKind = nil
     }
 
     public func setInspectorController(_ model: WIModel) {

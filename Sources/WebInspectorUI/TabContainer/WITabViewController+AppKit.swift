@@ -137,6 +137,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         uiStateApplyTask = nil
         runtimeStateSyncPending = false
         controllerSwapTask?.cancel()
+        invalidatePresentationStateForControllerSwap()
         let request = ControllerSwapRequest()
         activeControllerSwapRequest = request
         controllerSwapTask = Task { [weak self, request] in
@@ -175,6 +176,12 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
                 visibility: self.shouldDriveRuntimeStateFromUI ? .visible : .hidden
             )
         }
+    }
+
+    private func invalidatePresentationStateForControllerSwap() {
+        setVisibleContentViewController(nil, for: nil)
+        contentViewControllerByTabObjectID.removeAll()
+        stopObservingToolbarState()
     }
 
     public func setInspectorController(_ model: WIModel) {
