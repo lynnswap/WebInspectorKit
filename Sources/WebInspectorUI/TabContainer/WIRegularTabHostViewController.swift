@@ -138,7 +138,11 @@ final class WIRegularTabHostViewController: UINavigationController {
             \.selectedTab,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.applySelectedTabProjection()
+            guard let self else {
+                return
+            }
+            self.applySelectedTabProjection()
+            self.onSelectionChange()
         }
         .store(in: &tabObservationHandles)
     }

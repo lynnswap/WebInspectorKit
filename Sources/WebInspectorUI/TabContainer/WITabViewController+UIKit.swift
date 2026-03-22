@@ -300,6 +300,9 @@ public final class WITabViewController: UIViewController {
             }
             defer {
                 self.uiStateApplyTask = nil
+                if self.runtimeStateSyncPending {
+                    self.scheduleRuntimeStateSync()
+                }
             }
             while self.runtimeStateSyncPending {
                 self.runtimeStateSyncPending = false

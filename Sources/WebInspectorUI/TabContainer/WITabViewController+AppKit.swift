@@ -714,6 +714,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             }
             defer {
                 self.uiStateApplyTask = nil
+                if self.runtimeStateSyncPending {
+                    self.scheduleRuntimeStateSync()
+                }
             }
             while self.runtimeStateSyncPending {
                 self.runtimeStateSyncPending = false
