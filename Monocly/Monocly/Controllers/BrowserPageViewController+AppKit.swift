@@ -8,7 +8,7 @@ final class BrowserPageViewController: NSViewController {
     private let store: BrowserStore
     private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
-    private let logger = Logger(subsystem: "Luminiss", category: "BrowserPageViewController")
+    private let logger = Logger(subsystem: "Monocly", category: "BrowserPageViewController")
 
     private let progressIndicator = NSProgressIndicator()
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
@@ -213,7 +213,7 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
         state = .active
         wantsLayer = true
         layer?.cornerRadius = 10
-        identifier = NSUserInterfaceItemIdentifier("Luminiss.diagnostics.panel")
+        identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.panel")
 
         let stackView = NSStackView(views: [
             terminationCountLabel,
@@ -232,10 +232,10 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
             label.maximumNumberOfLines = 2
         }
 
-        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("Luminiss.diagnostics.terminationCount")
-        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("Luminiss.diagnostics.didFinishCount")
-        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("Luminiss.diagnostics.currentURL")
-        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("Luminiss.diagnostics.lastNavigationError")
+        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.terminationCount")
+        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.didFinishCount")
+        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.currentURL")
+        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.lastNavigationError")
 
         addSubview(stackView)
         NSLayoutConstraint.activate([

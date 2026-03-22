@@ -12,7 +12,7 @@
 - `Tests/WebInspectorTestSupport`: shared Swift test helpers.
 - `Sources/WebInspectorScripts/TypeScript/Tests`: Vitest suites for DOM/network helper scripts.
 - `Tools/WebInspectorScriptsTypeScriptTests`: pnpm/vitest harness so `node_modules` stays out of `Sources/`.
-- `Luminiss/`: app project.
+- `Monocly/`: app project.
 - `Plugins/WebInspectorKitObfuscatePlugin/ObfuscateJS/`: JavaScript bundling toolchain used by `./Scripts/generate-bundled-js.sh`.
 
 ## Test Commands

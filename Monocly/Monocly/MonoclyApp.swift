@@ -1,6 +1,6 @@
 //
-//  LuminissApp.swift
-//  Luminiss
+//  MonoclyApp.swift
+//  Monocly
 //
 //  Created by lynnswap on 2025/12/03.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct LuminissApp: App {
+struct MonoclyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
