@@ -440,6 +440,38 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func setInspectorControllerPreservesLatestSelectionDuringAsyncSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: "wi_dom", title: "DOM"),
+                makeDescriptor(id: "wi_network", title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        container.setPageWebView(makeTestWebView())
+        container.setInspectorController(secondController)
+
+        guard let networkTab = firstController.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+        firstController.model.setSelectedTab(networkTab)
+
+        await container.waitForRuntimeStateSyncForTesting()
+
+        #expect(secondController.model.selectedTab?.identifier == WITab.networkTabID)
+    }
+
+    @Test
     func duplicateIdentifierTabsUseDistinctCachedContentControllers() {
         let controller = WIInspectorController()
         let firstController = MarkerViewController(marker: "first")

@@ -358,6 +358,34 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func setInspectorControllerPreservesLatestCompactSelectionDuringAsyncSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        let replacementWebView = makeTestWebView()
+        container.setPageWebView(replacementWebView)
+        container.setInspectorController(secondController)
+
+        guard let networkTab = firstController.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+        firstController.model.setSelectedTab(networkTab)
+
+        await container.waitForRuntimeStateSyncForTesting()
+
+        #expect(secondController.model.selectedTab?.identifier == WITab.networkTabID)
+        #expect(secondController.model.preferredCompactSelectedTabIdentifier == WITab.networkTabID)
+    }
+
+    @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
         let requestedTabs: [WITab] = [

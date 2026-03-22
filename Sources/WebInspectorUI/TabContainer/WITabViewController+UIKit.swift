@@ -159,9 +159,6 @@ public final class WITabViewController: UIViewController {
             return
         }
 
-        let currentSelectedTab = model.selectedTab
-        let currentPreferredCompactSelectedTabIdentifier = model.preferredCompactSelectedTabIdentifier
-        let currentHasExplicitTabsConfiguration = model.hasExplicitTabsConfiguration
         let previousController = self.inspectorController
         let activeUIStateApplyTask = uiStateApplyTask
         uiStateApplyTask = nil
@@ -193,6 +190,9 @@ public final class WITabViewController: UIViewController {
             }
             let currentRequestedTabs = self.requestedTabs
             let currentPageWebView = self.requestedPageWebView
+            let currentSelectedTab = previousController.model.selectedTab
+            let currentPreferredCompactSelectedTabIdentifier = previousController.model.preferredCompactSelectedTabIdentifier
+            let currentHasExplicitTabsConfiguration = previousController.model.hasExplicitTabsConfiguration
             self.applyInspectorController(
                 inspectorController,
                 requestedTabs: currentRequestedTabs,

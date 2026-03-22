@@ -129,9 +129,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             return
         }
 
-        let currentSelectedTab = model.selectedTab
-        let currentHasExplicitTabsConfiguration = model.hasExplicitTabsConfiguration
-
         let previousController = self.inspectorController
         let activeUIStateApplyTask = uiStateApplyTask
         uiStateApplyTask = nil
@@ -163,6 +160,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             }
             let currentRequestedTabs = self.requestedTabs
             let currentPageWebView = self.requestedPageWebView
+            let currentSelectedTab = previousController.model.selectedTab
+            let currentHasExplicitTabsConfiguration = previousController.model.hasExplicitTabsConfiguration
             self.applyInspectorController(
                 inspectorController,
                 requestedTabs: currentRequestedTabs,
