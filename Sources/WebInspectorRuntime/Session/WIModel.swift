@@ -1,40 +1,20 @@
-import Observation
+import Foundation
 
 @MainActor
-@Observable
-public final class WIModel {
-    public private(set) var lastRecoverableError: String?
-    public private(set) var tabs: [WITab] = []
-    public private(set) var selectedTab: WITab?
-    package private(set) var preferredCompactSelectedTabIdentifier: String?
-    package private(set) var hasExplicitTabsConfiguration = false
-    @ObservationIgnored package var selectedTabDidChange: (@MainActor (WITab?) -> Void)?
+package struct WIInspectorState {
+    package var lastRecoverableError: String?
+    package var tabs: [WITab] = []
+    package var selectedTab: WITab?
+    package var preferredCompactSelectedTabIdentifier: String?
+    package var hasExplicitTabsConfiguration = false
 
-    public init() {}
+    package init() {}
 
-    public func setTabs(_ tabs: [WITab]) {
-        setTabsFromUI(tabs, marksExplicitConfiguration: true)
-    }
-
-    public func setSelectedTab(_ tab: WITab?) {
-        _ = projectSelectedTabFromUI(tab)
-    }
-
-    public func setPreferredCompactSelectedTabIdentifier(_ identifier: String?) {
-        setPreferredCompactSelectedTabIdentifierFromUI(identifier)
-    }
-}
-
-extension WIModel {
-    package func setRecoverableError(_ message: String?) {
+    package mutating func setRecoverableError(_ message: String?) {
         lastRecoverableError = message
     }
 
-    package func setSelectedTabFromUI(_ tab: WITab?) {
-        _ = projectSelectedTabFromUI(tab)
-    }
-
-    package func setTabsFromUI(
+    package mutating func setTabs(
         _ tabs: [WITab],
         marksExplicitConfiguration: Bool = true
     ) {
@@ -46,7 +26,7 @@ extension WIModel {
     }
 
     @discardableResult
-    package func projectSelectedTabFromUI(_ tab: WITab?) -> Bool {
+    package mutating func projectSelectedTab(_ tab: WITab?) -> Bool {
         let resolvedTab = resolveSelectionCandidate(tab)
         if tab != nil, resolvedTab == nil {
             return false
@@ -55,14 +35,14 @@ extension WIModel {
         return true
     }
 
-    package func setPreferredCompactSelectedTabIdentifierFromUI(_ identifier: String?) {
+    package mutating func setPreferredCompactSelectedTabIdentifier(_ identifier: String?) {
         preferredCompactSelectedTabIdentifier = identifier
         syncPreferredCompactSelectionAfterNormalization(selectedTab)
     }
 }
 
-private extension WIModel {
-    func applyNormalizedSelection(preferredTab: WITab?) {
+private extension WIInspectorState {
+    mutating func applyNormalizedSelection(preferredTab: WITab?) {
         let normalizedTab: WITab?
         if tabs.isEmpty {
             normalizedTab = nil
@@ -76,10 +56,7 @@ private extension WIModel {
             normalizedTab = tabs.first
         }
 
-        if normalizedTab !== selectedTab {
-            selectedTab = normalizedTab
-            selectedTabDidChange?(normalizedTab)
-        }
+        selectedTab = normalizedTab
         syncPreferredCompactSelectionAfterNormalization(normalizedTab)
     }
 
@@ -100,7 +77,7 @@ private extension WIModel {
         return nil
     }
 
-    func syncPreferredCompactSelectionAfterNormalization(_ normalizedTab: WITab?) {
+    mutating func syncPreferredCompactSelectionAfterNormalization(_ normalizedTab: WITab?) {
         guard let normalizedTab else {
             preferredCompactSelectedTabIdentifier = nil
             return

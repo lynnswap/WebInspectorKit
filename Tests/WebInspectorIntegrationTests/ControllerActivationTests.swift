@@ -16,7 +16,7 @@ import AppKit
 struct ControllerActivationTests {
     @Test
     func connectWithNoNetworkTabsDoesNotAttachNetworkSession() async {
-        let (controller, _) = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
+        let controller = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -33,7 +33,7 @@ struct ControllerActivationTests {
             title: "Custom Network",
             systemImage: "network"
         )
-        let (controller, _) = makeBoundSession(tabs: [customTab])
+        let controller = makeBoundSession(tabs: [customTab])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -49,7 +49,7 @@ struct ControllerActivationTests {
             title: "Custom DOM",
             systemImage: "doc"
         )
-        let (controller, _) = makeBoundSession(tabs: [customTab])
+        let controller = makeBoundSession(tabs: [customTab])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -72,7 +72,7 @@ struct ControllerActivationTests {
 
     @Test
     func connectWithExplicitEmptyTabsDoesNotAttachInspectorSessions() async {
-        let (controller, _) = makeBoundSession(tabs: [])
+        let controller = makeBoundSession(tabs: [])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -86,37 +86,37 @@ struct ControllerActivationTests {
 
     @Test
     func selectedTabSwitchesNetworkModeBetweenBufferingAndActive() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
         #expect(controller.network.session.mode == .buffering)
 
-        await selectTab("wi_network", in: controller, store: store)
+        await selectTab("wi_network", in: controller)
         #expect(controller.network.session.mode == .active)
 
-        await selectTab("wi_dom", in: controller, store: store)
+        await selectTab("wi_dom", in: controller)
         #expect(controller.network.session.mode == .buffering)
     }
 
     @Test
     func selectedTabSwitchesDOMAutoSnapshot() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
+        let controller = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
 
-        await selectTab("wi_element", in: controller, store: store)
+        await selectTab("wi_element", in: controller)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
 
-        await selectTab("wi_dom", in: controller, store: store)
+        await selectTab("wi_dom", in: controller)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
     }
 
     @Test
     func connectNilSuspendsWithoutClearingLastPageWebView() async {
-        let (controller, _) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -133,13 +133,13 @@ struct ControllerActivationTests {
 
     @Test
     func reconnectAfterSuspendRestoresModeForSelectedTab() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
         #expect(controller.network.session.mode == .buffering)
 
-        await selectTab("wi_network", in: controller, store: store)
+        await selectTab("wi_network", in: controller)
         #expect(controller.network.session.mode == .active)
 
         await controller.connect(to: nil)
@@ -151,7 +151,7 @@ struct ControllerActivationTests {
 
     @Test
     func setTabsWhileSuspendedDoesNotReattachSessionsUntilActivated() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -163,34 +163,47 @@ struct ControllerActivationTests {
         #expect(controller.dom.session.hasPageWebView == false)
         #expect(controller.network.session.hasAttachedPageWebView == false)
 
-        store.setTabs([.dom(), .network()])
-        await controller.reapplyCurrentHostState()
-        #expect(controller.lifecycle == .suspended)
-        #expect(controller.dom.session.hasPageWebView == false)
-        #expect(controller.network.session.hasAttachedPageWebView == false)
+        controller.setTabs([.dom(), .network()])
+        await waitForControllerState(
+            controller,
+            lifecycle: .suspended,
+            selectedTabID: WITab.domTabID,
+            hasAttachedPage: false,
+            networkMode: .stopped
+        )
 
-        await controller.activateFromUIIfPossible()
-        #expect(controller.lifecycle == .active)
-        #expect(controller.dom.session.hasPageWebView == true)
-        #expect(controller.network.session.hasAttachedPageWebView == true)
+        await controller.connect(to: webView)
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: WITab.domTabID,
+            hasAttachedPage: true,
+            networkMode: .buffering
+        )
     }
 
     @Test
     func setTabsWhileConnectedReconnectsNewlyRequiredSessions() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
+        let controller = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
         #expect(controller.network.session.lastPageWebView == nil)
 
-        store.setTabs([.dom(), .network()])
-        await controller.reapplyCurrentHostState()
+        controller.setTabs([.dom(), .network()])
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: WITab.domTabID,
+            hasAttachedPage: true,
+            networkMode: .buffering
+        )
         #expect(controller.network.session.lastPageWebView === webView)
     }
 
     @Test
     func setTabsWhileConnectedWithSameRequirementsKeepsDOMSelection() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
+        let controller = makeBoundSession(tabs: [.dom(), domSecondaryTab()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -205,7 +218,7 @@ struct ControllerActivationTests {
             )
         )
 
-        store.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
+        controller.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
         await controller.reapplyCurrentHostState()
 
         #expect(controller.dom.selectedEntry?.id.localID == 42)
@@ -228,37 +241,81 @@ struct ControllerActivationTests {
 
     @Test
     func programmaticSelectionAfterDisconnectKeepsSessionsStopped() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
         #expect(controller.network.session.mode == .buffering)
 
         await controller.disconnect()
-        await selectTab("wi_network", in: controller, store: store)
+        await selectTab("wi_network", in: controller)
 
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
         #expect(controller.network.session.mode == .stopped)
         #expect(controller.network.session.lastPageWebView == nil)
     }
 
     @Test
-    func programmaticSelectionWhileConnectedUpdatesStoreAndMode() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+    func publicSelectionMutationWhileConnectedReappliesRuntimeState() async {
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
-        #expect(store.selectedTab?.id == "wi_dom")
+        #expect(controller.selectedTab?.id == "wi_dom")
+        #expect(controller.network.session.mode == .buffering)
 
-        await selectTab("wi_network", in: controller, store: store)
+        guard let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+        controller.setSelectedTab(networkTab)
 
-        #expect(store.selectedTab?.id == "wi_network")
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: WITab.networkTabID,
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+    }
+
+    @Test
+    func explicitEmptyTabsMutationWhileConnectedSuspendsRuntime() async {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+
+        await controller.connect(to: webView)
+        #expect(controller.lifecycle == .active)
+        #expect(controller.network.session.mode == .active)
+
+        controller.setTabs([])
+
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: nil,
+            hasAttachedPage: false,
+            networkMode: .stopped
+        )
+    }
+
+    @Test
+    func programmaticSelectionWhileConnectedUpdatesStoreAndMode() async {
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
+        let webView = makeTestWebView()
+
+        await controller.connect(to: webView)
+        #expect(controller.selectedTab?.id == "wi_dom")
+
+        await selectTab("wi_network", in: controller)
+
+        #expect(controller.selectedTab?.id == "wi_network")
         #expect(controller.network.session.mode == .active)
     }
 
     @Test
     func repeatedTabSwitchingKeepsStoreAndNetworkModeConsistent() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
@@ -267,26 +324,26 @@ struct ControllerActivationTests {
             let expectedTabID = iteration.isMultiple(of: 2) ? "wi_network" : "wi_dom"
             let expectedMode: NetworkLoggingMode = expectedTabID == "wi_network" ? .active : .buffering
 
-            await selectTab(expectedTabID, in: controller, store: store)
+            await selectTab(expectedTabID, in: controller)
 
-            #expect(store.selectedTab?.id == expectedTabID)
+            #expect(controller.selectedTab?.id == expectedTabID)
             #expect(controller.network.session.mode == expectedMode)
         }
     }
 
     @Test
     func repeatedConnectSuspendReconnectDisconnectKeepsLifecycleConsistent() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         for _ in 0..<3 {
             await controller.connect(to: webView)
             #expect(controller.dom.session.hasPageWebView == true)
-            let expectedModeOnConnect: NetworkLoggingMode = store.selectedTab?.id == "wi_network" ? .active : .buffering
+            let expectedModeOnConnect: NetworkLoggingMode = controller.selectedTab?.id == "wi_network" ? .active : .buffering
             #expect(controller.network.session.mode == expectedModeOnConnect)
 
-            await selectTab("wi_network", in: controller, store: store)
-            #expect(store.selectedTab?.id == "wi_network")
+            await selectTab("wi_network", in: controller)
+            #expect(controller.selectedTab?.id == "wi_network")
             #expect(controller.network.session.mode == .active)
 
             await controller.connect(to: nil)
@@ -305,14 +362,13 @@ struct ControllerActivationTests {
 
     @Test
     func suspendAndReconnectSynchronizeStoreStateWithoutDroppingSelection() async {
-        let (controller, store) = makeBoundSession(tabs: [.dom(), .network()])
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
-        await selectTab("wi_network", in: controller, store: store)
+        await selectTab("wi_network", in: controller)
         await waitForControllerState(
             controller,
-            store: store,
             lifecycle: .active,
             selectedTabID: "wi_network",
             hasAttachedPage: true,
@@ -322,7 +378,6 @@ struct ControllerActivationTests {
         await controller.connect(to: nil)
         await waitForControllerState(
             controller,
-            store: store,
             lifecycle: .suspended,
             selectedTabID: "wi_network",
             hasAttachedPage: false,
@@ -332,7 +387,6 @@ struct ControllerActivationTests {
         await controller.connect(to: webView)
         await waitForControllerState(
             controller,
-            store: store,
             lifecycle: .active,
             selectedTabID: "wi_network",
             hasAttachedPage: true,
@@ -429,15 +483,14 @@ struct ControllerActivationTests {
     private func makeBoundSession(
         tabs: [WITab],
         selectedTabID: String? = nil
-    ) -> (WIInspectorController, WIModel) {
-        let store = WIModel()
-        let controller = WIInspectorController(model: store)
-        store.setTabs(tabs)
+    ) -> WIInspectorController {
+        let controller = WIInspectorController()
+        controller.setTabs(tabs)
         if let selectedTabID {
-            let tab = store.tabs.first(where: { $0.identifier == selectedTabID })
-            store.setSelectedTabFromUI(tab)
+            let tab = controller.tabs.first(where: { $0.identifier == selectedTabID })
+            controller.setSelectedTab(tab)
         }
-        return (controller, store)
+        return controller
     }
 
     private func makeTestWebView() -> WKWebView {
@@ -456,15 +509,45 @@ struct ControllerActivationTests {
         )
     }
 
-    private func selectTab(_ identifier: String, in controller: WIInspectorController, store: WIModel) async {
-        let tab = store.tabs.first(where: { $0.identifier == identifier })
-        store.setSelectedTabFromUI(tab)
-        await controller.reapplyCurrentHostState()
+    private func selectTab(_ identifier: String, in controller: WIInspectorController) async {
+        let tab = controller.tabs.first(where: { $0.identifier == identifier })
+        controller.setSelectedTab(tab)
+
+        let expectedLifecycle = controller.lifecycle
+        let expectedMode: NetworkLoggingMode
+        let expectedDOMAttached: Bool
+        let expectedNetworkAttached: Bool
+        switch expectedLifecycle {
+        case .active:
+            expectedDOMAttached = controller.tabs.contains {
+                $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID
+            }
+            expectedNetworkAttached = controller.tabs.contains { $0.identifier == WITab.networkTabID }
+            expectedMode = identifier == WITab.networkTabID && expectedNetworkAttached ? .active : (
+                expectedNetworkAttached ? .buffering : .stopped
+            )
+        case .suspended, .disconnected:
+            expectedMode = .stopped
+            expectedDOMAttached = false
+            expectedNetworkAttached = false
+        }
+
+        for _ in 0..<80 {
+            if controller.lifecycle == expectedLifecycle,
+               controller.selectedTab?.id == identifier,
+               controller.dom.session.hasPageWebView == expectedDOMAttached,
+               controller.network.session.hasAttachedPageWebView == expectedNetworkAttached,
+               controller.network.session.mode == expectedMode {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        Issue.record("Timed out waiting for synchronized tab selection state")
     }
 
     private func waitForControllerState(
         _ controller: WIInspectorController,
-        store: WIModel,
         lifecycle: WISessionLifecycle,
         selectedTabID: String?,
         hasAttachedPage: Bool,
@@ -472,7 +555,7 @@ struct ControllerActivationTests {
     ) async {
         for _ in 0..<80 {
             if controller.lifecycle == lifecycle,
-               store.selectedTab?.id == selectedTabID,
+               controller.selectedTab?.id == selectedTabID,
                controller.dom.session.hasPageWebView == hasAttachedPage,
                controller.network.session.hasAttachedPageWebView == hasAttachedPage,
                controller.network.session.mode == networkMode {
@@ -481,7 +564,16 @@ struct ControllerActivationTests {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        Issue.record("Timed out waiting for synchronized controller state")
+        Issue.record(
+            """
+            Timed out waiting for synchronized controller state \
+            lifecycle=\(controller.lifecycle) \
+            selectedTab=\(controller.selectedTab?.id ?? "nil") \
+            domAttached=\(controller.dom.session.hasPageWebView) \
+            networkAttached=\(controller.network.session.hasAttachedPageWebView) \
+            networkMode=\(controller.network.session.mode)
+            """
+        )
     }
 
 #if canImport(UIKit)

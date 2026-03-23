@@ -1,3 +1,4 @@
+import ObservationBridge
 import WebKit
 import WebInspectorRuntime
 
@@ -96,23 +97,17 @@ public final class WITabViewController: UIViewController {
         case regular
     }
 
-    private final class ControllerSwapRequest {}
-
     public private(set) var inspectorController: WIInspectorController
 
+    private var hostID: WIInspectorHostID
     private var requestedTabs: [WITab]
     private var requestedPageWebView: WKWebView?
     private let renderCache = WIUIKitTabRenderCache()
     private var controllerSwapTask: Task<Void, Never>?
-    private var activeControllerSwapRequest: ControllerSwapRequest?
-    private var uiStateApplyTask: Task<Void, Never>?
-    private var runtimeStateSyncPending = false
-    private var needsRuntimeStateSyncAfterSwap = false
-    private var shouldDriveRuntimeStateFromUI = false
+    private var needsHostStateSyncAfterSwap = false
 
     private var activeHost: (UIViewController & WIUIKitTabHost)?
     private var activeHostKind: HostKind?
-    private var model: WIModel { inspectorController.model }
 
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
         didSet {
@@ -128,18 +123,17 @@ public final class WITabViewController: UIViewController {
         tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
+        self.hostID = inspectorController.registerHost()
         self.requestedTabs = tabs
         self.requestedPageWebView = webView
         super.init(nibName: nil, bundle: nil)
-        inspectorController.model.setTabsFromUI(tabs)
-    }
-
-    public convenience init(
-        _ model: WIModel,
-        webView: WKWebView?,
-        tabs: [WITab] = [.dom(), .network()]
-    ) {
-        self.init(WIInspectorController(model: model), webView: webView, tabs: tabs)
+        inspectorController.setTabsFromUI(tabs)
+        inspectorController.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
     }
 
     @available(*, unavailable)
@@ -149,65 +143,67 @@ public final class WITabViewController: UIViewController {
 
     public func setPageWebView(_ webView: WKWebView?) {
         requestedPageWebView = webView
-        if isViewLoaded {
-            scheduleRuntimeStateSync()
-        }
+        syncRegisteredHostState()
     }
 
     public func setInspectorController(_ inspectorController: WIInspectorController) {
-        guard self.inspectorController !== inspectorController else {
+        guard self.inspectorController !== inspectorController || controllerSwapTask != nil else {
+            syncRegisteredHostState()
             return
         }
 
-        let previousController = self.inspectorController
-        previousController.model.selectedTabDidChange = nil
-        // Keep the shared reference so later swap requests still chain behind
-        // any host-state apply task that was already in flight.
-        let activeUIStateApplyTask = uiStateApplyTask
-        runtimeStateSyncPending = false
-        controllerSwapTask?.cancel()
+        let activeHostKindAtSwapStart = activeHostKind
+            ?? (effectiveHorizontalSizeClass == .compact ? .compact : .regular)
         invalidatePresentationStateForControllerSwap()
-        let request = ControllerSwapRequest()
-        activeControllerSwapRequest = request
-        controllerSwapTask = Task { [weak self, request] in
-            defer {
-                if let self, self.activeControllerSwapRequest === request {
-                    self.controllerSwapTask = nil
-                    self.activeControllerSwapRequest = nil
-                    if self.needsRuntimeStateSyncAfterSwap {
-                        self.needsRuntimeStateSyncAfterSwap = false
-                        self.scheduleRuntimeStateSync()
-                    }
-                }
-            }
-            await activeUIStateApplyTask?.value
-            await previousController.finalize()
-            guard
-                let self,
-                Task.isCancelled == false,
-                self.activeControllerSwapRequest === request,
-                self.inspectorController === previousController
-            else {
+
+        let previousSwapTask = controllerSwapTask
+        controllerSwapTask = Task { [weak self] in
+            await previousSwapTask?.value
+            guard let self else {
                 return
             }
-            let currentRequestedTabs = self.requestedTabs
-            let currentPageWebView = self.requestedPageWebView
-            let currentSelectedTab = previousController.model.selectedTab
-            let currentPreferredCompactSelectedTabIdentifier = previousController.model.preferredCompactSelectedTabIdentifier
-            let currentHasExplicitTabsConfiguration = previousController.model.hasExplicitTabsConfiguration
-            self.applyInspectorController(
-                inspectorController,
-                requestedTabs: currentRequestedTabs,
-                tabsExplicitlyConfigured: currentHasExplicitTabsConfiguration,
-                selectedTab: currentSelectedTab,
-                preferredCompactSelectedTabIdentifier: currentPreferredCompactSelectedTabIdentifier,
-                pageWebView: currentPageWebView,
-                syncRuntimeState: false
-            )
-            await inspectorController.applyHostState(
-                pageWebView: currentPageWebView,
-                visibility: self.shouldDriveRuntimeStateFromUI ? .visible : .hidden
-            )
+            guard self.inspectorController !== inspectorController else {
+                self.controllerSwapTask = nil
+                self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+                return
+            }
+
+            let previousController = self.inspectorController
+            let previousHostID = self.hostID
+            let preferredRole = previousController.preferredRole(for: previousHostID)
+
+            await previousController.waitForRuntimeApplyForTesting()
+            let currentSelectedTab = previousController.selectedTab
+            let currentPreferredCompactSelectedTabIdentifier = previousController.preferredCompactSelectedTabIdentifier
+            let preservedCompactSelectedTabIdentifier: String?
+            if activeHostKindAtSwapStart == .compact {
+                preservedCompactSelectedTabIdentifier = currentSelectedTab?.identifier
+                    ?? currentPreferredCompactSelectedTabIdentifier
+            } else {
+                preservedCompactSelectedTabIdentifier = currentPreferredCompactSelectedTabIdentifier
+            }
+            previousController.unregisterHost(previousHostID)
+            previousController.finalizeForControllerSwap()
+            await previousController.waitForRuntimeApplyForTesting()
+
+            self.inspectorController = inspectorController
+            self.hostID = inspectorController.registerHost(preferredRole: preferredRole)
+            inspectorController.setTabsFromUI(self.requestedTabs)
+            if let preservedCompactSelectedTabIdentifier {
+                inspectorController.setPreferredCompactSelectedTabIdentifierFromUI(
+                    preservedCompactSelectedTabIdentifier
+                )
+            }
+            if let currentSelectedTab {
+                _ = inspectorController.projectSelectedTabFromUI(currentSelectedTab)
+            }
+            self.syncRegisteredHostState(allowDuringSwap: true)
+
+            if self.isViewLoaded {
+                self.rebuildLayout(forceHostReplacement: true)
+            }
+            self.controllerSwapTask = nil
+            self.replayDeferredHostStateSyncAfterSwapIfNeeded()
         }
     }
 
@@ -223,69 +219,24 @@ public final class WITabViewController: UIViewController {
         activeHostKind = nil
     }
 
-    public func setInspectorController(_ model: WIModel) {
-        guard inspectorController.model !== model else {
-            return
-        }
-        setInspectorController(WIInspectorController(model: model))
-    }
-
     public func setTabs(_ tabs: [WITab]) {
         requestedTabs = tabs
-        model.setTabsFromUI(tabs)
-        scheduleRuntimeStateSync()
-        if isViewLoaded {
-            rebuildLayout()
-        }
+        inspectorController.setTabs(tabs)
     }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
 
         rebuildLayout(forceHostReplacement: true)
-        bindRuntimeSelectionSync()
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.handleHorizontalSizeClassChange()
         }
     }
 
-    private func applyInspectorController(
-        _ inspectorController: WIInspectorController,
-        requestedTabs: [WITab],
-        tabsExplicitlyConfigured: Bool,
-        selectedTab: WITab?,
-        preferredCompactSelectedTabIdentifier: String?,
-        pageWebView: WKWebView?,
-        syncRuntimeState: Bool
-    ) {
-        renderCache.resetAll()
-        self.inspectorController = inspectorController
-        self.requestedTabs = requestedTabs
-        self.requestedPageWebView = pageWebView
-        let model = inspectorController.model
-        model.setTabsFromUI(
-            requestedTabs,
-            marksExplicitConfiguration: tabsExplicitlyConfigured
-        )
-        model.setPreferredCompactSelectedTabIdentifierFromUI(preferredCompactSelectedTabIdentifier)
-        if let selectedTab {
-            _ = model.projectSelectedTabFromUI(selectedTab)
-        }
-
-        guard isViewLoaded else {
-            return
-        }
-
-        bindRuntimeSelectionSync()
-        rebuildLayout(forceHostReplacement: true)
-        _ = syncRuntimeState
-    }
-
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        shouldDriveRuntimeStateFromUI = true
-        scheduleRuntimeStateSync()
+        syncRegisteredHostState()
     }
 
     public override func viewDidDisappear(_ animated: Bool) {
@@ -293,54 +244,11 @@ public final class WITabViewController: UIViewController {
         guard view.window == nil else {
             return
         }
-        shouldDriveRuntimeStateFromUI = false
-        if isViewLoaded {
-            scheduleRuntimeStateSync()
-        }
+        syncRegisteredHostState()
     }
 
     isolated deinit {
-        model.selectedTabDidChange = nil
-        controllerSwapTask?.cancel()
-        uiStateApplyTask?.cancel()
-    }
-
-    private func bindRuntimeSelectionSync() {
-        model.selectedTabDidChange = { [weak self] _ in
-            self?.scheduleRuntimeStateSync()
-        }
-    }
-
-    private func scheduleRuntimeStateSync() {
-        guard controllerSwapTask == nil else {
-            needsRuntimeStateSyncAfterSwap = true
-            return
-        }
-        runtimeStateSyncPending = true
-        guard uiStateApplyTask == nil else {
-            return
-        }
-        var applyTask: Task<Void, Never>?
-        applyTask = Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            defer {
-                self.uiStateApplyTask = nil
-                if self.runtimeStateSyncPending {
-                    self.scheduleRuntimeStateSync()
-                }
-            }
-            while self.runtimeStateSyncPending {
-                self.runtimeStateSyncPending = false
-                let inspectorController = self.inspectorController
-                await inspectorController.applyHostState(
-                    pageWebView: self.requestedPageWebView,
-                    visibility: self.shouldDriveRuntimeStateFromUI ? .visible : .hidden
-                )
-            }
-        }
-        uiStateApplyTask = applyTask
+        inspectorController.unregisterHost(hostID)
     }
 
     var activeHostKindForTesting: String? {
@@ -355,7 +263,7 @@ public final class WITabViewController: UIViewController {
     }
 
     var resolvedTabIDsForTesting: [String] {
-        model.tabs.map(\.identifier)
+        inspectorController.tabs.map(\.identifier)
     }
 
     var activeHostViewControllerForTesting: UIViewController? {
@@ -366,8 +274,36 @@ public final class WITabViewController: UIViewController {
         horizontalSizeClassOverrideForTesting ?? traitCollection.horizontalSizeClass
     }
 
+    private var currentHostVisibility: WIHostVisibility {
+        guard isViewLoaded, view.window != nil else {
+            return .hidden
+        }
+        return .visible
+    }
+
+    private func syncRegisteredHostState(allowDuringSwap: Bool = false) {
+        guard allowDuringSwap || controllerSwapTask == nil else {
+            needsHostStateSyncAfterSwap = true
+            return
+        }
+        needsHostStateSyncAfterSwap = false
+        inspectorController.updateHost(
+            hostID,
+            pageWebView: requestedPageWebView,
+            visibility: currentHostVisibility,
+            isAttached: true
+        )
+    }
+
+    private func replayDeferredHostStateSyncAfterSwapIfNeeded() {
+        guard controllerSwapTask == nil, needsHostStateSyncAfterSwap else {
+            return
+        }
+        syncRegisteredHostState()
+    }
+
     private func rebuildLayout(forceHostReplacement: Bool = false) {
-        renderCache.prune(activeTabs: model.tabs)
+        renderCache.prune(activeTabs: inspectorController.tabs)
 
         let targetHostKind: HostKind = effectiveHorizontalSizeClass == .compact ? .compact : .regular
 
@@ -394,17 +330,13 @@ public final class WITabViewController: UIViewController {
         switch kind {
         case .compact:
             host = WICompactTabHostViewController(
-                model: model,
                 inspector: inspectorController,
-                renderCache: renderCache,
-                onSelectionChange: { [weak self] in self?.scheduleRuntimeStateSync() }
+                renderCache: renderCache
             )
         case .regular:
             host = WIRegularTabHostViewController(
-                model: model,
                 inspector: inspectorController,
-                renderCache: renderCache,
-                onSelectionChange: { [weak self] in self?.scheduleRuntimeStateSync() }
+                renderCache: renderCache
             )
         }
 
@@ -476,7 +408,7 @@ import SwiftUI
 extension WITabViewController {
     func waitForRuntimeStateSyncForTesting() async {
         await controllerSwapTask?.value
-        await uiStateApplyTask?.value
+        await inspectorController.waitForRuntimeApplyForTesting()
     }
 }
 

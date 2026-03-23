@@ -47,8 +47,8 @@ struct TabViewControllerAppKitTabTests {
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
         #expect(container.visibleContentTabIDForTesting == WITab.domTabID)
         #expect(container.visibleContentViewControllerForTesting is WIDOMViewController)
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.elementTabID])
-        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID])
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
     }
 
     @Test
@@ -64,7 +64,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.tabs.map(\.identifier) == [WITab.elementTabID, WITab.networkTabID])
     }
 
     @Test
@@ -83,7 +83,7 @@ struct TabViewControllerAppKitTabTests {
         await container.waitForRuntimeStateSyncForTesting()
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
-        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
         #expect(controller.dom.session.isAutoSnapshotEnabled == true)
     }
 
@@ -104,7 +104,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
 
         selectTabViaPicker(index: 1, in: window)
         #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
@@ -120,14 +120,14 @@ struct TabViewControllerAppKitTabTests {
         let network = makeDescriptor(id: WITab.networkTabID, title: "Network")
         let container = WITabViewController(controller, webView: nil, tabs: [dom, element, network])
 
-        controller.model.setSelectedTabFromUI(element)
-        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
+        controller.setSelectedTab(element)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
 
         container.loadViewIfNeeded()
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID, WITab.networkTabID])
         #expect(container.selectedTabIdentifierForTesting == WITab.domTabID)
-        #expect(controller.model.selectedTab?.identifier == WITab.domTabID)
+        #expect(controller.selectedTab?.identifier == WITab.domTabID)
     }
 
     @Test
@@ -176,7 +176,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.selectedTabIdentifierForTesting == "wi_network")
         #expect(container.visibleContentTabIDForTesting == "wi_network")
-        #expect(controller.model.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
     }
 
     @Test
@@ -202,7 +202,7 @@ struct TabViewControllerAppKitTabTests {
         #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
         drainMainQueue()
-        #expect(controller.model.selectedTab?.id == "wi_dom")
+        #expect(controller.selectedTab?.id == "wi_dom")
         #expect(container.hasVisibleContentForTesting == true)
     }
 
@@ -222,7 +222,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.visibleContentTabIDForTesting == "wi_dom")
 
-        controller.model.setTabs([
+        controller.setTabs([
             makeDescriptor(id: "wi_dom", title: "DOM"),
             makeDescriptor(id: "wi_network", title: "Network")
         ])
@@ -250,7 +250,7 @@ struct TabViewControllerAppKitTabTests {
         container.setTabs([])
         drainMainQueue()
 
-        #expect(controller.model.selectedTab == nil)
+        #expect(controller.selectedTab == nil)
         #expect(container.selectedTabIdentifierForTesting == nil)
         #expect(container.visibleContentTabIDForTesting == nil)
         #expect(container.hasVisibleContentForTesting == false)
@@ -278,7 +278,7 @@ struct TabViewControllerAppKitTabTests {
         ])
 
         selectTabViaPicker(index: 1, in: window)
-        #expect(controller.model.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
         drainMainQueue()
 
         #expect(toolbarIdentifierRawValues(in: window) == [
@@ -305,7 +305,7 @@ struct TabViewControllerAppKitTabTests {
         }
 
         selectTabViaPicker(index: 1, in: window)
-        #expect(controller.model.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
         guard
             let searchItem = window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == networkSearchIdentifierRaw }) as? NSSearchToolbarItem,
             let action = searchItem.searchField.action
@@ -458,17 +458,54 @@ struct TabViewControllerAppKitTabTests {
         }
 
         container.setPageWebView(makeTestWebView())
-        container.setInspectorController(secondController)
-
-        guard let networkTab = firstController.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+        guard let networkTab = firstController.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
             Issue.record("Expected network tab")
             return
         }
-        firstController.model.setSelectedTab(networkTab)
+        firstController.setSelectedTab(networkTab)
+        container.setInspectorController(secondController)
 
         await container.waitForRuntimeStateSyncForTesting()
 
-        #expect(secondController.model.selectedTab?.identifier == WITab.networkTabID)
+        #expect(secondController.selectedTab?.identifier == WITab.networkTabID)
+        #expect(firstController.lifecycle == .disconnected)
+    }
+
+    @Test
+    func setInspectorControllerReplaysPageWebViewUpdateThatArrivesDuringSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: nil,
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .suspended)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setPageWebView(makeTestWebView())
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .disconnected),
+                (secondController, .active)
+            ]
+        )
+
+        #expect(secondController.lifecycle == .active)
     }
 
     @Test
@@ -542,9 +579,8 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
-    func setInspectorControllerWithSameModelKeepsExistingController() async {
-        let model = WIModel()
-        let controller = WIInspectorController(model: model)
+    func setInspectorControllerWithSameControllerKeepsExistingController() async {
+        let controller = WIInspectorController()
         let container = WITabViewController(
             controller,
             webView: makeTestWebView(),
@@ -564,7 +600,7 @@ struct TabViewControllerAppKitTabTests {
             states: [(controller, .active)]
         )
 
-        container.setInspectorController(model)
+        container.setInspectorController(controller)
         await container.waitForRuntimeStateSyncForTesting()
 
         #expect(container.inspectorController === controller)
@@ -590,12 +626,12 @@ struct TabViewControllerAppKitTabTests {
 
         await container.waitForRuntimeStateSyncForTesting()
 
-        guard let networkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+        guard let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
             Issue.record("Expected network tab")
             return
         }
 
-        controller.model.setSelectedTab(networkTab)
+        controller.setSelectedTab(networkTab)
         await container.waitForRuntimeStateSyncForTesting()
 
         #expect(container.selectedTabIdentifierForTesting == WITab.networkTabID)
@@ -640,7 +676,7 @@ struct TabViewControllerAppKitTabTests {
         let switchedVisible = try? #require(container.visibleContentViewControllerForTesting as? MarkerViewController)
         #expect(switchedVisible?.marker == "second")
         #expect(initialVisible !== switchedVisible)
-        #expect(controller.model.selectedTab === secondDescriptor)
+        #expect(controller.selectedTab === secondDescriptor)
         #expect(tabPicker(in: window)?.selectedSegment == 1)
     }
 

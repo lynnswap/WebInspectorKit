@@ -9,6 +9,7 @@ import WebKit
 import UIKit
 
 @MainActor
+@Suite(.serialized)
 struct TabViewControllerUITabTests {
     @Test
     func containerUsesCompactHostWhenSizeClassIsCompact() {
@@ -113,7 +114,7 @@ struct TabViewControllerUITabTests {
         segmentedControl.selectedSegmentIndex = 1
         host.handleSegmentSelectionChangedForTesting(segmentedControl)
 
-        #expect(controller.model.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
     }
 
     @Test
@@ -129,13 +130,13 @@ struct TabViewControllerUITabTests {
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: tabs)
 
-        let elementTab = controller.model.tabs.first(where: { $0.identifier == WITab.elementTabID })
-        controller.model.setSelectedTabFromUI(elementTab)
-        #expect(controller.model.selectedTab?.id == WITab.elementTabID)
+        let elementTab = controller.tabs.first(where: { $0.identifier == WITab.elementTabID })
+        controller.setSelectedTab(elementTab)
+        #expect(controller.selectedTab?.id == WITab.elementTabID)
 
         configureSizeClass(.regular, for: container, requestedTabs: tabs)
 
-        #expect(controller.model.selectedTab?.id == WITab.domTabID)
+        #expect(controller.selectedTab?.id == WITab.domTabID)
     }
 
     @Test
@@ -149,13 +150,13 @@ struct TabViewControllerUITabTests {
         )
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
-        let selectedNetworkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID })
-        controller.model.setSelectedTabFromUI(selectedNetworkTab)
-        #expect(controller.model.selectedTab?.id == WITab.networkTabID)
+        let selectedNetworkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
+        controller.setSelectedTab(selectedNetworkTab)
+        #expect(controller.selectedTab?.id == WITab.networkTabID)
 
         configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
 
-        #expect(controller.model.selectedTab?.id == WITab.networkTabID)
+        #expect(controller.selectedTab?.id == WITab.networkTabID)
         #expect(container.resolvedTabIDsForTesting == ["wi_dom", "wi_network"])
     }
 
@@ -189,7 +190,7 @@ struct TabViewControllerUITabTests {
         compactHost.selectedTab = networkTab
         compactHost.tabBarController(compactHost, didSelectTab: networkTab, previousTab: domTab)
 
-        #expect(controller.model.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
     }
 
     @Test
@@ -209,17 +210,18 @@ struct TabViewControllerUITabTests {
         }
 
         container.loadViewIfNeeded()
+        container.viewWillAppear(false)
         drainMainQueue()
         configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
         drainMainQueue()
         await container.waitForRuntimeStateSyncForTesting()
 
-        guard let networkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+        guard let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
             Issue.record("Expected network tab")
             return
         }
 
-        controller.model.setSelectedTab(networkTab)
+        controller.setSelectedTab(networkTab)
         await waitForRuntimeState(
             in: container,
             inspector: controller,
@@ -227,8 +229,63 @@ struct TabViewControllerUITabTests {
             networkMode: .active
         )
 
-        #expect(controller.model.selectedTab?.id == WITab.networkTabID)
+        #expect(controller.selectedTab?.id == WITab.networkTabID)
         #expect(controller.network.session.mode == .active)
+    }
+
+    @Test
+    func sharedControllerProgrammaticSelectionReappliesRuntimeStateForEachVisibleContainer() async {
+        let controller = WIInspectorController()
+        let firstContainer = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let secondContainer = WITabViewController(
+            controller,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let firstWindow = UIWindow(frame: UIScreen.main.bounds)
+        let secondWindow = UIWindow(frame: UIScreen.main.bounds)
+        firstWindow.rootViewController = firstContainer
+        secondWindow.rootViewController = secondContainer
+        firstWindow.makeKeyAndVisible()
+        secondWindow.makeKeyAndVisible()
+        defer {
+            firstWindow.isHidden = true
+            firstWindow.rootViewController = nil
+            secondWindow.isHidden = true
+            secondWindow.rootViewController = nil
+        }
+
+        firstContainer.loadViewIfNeeded()
+        secondContainer.loadViewIfNeeded()
+        firstContainer.viewWillAppear(false)
+        secondContainer.viewWillAppear(false)
+        drainMainQueue()
+        await firstContainer.waitForRuntimeStateSyncForTesting()
+        await secondContainer.waitForRuntimeStateSyncForTesting()
+
+        guard let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+
+        controller.setSelectedTab(networkTab)
+
+        await waitForRuntimeState(
+            in: firstContainer,
+            inspector: controller,
+            selectedTabID: WITab.networkTabID,
+            networkMode: .active
+        )
+        await waitForRuntimeState(
+            in: secondContainer,
+            inspector: controller,
+            selectedTabID: WITab.networkTabID,
+            networkMode: .active
+        )
     }
 
     @Test
@@ -263,7 +320,7 @@ struct TabViewControllerUITabTests {
         compactHost.selectedTab = secondUITab
         compactHost.tabBarController(compactHost, didSelectTab: secondUITab, previousTab: firstUITab)
 
-        #expect(controller.model.selectedTab === secondCustom)
+        #expect(controller.selectedTab === secondCustom)
     }
 
     @Test
@@ -315,7 +372,7 @@ struct TabViewControllerUITabTests {
         #expect(firstHost.tabBarController(firstHost, shouldSelectTab: elementTab))
         firstHost.selectedTab = elementTab
         firstHost.tabBarController(firstHost, didSelectTab: elementTab, previousTab: domTab)
-        #expect(controller.model.selectedTab?.identifier == WITab.elementTabID)
+        #expect(controller.selectedTab?.identifier == WITab.elementTabID)
 
         let secondContainer = WITabViewController(
             controller,
@@ -334,7 +391,7 @@ struct TabViewControllerUITabTests {
         }
 
         #expect(secondHost.displayedTabIdentifiersForTesting == [WITab.domTabID, WITab.elementTabID, WITab.networkTabID])
-        #expect(controller.model.preferredCompactSelectedTabIdentifier == WITab.elementTabID)
+        #expect(controller.preferredCompactSelectedTabIdentifier == WITab.elementTabID)
     }
 
     @Test
@@ -408,20 +465,57 @@ struct TabViewControllerUITabTests {
 
         container.loadViewIfNeeded()
         configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        guard let networkTab = firstController.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
+            Issue.record("Expected network tab")
+            return
+        }
+        firstController.setSelectedTab(networkTab)
         let replacementWebView = makeTestWebView()
         container.setPageWebView(replacementWebView)
         container.setInspectorController(secondController)
 
-        guard let networkTab = firstController.model.tabs.first(where: { $0.identifier == WITab.networkTabID }) else {
-            Issue.record("Expected network tab")
-            return
-        }
-        firstController.model.setSelectedTab(networkTab)
-
         await container.waitForRuntimeStateSyncForTesting()
 
-        #expect(secondController.model.selectedTab?.identifier == WITab.networkTabID)
-        #expect(secondController.model.preferredCompactSelectedTabIdentifier == WITab.networkTabID)
+        #expect(secondController.selectedTab?.identifier == WITab.networkTabID)
+        #expect(secondController.preferredCompactSelectedTabIdentifier == WITab.networkTabID)
+        #expect(firstController.lifecycle == .disconnected)
+    }
+
+    @Test
+    func setInspectorControllerReplaysPageWebViewUpdateThatArrivesDuringSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .suspended)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setPageWebView(makeTestWebView())
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .disconnected),
+                (secondController, .active)
+            ]
+        )
+
+        #expect(secondController.lifecycle == .active)
     }
 
     @Test
@@ -466,9 +560,8 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
-    func setInspectorControllerWithSameModelKeepsExistingController() async {
-        let model = WIModel()
-        let controller = WIInspectorController(model: model)
+    func setInspectorControllerWithSameControllerKeepsExistingController() async {
+        let controller = WIInspectorController()
         let container = WITabViewController(
             controller,
             webView: makeTestWebView(),
@@ -489,7 +582,8 @@ struct TabViewControllerUITabTests {
             states: [(controller, .active)]
         )
 
-        container.setInspectorController(model)
+        container.setInspectorController(controller)
+        container.viewWillAppear(false)
         await container.waitForRuntimeStateSyncForTesting()
 
         #expect(container.inspectorController === controller)
@@ -550,13 +644,13 @@ struct TabViewControllerUITabTests {
         container.horizontalSizeClassOverrideForTesting = .regular
 
         let elementTab = tabs.first(where: { $0.identifier == WITab.elementTabID })
-        controller.model.setSelectedTabFromUI(elementTab)
-        #expect(controller.model.selectedTab?.id == WITab.elementTabID)
+        controller.setSelectedTab(elementTab)
+        #expect(controller.selectedTab?.id == WITab.elementTabID)
 
         container.loadViewIfNeeded()
 
         #expect(container.activeHostKindForTesting == "regular")
-        #expect(controller.model.selectedTab?.id == WITab.domTabID)
+        #expect(controller.selectedTab?.id == WITab.domTabID)
     }
 
     @Test
@@ -569,13 +663,13 @@ struct TabViewControllerUITabTests {
             tabs: requestedTabs
         )
         container.loadViewIfNeeded()
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
 
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
 
         configureSizeClass(.regular, for: container, requestedTabs: requestedTabs)
-        #expect(controller.model.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+        #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
     }
 
     @Test
@@ -779,8 +873,8 @@ struct TabViewControllerUITabTests {
         }
 
         container.loadViewIfNeeded()
-        let networkTab = controller.model.tabs.first(where: { $0.identifier == WITab.networkTabID })
-        controller.model.setSelectedTabFromUI(networkTab)
+        let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
+        controller.setSelectedTab(networkTab)
         drainMainQueue()
         configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
         drainMainQueue()
@@ -814,7 +908,7 @@ struct TabViewControllerUITabTests {
     func regularHostPrepareForRemovalDetachesDisplayedRootController() {
         let controller = WIInspectorController()
         let tabs: [WITab] = [.dom(), .network()]
-        controller.model.setTabs(tabs)
+        controller.setTabs(tabs)
         let host = WIRegularTabHostViewController(model: controller, renderCache: WIUIKitTabRenderCache())
 
         host.loadViewIfNeeded()
@@ -829,7 +923,7 @@ struct TabViewControllerUITabTests {
     @Test
     func compactHostPrepareForRemovalClearsInstalledTabs() {
         let controller = WIInspectorController()
-        controller.model.setTabs([.dom(), .network()])
+        controller.setTabs([.dom(), .network()])
         let host = WICompactTabHostViewController(model: controller, renderCache: WIUIKitTabRenderCache())
 
         host.loadViewIfNeeded()
@@ -921,16 +1015,26 @@ struct TabViewControllerUITabTests {
         inspector: WIInspectorController,
         selectedTabID: String,
         networkMode: NetworkLoggingMode,
-        attempts: Int = 20
+        attempts: Int = 60
     ) async {
         for _ in 0..<attempts {
             drainMainQueue()
             await container.waitForRuntimeStateSyncForTesting()
-            if inspector.model.selectedTab?.identifier == selectedTabID,
+            if inspector.selectedTab?.identifier == selectedTabID,
                inspector.network.session.mode == networkMode {
                 return
             }
         }
+
+        Issue.record(
+            """
+            Timed out waiting for runtime state \
+            lifecycle=\(inspector.lifecycle) \
+            selectedTab=\(inspector.selectedTab?.identifier ?? "nil") \
+            networkMode=\(inspector.network.session.mode) \
+            activeHost=\(container.activeHostKindForTesting ?? "nil")
+            """
+        )
     }
 
     private func waitForControllerLifecycles(

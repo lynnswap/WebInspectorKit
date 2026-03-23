@@ -5,51 +5,25 @@ import WebInspectorRuntime
 
 @MainActor
 final class WICompactTabHostViewController: UITabBarController, UITabBarControllerDelegate {
-    private let model: WIModel
     private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
-    private let onSelectionChange: @MainActor () -> Void
     private let synthesizedElementTab = WITab.element()
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSelectionFromModel = false
 
     init(
-        model: WIModel,
         inspector: WIInspectorController,
-        renderCache: WIUIKitTabRenderCache,
-        onSelectionChange: @escaping @MainActor () -> Void
+        renderCache: WIUIKitTabRenderCache
     ) {
-        self.model = model
         self.inspector = inspector
         self.renderCache = renderCache
-        self.onSelectionChange = onSelectionChange
         super.init(nibName: nil, bundle: nil)
-    }
-
-    convenience init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
-        self.init(
-            model: model,
-            inspector: WIInspectorController(model: model),
-            renderCache: renderCache,
-            onSelectionChange: {}
-        )
     }
 
     convenience init(model inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
         self.init(
-            model: inspector.model,
             inspector: inspector,
-            renderCache: renderCache,
-            onSelectionChange: {}
-        )
-    }
-
-    convenience init(inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
-        self.init(
-            model: inspector.model,
-            inspector: inspector,
-            renderCache: renderCache,
-            onSelectionChange: {}
+            renderCache: renderCache
         )
     }
 
@@ -73,7 +47,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         restoreModelSelectionIfNeeded(displayTabs: displayTabs)
-        syncNativeSelection(with: model.selectedTab)
+        syncNativeSelection(with: inspector.selectedTab)
     }
 
     func prepareForRemoval() {
@@ -92,7 +66,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     private var displayTabs: [WITab] {
         wiCompactDisplayTabs(
-            from: model.tabs,
+            from: inspector.tabs,
             synthesizedElementTab: synthesizedElementTab
         )
     }
@@ -100,7 +74,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     private func bindModel() {
         tabObservationHandles.removeAll()
 
-        model.observe(
+        inspector.observe(
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -108,7 +82,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         }
         .store(in: &tabObservationHandles)
 
-        model.observe(
+        inspector.observe(
             \.selectedTab,
             options: [.removeDuplicates]
         ) { [weak self] newValue in
@@ -116,7 +90,6 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
                 return
             }
             self.syncNativeSelection(with: newValue)
-            self.onSelectionChange()
         }
         .store(in: &tabObservationHandles)
     }
@@ -127,7 +100,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
         renderCache.prune(activeTabs: resolvedDisplayTabs)
         let desiredTabs = resolvedDisplayTabs.map { makeNativeTab(for: $0) }
         applyNativeTabsIfNeeded(desiredTabs)
-        syncNativeSelection(with: model.selectedTab, displayTabs: resolvedDisplayTabs)
+        syncNativeSelection(with: inspector.selectedTab, displayTabs: resolvedDisplayTabs)
     }
 
     private func applyNativeTabsIfNeeded(_ desiredTabs: [UITab]) {
@@ -215,23 +188,21 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func applyUserSelection(selectedTab: WITab) {
-        model.setPreferredCompactSelectedTabIdentifierFromUI(selectedTab.identifier)
-        model.setSelectedTabFromUI(selectedTab)
-        onSelectionChange()
+        inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
+        inspector.setSelectedTab(selectedTab)
     }
 
     private func restoreModelSelectionIfNeeded(displayTabs: [WITab]) {
-        guard let preferredIdentifier = model.preferredCompactSelectedTabIdentifier else {
+        guard let preferredIdentifier = inspector.preferredCompactSelectedTabIdentifier else {
             return
         }
-        guard model.selectedTab?.identifier != preferredIdentifier else {
+        guard inspector.selectedTab?.identifier != preferredIdentifier else {
             return
         }
         guard let preferredTab = displayTabs.first(where: { $0.identifier == preferredIdentifier }) else {
             return
         }
-        model.setSelectedTabFromUI(preferredTab)
-        onSelectionChange()
+        inspector.setSelectedTab(preferredTab)
     }
 
     private func resolveDisplayedModelTab(from requestedTab: WITab?, in displayTabs: [WITab]) -> WITab? {
@@ -333,14 +304,12 @@ import SwiftUI
 #Preview("Compact Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
         let session = WIInspectorController()
-        session.model.setTabs([.dom(), .element(), .network()])
+        session.setTabs([.dom(), .element(), .network()])
         let host = WICompactTabHostViewController(
-            model: session.model,
             inspector: session,
-            renderCache: WIUIKitTabRenderCache(),
-            onSelectionChange: {}
+            renderCache: WIUIKitTabRenderCache()
         )
-        session.model.setSelectedTab(.dom())
+        session.setSelectedTab(.dom())
         return host
     }
 }

@@ -35,24 +35,23 @@ struct WISessionStateTests {
 
     @Test
     func lifecycleTransitionsKeepSelectionOrdering() async {
-        let store = WIModel()
-        let controller = WIInspectorController(model: store)
-        store.setTabs([.dom(), .network()])
-        selectTab("wi_network", in: store)
+        let controller = WIInspectorController()
+        controller.setTabs([.dom(), .network()])
+        selectTab("wi_network", in: controller)
         let webView = makeTestWebView()
 
         await controller.applyHostState(pageWebView: webView, visibility: .visible)
 
         #expect(controller.lifecycle == .active)
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
 
         await controller.applyHostState(pageWebView: webView, visibility: .hidden)
         #expect(controller.lifecycle == .suspended)
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
 
         await controller.finalize()
         #expect(controller.lifecycle == .disconnected)
-        #expect(store.selectedTab?.id == "wi_network")
+        #expect(controller.selectedTab?.id == "wi_network")
     }
 
     @Test
@@ -68,7 +67,7 @@ struct WISessionStateTests {
             systemImage: "b.circle"
         )
 
-        let controller = WIModel()
+        let controller = WIInspectorController()
         controller.setTabs([])
         selectTab("missing", in: controller)
         controller.setTabs([customA, customB])
@@ -83,9 +82,9 @@ struct WISessionStateTests {
         let replacementA = WITab(id: "a", title: "A", systemImage: "a.circle")
         let replacementC = WITab(id: "c", title: "C", systemImage: "c.circle")
 
-        let controller = WIModel()
+        let controller = WIInspectorController()
         controller.setTabs([originalA, originalB])
-        controller.setSelectedTabFromUI(originalB)
+        controller.setSelectedTab(originalB)
         #expect(controller.selectedTab?.id == "b")
 
         controller.setTabs([replacementA, replacementC])
@@ -108,7 +107,7 @@ struct WISessionStateTests {
             }
         }
 
-        let controller = WIModel()
+        let controller = WIInspectorController()
         controller.setTabs([.dom(), .network()])
 
         let recorder = Recorder()
@@ -119,7 +118,7 @@ struct WISessionStateTests {
         .store(in: &observationHandles)
 
         let networkTab = controller.tabs.first { $0.identifier == WITab.networkTabID }
-        controller.setSelectedTabFromUI(networkTab)
+        controller.setSelectedTab(networkTab)
 
         for _ in 0..<50 {
             let values = await recorder.snapshot()
@@ -134,7 +133,7 @@ struct WISessionStateTests {
 
     @Test
     func compactElementSelectionPersistsAcrossTabReapplicationWhenDOMTabExists() {
-        let controller = WIModel()
+        let controller = WIInspectorController()
         controller.setTabs([.dom(), .network()])
 
         let syntheticElementTab = WITab(
@@ -142,7 +141,7 @@ struct WISessionStateTests {
             title: "Element",
             systemImage: "info.circle"
         )
-        controller.setSelectedTabFromUI(syntheticElementTab)
+        controller.setSelectedTab(syntheticElementTab)
         #expect(controller.selectedTab?.identifier == WITab.elementTabID)
         #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
 
@@ -159,8 +158,8 @@ struct WISessionStateTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func selectTab(_ identifier: String, in controller: WIModel) {
+    private func selectTab(_ identifier: String, in controller: WIInspectorController) {
         let tab = controller.tabs.first(where: { $0.identifier == identifier })
-        controller.setSelectedTabFromUI(tab)
+        controller.setSelectedTab(tab)
     }
 }
