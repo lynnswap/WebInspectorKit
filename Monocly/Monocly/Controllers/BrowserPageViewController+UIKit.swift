@@ -47,6 +47,7 @@ final class BrowserPageViewController: UIViewController {
 
     private var viewportCoordinator: ViewportCoordinator?
     private var storeObserverID: UUID?
+    private var historyObserverID: UUID?
     private var inspectorWindowObserverID: UUID?
     private var didAutoPresentInspector = false
     private var didAutoStartSelection = false
@@ -78,6 +79,9 @@ final class BrowserPageViewController: UIViewController {
         if let storeObserverID {
             store.removeStateObserver(storeObserverID)
         }
+        if let historyObserverID {
+            store.removeHistoryObserver(historyObserverID)
+        }
         if let inspectorWindowObserverID {
             BrowserInspectorCoordinator.removeInspectorWindowObservation(inspectorWindowObserverID)
         }
@@ -93,6 +97,13 @@ final class BrowserPageViewController: UIViewController {
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
             self?.maybeAutoPresentInspectorIfNeeded()
+        }
+        historyObserverID = store.addHistoryObserver { [weak self] in
+            guard let self else {
+                return
+            }
+            let placement = self.currentChromePlacement ?? self.resolvedChromePlacement()
+            self.refreshNavigationHistoryMenus(for: placement)
         }
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
             self?.refreshChromeControls()
@@ -430,7 +441,7 @@ final class BrowserPageViewController: UIViewController {
         }
 
         navigationItem.title = store.displayTitle
-        refreshChromeControls()
+        syncNavigationButtonStates()
 
         let progressIsVisible = store.isShowingProgress
         progressView.progress = Float(store.estimatedProgress)
@@ -558,12 +569,20 @@ final class BrowserPageViewController: UIViewController {
         backButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
+    var backMenuForTesting: UIMenu? {
+        backButton.menu
+    }
+
     var backMenuActionSubtitlesForTesting: [String?] {
         backButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
     }
 
     var forwardMenuActionTitlesForTesting: [String] {
         forwardButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    }
+
+    var forwardMenuForTesting: UIMenu? {
+        forwardButton.menu
     }
 
     var forwardMenuActionSubtitlesForTesting: [String?] {

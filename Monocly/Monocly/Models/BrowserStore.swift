@@ -29,6 +29,16 @@ struct BrowserHistoryMenuItem {
     let direction: BrowserHistoryDirection
 }
 
+private struct BrowserHistorySnapshotEntry: Equatable {
+    let title: String
+    let urlString: String
+}
+
+private struct BrowserHistorySnapshot: Equatable {
+    let backItems: [BrowserHistorySnapshotEntry]
+    let forwardItems: [BrowserHistorySnapshotEntry]
+}
+
 private enum BrowserStoreSPI {
     private static func deobfuscate(_ reverseTokens: [String]) -> String {
         reverseTokens.reversed().joined()
@@ -42,6 +52,9 @@ private enum BrowserStoreSPI {
     )
     static let goToBackForwardListItemSelector = NSSelectorFromString(
         deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
+    )
+    static let setHistoryDelegateSelector = NSSelectorFromString(
+        deobfuscate([":", "Delegate", "History", "_set"])
     )
     static let maximumHistoryMenuItemCount = 20
 }
@@ -69,7 +82,12 @@ private enum BrowserStoreSPI {
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var stateObserverByID: [UUID: () -> Void] = [:]
+    @ObservationIgnored private var historyObserverByID: [UUID: () -> Void] = [:]
     @ObservationIgnored private var hasLoadedInitialRequest = false
+    @ObservationIgnored private var lastHistorySnapshot = BrowserHistorySnapshot(
+        backItems: [],
+        forwardItems: []
+    )
 
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
@@ -115,8 +133,10 @@ private enum BrowserStoreSPI {
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        configureHistoryDelegateIfAvailable()
 
         setObservers()
+        lastHistorySnapshot = historySnapshot()
         if automaticallyLoadsInitialRequest {
             loadInitialRequestIfNeeded()
         }
@@ -132,6 +152,18 @@ private enum BrowserStoreSPI {
 
     func removeStateObserver(_ observerID: UUID) {
         stateObserverByID.removeValue(forKey: observerID)
+    }
+
+    @discardableResult
+    func addHistoryObserver(_ observer: @escaping () -> Void) -> UUID {
+        let observerID = UUID()
+        historyObserverByID[observerID] = observer
+        observer()
+        return observerID
+    }
+
+    func removeHistoryObserver(_ observerID: UUID) {
+        historyObserverByID.removeValue(forKey: observerID)
     }
 
     func goBack() {
@@ -237,6 +269,21 @@ private enum BrowserStoreSPI {
         }
     }
 
+    private func notifyHistoryObservers() {
+        for observer in historyObserverByID.values {
+            observer()
+        }
+    }
+
+    private func invalidateHistoryIfNeeded() {
+        let snapshot = historySnapshot()
+        guard snapshot != lastHistorySnapshot else {
+            return
+        }
+        lastHistorySnapshot = snapshot
+        notifyHistoryObservers()
+    }
+
     private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
         spiHistoryItems(direction: direction, limit: limit).map { item in
             BrowserHistoryMenuItem(
@@ -256,6 +303,22 @@ private enum BrowserStoreSPI {
             return host
         }
         return item.url.absoluteString
+    }
+
+    private func historySnapshot() -> BrowserHistorySnapshot {
+        BrowserHistorySnapshot(
+            backItems: historySnapshotEntries(direction: .back),
+            forwardItems: historySnapshotEntries(direction: .forward)
+        )
+    }
+
+    private func historySnapshotEntries(direction: BrowserHistoryDirection) -> [BrowserHistorySnapshotEntry] {
+        spiHistoryItems(direction: direction, limit: BrowserStoreSPI.maximumHistoryMenuItemCount).map { item in
+            BrowserHistorySnapshotEntry(
+                title: historyTitle(for: item),
+                urlString: item.url.absoluteString
+            )
+        }
     }
 
     private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
@@ -302,6 +365,13 @@ private enum BrowserStoreSPI {
         }
         browsingContextController.perform(BrowserStoreSPI.goToBackForwardListItemSelector, with: item)
         return true
+    }
+
+    private func configureHistoryDelegateIfAvailable() {
+        guard webView.responds(to: BrowserStoreSPI.setHistoryDelegateSelector) else {
+            return
+        }
+        webView.perform(BrowserStoreSPI.setHistoryDelegateSelector, with: self)
     }
 
 #if canImport(UIKit)
@@ -370,6 +440,7 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -380,6 +451,7 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -393,6 +465,7 @@ extension BrowserStore: WKNavigationDelegate {
         webContentTerminationCount += 1
         lastWebContentTerminationDate = Date()
         lastWebContentTerminationURL = webView.url
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -404,7 +477,37 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
+    }
+}
+
+extension BrowserStore {
+    @objc(_webView:backForwardListItemAdded:removed:)
+    func _webView(
+        _ webView: WKWebView!,
+        backForwardListItemAdded itemAdded: WKBackForwardListItem!,
+        removed itemsRemoved: [WKBackForwardListItem]!
+    ) {
+        _ = webView
+        _ = itemAdded
+        _ = itemsRemoved
+        invalidateHistoryIfNeeded()
+    }
+
+    @objc(_webView:didNavigateWithNavigationData:)
+    func _webView(_ webView: WKWebView!, didNavigateWith navigationData: NSObject!) {
+        _ = webView
+        _ = navigationData
+        invalidateHistoryIfNeeded()
+    }
+
+    @objc(_webView:didUpdateHistoryTitle:forURL:)
+    func _webView(_ webView: WKWebView!, didUpdateHistoryTitle title: String!, forURL url: URL!) {
+        _ = webView
+        _ = title
+        _ = url
+        invalidateHistoryIfNeeded()
     }
 }
 

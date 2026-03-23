@@ -387,6 +387,72 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertTrue(store.canGoForward)
         XCTAssertTrue(pageViewController.forwardButtonForTesting.menu != nil)
     }
+
+    @MainActor
+    func testReloadDoesNotRecreateHistoryMenusWhenHistoryIsUnchanged() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        let backMenuBeforeReload = try XCTUnwrap(pageViewController.backMenuForTesting)
+
+        store.webView.reload()
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 3, in: store))
+
+        let backMenuAfterReload = try XCTUnwrap(pageViewController.backMenuForTesting)
+        XCTAssertTrue(backMenuBeforeReload === backMenuAfterReload)
+    }
+
+    @MainActor
+    func testHistoryChangeRecreatesMenus() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+        let thirdURL = try makeTemporaryHTMLURL(named: "third", title: "Third Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        let backMenuAfterSecondPage = try XCTUnwrap(pageViewController.backMenuForTesting)
+
+        store.webView.load(URLRequest(url: thirdURL))
+        XCTAssertTrue(waitForNavigation(to: thirdURL, minimumDidFinishCount: 3, in: store))
+
+        let backMenuAfterThirdPage = try XCTUnwrap(pageViewController.backMenuForTesting)
+        XCTAssertFalse(backMenuAfterSecondPage === backMenuAfterThirdPage)
+
+        store.goBack()
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 4, in: store))
+
+        let forwardMenuAfterSingleBack = try XCTUnwrap(pageViewController.forwardMenuForTesting)
+
+        store.goBack()
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 5, in: store))
+
+        let forwardMenuAfterDoubleBack = try XCTUnwrap(pageViewController.forwardMenuForTesting)
+        XCTAssertFalse(forwardMenuAfterSingleBack === forwardMenuAfterDoubleBack)
+    }
 }
 
 private extension BrowserNavigationChromeTests {
