@@ -17,6 +17,25 @@ private let logger = Logger(
     category: "BrowserStore"
 )
 
+enum BrowserHistoryDirection {
+    case back
+    case forward
+}
+
+struct BrowserHistoryMenuItem {
+    let backForwardListItem: WKBackForwardListItem
+    let title: String
+    let subtitle: String
+    let direction: BrowserHistoryDirection
+}
+
+private enum BrowserStoreSPI {
+    static let browsingContextControllerSelector = NSSelectorFromString("browsingContextController")
+    static let backForwardListSelector = NSSelectorFromString("backForwardList")
+    static let goToBackForwardListItemSelector = NSSelectorFromString("goToBackForwardListItem:")
+    static let maximumHistoryMenuItemCount = 20
+}
+
 @MainActor
 @Observable final class BrowserStore: NSObject {
     let webView: WKWebView
@@ -119,6 +138,21 @@ private let logger = Logger(
         webView.goForward()
     }
 
+    func go(to item: WKBackForwardListItem) {
+        guard spiGoToHistoryItem(item) == false else {
+            return
+        }
+        webView.go(to: item)
+    }
+
+    func backHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+        historyItems(direction: .back, limit: limit)
+    }
+
+    func forwardHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+        historyItems(direction: .forward, limit: limit)
+    }
+
     func loadInitialRequestIfNeeded() {
         guard hasLoadedInitialRequest == false else {
             return
@@ -191,6 +225,73 @@ private let logger = Logger(
         for observer in stateObserverByID.values {
             observer()
         }
+    }
+
+    private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
+        spiHistoryItems(direction: direction, limit: limit).map { item in
+            BrowserHistoryMenuItem(
+                backForwardListItem: item,
+                title: historyTitle(for: item),
+                subtitle: item.url.absoluteString,
+                direction: direction
+            )
+        }
+    }
+
+    private func historyTitle(for item: WKBackForwardListItem) -> String {
+        if let title = item.title, title.isEmpty == false {
+            return title
+        }
+        if let host = item.url.host(), host.isEmpty == false {
+            return host
+        }
+        return item.url.absoluteString
+    }
+
+    private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
+        let clampedLimit = max(0, min(limit, BrowserStoreSPI.maximumHistoryMenuItemCount))
+        guard clampedLimit > 0 else {
+            return []
+        }
+
+        let backForwardList = spiBackForwardList() ?? webView.backForwardList
+        let step = direction == .back ? -1 : 1
+
+        var items: [WKBackForwardListItem] = []
+        var offset = step
+        while items.count < clampedLimit, let item = backForwardList.item(at: offset) {
+            items.append(item)
+            offset += step
+        }
+        return items
+    }
+
+    private func spiBrowsingContextController() -> NSObject? {
+        guard webView.responds(to: BrowserStoreSPI.browsingContextControllerSelector),
+              let browsingContextController = webView.perform(BrowserStoreSPI.browsingContextControllerSelector)?
+                .takeUnretainedValue() as? NSObject else {
+            return nil
+        }
+        return browsingContextController
+    }
+
+    private func spiBackForwardList() -> WKBackForwardList? {
+        guard let browsingContextController = spiBrowsingContextController(),
+              browsingContextController.responds(to: BrowserStoreSPI.backForwardListSelector),
+              let backForwardList = browsingContextController.perform(BrowserStoreSPI.backForwardListSelector)?
+                .takeUnretainedValue() as? WKBackForwardList else {
+            return nil
+        }
+        return backForwardList
+    }
+
+    private func spiGoToHistoryItem(_ item: WKBackForwardListItem) -> Bool {
+        guard let browsingContextController = spiBrowsingContextController(),
+              browsingContextController.responds(to: BrowserStoreSPI.goToBackForwardListItemSelector) else {
+            return false
+        }
+        browsingContextController.perform(BrowserStoreSPI.goToBackForwardListItemSelector, with: item)
+        return true
     }
 
 #if canImport(UIKit)
