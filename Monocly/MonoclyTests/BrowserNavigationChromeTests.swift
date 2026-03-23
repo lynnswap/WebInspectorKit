@@ -29,15 +29,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.navigationItem.trailingItemGroups.count, 0)
 
         let toolbarItems = try XCTUnwrap(pageViewController.toolbarItems)
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactBackButtonItemForTesting })
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactForwardButtonItemForTesting })
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactInspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.compactBackButtonItemForTesting.customView === pageViewController.compactBackButtonForTesting)
-        XCTAssertTrue(pageViewController.compactForwardButtonItemForTesting.customView === pageViewController.compactForwardButtonForTesting)
-        XCTAssertFalse(pageViewController.compactBackButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.compactForwardButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertNil(pageViewController.compactBackButtonForTesting.menu)
-        XCTAssertNil(pageViewController.compactForwardButtonForTesting.menu)
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.backButtonItemForTesting })
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
+        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
+        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertNil(pageViewController.backButtonForTesting.menu)
+        XCTAssertNil(pageViewController.forwardButtonForTesting.menu)
+        XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.compact")
+        XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.compact")
+        XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
     @MainActor
@@ -57,16 +60,19 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         let leadingItems = pageViewController.navigationItem.leadingItemGroups.flatMap(\.barButtonItems)
         let trailingItems = pageViewController.navigationItem.trailingItemGroups.flatMap(\.barButtonItems)
-        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularBackButtonItemForTesting })
-        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularForwardButtonItemForTesting })
-        XCTAssertTrue(trailingItems.contains { $0 === pageViewController.regularInspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.regularBackButtonItemForTesting.customView === pageViewController.regularBackButtonForTesting)
-        XCTAssertTrue(pageViewController.regularForwardButtonItemForTesting.customView === pageViewController.regularForwardButtonForTesting)
-        XCTAssertFalse(pageViewController.regularBackButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertFalse(pageViewController.regularForwardButtonForTesting.showsMenuAsPrimaryAction)
-        XCTAssertTrue(pageViewController.regularInspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.backButtonItemForTesting })
+        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
+        XCTAssertTrue(trailingItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
+        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
+        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.regular")
+        XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.regular")
+        XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.regular")
+        XCTAssertTrue(pageViewController.inspectorHasPrimaryActionForTesting)
         XCTAssertEqual(
-            pageViewController.regularInspectorMenuActionTitlesForTesting,
+            pageViewController.inspectorMenuActionTitlesForTesting,
             ["Open as Sheet", "Open in New Window"]
         )
     }
@@ -82,15 +88,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
         XCTAssertFalse(rootViewController.isToolbarHidden)
-        XCTAssertFalse(pageViewController.compactBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.compactForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
 
         applyHorizontalSizeClass(.regular, to: rootViewController)
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "regularNavigationBar")
         XCTAssertTrue(rootViewController.isToolbarHidden)
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
-        XCTAssertFalse(pageViewController.regularBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.regularForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
 
         applyHorizontalSizeClass(.compact, to: rootViewController)
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
@@ -98,8 +104,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
         XCTAssertEqual(pageViewController.navigationItem.leadingItemGroups.count, 0)
         XCTAssertEqual(pageViewController.navigationItem.trailingItemGroups.count, 0)
-        XCTAssertFalse(pageViewController.compactBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.compactForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
     }
 
     @MainActor
@@ -170,13 +176,13 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
-        XCTAssertTrue(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertTrue(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
         XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
-        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
         dismissPresentedInspector(from: rootViewController)
     }
@@ -190,7 +196,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
         let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
@@ -218,15 +224,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
         XCTAssertEqual(requestedActivity?.targetContentIdentifier, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
 
         XCTAssertTrue(pageViewController.hasInspectorWindowForTesting)
-        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
-        XCTAssertFalse(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertFalse(pageViewController.triggerInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         pageViewController.dismissInspectorWindowForTesting()
     }
@@ -258,8 +264,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
-        XCTAssertFalse(pageViewController.regularInspectorHasPrimaryActionForTesting)
-        XCTAssertTrue(pageViewController.regularInspectorMenuActionTitlesForTesting.isEmpty)
+        XCTAssertFalse(pageViewController.inspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(pageViewController.inspectorMenuActionTitlesForTesting.isEmpty)
     }
 
     @MainActor
@@ -271,9 +277,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.compact, to: rootViewController)
 
-        XCTAssertTrue(pageViewController.compactInspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(pageViewController.inspectorHasPrimaryActionForTesting)
         XCTAssertEqual(
-            pageViewController.compactInspectorMenuActionTitlesForTesting,
+            pageViewController.inspectorMenuActionTitlesForTesting,
             ["Open as Sheet", "Open in New Window"]
         )
     }
@@ -305,15 +311,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.view.layoutIfNeeded()
 
         XCTAssertEqual(
-            pageViewController.compactBackMenuActionTitlesForTesting,
+            pageViewController.backMenuActionTitlesForTesting,
             ["First Page", "Second Page"]
         )
         XCTAssertEqual(
-            pageViewController.compactForwardMenuActionTitlesForTesting,
+            pageViewController.forwardMenuActionTitlesForTesting,
             []
         )
         XCTAssertEqual(
-            pageViewController.compactBackMenuActionSubtitlesForTesting.compactMap(\.self),
+            pageViewController.backMenuActionSubtitlesForTesting.compactMap(\.self),
             [firstURL.absoluteString, secondURL.absoluteString]
         )
     }
@@ -345,9 +351,9 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.view.layoutIfNeeded()
 
-        XCTAssertEqual(pageViewController.compactForwardMenuActionTitlesForTesting, ["Third Page"])
+        XCTAssertEqual(pageViewController.forwardMenuActionTitlesForTesting, ["Third Page"])
         XCTAssertEqual(
-            pageViewController.compactForwardMenuActionSubtitlesForTesting.compactMap(\.self),
+            pageViewController.forwardMenuActionSubtitlesForTesting.compactMap(\.self),
             [thirdURL.absoluteString]
         )
     }
@@ -379,7 +385,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(store.currentURL, firstURL)
         XCTAssertFalse(store.canGoBack)
         XCTAssertTrue(store.canGoForward)
-        XCTAssertTrue(pageViewController.regularForwardButtonForTesting.menu != nil)
+        XCTAssertTrue(pageViewController.forwardButtonForTesting.menu != nil)
     }
 }
 
@@ -451,7 +457,7 @@ private extension BrowserNavigationChromeTests {
         from pageViewController: BrowserPageViewController,
         rootViewController: BrowserRootViewController
     ) throws -> WITabViewController {
-        let buttonItem = pageViewController.compactInspectorButtonItemForTesting
+        let buttonItem = pageViewController.inspectorButtonItemForTesting
         let action = try XCTUnwrap(buttonItem.action)
         XCTAssertTrue(UIApplication.shared.sendAction(action, to: buttonItem.target, from: buttonItem, for: nil))
         drainMainQueue()

@@ -19,74 +19,30 @@ final class BrowserPageViewController: UIViewController {
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
-    private let compactInspectorButtonItem = UIBarButtonItem(
+    private let inspectorButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
         style: .plain,
         target: nil,
         action: nil
     )
-    private let compactBackButtonItem = UIBarButtonItem(
+    private let backButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.left"),
         style: .plain,
         target: nil,
         action: nil
     )
-    private let compactForwardButtonItem = UIBarButtonItem(
+    private let forwardButtonItem = UIBarButtonItem(
         image: UIImage(systemName: "chevron.right"),
         style: .plain,
         target: nil,
         action: nil
     )
-    private let regularInspectorButtonItem = UIBarButtonItem(
-        image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
-        style: .plain,
-        target: nil,
-        action: nil
-    )
-    private let regularBackButtonItem = UIBarButtonItem(
-        image: UIImage(systemName: "chevron.left"),
-        style: .plain,
-        target: nil,
-        action: nil
-    )
-    private let regularForwardButtonItem = UIBarButtonItem(
-        image: UIImage(systemName: "chevron.right"),
-        style: .plain,
-        target: nil,
-        action: nil
-    )
-    private lazy var compactBackButton = makeNavigationHistoryButton(
-        systemImageName: "chevron.left",
-        accessibilityIdentifier: "Monocly.navigation.back.compact"
-    ) { [weak self] in
+    private lazy var backButton = makeNavigationHistoryButton(systemImageName: "chevron.left") { [weak self] in
         self?.store.goBack()
     }
-    private lazy var compactForwardButton = makeNavigationHistoryButton(
-        systemImageName: "chevron.right",
-        accessibilityIdentifier: "Monocly.navigation.forward.compact"
-    ) { [weak self] in
+    private lazy var forwardButton = makeNavigationHistoryButton(systemImageName: "chevron.right") { [weak self] in
         self?.store.goForward()
     }
-    private lazy var regularBackButton = makeNavigationHistoryButton(
-        systemImageName: "chevron.left",
-        accessibilityIdentifier: "Monocly.navigation.back.regular"
-    ) { [weak self] in
-        self?.store.goBack()
-    }
-    private lazy var regularForwardButton = makeNavigationHistoryButton(
-        systemImageName: "chevron.right",
-        accessibilityIdentifier: "Monocly.navigation.forward.regular"
-    ) { [weak self] in
-        self?.store.goForward()
-    }
-    private lazy var regularNavigationButtonGroup = UIBarButtonItemGroup(
-        barButtonItems: [regularBackButtonItem, regularForwardButtonItem],
-        representativeItem: nil
-    )
-    private lazy var regularInspectorButtonGroup = UIBarButtonItemGroup(
-        barButtonItems: [regularInspectorButtonItem],
-        representativeItem: nil
-    )
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
     private var viewportCoordinator: ViewportCoordinator?
@@ -108,8 +64,7 @@ final class BrowserPageViewController: UIViewController {
         self.launchConfiguration = launchConfiguration
         super.init(nibName: nil, bundle: nil)
         inspectorCoordinator.onPresentationStateChange = { [weak self] in
-            self?.syncNavigationButtonStates()
-            self?.refreshInspectorButtonConfigurations()
+            self?.refreshChromeControls()
         }
     }
 
@@ -140,8 +95,7 @@ final class BrowserPageViewController: UIViewController {
             self?.maybeAutoPresentInspectorIfNeeded()
         }
         inspectorWindowObserverID = BrowserInspectorCoordinator.observeInspectorWindowPresentation { [weak self] _ in
-            self?.syncNavigationButtonStates()
-            self?.refreshInspectorButtonConfigurations()
+            self?.refreshChromeControls()
         }
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
@@ -157,23 +111,9 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        syncNavigationButtonStates()
-        refreshNavigationHistoryMenus()
-        refreshInspectorButtonConfigurations()
+        refreshChromeControls()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
-    }
-
-    @objc
-    private func handleBackAction(_ sender: Any?) {
-        _ = sender
-        store.goBack()
-    }
-
-    @objc
-    private func handleForwardAction(_ sender: Any?) {
-        _ = sender
-        store.goForward()
     }
 
     @objc
@@ -226,44 +166,22 @@ final class BrowserPageViewController: UIViewController {
         navigationItem.leftBarButtonItems = nil
         navigationItem.rightBarButtonItems = nil
 
-        configureNavigationButtonItem(
-            compactInspectorButtonItem,
-            action: #selector(handleOpenInspectorAction(_:)),
-            accessibilityIdentifier: "Monocly.openInspectorButton.compact"
+        configureNavigationHistoryButtonItem(
+            backButtonItem,
+            button: backButton
         )
         configureNavigationHistoryButtonItem(
-            compactBackButtonItem,
-            button: compactBackButton,
-            accessibilityIdentifier: "Monocly.navigation.back.compact"
+            forwardButtonItem,
+            button: forwardButton
         )
-        configureNavigationHistoryButtonItem(
-            compactForwardButtonItem,
-            button: compactForwardButton,
-            accessibilityIdentifier: "Monocly.navigation.forward.compact"
-        )
-        configureNavigationButtonItem(
-            regularInspectorButtonItem,
-            accessibilityIdentifier: "Monocly.openInspectorButton.regular"
-        )
-        configureNavigationHistoryButtonItem(
-            regularBackButtonItem,
-            button: regularBackButton,
-            accessibilityIdentifier: "Monocly.navigation.back.regular"
-        )
-        configureNavigationHistoryButtonItem(
-            regularForwardButtonItem,
-            button: regularForwardButton,
-            accessibilityIdentifier: "Monocly.navigation.forward.regular"
-        )
-        refreshNavigationHistoryMenus()
-        refreshInspectorButtonConfigurations()
+        configureNavigationButtonItem(inspectorButtonItem)
+        refreshChromeControls()
 
         applyChromePlacement(force: true)
     }
 
     private func makeNavigationHistoryButton(
         systemImageName: String,
-        accessibilityIdentifier: String,
         action: @escaping () -> Void
     ) -> UIButton {
         var configuration = UIButton.Configuration.plain()
@@ -274,7 +192,6 @@ final class BrowserPageViewController: UIViewController {
         let button = UIButton(type: .system)
         button.configuration = configuration
         button.bounds.size = CGSize(width: 32, height: 32)
-        button.accessibilityIdentifier = accessibilityIdentifier
         button.showsMenuAsPrimaryAction = false
         button.preferredMenuElementOrder = .fixed
         button.addAction(
@@ -287,10 +204,9 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureNavigationButtonItem(
-        _ item: UIBarButtonItem,
-        accessibilityIdentifier: String
+        _ item: UIBarButtonItem
     ) {
-        item.accessibilityIdentifier = accessibilityIdentifier
+        item.accessibilityIdentifier = nil
     }
 
     private func configureNavigationButtonItem(
@@ -305,28 +221,44 @@ final class BrowserPageViewController: UIViewController {
 
     private func configureNavigationHistoryButtonItem(
         _ item: UIBarButtonItem,
-        button: UIButton,
-        accessibilityIdentifier: String
+        button: UIButton
     ) {
         item.target = nil
         item.action = nil
         item.primaryAction = nil
         item.menu = nil
         item.customView = button
-        item.accessibilityIdentifier = accessibilityIdentifier
+        item.accessibilityIdentifier = nil
     }
 
-    private func refreshNavigationHistoryMenus() {
-        compactBackButton.menu = makeHistoryMenu(direction: .back, placement: .compactToolbar)
-        regularBackButton.menu = makeHistoryMenu(direction: .back, placement: .regularNavigationBar)
-        compactForwardButton.menu = makeHistoryMenu(direction: .forward, placement: .compactToolbar)
-        regularForwardButton.menu = makeHistoryMenu(direction: .forward, placement: .regularNavigationBar)
+    private func refreshChromeControls() {
+        let placement = currentChromePlacement ?? resolvedChromePlacement()
+        applyAccessibilityIdentifiers(for: placement)
+        refreshNavigationHistoryMenus(for: placement)
+        refreshInspectorButtonConfiguration(for: placement)
+        syncNavigationButtonStates()
     }
 
-    private func makeHistoryMenu(
-        direction: BrowserHistoryDirection,
-        placement: ChromePlacement
-    ) -> UIMenu? {
+    private func applyAccessibilityIdentifiers(for placement: ChromePlacement) {
+        let suffix = placement == .compactToolbar ? "compact" : "regular"
+
+        let backIdentifier = "Monocly.navigation.back.\(suffix)"
+        backButtonItem.accessibilityIdentifier = backIdentifier
+        backButton.accessibilityIdentifier = backIdentifier
+
+        let forwardIdentifier = "Monocly.navigation.forward.\(suffix)"
+        forwardButtonItem.accessibilityIdentifier = forwardIdentifier
+        forwardButton.accessibilityIdentifier = forwardIdentifier
+
+        inspectorButtonItem.accessibilityIdentifier = "Monocly.openInspectorButton.\(suffix)"
+    }
+
+    private func refreshNavigationHistoryMenus(for placement: ChromePlacement) {
+        backButton.menu = makeHistoryMenu(direction: .back, placement: placement)
+        forwardButton.menu = makeHistoryMenu(direction: .forward, placement: placement)
+    }
+
+    private func makeHistoryMenu(direction: BrowserHistoryDirection, placement: ChromePlacement) -> UIMenu? {
         let historyItems = displayedHistoryMenuItems(direction: direction, placement: placement)
         guard historyItems.isEmpty == false else {
             return nil
@@ -384,25 +316,20 @@ final class BrowserPageViewController: UIViewController {
         supportsMultipleScenesOverrideForTesting ?? UIApplication.shared.supportsMultipleScenes
     }
 
-    private func refreshInspectorButtonConfigurations() {
-        configureInspectorButtonItem(compactInspectorButtonItem)
-        configureInspectorButtonItem(regularInspectorButtonItem)
-    }
-
-    private func configureInspectorButtonItem(_ item: UIBarButtonItem) {
+    private func refreshInspectorButtonConfiguration(for placement: ChromePlacement) {
         if supportsMultipleScenesForInspectorMenu {
-            item.target = nil
-            item.action = nil
-            item.primaryAction = makeInspectorPrimaryAction()
-            item.preferredMenuElementOrder = .fixed
-            item.menu = makeInspectorMenu()
+            inspectorButtonItem.target = nil
+            inspectorButtonItem.action = nil
+            inspectorButtonItem.primaryAction = makeInspectorPrimaryAction()
+            inspectorButtonItem.preferredMenuElementOrder = .fixed
+            inspectorButtonItem.menu = makeInspectorMenu(for: placement)
             return
         }
 
-        item.primaryAction = nil
-        item.menu = nil
-        item.target = self
-        item.action = #selector(handleOpenInspectorAction(_:))
+        inspectorButtonItem.primaryAction = nil
+        inspectorButtonItem.menu = nil
+        inspectorButtonItem.target = self
+        inspectorButtonItem.action = #selector(handleOpenInspectorAction(_:))
     }
 
     private func makeInspectorPrimaryAction() -> UIAction {
@@ -417,10 +344,11 @@ final class BrowserPageViewController: UIViewController {
         }
     }
 
-    private func makeInspectorMenu() -> UIMenu {
+    private func makeInspectorMenu(for placement: ChromePlacement) -> UIMenu {
         let isInspectorOpen = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self)
-        let openAsSheetAttributes: UIMenuElement.Attributes = isInspectorOpen ? [.disabled] : []
-        let openInWindowAttributes: UIMenuElement.Attributes = isInspectorOpen ? [.disabled] : []
+        let disableMenuActions = placement == .compactToolbar ? false : isInspectorOpen
+        let openAsSheetAttributes: UIMenuElement.Attributes = disableMenuActions ? [.disabled] : []
+        let openInWindowAttributes: UIMenuElement.Attributes = disableMenuActions ? [.disabled] : []
 
         let openAsSheet = UIAction(
             title: "Open as Sheet",
@@ -453,22 +381,27 @@ final class BrowserPageViewController: UIViewController {
         }
 
         currentChromePlacement = placement
+        refreshChromeControls()
 
         switch placement {
         case .compactToolbar:
             navigationItem.leadingItemGroups = []
             navigationItem.trailingItemGroups = []
             toolbarItems = [
-                compactBackButtonItem,
-                compactForwardButtonItem,
+                backButtonItem,
+                forwardButtonItem,
                 UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-                compactInspectorButtonItem
+                inspectorButtonItem
             ]
             navigationController?.setToolbarHidden(false, animated: false)
         case .regularNavigationBar:
             toolbarItems = nil
-            navigationItem.leadingItemGroups = [regularNavigationButtonGroup]
-            navigationItem.trailingItemGroups = [regularInspectorButtonGroup]
+            navigationItem.leadingItemGroups = [
+                UIBarButtonItemGroup(barButtonItems: [backButtonItem, forwardButtonItem], representativeItem: nil)
+            ]
+            navigationItem.trailingItemGroups = [
+                UIBarButtonItemGroup(barButtonItems: [inspectorButtonItem], representativeItem: nil)
+            ]
             navigationController?.setToolbarHidden(true, animated: false)
         }
 
@@ -484,16 +417,11 @@ final class BrowserPageViewController: UIViewController {
         let canGoForward = store.canGoForward
         let canOpenInspector = inspectorCoordinator.isPresentingInspector(presenter: navigationController ?? self) == false
 
-        compactBackButtonItem.isEnabled = canGoBack
-        regularBackButtonItem.isEnabled = canGoBack
-        compactForwardButtonItem.isEnabled = canGoForward
-        regularForwardButtonItem.isEnabled = canGoForward
-        compactBackButton.isEnabled = canGoBack
-        regularBackButton.isEnabled = canGoBack
-        compactForwardButton.isEnabled = canGoForward
-        regularForwardButton.isEnabled = canGoForward
-        compactInspectorButtonItem.isEnabled = canOpenInspector
-        regularInspectorButtonItem.isEnabled = canOpenInspector
+        backButtonItem.isEnabled = canGoBack
+        forwardButtonItem.isEnabled = canGoForward
+        backButton.isEnabled = canGoBack
+        forwardButton.isEnabled = canGoForward
+        inspectorButtonItem.isEnabled = canOpenInspector
     }
 
     private func renderState() {
@@ -502,8 +430,7 @@ final class BrowserPageViewController: UIViewController {
         }
 
         navigationItem.title = store.displayTitle
-        refreshNavigationHistoryMenus()
-        syncNavigationButtonStates()
+        refreshChromeControls()
 
         let progressIsVisible = store.isShowingProgress
         progressView.progress = Float(store.estimatedProgress)
@@ -607,80 +534,52 @@ final class BrowserPageViewController: UIViewController {
         }
     }
 
-    var compactBackButtonItemForTesting: UIBarButtonItem {
-        compactBackButtonItem
+    var backButtonItemForTesting: UIBarButtonItem {
+        backButtonItem
     }
 
-    var compactBackButtonForTesting: UIButton {
-        compactBackButton
+    var backButtonForTesting: UIButton {
+        backButton
     }
 
-    var compactForwardButtonItemForTesting: UIBarButtonItem {
-        compactForwardButtonItem
+    var forwardButtonItemForTesting: UIBarButtonItem {
+        forwardButtonItem
     }
 
-    var compactForwardButtonForTesting: UIButton {
-        compactForwardButton
+    var forwardButtonForTesting: UIButton {
+        forwardButton
     }
 
-    var compactInspectorButtonItemForTesting: UIBarButtonItem {
-        compactInspectorButtonItem
+    var inspectorButtonItemForTesting: UIBarButtonItem {
+        inspectorButtonItem
     }
 
-    var compactBackMenuActionTitlesForTesting: [String] {
-        compactBackButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    var backMenuActionTitlesForTesting: [String] {
+        backButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
-    var compactBackMenuActionSubtitlesForTesting: [String?] {
-        compactBackButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
+    var backMenuActionSubtitlesForTesting: [String?] {
+        backButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
     }
 
-    var compactForwardMenuActionTitlesForTesting: [String] {
-        compactForwardButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    var forwardMenuActionTitlesForTesting: [String] {
+        forwardButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
-    var compactForwardMenuActionSubtitlesForTesting: [String?] {
-        compactForwardButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
+    var forwardMenuActionSubtitlesForTesting: [String?] {
+        forwardButton.menu?.children.compactMap { ($0 as? UIAction)?.subtitle } ?? []
     }
 
-    var compactInspectorMenuActionTitlesForTesting: [String] {
-        compactInspectorButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
+    var inspectorMenuActionTitlesForTesting: [String] {
+        inspectorButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 
-    var compactInspectorHasPrimaryActionForTesting: Bool {
-        compactInspectorButtonItem.primaryAction != nil
-    }
-
-    var regularBackButtonItemForTesting: UIBarButtonItem {
-        regularBackButtonItem
-    }
-
-    var regularBackButtonForTesting: UIButton {
-        regularBackButton
-    }
-
-    var regularForwardButtonItemForTesting: UIBarButtonItem {
-        regularForwardButtonItem
-    }
-
-    var regularForwardButtonForTesting: UIButton {
-        regularForwardButton
-    }
-
-    var regularInspectorButtonItemForTesting: UIBarButtonItem {
-        regularInspectorButtonItem
-    }
-
-    var regularInspectorMenuActionTitlesForTesting: [String] {
-        regularInspectorButtonItem.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
-    }
-
-    var regularInspectorHasPrimaryActionForTesting: Bool {
-        regularInspectorButtonItem.primaryAction != nil
+    var inspectorHasPrimaryActionForTesting: Bool {
+        inspectorButtonItem.primaryAction != nil
     }
 
     @discardableResult
-    func triggerRegularInspectorPrimaryActionForTesting() -> Bool {
+    func triggerInspectorPrimaryActionForTesting() -> Bool {
         openInspectorAsSheet(tabs: [.dom(), .network()])
     }
 
@@ -695,13 +594,12 @@ final class BrowserPageViewController: UIViewController {
     }
 
     @discardableResult
-    func triggerRegularInspectorWindowActionForTesting() -> Bool {
+    func triggerInspectorWindowActionForTesting() -> Bool {
         openInspectorInNewWindow(tabs: [.dom(), .network()])
     }
 
     func refreshInspectorControlsForTesting() {
-        syncNavigationButtonStates()
-        refreshInspectorButtonConfigurations()
+        refreshChromeControls()
     }
 
     var hasInspectorWindowForTesting: Bool {
@@ -718,8 +616,7 @@ final class BrowserPageViewController: UIViewController {
 
     func setSupportsMultipleScenesForTesting(_ value: Bool?) {
         supportsMultipleScenesOverrideForTesting = value
-        refreshInspectorButtonConfigurations()
-        syncNavigationButtonStates()
+        refreshChromeControls()
     }
 }
 
