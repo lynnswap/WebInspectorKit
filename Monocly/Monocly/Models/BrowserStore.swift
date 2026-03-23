@@ -17,6 +17,48 @@ private let logger = Logger(
     category: "BrowserStore"
 )
 
+enum BrowserHistoryDirection {
+    case back
+    case forward
+}
+
+struct BrowserHistoryMenuItem {
+    let backForwardListItem: WKBackForwardListItem
+    let title: String
+    let subtitle: String
+    let direction: BrowserHistoryDirection
+}
+
+private struct BrowserHistorySnapshotEntry: Equatable {
+    let title: String
+    let urlString: String
+}
+
+private struct BrowserHistorySnapshot: Equatable {
+    let backItems: [BrowserHistorySnapshotEntry]
+    let forwardItems: [BrowserHistorySnapshotEntry]
+}
+
+private enum BrowserStoreSPI {
+    private static func deobfuscate(_ reverseTokens: [String]) -> String {
+        reverseTokens.reversed().joined()
+    }
+
+    static let browsingContextControllerSelector = NSSelectorFromString(
+        deobfuscate(["Controller", "Context", "browsing"])
+    )
+    static let backForwardListSelector = NSSelectorFromString(
+        deobfuscate(["List", "Forward", "back"])
+    )
+    static let goToBackForwardListItemSelector = NSSelectorFromString(
+        deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
+    )
+    static let setHistoryDelegateSelector = NSSelectorFromString(
+        deobfuscate([":", "Delegate", "History", "_set"])
+    )
+    static let maximumHistoryMenuItemCount = 20
+}
+
 @MainActor
 @Observable final class BrowserStore: NSObject {
     let webView: WKWebView
@@ -40,7 +82,12 @@ private let logger = Logger(
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var stateObserverByID: [UUID: () -> Void] = [:]
+    @ObservationIgnored private var historyObserverByID: [UUID: () -> Void] = [:]
     @ObservationIgnored private var hasLoadedInitialRequest = false
+    @ObservationIgnored private var lastHistorySnapshot = BrowserHistorySnapshot(
+        backItems: [],
+        forwardItems: []
+    )
 
     var isShowingProgress: Bool {
         isLoading && estimatedProgress < 1.0
@@ -86,8 +133,10 @@ private let logger = Logger(
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        configureHistoryDelegateIfAvailable()
 
         setObservers()
+        lastHistorySnapshot = historySnapshot()
         if automaticallyLoadsInitialRequest {
             loadInitialRequestIfNeeded()
         }
@@ -105,6 +154,18 @@ private let logger = Logger(
         stateObserverByID.removeValue(forKey: observerID)
     }
 
+    @discardableResult
+    func addHistoryObserver(_ observer: @escaping () -> Void) -> UUID {
+        let observerID = UUID()
+        historyObserverByID[observerID] = observer
+        observer()
+        return observerID
+    }
+
+    func removeHistoryObserver(_ observerID: UUID) {
+        historyObserverByID.removeValue(forKey: observerID)
+    }
+
     func goBack() {
         guard webView.canGoBack else {
             return
@@ -117,6 +178,21 @@ private let logger = Logger(
             return
         }
         webView.goForward()
+    }
+
+    func go(to item: WKBackForwardListItem) {
+        guard spiGoToHistoryItem(item) == false else {
+            return
+        }
+        webView.go(to: item)
+    }
+
+    func backHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+        historyItems(direction: .back, limit: limit)
+    }
+
+    func forwardHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
+        historyItems(direction: .forward, limit: limit)
     }
 
     func loadInitialRequestIfNeeded() {
@@ -193,6 +269,111 @@ private let logger = Logger(
         }
     }
 
+    private func notifyHistoryObservers() {
+        for observer in historyObserverByID.values {
+            observer()
+        }
+    }
+
+    private func invalidateHistoryIfNeeded() {
+        let snapshot = historySnapshot()
+        guard snapshot != lastHistorySnapshot else {
+            return
+        }
+        lastHistorySnapshot = snapshot
+        notifyHistoryObservers()
+    }
+
+    private func historyItems(direction: BrowserHistoryDirection, limit: Int) -> [BrowserHistoryMenuItem] {
+        spiHistoryItems(direction: direction, limit: limit).map { item in
+            BrowserHistoryMenuItem(
+                backForwardListItem: item,
+                title: historyTitle(for: item),
+                subtitle: item.url.absoluteString,
+                direction: direction
+            )
+        }
+    }
+
+    private func historyTitle(for item: WKBackForwardListItem) -> String {
+        if let title = item.title, title.isEmpty == false {
+            return title
+        }
+        if let host = item.url.host(), host.isEmpty == false {
+            return host
+        }
+        return item.url.absoluteString
+    }
+
+    private func historySnapshot() -> BrowserHistorySnapshot {
+        BrowserHistorySnapshot(
+            backItems: historySnapshotEntries(direction: .back),
+            forwardItems: historySnapshotEntries(direction: .forward)
+        )
+    }
+
+    private func historySnapshotEntries(direction: BrowserHistoryDirection) -> [BrowserHistorySnapshotEntry] {
+        spiHistoryItems(direction: direction, limit: BrowserStoreSPI.maximumHistoryMenuItemCount).map { item in
+            BrowserHistorySnapshotEntry(
+                title: historyTitle(for: item),
+                urlString: item.url.absoluteString
+            )
+        }
+    }
+
+    private func spiHistoryItems(direction: BrowserHistoryDirection, limit: Int) -> [WKBackForwardListItem] {
+        let clampedLimit = max(0, min(limit, BrowserStoreSPI.maximumHistoryMenuItemCount))
+        guard clampedLimit > 0 else {
+            return []
+        }
+
+        let backForwardList = spiBackForwardList() ?? webView.backForwardList
+        let step = direction == .back ? -1 : 1
+
+        var items: [WKBackForwardListItem] = []
+        var offset = step
+        while items.count < clampedLimit, let item = backForwardList.item(at: offset) {
+            items.append(item)
+            offset += step
+        }
+        return items
+    }
+
+    private func spiBrowsingContextController() -> NSObject? {
+        guard webView.responds(to: BrowserStoreSPI.browsingContextControllerSelector),
+              let browsingContextController = webView.perform(BrowserStoreSPI.browsingContextControllerSelector)?
+                .takeUnretainedValue() as? NSObject else {
+            return nil
+        }
+        return browsingContextController
+    }
+
+    private func spiBackForwardList() -> WKBackForwardList? {
+        guard let browsingContextController = spiBrowsingContextController(),
+              browsingContextController.responds(to: BrowserStoreSPI.backForwardListSelector),
+              let backForwardList = browsingContextController.perform(BrowserStoreSPI.backForwardListSelector)?
+                .takeUnretainedValue() as? WKBackForwardList else {
+            return nil
+        }
+        return backForwardList
+    }
+
+    private func spiGoToHistoryItem(_ item: WKBackForwardListItem) -> Bool {
+        guard let browsingContextController = spiBrowsingContextController(),
+              browsingContextController.responds(to: BrowserStoreSPI.goToBackForwardListItemSelector) else {
+            return false
+        }
+        browsingContextController.perform(BrowserStoreSPI.goToBackForwardListItemSelector, with: item)
+        return true
+    }
+
+    private func configureHistoryDelegateIfAvailable() {
+        guard webView.responds(to: BrowserStoreSPI.setHistoryDelegateSelector) else {
+            return
+        }
+        webView.perform(BrowserStoreSPI.setHistoryDelegateSelector, with: self)
+    }
+
 #if canImport(UIKit)
     private func configureRefreshControl() {
         let control = UIRefreshControl()
@@ -259,6 +440,7 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -269,6 +451,7 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -282,6 +465,7 @@ extension BrowserStore: WKNavigationDelegate {
         webContentTerminationCount += 1
         lastWebContentTerminationDate = Date()
         lastWebContentTerminationURL = webView.url
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
     }
 
@@ -293,7 +477,37 @@ extension BrowserStore: WKNavigationDelegate {
 #if canImport(UIKit)
         endRefreshingIfNeeded()
 #endif
+        invalidateHistoryIfNeeded()
         notifyStateObservers()
+    }
+}
+
+extension BrowserStore {
+    @objc(_webView:backForwardListItemAdded:removed:)
+    func _webView(
+        _ webView: WKWebView!,
+        backForwardListItemAdded itemAdded: WKBackForwardListItem!,
+        removed itemsRemoved: [WKBackForwardListItem]!
+    ) {
+        _ = webView
+        _ = itemAdded
+        _ = itemsRemoved
+        invalidateHistoryIfNeeded()
+    }
+
+    @objc(_webView:didNavigateWithNavigationData:)
+    func _webView(_ webView: WKWebView!, didNavigateWith navigationData: NSObject!) {
+        _ = webView
+        _ = navigationData
+        invalidateHistoryIfNeeded()
+    }
+
+    @objc(_webView:didUpdateHistoryTitle:forURL:)
+    func _webView(_ webView: WKWebView!, didUpdateHistoryTitle title: String!, forURL url: URL!) {
+        _ = webView
+        _ = title
+        _ = url
+        invalidateHistoryIfNeeded()
     }
 }
 

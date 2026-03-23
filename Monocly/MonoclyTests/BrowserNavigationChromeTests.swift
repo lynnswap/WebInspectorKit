@@ -1,5 +1,6 @@
 #if os(iOS)
 import UIKit
+import WebKit
 import XCTest
 @testable import Monocly
 @testable import WebInspectorUI
@@ -28,9 +29,18 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.navigationItem.trailingItemGroups.count, 0)
 
         let toolbarItems = try XCTUnwrap(pageViewController.toolbarItems)
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactBackButtonItemForTesting })
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactForwardButtonItemForTesting })
-        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.compactInspectorButtonItemForTesting })
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.backButtonItemForTesting })
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
+        XCTAssertTrue(toolbarItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
+        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
+        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertNil(pageViewController.backButtonForTesting.menu)
+        XCTAssertNil(pageViewController.forwardButtonForTesting.menu)
+        XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.compact")
+        XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.compact")
+        XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
     @MainActor
@@ -50,12 +60,19 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         let leadingItems = pageViewController.navigationItem.leadingItemGroups.flatMap(\.barButtonItems)
         let trailingItems = pageViewController.navigationItem.trailingItemGroups.flatMap(\.barButtonItems)
-        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularBackButtonItemForTesting })
-        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.regularForwardButtonItemForTesting })
-        XCTAssertTrue(trailingItems.contains { $0 === pageViewController.regularInspectorButtonItemForTesting })
-        XCTAssertTrue(pageViewController.regularInspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.backButtonItemForTesting })
+        XCTAssertTrue(leadingItems.contains { $0 === pageViewController.forwardButtonItemForTesting })
+        XCTAssertTrue(trailingItems.contains { $0 === pageViewController.inspectorButtonItemForTesting })
+        XCTAssertTrue(pageViewController.backButtonItemForTesting.customView === pageViewController.backButtonForTesting)
+        XCTAssertTrue(pageViewController.forwardButtonItemForTesting.customView === pageViewController.forwardButtonForTesting)
+        XCTAssertFalse(pageViewController.backButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertFalse(pageViewController.forwardButtonForTesting.showsMenuAsPrimaryAction)
+        XCTAssertEqual(pageViewController.backButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.back.regular")
+        XCTAssertEqual(pageViewController.forwardButtonItemForTesting.accessibilityIdentifier, "Monocly.navigation.forward.regular")
+        XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.regular")
+        XCTAssertTrue(pageViewController.inspectorHasPrimaryActionForTesting)
         XCTAssertEqual(
-            pageViewController.regularInspectorMenuActionTitlesForTesting,
+            pageViewController.inspectorMenuActionTitlesForTesting,
             ["Open as Sheet", "Open in New Window"]
         )
     }
@@ -71,15 +88,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
         XCTAssertFalse(rootViewController.isToolbarHidden)
-        XCTAssertFalse(pageViewController.compactBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.compactForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
 
         applyHorizontalSizeClass(.regular, to: rootViewController)
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "regularNavigationBar")
         XCTAssertTrue(rootViewController.isToolbarHidden)
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
-        XCTAssertFalse(pageViewController.regularBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.regularForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
 
         applyHorizontalSizeClass(.compact, to: rootViewController)
         XCTAssertEqual(pageViewController.chromePlacementForTesting, "compactToolbar")
@@ -87,8 +104,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.navigationItem.title, "about:blank")
         XCTAssertEqual(pageViewController.navigationItem.leadingItemGroups.count, 0)
         XCTAssertEqual(pageViewController.navigationItem.trailingItemGroups.count, 0)
-        XCTAssertFalse(pageViewController.compactBackButtonItemForTesting.isEnabled)
-        XCTAssertFalse(pageViewController.compactForwardButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.backButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.forwardButtonItemForTesting.isEnabled)
     }
 
     @MainActor
@@ -159,13 +176,13 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
-        XCTAssertTrue(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertTrue(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
         XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
-        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
         dismissPresentedInspector(from: rootViewController)
     }
@@ -179,7 +196,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorPrimaryActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
         drainMainQueue()
 
         let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
@@ -207,15 +224,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertTrue(pageViewController.triggerInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
         XCTAssertEqual(requestedActivity?.targetContentIdentifier, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
 
         XCTAssertTrue(pageViewController.hasInspectorWindowForTesting)
-        XCTAssertFalse(pageViewController.regularInspectorButtonItemForTesting.isEnabled)
+        XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
-        XCTAssertFalse(pageViewController.triggerRegularInspectorWindowActionForTesting())
+        XCTAssertFalse(pageViewController.triggerInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         pageViewController.dismissInspectorWindowForTesting()
     }
@@ -247,8 +264,8 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.regular, to: rootViewController)
 
-        XCTAssertFalse(pageViewController.regularInspectorHasPrimaryActionForTesting)
-        XCTAssertTrue(pageViewController.regularInspectorMenuActionTitlesForTesting.isEmpty)
+        XCTAssertFalse(pageViewController.inspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(pageViewController.inspectorMenuActionTitlesForTesting.isEmpty)
     }
 
     @MainActor
@@ -260,20 +277,192 @@ final class BrowserNavigationChromeTests: XCTestCase {
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.compact, to: rootViewController)
 
-        XCTAssertTrue(pageViewController.compactInspectorHasPrimaryActionForTesting)
+        XCTAssertTrue(pageViewController.inspectorHasPrimaryActionForTesting)
         XCTAssertEqual(
-            pageViewController.compactInspectorMenuActionTitlesForTesting,
+            pageViewController.inspectorMenuActionTitlesForTesting,
             ["Open as Sheet", "Open in New Window"]
         )
+    }
+
+    @MainActor
+    func testCompactHistoryMenusShowDirectionSpecificEntriesNearestFirst() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+        let thirdURL = try makeTemporaryHTMLURL(named: "third", title: "Third Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        let secondFinishCount = store.didFinishNavigationCount + 1
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: secondFinishCount, in: store))
+
+        let thirdFinishCount = store.didFinishNavigationCount + 1
+        store.webView.load(URLRequest(url: thirdURL))
+        XCTAssertTrue(waitForNavigation(to: thirdURL, minimumDidFinishCount: thirdFinishCount, in: store))
+
+        pageViewController.view.layoutIfNeeded()
+
+        XCTAssertEqual(
+            pageViewController.backMenuActionTitlesForTesting,
+            ["First Page", "Second Page"]
+        )
+        XCTAssertEqual(
+            pageViewController.forwardMenuActionTitlesForTesting,
+            []
+        )
+        XCTAssertEqual(
+            pageViewController.backMenuActionSubtitlesForTesting.compactMap(\.self),
+            [firstURL.absoluteString, secondURL.absoluteString]
+        )
+    }
+
+    @MainActor
+    func testForwardHistoryMenuAppearsAfterGoingBack() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+        let thirdURL = try makeTemporaryHTMLURL(named: "third", title: "Third Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        store.webView.load(URLRequest(url: thirdURL))
+        XCTAssertTrue(waitForNavigation(to: thirdURL, minimumDidFinishCount: 3, in: store))
+
+        store.goBack()
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 4, in: store))
+
+        pageViewController.view.layoutIfNeeded()
+
+        XCTAssertEqual(pageViewController.forwardMenuActionTitlesForTesting, ["Third Page"])
+        XCTAssertEqual(
+            pageViewController.forwardMenuActionSubtitlesForTesting.compactMap(\.self),
+            [thirdURL.absoluteString]
+        )
+    }
+
+    @MainActor
+    func testSelectingHistoryMenuEntryNavigatesDirectly() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+        let thirdURL = try makeTemporaryHTMLURL(named: "third", title: "Third Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        store.webView.load(URLRequest(url: thirdURL))
+        XCTAssertTrue(waitForNavigation(to: thirdURL, minimumDidFinishCount: 3, in: store))
+
+        XCTAssertTrue(pageViewController.triggerBackHistorySelectionForTesting(index: 1))
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 4, in: store))
+        XCTAssertEqual(store.currentURL, firstURL)
+        XCTAssertFalse(store.canGoBack)
+        XCTAssertTrue(store.canGoForward)
+        XCTAssertTrue(pageViewController.forwardButtonForTesting.menu != nil)
+    }
+
+    @MainActor
+    func testReloadDoesNotRecreateHistoryMenusWhenHistoryIsUnchanged() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        let backMenuBeforeReload = try XCTUnwrap(pageViewController.backMenuForTesting)
+
+        store.webView.reload()
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 3, in: store))
+
+        let backMenuAfterReload = try XCTUnwrap(pageViewController.backMenuForTesting)
+        XCTAssertTrue(backMenuBeforeReload === backMenuAfterReload)
+    }
+
+    @MainActor
+    func testHistoryChangeRecreatesMenus() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")
+        let thirdURL = try makeTemporaryHTMLURL(named: "third", title: "Third Page")
+
+        let fixture = try makeHostedRootViewController(initialURL: firstURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let store = rootViewController.store
+
+        pageViewController.setSupportsMultipleScenesForTesting(false)
+        applyHorizontalSizeClass(.compact, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 1, in: store))
+
+        store.webView.load(URLRequest(url: secondURL))
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 2, in: store))
+
+        let backMenuAfterSecondPage = try XCTUnwrap(pageViewController.backMenuForTesting)
+
+        store.webView.load(URLRequest(url: thirdURL))
+        XCTAssertTrue(waitForNavigation(to: thirdURL, minimumDidFinishCount: 3, in: store))
+
+        let backMenuAfterThirdPage = try XCTUnwrap(pageViewController.backMenuForTesting)
+        XCTAssertFalse(backMenuAfterSecondPage === backMenuAfterThirdPage)
+
+        store.goBack()
+        XCTAssertTrue(waitForNavigation(to: secondURL, minimumDidFinishCount: 4, in: store))
+
+        let forwardMenuAfterSingleBack = try XCTUnwrap(pageViewController.forwardMenuForTesting)
+
+        store.goBack()
+        XCTAssertTrue(waitForNavigation(to: firstURL, minimumDidFinishCount: 5, in: store))
+
+        let forwardMenuAfterDoubleBack = try XCTUnwrap(pageViewController.forwardMenuForTesting)
+        XCTAssertFalse(forwardMenuAfterSingleBack === forwardMenuAfterDoubleBack)
     }
 }
 
 private extension BrowserNavigationChromeTests {
     @MainActor
-    private func makeHostedRootViewController() throws -> HostedRootViewControllerFixture {
+    private func makeHostedRootViewController(
+        initialURL: URL = URL(string: "about:blank")!
+    ) throws -> HostedRootViewControllerFixture {
         let rootViewController = BrowserRootViewController(
             launchConfiguration: BrowserLaunchConfiguration(
-                initialURL: URL(string: "about:blank")!
+                initialURL: initialURL
             )
         )
         let window = try makeWindow()
@@ -334,7 +523,7 @@ private extension BrowserNavigationChromeTests {
         from pageViewController: BrowserPageViewController,
         rootViewController: BrowserRootViewController
     ) throws -> WITabViewController {
-        let buttonItem = pageViewController.compactInspectorButtonItemForTesting
+        let buttonItem = pageViewController.inspectorButtonItemForTesting
         let action = try XCTUnwrap(buttonItem.action)
         XCTAssertTrue(UIApplication.shared.sendAction(action, to: buttonItem.target, from: buttonItem, for: nil))
         drainMainQueue()
@@ -359,6 +548,49 @@ private extension BrowserNavigationChromeTests {
     @MainActor
     func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    @MainActor
+    func waitForNavigation(
+        to url: URL,
+        minimumDidFinishCount: Int,
+        in store: BrowserStore,
+        timeout: TimeInterval = 5
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if store.currentURL == url,
+               store.didFinishNavigationCount >= minimumDidFinishCount,
+               store.isLoading == false {
+                return true
+            }
+            drainMainQueue()
+        }
+        return store.currentURL == url && store.didFinishNavigationCount >= minimumDidFinishCount
+    }
+
+    @MainActor
+    func makeTemporaryHTMLURL(named name: String, title: String) throws -> URL {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
+
+        let fileURL = directoryURL.appendingPathComponent("\(name).html")
+        let html = """
+        <html>
+            <head>
+                <title>\(title)</title>
+            </head>
+            <body>
+                <main>\(title)</main>
+            </body>
+        </html>
+        """
+        try html.write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
     }
 }
 #endif
