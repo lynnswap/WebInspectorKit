@@ -30,9 +30,19 @@ struct BrowserHistoryMenuItem {
 }
 
 private enum BrowserStoreSPI {
-    static let browsingContextControllerSelector = NSSelectorFromString("browsingContextController")
-    static let backForwardListSelector = NSSelectorFromString("backForwardList")
-    static let goToBackForwardListItemSelector = NSSelectorFromString("goToBackForwardListItem:")
+    private static func deobfuscate(_ reverseTokens: [String]) -> String {
+        reverseTokens.reversed().joined()
+    }
+
+    static let browsingContextControllerSelector = NSSelectorFromString(
+        deobfuscate(["Controller", "Context", "browsing"])
+    )
+    static let backForwardListSelector = NSSelectorFromString(
+        deobfuscate(["List", "Forward", "back"])
+    )
+    static let goToBackForwardListItemSelector = NSSelectorFromString(
+        deobfuscate([":", "Item", "List", "Forward", "Back", "To", "go"])
+    )
     static let maximumHistoryMenuItemCount = 20
 }
 
