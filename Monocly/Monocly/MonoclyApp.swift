@@ -1,6 +1,6 @@
 //
-//  MiniBrowserApp.swift
-//  MiniBrowser
+//  MonoclyApp.swift
+//  Monocly
 //
 //  Created by lynnswap on 2025/12/03.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct MiniBrowserApp: App {
+struct MonoclyApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

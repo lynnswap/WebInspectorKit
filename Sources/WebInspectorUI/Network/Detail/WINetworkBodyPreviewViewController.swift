@@ -42,8 +42,8 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
     private var hasUserSelectedMode = false
     private var renderModel: NetworkBodyPreviewRenderModel?
 
-    private let renderGeneration = NetworkBodyPreviewRenderGeneration()
     private var renderTask: Task<Void, Never>?
+    private var renderGeneration: UInt64 = 0
     private var hasAppliedInitialTreeSnapshot = false
     private var bodyObservationHandles: Set<ObservationHandle> = []
 
@@ -136,21 +136,27 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
 
     private func requestRenderModelUpdate() {
         renderTask?.cancel()
-        let generation = renderGeneration.advance()
+        renderGeneration &+= 1
+        let generation = renderGeneration
         let input = NetworkBodyPreviewRenderModel.Input(
             body: bodyState,
             unavailableText: wiLocalized("network.body.unavailable", default: "Body unavailable")
         )
 
-        renderTask = Task { [weak self] in
-            let model = await Task.detached(priority: .userInitiated) {
+        renderTask = Task(priority: .userInitiated) { [weak self, generation, input] in
+            let workerTask = Task.detached(priority: .userInitiated) {
                 NetworkBodyPreviewRenderModel.make(from: input)
-            }.value
-
-            guard let self, !Task.isCancelled else {
-                return
             }
-            guard self.renderGeneration.shouldApply(generation) else {
+            let model = await withTaskCancellationHandler {
+                await workerTask.value
+            } onCancel: {
+                workerTask.cancel()
+            }
+            guard
+                Task.isCancelled == false,
+                let self,
+                self.renderGeneration == generation
+            else {
                 return
             }
             self.applyRenderModel(model)
@@ -226,6 +232,7 @@ public final class WINetworkBodyPreviewViewController: UIViewController, UIColle
         }
         .store(in: &bodyObservationHandles)
     }
+
     private func makeTreeLayout() -> UICollectionViewLayout {
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.showsSeparators = true

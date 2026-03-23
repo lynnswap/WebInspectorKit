@@ -7,9 +7,9 @@ protocol PageSession: AnyObject {
     var lastPageWebView: WKWebView? { get }
 
     @discardableResult
-    func attach(pageWebView webView: WKWebView) -> AttachmentResult
+    func attach(pageWebView webView: WKWebView) async -> AttachmentResult
 
-    func suspend()
+    func suspend() async
 
-    func detach()
+    func detach() async
 }

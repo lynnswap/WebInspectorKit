@@ -1,11 +1,8 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 #include <atomic>
+#include <cstdint>
 #include <span>
-
-extern "C" void WITransportStringFromUTF8Symbol(void) asm("__ZN3WTF6String8fromUTF8ENSt3__14spanIKDuLm18446744073709551615EEE");
-extern "C" NSString *WITransportStringImplToNSString(void *stringImpl) asm("__ZN3WTF10StringImplcvP8NSStringEv");
-extern "C" void WITransportDestroyStringImpl(void *stringImpl) asm("__ZN3WTF10StringImpl7destroyEPS0_");
 
 namespace WTF {
 
@@ -58,22 +55,36 @@ struct StringImplRefCountHeader {
 static constexpr uint32_t stringImplStaticFlag = 0x1;
 static constexpr uint32_t stringImplRefCountIncrement = 0x2;
 
-inline NSString *copyNSString(const WTF::String& string)
+using StringImplToNSStringFn = NSString *(*)(void *);
+using DestroyStringImplFn = void (*)(void *);
+using BackendDispatcherDispatchFn = void (*)(void *, const WTF::String&);
+
+inline NSString *copyNSString(const WTF::String& string, uintptr_t stringImplToNSStringAddress)
 {
     if (!string.impl())
         return @"";
+    if (!stringImplToNSStringAddress)
+        return @"";
 
-    NSString *message = WITransportStringImplToNSString(string.impl());
+    auto *copyString = reinterpret_cast<StringImplToNSStringFn>(stringImplToNSStringAddress);
+    NSString *message = copyString(string.impl());
     return [message copy] ?: @"";
 }
 
-inline void constructStringFromUTF8(WTF::String *storage, std::span<const char8_t> characters)
+inline void constructStringFromUTF8(
+    WTF::String *storage,
+    std::span<const char8_t> characters,
+    uintptr_t stringFromUTF8Address
+)
 {
+    if (!stringFromUTF8Address)
+        return;
+
 #if defined(__aarch64__) || defined(__arm64__)
     register const char8_t *data asm("x0") = characters.data();
     register size_t length asm("x1") = characters.size();
     register WTF::String *result asm("x8") = storage;
-    void *symbol = reinterpret_cast<void *>(WITransportStringFromUTF8Symbol);
+    void *symbol = reinterpret_cast<void *>(stringFromUTF8Address);
     asm volatile(
         "blr %3"
         : "+r"(data), "+r"(length), "+r"(result)
@@ -84,7 +95,7 @@ inline void constructStringFromUTF8(WTF::String *storage, std::span<const char8_
     register WTF::String *result asm("rdi") = storage;
     register const char8_t *data asm("rsi") = characters.data();
     register size_t length asm("rdx") = characters.size();
-    void *symbol = reinterpret_cast<void *>(WITransportStringFromUTF8Symbol);
+    void *symbol = reinterpret_cast<void *>(stringFromUTF8Address);
     asm volatile(
         "call *%3"
         : "+r"(result), "+r"(data), "+r"(length)
@@ -96,14 +107,18 @@ inline void constructStringFromUTF8(WTF::String *storage, std::span<const char8_
 #endif
 }
 
-inline void constructStringFromNSString(WTF::String *storage, NSString *string)
+inline void constructStringFromNSString(
+    WTF::String *storage,
+    NSString *string,
+    uintptr_t stringFromUTF8Address
+)
 {
     NSData *utf8Data = [string dataUsingEncoding:NSUTF8StringEncoding];
     auto *bytes = reinterpret_cast<const char8_t *>(utf8Data.bytes);
-    constructStringFromUTF8(storage, std::span<const char8_t>(bytes, utf8Data.length));
+    constructStringFromUTF8(storage, std::span<const char8_t>(bytes, utf8Data.length), stringFromUTF8Address);
 }
 
-inline void derefConstructedString(const WTF::String& string)
+inline void derefConstructedString(const WTF::String& string, uintptr_t destroyStringImplAddress)
 {
     if (!string.impl())
         return;
@@ -114,20 +129,23 @@ inline void derefConstructedString(const WTF::String& string)
         return;
 
     uint32_t oldRefCount = header->refCount.fetch_sub(stringImplRefCountIncrement, std::memory_order_relaxed);
-    if (oldRefCount == stringImplRefCountIncrement)
-        WITransportDestroyStringImpl(string.impl());
+    if (oldRefCount == stringImplRefCountIncrement && destroyStringImplAddress) {
+        auto *destroyStringImpl = reinterpret_cast<DestroyStringImplFn>(destroyStringImplAddress);
+        destroyStringImpl(string.impl());
+    }
 }
 
 class ConstructedString final {
 public:
-    explicit ConstructedString(NSString *string)
+    ConstructedString(NSString *string, uintptr_t stringFromUTF8Address, uintptr_t destroyStringImplAddress)
+        : m_destroyStringImplAddress(destroyStringImplAddress)
     {
-        constructStringFromNSString(&m_string, string);
+        constructStringFromNSString(&m_string, string, stringFromUTF8Address);
     }
 
     ~ConstructedString()
     {
-        derefConstructedString(m_string);
+        derefConstructedString(m_string, m_destroyStringImplAddress);
     }
 
     ConstructedString(const ConstructedString&) = delete;
@@ -140,6 +158,20 @@ public:
 
 private:
     WTF::String m_string;
+    uintptr_t m_destroyStringImplAddress { 0 };
 };
+
+inline void dispatchToBackendDispatcher(
+    void *backendDispatcher,
+    const WTF::String& string,
+    uintptr_t backendDispatcherDispatchAddress
+)
+{
+    if (!backendDispatcher || !backendDispatcherDispatchAddress)
+        return;
+
+    auto *dispatch = reinterpret_cast<BackendDispatcherDispatchFn>(backendDispatcherDispatchAddress);
+    dispatch(backendDispatcher, string);
+}
 
 } // namespace WITransportInspectorABI

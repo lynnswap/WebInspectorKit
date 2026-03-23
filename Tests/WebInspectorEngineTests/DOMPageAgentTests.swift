@@ -1,11 +1,12 @@
 import Testing
 import WebKit
 @testable import WebInspectorEngine
+@testable import WebInspectorBridge
 
 @MainActor
 struct DOMSessionTests {
     @Test
-    func detachClearsSelection() {
+    func detachClearsSelection() async {
         let session = DOMSession(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
         session.graphStore.applySelectionSnapshot(
             .init(
@@ -34,7 +35,7 @@ struct DOMSessionTests {
             for: 42
         )
 
-        session.detach()
+        await session.detach()
 
         #expect(session.graphStore.selectedEntry == nil)
         #expect(session.graphStore.entriesByID.isEmpty)
@@ -106,12 +107,12 @@ struct DOMSessionTests {
     }
 
     @Test
-    func attachRegistersHandlersAndInstallsUserScripts() {
+    func attachRegistersHandlersAndInstallsUserScripts() async {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()
         let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
 
         let addedHandlerNames = controller.addedHandlers.map(\.name)
         #expect(addedHandlerNames.contains("webInspectorDOMSnapshot"))
@@ -122,11 +123,11 @@ struct DOMSessionTests {
     }
 
     @Test
-    func reattachingSameWebViewKeepsSelectionAndDoesNotRequestReload() {
+    func reattachingSameWebViewKeepsSelectionAndDoesNotRequestReload() async {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
-        let firstAttach = session.attach(to: webView)
+        let firstAttach = await session.attach(to: webView)
         #expect(firstAttach.shouldReload == true)
         #expect(firstAttach.preserveState == false)
 
@@ -134,7 +135,7 @@ struct DOMSessionTests {
             .init(localID: 42, preview: "<div id=\"selected\">", attributes: [], path: [], selectorPath: "", styleRevision: 0)
         )
 
-        let secondAttach = session.attach(to: webView)
+        let secondAttach = await session.attach(to: webView)
 
         #expect(secondAttach.shouldReload == false)
         #expect(secondAttach.preserveState == false)
@@ -143,15 +144,15 @@ struct DOMSessionTests {
     }
 
     @Test
-    func suspendRemovesHandlersAndClearsWebView() {
+    func suspendRemovesHandlersAndClearsWebView() async {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()
         let bridgeWorld = WISPIContentWorldProvider.bridgeWorld()
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         let removedBefore = controller.removedHandlers.count
 
-        session.suspend()
+        await session.suspend()
 
         let removedHandlerNames = controller.removedHandlers.map(\.name)
         #expect(controller.removedHandlers.count > removedBefore)
@@ -166,7 +167,7 @@ struct DOMSessionTests {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
 
         let raw = try await webView.evaluateJavaScript(
@@ -190,7 +191,7 @@ struct DOMSessionTests {
             )
         )
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
 
         let raw = try await webView.evaluateJavaScript(
@@ -203,16 +204,44 @@ struct DOMSessionTests {
     }
 
     @Test
-    func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() {
+    func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() async {
         let firstSession = DOMSession(configuration: .init())
         let secondSession = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()
 
-        firstSession.attach(to: webView)
+        _ = await firstSession.attach(to: webView)
         let firstScriptCount = controller.userScripts.count
         #expect(firstScriptCount == 2)
 
-        secondSession.attach(to: webView)
+        _ = await secondSession.attach(to: webView)
+
+        #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
+    func installFailureKeepsBridgeScriptMarkedInstalled() async {
+        struct InstallFailure: Error {}
+
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry,
+            installDOMBridgeScript: { _, _, _ in
+                throw InstallFailure()
+            }
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        let firstScriptCount = controller.userScripts.count
+
+        #expect(firstScriptCount == 2)
+        #expect(registry.domBridgeScriptInstalled(on: controller) == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
 
         #expect(controller.userScripts.count == firstScriptCount)
     }
@@ -223,8 +252,8 @@ struct DOMSessionTests {
         let (webView, _) = makeTestWebView()
 
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
-        session.attach(to: webView)
-        session.setAutoSnapshot(enabled: true)
+        _ = await session.attach(to: webView)
+        await session.setAutoSnapshot(enabled: true)
         await waitForAutoSnapshotEnabled(on: webView)
 
         let rawStatus = try await webView.evaluateJavaScript(
@@ -247,13 +276,45 @@ struct DOMSessionTests {
     }
 
     @Test
+    func tearDownForDeinitBestEffortDetachesAutoSnapshot() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 7, subtreeDepth: 2, autoUpdateDebounce: 0.2))
+        let (webView, _) = makeTestWebView()
+
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        _ = await session.attach(to: webView)
+        await session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        session.tearDownForDeinit()
+
+        for _ in 0..<100 {
+            let status = await autoSnapshotStatus(on: webView)
+            let enabled = (status?["snapshotAutoUpdateEnabled"] as? Bool)
+                ?? (status?["snapshotAutoUpdateEnabled"] as? NSNumber)?.boolValue
+                ?? false
+            if enabled == false {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let finalStatus = await autoSnapshotStatus(on: webView)
+        let enabled = (finalStatus?["snapshotAutoUpdateEnabled"] as? Bool)
+            ?? (finalStatus?["snapshotAutoUpdateEnabled"] as? NSNumber)?.boolValue
+            ?? false
+
+        #expect(enabled == false)
+        #expect(session.pageWebView == nil)
+    }
+
+    @Test
     func setAutoSnapshotBeforeAttachEventuallyConfiguresAgent() async throws {
         let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 2, autoUpdateDebounce: 0.3))
         let (webView, _) = makeTestWebView()
 
-        session.setAutoSnapshot(enabled: true)
+        await session.setAutoSnapshot(enabled: true)
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await waitForAutoSnapshotEnabled(on: webView)
 
         let status = await autoSnapshotStatus(on: webView)
@@ -272,11 +333,11 @@ struct DOMSessionTests {
         let (webView, _) = makeTestWebView()
 
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
-        session.attach(to: webView)
-        session.setAutoSnapshot(enabled: true)
+        _ = await session.attach(to: webView)
+        await session.setAutoSnapshot(enabled: true)
         await waitForAutoSnapshotEnabled(on: webView)
 
-        session.updateConfiguration(.init(snapshotDepth: 9, subtreeDepth: 2, autoUpdateDebounce: 0.12))
+        await session.updateConfiguration(.init(snapshotDepth: 9, subtreeDepth: 2, autoUpdateDebounce: 0.12))
         await waitForAutoSnapshotConfiguration(on: webView, maxDepth: 9, debounce: 120)
 
         let status = await autoSnapshotStatus(on: webView)
@@ -295,8 +356,8 @@ struct DOMSessionTests {
         let (webView, _) = makeTestWebView()
 
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
-        session.attach(to: webView)
-        session.setAutoSnapshot(enabled: true)
+        _ = await session.attach(to: webView)
+        await session.setAutoSnapshot(enabled: true)
         await waitForAutoSnapshotEnabled(on: webView)
 
         let status = await autoSnapshotStatus(on: webView)
@@ -324,7 +385,7 @@ struct DOMSessionTests {
         </html>
         """
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await loadHTML(html, in: webView)
         let snapshot = try await session.captureSnapshot(maxDepth: 6)
         guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
@@ -353,7 +414,7 @@ struct DOMSessionTests {
         </html>
         """
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await loadHTML(html, in: webView)
         let snapshot = try await session.captureSnapshot(maxDepth: 5)
         guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
@@ -388,7 +449,7 @@ struct DOMSessionTests {
         </html>
         """
 
-        session.attach(to: webView)
+        _ = await session.attach(to: webView)
         await loadHTML(html, in: webView)
         let snapshot = try await session.captureSnapshot(maxDepth: 5)
         guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {

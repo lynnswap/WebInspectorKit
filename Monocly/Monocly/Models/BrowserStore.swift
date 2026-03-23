@@ -13,7 +13,7 @@ typealias BrowserPlatformColor = NSColor
 #endif
 
 private let logger = Logger(
-    subsystem: "MiniBrowser",
+    subsystem: "Monocly",
     category: "BrowserStore"
 )
 
@@ -56,7 +56,7 @@ private let logger = Logger(
             }
             return currentURL.absoluteString
         }
-        return "MiniBrowser"
+        return "Monocly"
     }
 
     init(url: URL, automaticallyLoadsInitialRequest: Bool = true) {
@@ -319,7 +319,7 @@ extension BrowserStore: WKUIDelegate {
             }
 
             let openInAppAction = UIAction(
-                title: "Open in MiniBrowser",
+                title: "Open in Monocly",
                 image: UIImage(systemName: "safari")
             ) { _ in
                 guard let webView else {

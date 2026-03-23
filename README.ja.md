@@ -18,7 +18,7 @@
 - DOM ツリーの参照（要素ピック、ハイライト、削除、属性編集）
 - Network リクエストログ（fetch/XHR/WebSocket）と、buffering/active モード切り替え
 - `WITab` によるタブ構成のカスタマイズ（custom tab は `viewControllerProvider` を利用）
-- `WIModel` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
+- `WIInspectorController` による明示的ライフサイクル（`connect(to:)`, `suspend()`, `disconnect()`）
 
 ## 要件
 
@@ -37,7 +37,7 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WIModel()
+    private let inspector = WIInspectorController()
 
     @objc private func presentInspector() {
         let container = WITabViewController(
@@ -65,7 +65,7 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIModel()
+    let inspector = WIInspectorController()
 
     @objc func presentInspector() {
         let container = WITabViewController(

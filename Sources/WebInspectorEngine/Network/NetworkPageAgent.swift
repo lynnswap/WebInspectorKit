@@ -45,8 +45,6 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     package weak var webView: WKWebView?
     package let store = NetworkStore()
     private var loggingMode: NetworkLoggingMode = .buffering
-    private var configureTask: Task<Void, Never>?
-    private var clearTask: Task<Void, Never>?
     private var nativeResourceObserver: NetworkResourceLoadObserver?
     private var nativeObserverEnabled = false
     private var nativeSessionID = ""
@@ -60,6 +58,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
+    private var pendingConfigurationTask: Task<Void, Never>?
 
     package var currentBridgeMode: WIBridgeMode {
         bridgeMode
@@ -73,39 +72,59 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     }
 
     isolated deinit {
-        configureTask?.cancel()
-        clearTask?.cancel()
+        pendingConfigurationTask?.cancel()
         detachPageWebView()
     }
 
-    package func setMode(_ mode: NetworkLoggingMode) {
+    package func setMode(_ mode: NetworkLoggingMode) async {
+        pendingConfigurationTask?.cancel()
+        pendingConfigurationTask = nil
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
             preservesStoreAcrossNextAttach = false
             store.reset()
         }
-        scheduleConfigure(mode: mode, clearExisting: false, on: webView)
+        await configureNetworkLogging(mode: mode, clearExisting: false, on: webView)
     }
 
     func waitForPendingConfigurationForTesting() async {
-        await configureTask?.value
+        await pendingConfigurationTask?.value
     }
 
-    package func clearNetworkLogs() {
+    package func clearNetworkLogs() async {
         store.clear()
-        scheduleClear(on: webView)
+        await clearRemoteNetworkRecords(on: webView)
+    }
+
+    package func tearDownForDeinit() {
+        pendingConfigurationTask?.cancel()
+        pendingConfigurationTask = nil
+        preservesStoreAcrossNextAttach = false
+        loggingMode = .stopped
+        store.setRecording(false)
+        detachPageWebView()
+        store.reset()
     }
 }
 
 // MARK: - WIPageAgent
 
 extension NetworkPageAgent {
-    package func attachPageWebView(_ newWebView: WKWebView?) {
+    package func attachPageWebView(_ newWebView: WKWebView?) async {
+        pendingConfigurationTask?.cancel()
+        pendingConfigurationTask = nil
+        let shouldClearExisting = preservesStoreAcrossNextAttach == false
         replacePageWebView(with: newWebView)
+        guard let newWebView else {
+            return
+        }
+        await configureNetworkLogging(mode: loggingMode, clearExisting: shouldClearExisting, on: newWebView)
     }
 
-    package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) {
+    package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) async {
+        pendingConfigurationTask?.cancel()
+        pendingConfigurationTask = nil
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -115,9 +134,6 @@ extension NetworkPageAgent {
             }
         } else {
             preservesStoreAcrossNextAttach = false
-        }
-        if let modeBeforeDetach, let webView {
-            scheduleConfigure(mode: modeBeforeDetach, clearExisting: false, on: webView)
         }
         replacePageWebView(with: nil)
     }
@@ -136,7 +152,6 @@ extension NetworkPageAgent {
         }
         attachNativeResourceObserver(to: webView)
         registerMessageHandlers()
-        scheduleConfigure(mode: loggingMode, clearExisting: preservesExistingStore == false, on: webView)
     }
 
     func didClearPageWebView() {
@@ -162,46 +177,10 @@ extension NetworkPageAgent {
         bodyHandle: AnyObject?,
         role: NetworkBody.Role
     ) async -> NetworkBodyFetchResult {
-        guard let webView else {
-            return .agentUnavailable
-        }
-
-        let hasReference = bodyRef?.isEmpty == false
-        let hasHandle = bodyHandle != nil
-        let requiresHandleAPI = hasHandle && (hasReference == false || bridgeMode != .legacyJSON)
-        guard hasReference || hasHandle else {
-            return .bodyUnavailable
-        }
-
-        await waitForPendingConfigurationIfNeeded(in: webView)
-
-        let availability = await ensureBodyFetchAvailability(
-            in: webView,
-            requiresReferenceAPI: hasReference,
-            requiresHandleAPI: requiresHandleAPI
-        )
-        let initialResult = await performBodyFetch(
+        await runFetchBodyResult(
             bodyRef: bodyRef,
             bodyHandle: bodyHandle,
-            role: role,
-            in: webView,
-            availability: availability
-        )
-        guard case .agentUnavailable = initialResult else {
-            return initialResult
-        }
-
-        let recoveredAvailability = await ensureBodyFetchAvailability(
-            in: webView,
-            requiresReferenceAPI: hasReference,
-            requiresHandleAPI: requiresHandleAPI
-        )
-        return await performBodyFetch(
-            bodyRef: bodyRef,
-            bodyHandle: bodyHandle,
-            role: role,
-            in: webView,
-            availability: recoveredAvailability
+            role: role
         )
     }
 }
@@ -259,7 +238,7 @@ extension NetworkPageAgent: WKScriptMessageHandler {
             break
         case .missing:
             networkLogger.notice("network batch missing auth token, reconfiguring page token")
-            scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
+            startPendingConfiguration(on: webView)
             return
         case .mismatched:
             networkLogger.error("dropped network batch: auth token mismatch")
@@ -283,7 +262,7 @@ extension NetworkPageAgent: WKScriptMessageHandler {
             break
         case .missing:
             networkLogger.notice("network reset missing auth token, reconfiguring page token")
-            scheduleConfigure(mode: loggingMode, clearExisting: false, on: webView)
+            startPendingConfiguration(on: webView)
             return
         case .mismatched:
             networkLogger.error("dropped network reset: auth token mismatch")
@@ -294,6 +273,68 @@ extension NetworkPageAgent: WKScriptMessageHandler {
 }
 
 private extension NetworkPageAgent {
+    func runFetchBodyResult(
+        bodyRef: String?,
+        bodyHandle: AnyObject?,
+        role: NetworkBody.Role
+    ) async -> NetworkBodyFetchResult {
+        guard let webView else {
+            return .agentUnavailable
+        }
+        let currentConfigurationTask = pendingConfigurationTask
+        await currentConfigurationTask?.value
+        guard self.webView === webView else {
+            return .agentUnavailable
+        }
+
+        let hasReference = bodyRef?.isEmpty == false
+        let hasHandle = bodyHandle != nil
+        let requiresHandleAPI = hasHandle && (hasReference == false || bridgeMode != .legacyJSON)
+        guard hasReference || hasHandle else {
+            return .bodyUnavailable
+        }
+
+        let availability = await ensureBodyFetchAvailability(
+            in: webView,
+            requiresReferenceAPI: hasReference,
+            requiresHandleAPI: requiresHandleAPI
+        )
+        let initialResult = await performBodyFetch(
+            bodyRef: bodyRef,
+            bodyHandle: bodyHandle,
+            role: role,
+            in: webView,
+            availability: availability
+        )
+        guard case .agentUnavailable = initialResult else {
+            return initialResult
+        }
+
+        let recoveredAvailability = await ensureBodyFetchAvailability(
+            in: webView,
+            requiresReferenceAPI: hasReference,
+            requiresHandleAPI: requiresHandleAPI
+        )
+        return await performBodyFetch(
+            bodyRef: bodyRef,
+            bodyHandle: bodyHandle,
+            role: role,
+            in: webView,
+            availability: recoveredAvailability
+        )
+    }
+
+    func startPendingConfiguration(on webView: WKWebView?) {
+        pendingConfigurationTask?.cancel()
+        let loggingMode = loggingMode
+        pendingConfigurationTask = Task.immediateIfAvailable { [weak self, weak webView] in
+            guard let self else {
+                return
+            }
+            await self.configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
+        }
+    }
+
     private func performBodyFetch(
         bodyRef: String?,
         bodyHandle: AnyObject?,
@@ -351,26 +392,6 @@ private extension NetworkPageAgent {
         bridgeMode = .legacyJSON
         bridgeModeLocked = true
         networkLogger.error("bridge_mode=legacyJSON \(reason, privacy: .public)")
-    }
-
-    func scheduleConfigure(mode: NetworkLoggingMode, clearExisting: Bool, on targetWebView: WKWebView?) {
-        configureTask?.cancel()
-        configureTask = Task { [weak self] in
-            guard let self else { return }
-            await configureNetworkLogging(
-                mode: mode,
-                clearExisting: clearExisting,
-                on: targetWebView
-            )
-        }
-    }
-
-    func scheduleClear(on targetWebView: WKWebView?) {
-        clearTask?.cancel()
-        clearTask = Task { [weak self] in
-            guard let self else { return }
-            await clearRemoteNetworkRecords(on: targetWebView)
-        }
     }
 
     func registerMessageHandlers() {
@@ -516,7 +537,6 @@ private extension NetworkPageAgent {
         requiresReferenceAPI: Bool,
         requiresHandleAPI: Bool
     ) async -> BodyFetchAvailability {
-        await waitForPendingConfigurationIfNeeded(in: webView)
         let initialAvailability = await probeBodyFetchAvailability(in: webView)
         guard initialAvailability.satisfies(
             requiresReferenceAPI: requiresReferenceAPI,
@@ -541,13 +561,6 @@ private extension NetworkPageAgent {
         await installNetworkAgentScriptIfNeeded(on: webView, forceCurrentPageAgentInjection: true)
         await configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
         return await probeBodyFetchAvailability(in: webView)
-    }
-
-    private func waitForPendingConfigurationIfNeeded(in webView: WKWebView) async {
-        guard self.webView === webView else {
-            return
-        }
-        await configureTask?.value
     }
 
     private func fetchSentinelState(from result: Any?) -> String? {

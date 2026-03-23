@@ -11,6 +11,7 @@ private let domAgentPresenceProbeScript: String = """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
 private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
+private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKContentWorld) async throws -> Void
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
@@ -51,6 +52,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
     private let controllerStateRegistry: WIUserContentControllerStateRegistry
+    private let installDOMBridgeScript: DOMBridgeScriptInstaller
     private let handleCache = WIJSHandleCache(capacity: 128)
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
@@ -60,26 +62,47 @@ public final class DOMPageAgent: NSObject, PageAgent {
     }
 
     public convenience init(configuration: DOMConfiguration) {
-        self.init(configuration: configuration, controllerStateRegistry: .shared)
+        self.init(
+            configuration: configuration,
+            controllerStateRegistry: .shared,
+            installDOMBridgeScript: DOMPageAgent.evaluateDOMBridgeScript
+        )
     }
 
     package init(
         configuration: DOMConfiguration,
-        controllerStateRegistry: WIUserContentControllerStateRegistry
+        controllerStateRegistry: WIUserContentControllerStateRegistry,
+        installDOMBridgeScript: @escaping @MainActor (WKWebView, String, WKContentWorld) async throws -> Void = DOMPageAgent.evaluateDOMBridgeScript
     ) {
         self.configuration = configuration
         runtime = .shared
         self.controllerStateRegistry = controllerStateRegistry
+        self.installDOMBridgeScript = installDOMBridgeScript
         bridgeMode = runtime.startupMode()
         bridgeWorld = WISPIContentWorldProvider.bridgeWorld(runtime: runtime)
     }
 
     isolated deinit {
-        detachPageWebView()
+        tearDownPageWebViewForDeinit()
     }
 
     public func updateConfiguration(_ configuration: DOMConfiguration) {
         self.configuration = configuration
+    }
+
+    func tearDownForDeinit() {
+        tearDownPageWebViewForDeinit()
+    }
+
+    private static func evaluateDOMBridgeScript(
+        on webView: WKWebView,
+        scriptSource: String,
+        contentWorld: WKContentWorld
+    ) async throws {
+        try await webView.callAsyncVoidJavaScript(
+            scriptSource,
+            contentWorld: contentWorld
+        )
     }
 }
 
@@ -382,21 +405,26 @@ public extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
-    func willDetachPageWebView(_ webView: WKWebView) {
-        // Stop observers if the script is installed. This is best-effort.
-        Task {
-            try? await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
-                contentWorld: bridgeWorld
-            )
+    func ensureDOMAgentScriptInstalled(on webView: WKWebView) async {
+        await installDOMAgentScriptIfNeeded(on: webView)
+    }
+
+    func detachPageWebViewAndWaitForCleanup() async {
+        let detachedWebView = webView
+        detachPageWebView()
+        guard let detachedWebView else {
+            return
         }
+        await performDetachCleanup(on: detachedWebView)
+    }
+
+    func willDetachPageWebView(_ webView: WKWebView) {
         detachMessageHandlers(from: webView)
     }
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
         resolveBridgeModeIfNeeded(with: webView)
         registerMessageHandlers(on: webView)
-        installDOMAgentScriptIfNeeded(on: webView)
     }
 
     func didClearPageWebView() {
@@ -407,6 +435,32 @@ extension DOMPageAgent {
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func performDetachCleanup(on webView: WKWebView) async {
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            domLogger.debug("detach cleanup skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func tearDownPageWebViewForDeinit() {
+        guard let webView else {
+            return
+        }
+        webView.evaluateJavaScript(
+            "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
+            in: nil,
+            in: bridgeWorld,
+            completionHandler: nil
+        )
+        detachMessageHandlers(from: webView)
+        self.webView = nil
+        handleCache.clear()
+    }
+
     func resolveBridgeModeIfNeeded(with webView: WKWebView) {
         guard !bridgeModeLocked else {
             return
@@ -470,7 +524,7 @@ private extension DOMPageAgent {
         domLogger.debug("detached DOM message handlers")
     }
 
-    func installDOMAgentScriptIfNeeded(on webView: WKWebView) {
+    func installDOMAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
         if controllerStateRegistry.domBridgeScriptInstalled(on: controller) {
             return
@@ -502,11 +556,13 @@ private extension DOMPageAgent {
         )
         controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
 
-        // Install into already-loaded documents too.
-        Task {
-            _ = try? await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: bridgeWorld)
+        do {
+            try await installDOMBridgeScript(webView, scriptSource, bridgeWorld)
+        } catch {
+            domLogger.error(
+                "failed to evaluate DOM agent script after registration: \(error.localizedDescription, privacy: .public)"
+            )
         }
-        domLogger.debug("installed DOM agent user script")
     }
 
     func evaluateStringScript(_ script: String, nodeId: Int) async throws -> String {

@@ -7,7 +7,7 @@ struct NetworkBodyPreviewRenderModel: Sendable {
         case objectTree = 1
     }
 
-    struct Input: Sendable {
+    struct Input: Sendable, Equatable {
         let kind: NetworkBody.Kind
         let full: String?
         let preview: String?
@@ -23,6 +23,15 @@ struct NetworkBodyPreviewRenderModel: Sendable {
             isBase64Encoded = body.isBase64Encoded
             self.unavailableText = unavailableText
         }
+
+        static func == (lhs: Input, rhs: Input) -> Bool {
+            lhs.kind == rhs.kind
+                && lhs.full == rhs.full
+                && lhs.preview == rhs.preview
+                && lhs.summary == rhs.summary
+                && lhs.isBase64Encoded == rhs.isBase64Encoded
+                && lhs.unavailableText == rhs.unavailableText
+        }
     }
 
     let text: String
@@ -31,10 +40,19 @@ struct NetworkBodyPreviewRenderModel: Sendable {
     let preferredMode: Mode
 
     static func make(from input: Input) -> NetworkBodyPreviewRenderModel {
+        if Task.isCancelled {
+            return cancelledFallback(unavailableText: input.unavailableText)
+        }
         let decoded = decodedText(from: input)
         let contentText = decoded ?? input.full ?? input.preview
         let displaySource = contentText ?? input.summary
+        if Task.isCancelled {
+            return cancelledFallback(text: displaySource, unavailableText: input.unavailableText)
+        }
         let objectTreeNodes = contentText.flatMap(NetworkJSONNode.nodes(from:)) ?? []
+        if Task.isCancelled {
+            return cancelledFallback(text: displaySource, unavailableText: input.unavailableText)
+        }
         let displayText = formattedText(from: contentText) ?? displaySource ?? input.unavailableText
 
         if objectTreeNodes.isEmpty {
@@ -117,18 +135,16 @@ struct NetworkBodyPreviewRenderModel: Sendable {
         }
         return pretty
     }
-}
 
-@MainActor
-final class NetworkBodyPreviewRenderGeneration {
-    private var currentValue: UInt64 = 0
-
-    func advance() -> UInt64 {
-        currentValue &+= 1
-        return currentValue
-    }
-
-    func shouldApply(_ generation: UInt64) -> Bool {
-        generation == currentValue
+    private static func cancelledFallback(
+        text: String? = nil,
+        unavailableText: String
+    ) -> NetworkBodyPreviewRenderModel {
+        NetworkBodyPreviewRenderModel(
+            text: text ?? unavailableText,
+            objectTreeNodes: [],
+            availableModes: [.text],
+            preferredMode: .text
+        )
     }
 }

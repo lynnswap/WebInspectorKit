@@ -17,6 +17,20 @@ final class DOMFrontendStore: NSObject {
         case domSelector = "webInspectorDomSelector"
     }
 
+    private struct PendingReconcileWork {
+        let shouldApplyConfiguration: Bool
+        let preferredDepth: Int?
+        let documentRequest: (depth: Int, preserveState: Bool)?
+        let shouldFlushMutationBundles: Bool
+
+        var hasWork: Bool {
+            shouldApplyConfiguration
+                || preferredDepth != nil
+                || documentRequest != nil
+                || shouldFlushMutationBundles
+        }
+    }
+
     let session: DOMSession
     private(set) var webView: InspectorWebView?
     private var isReady = false
@@ -24,8 +38,15 @@ final class DOMFrontendStore: NSObject {
     private var pendingPreferredDepth: Int?
     private var pendingDocumentRequest: (depth: Int, preserveState: Bool)?
     private var configuration: DOMConfiguration
+    private var configurationNeedsApply = false
     private var matchedStylesTask: Task<Void, Never>?
-    private var matchedStylesRequestToken = 0
+    private var matchedStylesRequestCount = 0
+#if DEBUG
+    private var matchedStylesFetchOverride: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)?
+#endif
+    private var pendingWorkTask: Task<Void, Never>?
+    private var isRunningPendingStateLoop = false
+    private var protocolWorkTask: Task<Void, Never>?
     private let protocolRouter: DOMProtocolRouter
     private let payloadNormalizer = DOMPayloadNormalizer()
     private let bridgeRuntime = WISPIRuntime.shared
@@ -80,27 +101,21 @@ final class DOMFrontendStore: NSObject {
         mutationPipeline.pendingMutationBundleCount
     }
 
-    func setPreferredDepth(_ depth: Int) {
+    func setPreferredDepth(_ depth: Int) async {
         pendingPreferredDepth = depth
-        if isReady {
-            Task {
-                await applyPreferredDepthNow(depth)
-            }
-        }
+        await reconcilePendingStateIfReady()
     }
 
-    func requestDocument(depth: Int, preserveState: Bool) {
+    func requestDocument(depth: Int, preserveState: Bool) async {
         pendingDocumentRequest = (depth, preserveState)
-        if isReady {
-            Task {
-                await requestDocumentNow(depth: depth, preserveState: preserveState)
-            }
-        }
+        await reconcilePendingStateIfReady()
     }
 
-    func updateConfiguration(_ configuration: DOMConfiguration) {
+    func updateConfiguration(_ configuration: DOMConfiguration) async {
         self.configuration = configuration
+        configurationNeedsApply = true
         mutationPipeline.updateConfiguration(configuration)
+        await reconcilePendingStateIfReady()
     }
 
     private func applyConfigurationToInspector() async {
@@ -141,7 +156,12 @@ final class DOMFrontendStore: NSObject {
 
     private func resetInspectorState() {
         cancelMatchedStylesRequest()
+        pendingWorkTask?.cancel()
+        pendingWorkTask = nil
+        protocolWorkTask?.cancel()
+        protocolWorkTask = nil
         isReady = false
+        configurationNeedsApply = false
         mutationPipeline.reset()
         pendingPreferredDepth = nil
         pendingDocumentRequest = nil
@@ -171,6 +191,8 @@ final class DOMFrontendStore: NSObject {
 
     isolated deinit {
         cancelMatchedStylesRequest()
+        pendingWorkTask?.cancel()
+        protocolWorkTask?.cancel()
         mutationPipeline.reset()
         if let webView {
             detachMessageHandlers(from: webView)
@@ -247,11 +269,9 @@ extension DOMFrontendStore: WKScriptMessageHandler {
 private extension DOMFrontendStore {
     private func handleReadyMessage() {
         isReady = true
+        configurationNeedsApply = true
         mutationPipeline.setReady(true)
-        Task {
-            await applyConfigurationToInspector()
-            await flushPendingWork()
-        }
+        schedulePendingStateReconcile()
     }
 
     private func handleLogMessage(_ payload: Any) {
@@ -309,80 +329,221 @@ private extension DOMFrontendStore {
         }
     }
 
-    private func flushPendingWork() async {
-        if let preferredDepth = pendingPreferredDepth {
-            await applyPreferredDepthNow(preferredDepth)
-            pendingPreferredDepth = nil
+    private func reconcilePendingStateIfReady() async {
+        schedulePendingStateReconcile()
+        guard isRunningPendingStateLoop == false else {
+            return
         }
-        if let request = pendingDocumentRequest {
-            await requestDocumentNow(depth: request.depth, preserveState: request.preserveState)
-            pendingDocumentRequest = nil
+        await pendingWorkTask?.value
+    }
+
+    private func schedulePendingStateReconcile() {
+        guard pendingWorkTask == nil else {
+            return
         }
-        await mutationPipeline.flushPendingBundlesNow()
+        pendingWorkTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.runPendingStateLoop()
+        }
+    }
+
+    private func runPendingStateLoop() async {
+        isRunningPendingStateLoop = true
+        defer {
+            isRunningPendingStateLoop = false
+            pendingWorkTask = nil
+            if isReady, hasPendingReconcileWork() {
+                schedulePendingStateReconcile()
+            }
+        }
+
+        while isReady {
+            let work = takePendingReconcileWork()
+            guard work.hasWork else {
+                return
+            }
+            await applyPendingReconcileWork(work)
+            if Task.isCancelled {
+                return
+            }
+        }
+    }
+
+    private func hasPendingReconcileWork() -> Bool {
+        configurationNeedsApply
+            || pendingPreferredDepth != nil
+            || pendingDocumentRequest != nil
+            || pendingMutationBundleCount > 0
     }
 
     private func startMatchedStylesRequest(nodeID: Int, selectionID: DOMEntryID) {
         cancelMatchedStylesRequest()
-        let requestToken = matchedStylesRequestToken
+        matchedStylesRequestCount += 1
+        let requestGeneration = matchedStylesRequestCount
         session.graphStore.beginMatchedStylesLoading(for: selectionID.localID)
 
-        matchedStylesTask = Task { @MainActor [weak self] in
+        matchedStylesTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let payload = try await self.session.matchedStyles(nodeId: nodeID)
-                guard !Task.isCancelled else { return }
-                guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
+                let payload = try await self.fetchMatchedStyles(nodeID: nodeID)
+                if Task.isCancelled {
+                    return
+                }
+                guard self.isCurrentMatchedStylesRequest(
+                    generation: requestGeneration,
+                    selectionID: selectionID
+                ) else {
+                    return
+                }
                 self.session.graphStore.applyMatchedStyles(payload, for: selectionID.localID)
+            } catch is CancellationError {
+                return
             } catch {
-                guard !Task.isCancelled else { return }
-                guard requestToken == self.matchedStylesRequestToken else { return }
-                guard self.session.graphStore.selectedID == selectionID else { return }
+                if Task.isCancelled {
+                    return
+                }
+                guard self.isCurrentMatchedStylesRequest(
+                    generation: requestGeneration,
+                    selectionID: selectionID
+                ) else {
+                    return
+                }
                 self.session.graphStore.clearMatchedStyles(for: selectionID.localID)
                 inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
+    private func fetchMatchedStyles(nodeID: Int) async throws -> DOMMatchedStylesPayload {
+#if DEBUG
+        if let matchedStylesFetchOverride {
+            return try await matchedStylesFetchOverride(nodeID)
+        }
+#endif
+        return try await session.matchedStyles(nodeId: nodeID)
+    }
+
+    private func isCurrentMatchedStylesRequest(generation: Int, selectionID: DOMEntryID) -> Bool {
+        matchedStylesRequestCount == generation
+            && session.graphStore.selectedID == selectionID
+    }
+
     private func cancelMatchedStylesRequest() {
         matchedStylesTask?.cancel()
         matchedStylesTask = nil
-        matchedStylesRequestToken += 1
     }
 
     private func handleProtocolPayload(_ payload: Any?) {
         let method = protocolRequestMethod(from: payload)
         let resetDocumentHint = protocolRequestWantsDocumentReset(method: method, from: payload)
-        Task { [weak self] in
+        let previousTask = protocolWorkTask
+        protocolWorkTask = Task.immediateIfAvailable { [weak self, previousTask] in
+            await previousTask?.value
             guard let self else { return }
-            let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
-            if let recoverableError = outcome.recoverableError {
-                onRecoverableError?(recoverableError)
-            }
-            if let responseObject = outcome.responseObject {
-                if let method,
-                   let delta = payloadNormalizer.normalizeProtocolResponse(
-                    method: method,
-                    responseObject: responseObject,
-                    resetDocument: resetDocumentHint
-                   ) {
-                    applyGraphDelta(delta)
-                }
-                let delivered = await dispatchToFrontend(message: responseObject)
-                if delivered {
-                    return
-                }
-
-                let fallbackJSON = outcome.responseJSON
-                    ?? protocolRouter.fallbackJSONResponse(forObjectResponse: responseObject)
-                guard let responseJSON = fallbackJSON else { return }
-                inspectorLogger.debug("retrying protocol response dispatch with JSON fallback")
-                _ = await dispatchToFrontend(message: responseJSON)
+            guard Task.isCancelled == false else {
                 return
             }
-            guard let responseJSON = outcome.responseJSON else { return }
-            _ = await dispatchToFrontend(message: responseJSON)
+            await self.processProtocolPayload(
+                payload,
+                method: method,
+                resetDocumentHint: resetDocumentHint
+            )
         }
+    }
+
+    private func takePendingReconcileWork() -> PendingReconcileWork {
+        let work = PendingReconcileWork(
+            shouldApplyConfiguration: configurationNeedsApply,
+            preferredDepth: pendingPreferredDepth,
+            documentRequest: pendingDocumentRequest,
+            shouldFlushMutationBundles: pendingMutationBundleCount > 0
+        )
+        configurationNeedsApply = false
+        pendingPreferredDepth = nil
+        pendingDocumentRequest = nil
+        return work
+    }
+
+    private func applyPendingReconcileWork(_ work: PendingReconcileWork) async {
+        if work.shouldApplyConfiguration {
+            await applyConfigurationToInspector()
+            if Task.isCancelled {
+                return
+            }
+        }
+
+        if let preferredDepth = work.preferredDepth {
+            await applyPreferredDepthNow(preferredDepth)
+            if Task.isCancelled {
+                return
+            }
+        }
+
+        if let documentRequest = work.documentRequest {
+            await requestDocumentNow(
+                depth: documentRequest.depth,
+                preserveState: documentRequest.preserveState
+            )
+            if Task.isCancelled {
+                return
+            }
+        }
+
+        if work.shouldFlushMutationBundles {
+            await mutationPipeline.flushPendingBundlesNow()
+        }
+    }
+
+    private func processProtocolPayload(
+        _ payload: Any?,
+        method: String?,
+        resetDocumentHint: Bool
+    ) async {
+        let outcome = await protocolRouter.route(payload: payload, configuration: configuration)
+        guard Task.isCancelled == false else {
+            return
+        }
+
+        if let recoverableError = outcome.recoverableError {
+            onRecoverableError?(recoverableError)
+        }
+
+        if let responseObject = outcome.responseObject {
+            if let method,
+               let delta = payloadNormalizer.normalizeProtocolResponse(
+                method: method,
+                responseObject: responseObject,
+                resetDocument: resetDocumentHint
+               ) {
+                applyGraphDelta(delta)
+            }
+            guard Task.isCancelled == false else {
+                return
+            }
+            let delivered = await dispatchToFrontend(message: responseObject)
+            if delivered {
+                return
+            }
+
+            let fallbackJSON = outcome.responseJSON
+                ?? protocolRouter.fallbackJSONResponse(forObjectResponse: responseObject)
+            guard let responseJSON = fallbackJSON else {
+                return
+            }
+            inspectorLogger.debug("retrying protocol response dispatch with JSON fallback")
+            _ = await dispatchToFrontend(message: responseJSON)
+            return
+        }
+
+        guard let responseJSON = outcome.responseJSON else {
+            return
+        }
+        guard Task.isCancelled == false else {
+            return
+        }
+        _ = await dispatchToFrontend(message: responseJSON)
     }
 
     private func applyGraphDelta(_ delta: DOMGraphDelta) {
@@ -537,11 +698,16 @@ extension DOMFrontendStore {
     }
 
     var testMatchedStylesRequestToken: Int {
-        matchedStylesRequestToken
+        matchedStylesRequestCount
     }
 
     func testHandleDOMSelectionMessage(_ payload: Any) {
         handleDOMSelectionMessage(payload)
+    }
+
+    var testMatchedStylesFetcher: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)? {
+        get { matchedStylesFetchOverride }
+        set { matchedStylesFetchOverride = newValue }
     }
 
     func testProtocolRequestWantsDocumentReset(method: String?, payload: Any?) -> Bool {

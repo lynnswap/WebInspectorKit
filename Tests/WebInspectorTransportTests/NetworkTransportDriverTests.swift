@@ -14,14 +14,14 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(backend.attachCallCount == 1)
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -39,7 +39,7 @@ struct NetworkTransportDriverTests {
         let session = WINetworkRuntime(configuration: .init(), backend: driver)
         let webView = makeIsolatedTestWebView()
 
-        session.attach(pageWebView: webView)
+        await session.attach(pageWebView: webView)
 
         #expect(await waitForCondition {
             backend.sentPageMethods.contains(WITransportMethod.Network.enable)
@@ -59,7 +59,7 @@ struct NetworkTransportDriverTests {
             }
         )
 
-        session.detach()
+        await session.detach()
     }
 
     @Test
@@ -84,7 +84,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(backend.sentPageMethods.contains(WITransportMethod.Page.getResourceTree))
@@ -133,7 +133,7 @@ struct NetworkTransportDriverTests {
             }
         )
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -142,17 +142,17 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(backend.attachCallCount == 1)
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(backend.attachCallCount == 2)
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -183,7 +183,7 @@ struct NetworkTransportDriverTests {
         )
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(backend.attachCallCount == 1)
@@ -224,7 +224,7 @@ struct NetworkTransportDriverTests {
         }
         #expect(recoveredWithoutReattach)
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -235,7 +235,7 @@ struct NetworkTransportDriverTests {
         let firstWebView = makeIsolatedTestWebView()
         let secondWebView = makeIsolatedTestWebView()
 
-        session.attach(pageWebView: firstWebView)
+        await session.attach(pageWebView: firstWebView)
         await driver.waitForAttachForTesting()
 
         session.prepareForNavigationReconnect()
@@ -250,7 +250,7 @@ struct NetworkTransportDriverTests {
             ]
         )
 
-        session.detach()
+        await session.detach()
     }
 
     @Test
@@ -287,7 +287,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(
@@ -309,7 +309,7 @@ struct NetworkTransportDriverTests {
             }
         )
 
-        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+        await driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
     }
 
     @Test
@@ -368,7 +368,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(
@@ -384,7 +384,7 @@ struct NetworkTransportDriverTests {
             }
         )
 
-        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+        await driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
     }
 
     @Test
@@ -439,7 +439,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(
@@ -461,7 +461,7 @@ struct NetworkTransportDriverTests {
             }
         )
 
-        driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
+        await driver.detachPageWebView(preparing: NetworkLoggingMode.stopped)
     }
 
     @Test
@@ -500,7 +500,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         #expect(await waitForCondition {
@@ -510,7 +510,7 @@ struct NetworkTransportDriverTests {
                 && matches.contains { $0.method == "UNKNOWN" }
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -519,7 +519,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitPageEvent(
@@ -621,7 +621,7 @@ struct NetworkTransportDriverTests {
                 && matches.allSatisfy { $0.phase == .completed }
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -630,7 +630,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitPageTargetCreated(
@@ -699,7 +699,7 @@ struct NetworkTransportDriverTests {
                 && entry.encodedBodyLength == 64
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -708,7 +708,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitPageTargetCreated(
@@ -789,7 +789,7 @@ struct NetworkTransportDriverTests {
                 && entry.encodedBodyLength == 64
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -798,7 +798,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitPageTargetCreated(
@@ -860,7 +860,7 @@ struct NetworkTransportDriverTests {
                 && entry.encodedBodyLength == nil
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -903,7 +903,7 @@ struct NetworkTransportDriverTests {
         let firstWebView = makeIsolatedTestWebView()
         let secondWebView = makeIsolatedTestWebView()
 
-        session.attach(pageWebView: firstWebView)
+        await session.attach(pageWebView: firstWebView)
         await driver.waitForAttachForTesting()
 
         backend.emitPageTargetCreated(
@@ -982,7 +982,7 @@ struct NetworkTransportDriverTests {
         }
         #expect(reconnectClearedDeferred)
 
-        session.detach()
+        await session.detach()
     }
 
     @Test
@@ -1014,7 +1014,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitRootEvent(
@@ -1079,7 +1079,7 @@ struct NetworkTransportDriverTests {
                 && entry.encodedBodyLength == 64
         })
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 
     @Test
@@ -1111,7 +1111,7 @@ struct NetworkTransportDriverTests {
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
         let webView = makeIsolatedTestWebView()
 
-        driver.attachPageWebView(webView)
+        await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
 
         backend.emitRootEvent(
@@ -1198,7 +1198,7 @@ struct NetworkTransportDriverTests {
         }
         #expect(matchedRedirectEntries)
 
-        driver.detachPageWebView(preparing: .stopped)
+        await driver.detachPageWebView(preparing: .stopped)
     }
 }
 

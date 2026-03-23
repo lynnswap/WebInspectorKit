@@ -145,7 +145,11 @@ public final class WIDOMTreeViewController: NSViewController {
         guard let nodeID else {
             return
         }
-        inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        let inspector = inspector
+        let undoManager = undoManager
+        Task.immediateIfAvailable {
+            await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        }
     }
 
     private var contextActionNodeID: Int? {

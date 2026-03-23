@@ -138,6 +138,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var sections: [DetailSection] = []
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var editingDraftValue: String?
+    private var isSelectionActionPending = false
     private var isInlineEditingActive = false
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
@@ -255,13 +256,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 self?.reloadInspector()
@@ -292,9 +293,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
@@ -851,7 +852,10 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         if editingAttributeKey == key {
             clearInlineEditingState()
         }
-        inspector.removeAttribute(name: key.name)
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            await inspector.removeAttribute(name: key.name)
+        }
     }
 
     private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
@@ -874,7 +878,27 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        guard isSelectionActionPending == false else {
+            return
+        }
+
+        isSelectionActionPending = true
+        updateNavigationControls()
+
+        let inspector = inspector
+        Task.immediateIfAvailable { [weak self] in
+            defer {
+                if let self {
+                    self.isSelectionActionPending = false
+                    self.scheduleNavigationControlsUpdate()
+                }
+            }
+            if inspector.isSelectingElement {
+                await inspector.cancelSelectionMode()
+            } else {
+                _ = try? await inspector.beginSelectionMode()
+            }
+        }
     }
 
     @objc
@@ -886,7 +910,26 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode(undoManager: undoManager)
+        let inspector = inspector
+        let undoManager = undoManager
+        Task.immediateIfAvailable {
+            await inspector.deleteSelectedNode(undoManager: undoManager)
+        }
+    }
+
+    private func copySelection(_ kind: DOMSelectionCopyKind) {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelection(kind)
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
     }
 }
 
@@ -918,7 +961,10 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
     ) {
         editingAttributeKey = key
         editingDraftValue = value
-        inspector.updateAttributeValue(name: key.name, value: value)
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            await inspector.updateAttributeValue(name: key.name, value: value)
+        }
     }
 
     fileprivate func elementAttributeEditorCellDidEndEditing(

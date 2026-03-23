@@ -5,13 +5,13 @@ import WebInspectorRuntime
 
 @MainActor
 final class WIRegularTabHostViewController: UINavigationController {
-    private let model: WIModel
+    private let inspector: WIInspectorController
     private let renderCache: WIUIKitTabRenderCache
     private var tabObservationHandles: Set<ObservationHandle> = []
     private var isApplyingSegmentSelection = false
 
     private var tabs: [WITab] {
-        model.tabs.filter { $0.identifier != WITab.elementTabID }
+        inspector.tabs.filter { $0.identifier != WITab.elementTabID }
     }
 
     private lazy var segmentedControl: UISegmentedControl = {
@@ -21,8 +21,11 @@ final class WIRegularTabHostViewController: UINavigationController {
         return control
     }()
 
-    init(model: WIModel, renderCache: WIUIKitTabRenderCache) {
-        self.model = model
+    init(
+        inspector: WIInspectorController,
+        renderCache: WIUIKitTabRenderCache
+    ) {
+        self.inspector = inspector
         self.renderCache = renderCache
         super.init(nibName: nil, bundle: nil)
 
@@ -31,6 +34,13 @@ final class WIRegularTabHostViewController: UINavigationController {
            let initialRoot = makeTabRootViewController(for: initialTab) {
             setViewControllers([wrappedForRegularNavigationIfNeeded(initialRoot)], animated: false)
         }
+    }
+
+    convenience init(model inspector: WIInspectorController, renderCache: WIUIKitTabRenderCache) {
+        self.init(
+            inspector: inspector,
+            renderCache: renderCache
+        )
     }
 
     @available(*, unavailable)
@@ -78,7 +88,8 @@ final class WIRegularTabHostViewController: UINavigationController {
             return
         }
 
-        model.setSelectedTabFromUI(visibleTabs[selectedIndex])
+        let selectedTab = visibleTabs[selectedIndex]
+        inspector.setSelectedTab(selectedTab)
     }
 
     func handleSegmentSelectionChangedForTesting(_ sender: UISegmentedControl) {
@@ -88,7 +99,7 @@ final class WIRegularTabHostViewController: UINavigationController {
     private func bindModel() {
         tabObservationHandles.removeAll()
 
-        model.observe(
+        inspector.observe(
             \.tabs,
             options: [.removeDuplicates]
         ) { [weak self] _ in
@@ -96,11 +107,14 @@ final class WIRegularTabHostViewController: UINavigationController {
         }
         .store(in: &tabObservationHandles)
 
-        model.observe(
+        inspector.observe(
             \.selectedTab,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.applySelectedTabProjection()
+            guard let self else {
+                return
+            }
+            self.applySelectedTabProjection()
         }
         .store(in: &tabObservationHandles)
     }
@@ -195,11 +209,11 @@ final class WIRegularTabHostViewController: UINavigationController {
         } else {
             switch tab.identifier {
             case WITab.domTabID:
-                viewController = WIDOMViewController(inspector: model.dom)
+                viewController = WIDOMViewController(inspector: inspector.dom)
             case WITab.elementTabID:
-                viewController = WIDOMDetailViewController(inspector: model.dom)
+                viewController = WIDOMDetailViewController(inspector: inspector.dom)
             case WITab.networkTabID:
-                viewController = WINetworkViewController(inspector: model.network)
+                viewController = WINetworkViewController(inspector: inspector.network)
             default:
                 viewController = nil
             }
@@ -235,10 +249,10 @@ final class WIRegularTabHostViewController: UINavigationController {
         guard let displayedTab = selectedTabForDisplay() else {
             return
         }
-        guard model.selectedTab !== displayedTab else {
+        guard inspector.selectedTab !== displayedTab else {
             return
         }
-        model.setSelectedTabFromUI(displayedTab)
+        inspector.setSelectedTab(displayedTab)
     }
 
     private func selectedTabForDisplay() -> WITab? {
@@ -246,7 +260,7 @@ final class WIRegularTabHostViewController: UINavigationController {
         guard visibleTabs.isEmpty == false else {
             return nil
         }
-        guard let selectedTab = model.selectedTab else {
+        guard let selectedTab = inspector.selectedTab else {
             return visibleTabs.first
         }
         if let exactMatch = visibleTabs.first(where: { $0 === selectedTab }) {
@@ -304,10 +318,13 @@ private final class WIRegularSplitRootContainerViewController: UIViewController 
 import SwiftUI
 #Preview("Regular Tab Host (UIKit)") {
     WIUIKitPreviewContainer {
-        let session = WIModel()
+        let session = WIInspectorController()
         session.setTabs([.dom(), .network()])
-        let host = WIRegularTabHostViewController(model: session, renderCache: WIUIKitTabRenderCache())
-        session.setSelectedTabFromUI(.dom())
+        let host = WIRegularTabHostViewController(
+            inspector: session,
+            renderCache: WIUIKitTabRenderCache()
+        )
+        session.setSelectedTab(.dom())
         return host
     }
 }

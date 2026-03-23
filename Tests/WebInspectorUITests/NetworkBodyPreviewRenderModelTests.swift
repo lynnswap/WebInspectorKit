@@ -139,15 +139,4 @@ struct NetworkBodyPreviewRenderModelTests {
         #expect(displayText.contains(unavailableText))
         #expect(displayText.contains(NetworkBody.FetchError.decodeFailed.localizedDescriptionText))
     }
-
-    @Test
-    func staleGenerationIsRejectedAfterNewGenerationArrives() {
-        let generation = NetworkBodyPreviewRenderGeneration()
-        let first = generation.advance()
-        let second = generation.advance()
-
-        #expect(first != second)
-        #expect(generation.shouldApply(first) == false)
-        #expect(generation.shouldApply(second))
-    }
 }

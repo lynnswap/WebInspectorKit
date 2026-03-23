@@ -1,7 +1,7 @@
 #if os(iOS)
 import UIKit
 import XCTest
-@testable import MiniBrowser
+@testable import Monocly
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {

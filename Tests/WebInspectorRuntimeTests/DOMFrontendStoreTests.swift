@@ -331,16 +331,16 @@ struct DOMFrontendStoreTests {
     }
 
     @Test
-    func bundleFlushIntervalClampsToExpectedRange() {
+    func bundleFlushIntervalClampsToExpectedRange() async {
         let store = makeStore(autoUpdateDebounce: 0.01)
         #expect(abs(store.testBundleFlushInterval - 0.05) < 0.0001)
 
-        store.updateConfiguration(
+        await store.updateConfiguration(
             .init(snapshotDepth: 4, subtreeDepth: 3, autoUpdateDebounce: 0.4)
         )
         #expect(abs(store.testBundleFlushInterval - 0.1) < 0.0001)
 
-        store.updateConfiguration(
+        await store.updateConfiguration(
             .init(snapshotDepth: 4, subtreeDepth: 3, autoUpdateDebounce: 2.0)
         )
         #expect(abs(store.testBundleFlushInterval - 0.2) < 0.0001)
@@ -571,6 +571,92 @@ struct DOMFrontendStoreTests {
         #expect(store.session.graphStore.selectedEntry?.matchedStyles.isEmpty == true)
     }
 
+    @Test
+    func cancelledMatchedStylesSuccessDoesNotOverwriteNewerResult() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = MatchedStylesFetcherHarness()
+        store.testMatchedStylesFetcher = { nodeID in
+            try await harness.fetch(nodeID: nodeID)
+        }
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
+        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
+        guard let firstRequestID = initialRequestIDs.first else {
+            Issue.record("Expected first matched styles request to be pending")
+            return
+        }
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
+        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
+        guard restartedRequestIDs.count >= 2 else {
+            Issue.record("Expected restarted matched styles request to be pending")
+            return
+        }
+        let secondRequestID = restartedRequestIDs[1]
+
+        #expect(firstRequestID != secondRequestID)
+        #expect(harness.resolve(secondRequestID, selectorText: ".latest") == true)
+
+        let appliedLatest = await waitForCondition {
+            store.session.graphStore.selectedEntry?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
+                && store.session.graphStore.selectedEntry?.isLoadingMatchedStyles == false
+        }
+        #expect(appliedLatest == true)
+
+        #expect(harness.resolve(firstRequestID, selectorText: ".stale") == true)
+
+        let staleDidNotOverwrite = await waitForCondition {
+            store.session.graphStore.selectedEntry?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
+                && store.session.graphStore.selectedEntry?.isLoadingMatchedStyles == false
+        }
+        #expect(staleDidNotOverwrite == true)
+    }
+
+    @Test
+    func cancelledMatchedStylesFailureDoesNotClearNewerLoadingStateOrResult() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = MatchedStylesFetcherHarness()
+        store.testMatchedStylesFetcher = { nodeID in
+            try await harness.fetch(nodeID: nodeID)
+        }
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
+        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
+        guard let firstRequestID = initialRequestIDs.first else {
+            Issue.record("Expected first matched styles request to be pending")
+            return
+        }
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
+        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
+        guard restartedRequestIDs.count >= 2 else {
+            Issue.record("Expected restarted matched styles request to be pending")
+            return
+        }
+        let secondRequestID = restartedRequestIDs[1]
+
+        let restartedLoading = await waitForCondition {
+            store.session.graphStore.selectedEntry?.isLoadingMatchedStyles == true
+        }
+        #expect(restartedLoading == true)
+
+        #expect(harness.reject(firstRequestID, message: "cancelled stale request") == true)
+
+        let staleFailureDidNotClearLoading = await waitForCondition {
+            store.session.graphStore.selectedEntry?.isLoadingMatchedStyles == true
+                && store.session.graphStore.selectedEntry?.matchedStyles.isEmpty == true
+        }
+        #expect(staleFailureDidNotClearLoading == true)
+
+        #expect(harness.resolve(secondRequestID, selectorText: ".latest") == true)
+
+        let appliedLatest = await waitForCondition {
+            store.session.graphStore.selectedEntry?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
+                && store.session.graphStore.selectedEntry?.isLoadingMatchedStyles == false
+        }
+        #expect(appliedLatest == true)
+    }
+
     private func makeStore(autoUpdateDebounce: TimeInterval) -> DOMFrontendStore {
         let session = DOMSession(
             configuration: .init(
@@ -580,6 +666,43 @@ struct DOMFrontendStoreTests {
             )
         )
         return DOMFrontendStore(session: session)
+    }
+
+    private func waitForPendingMatchedStylesRequestIDs(
+        count: Int,
+        harness: MatchedStylesFetcherHarness
+    ) async -> [Int] {
+        var latestIDs: [Int] = []
+        for _ in 0..<100 {
+            latestIDs = harness.pendingRequestIDs
+            if latestIDs.count >= count {
+                return latestIDs
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return latestIDs
+    }
+
+    private func matchedStylesSelectionPayload(styleRevision: Int) -> [String: Any] {
+        [
+            "id": 42,
+            "preview": "<div id=\"target\">",
+            "attributes": [["name": "id", "value": "target"]],
+            "path": ["html", "body", "div"],
+            "selectorPath": "div#target",
+            "styleRevision": styleRevision,
+        ]
+    }
+
+    private func matchedStylesRule(selectorText: String) -> DOMMatchedStyleRule {
+        DOMMatchedStyleRule(
+            origin: .author,
+            selectorText: selectorText,
+            declarations: [
+                .init(name: "color", value: selectorText, important: false)
+            ],
+            sourceLabel: "<style>"
+        )
     }
 
     private func seedSelection(
@@ -635,5 +758,90 @@ struct DOMFrontendStoreTests {
             "attributes": [],
             "children": [],
         ]
+    }
+
+    private func waitForCondition(
+        maxAttempts: Int = 100,
+        intervalNanoseconds: UInt64 = 10_000_000,
+        condition: @escaping @MainActor () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxAttempts {
+            if await condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return await condition()
+    }
+}
+
+@MainActor
+private final class MatchedStylesFetcherHarness {
+    private var nextRequestID = 0
+    private var pendingByID: [Int: PendingRequest] = [:]
+    private var pendingOrder: [Int] = []
+
+    var pendingRequestIDs: [Int] {
+        pendingOrder.filter { pendingByID[$0] != nil }
+    }
+
+    func fetch(nodeID: Int) async throws -> DOMMatchedStylesPayload {
+        try await withCheckedThrowingContinuation { continuation in
+            nextRequestID += 1
+            let requestID = nextRequestID
+            pendingByID[requestID] = PendingRequest(
+                nodeID: nodeID,
+                continuation: continuation
+            )
+            pendingOrder.append(requestID)
+        }
+    }
+
+    func resolve(_ requestID: Int, selectorText: String) -> Bool {
+        guard let pending = takePendingRequest(id: requestID) else {
+            return false
+        }
+        pending.continuation.resume(
+            returning: DOMMatchedStylesPayload(
+                nodeId: pending.nodeID,
+                rules: [
+                    DOMMatchedStyleRule(
+                        origin: .author,
+                        selectorText: selectorText,
+                        declarations: [
+                            .init(name: "color", value: selectorText, important: false)
+                        ],
+                        sourceLabel: "<style>"
+                    )
+                ],
+                truncated: false,
+                blockedStylesheetCount: 0
+            )
+        )
+        return true
+    }
+
+    func reject(_ requestID: Int, message: String) -> Bool {
+        guard let pending = takePendingRequest(id: requestID) else {
+            return false
+        }
+        pending.continuation.resume(
+            throwing: NSError(
+                domain: "MatchedStylesFetcherHarness",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        )
+        return true
+    }
+
+    private func takePendingRequest(id requestID: Int) -> PendingRequest? {
+        pendingOrder.removeAll { $0 == requestID }
+        return pendingByID.removeValue(forKey: requestID)
+    }
+
+    private struct PendingRequest {
+        let nodeID: Int
+        let continuation: CheckedContinuation<DOMMatchedStylesPayload, Error>
     }
 }

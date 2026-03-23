@@ -11,6 +11,7 @@ public final class WIDOMTreeViewController: UIViewController {
     private let inspector: WIDOMModel
     private let showsNavigationControls: Bool
     private var observationHandles: Set<ObservationHandle> = []
+    private var isSelectionActionPending = false
     // Keep coalescing here because navigation controls are driven by multiple observed states.
     private let navigationUpdateCoalescer = UIUpdateCoalescer()
 
@@ -81,13 +82,13 @@ public final class WIDOMTreeViewController: UIViewController {
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.inspector.copySelection(.html)
+                self?.copySelection(.html)
             },
             onCopySelectorPath: { [weak self] in
-                self?.inspector.copySelection(.selectorPath)
+                self?.copySelection(.selectorPath)
             },
             onCopyXPath: { [weak self] in
-                self?.inspector.copySelection(.xpath)
+                self?.copySelection(.xpath)
             },
             onReloadInspector: { [weak self] in
                 guard let self else { return }
@@ -157,9 +158,9 @@ public final class WIDOMTreeViewController: UIViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView
+            pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
+            pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
@@ -167,12 +168,51 @@ public final class WIDOMTreeViewController: UIViewController {
 
     @objc
     private func toggleSelectionMode() {
-        inspector.toggleSelectionMode()
+        guard isSelectionActionPending == false else {
+            return
+        }
+
+        isSelectionActionPending = true
+        updateNavigationControls()
+
+        let inspector = inspector
+        Task.immediateIfAvailable { [weak self] in
+            defer {
+                if let self {
+                    self.isSelectionActionPending = false
+                    self.scheduleNavigationControlsUpdate()
+                }
+            }
+            if inspector.isSelectingElement {
+                await inspector.cancelSelectionMode()
+            } else {
+                _ = try? await inspector.beginSelectionMode()
+            }
+        }
     }
 
     @objc
     private func deleteNode() {
-        inspector.deleteSelectedNode(undoManager: undoManager)
+        let inspector = inspector
+        let undoManager = undoManager
+        Task.immediateIfAvailable {
+            await inspector.deleteSelectedNode(undoManager: undoManager)
+        }
+    }
+
+    private func copySelection(_ kind: DOMSelectionCopyKind) {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelection(kind)
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
     }
 }
 

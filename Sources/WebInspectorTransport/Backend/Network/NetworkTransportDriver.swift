@@ -71,7 +71,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         }
     }
 
-    func setMode(_ mode: NetworkLoggingMode) {
+    func setMode(_ mode: NetworkLoggingMode) async {
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
@@ -79,7 +79,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         }
     }
 
-    func attachPageWebView(_ newWebView: WKWebView?) {
+    func attachPageWebView(_ newWebView: WKWebView?) async {
         guard webView !== newWebView || transportSession == nil else {
             return
         }
@@ -99,7 +99,7 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         startTransportSessionAttachment(for: newWebView)
     }
 
-    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) {
+    func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode?) async {
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -112,8 +112,16 @@ final class NetworkTransportDriver: WINetworkBackend, InspectorTransportCapabili
         webView = nil
     }
 
-    func clearNetworkLogs() {
+    func clearNetworkLogs() async {
         resetStoreState()
+    }
+
+    func tearDownForDeinit() {
+        loggingMode = .stopped
+        store.setRecording(false)
+        resetStoreState()
+        tearDownLifecycle()
+        webView = nil
     }
 
     package func waitForAttachForTesting() async {

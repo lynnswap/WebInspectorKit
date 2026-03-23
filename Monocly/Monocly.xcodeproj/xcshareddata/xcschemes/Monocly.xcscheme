@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-               BuildableName = "MiniBrowser.app"
-               BlueprintName = "MiniBrowser"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
+               BuildableName = "Monocly.app"
+               BlueprintName = "Monocly"
+               ReferencedContainer = "container:Monocly.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Monocly.app"
+            BlueprintName = "Monocly"
+            ReferencedContainer = "container:Monocly.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -45,9 +45,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ABA353D42EDFF1ED00489A00"
-               BuildableName = "MiniBrowserTests.xctest"
-               BlueprintName = "MiniBrowserTests"
-               ReferencedContainer = "container:MiniBrowser.xcodeproj">
+               BuildableName = "MonoclyTests.xctest"
+               BlueprintName = "MonoclyTests"
+               ReferencedContainer = "container:Monocly.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -67,9 +67,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Monocly.app"
+            BlueprintName = "Monocly"
+            ReferencedContainer = "container:Monocly.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -84,9 +84,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
-            BuildableName = "MiniBrowser.app"
-            BlueprintName = "MiniBrowser"
-            ReferencedContainer = "container:MiniBrowser.xcodeproj">
+            BuildableName = "Monocly.app"
+            BlueprintName = "Monocly"
+            ReferencedContainer = "container:Monocly.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

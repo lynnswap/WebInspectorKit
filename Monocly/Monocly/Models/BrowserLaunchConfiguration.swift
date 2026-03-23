@@ -28,14 +28,14 @@ struct BrowserLaunchConfiguration {
         return BrowserLaunchConfiguration(
             initialURL: resolveInitialURL(from: environment),
             autoOpenInspectorTabs: resolveAutoOpenInspectorTabs(from: environment),
-            shouldAutoOpenInspector: environment["MINIBROWSER_AUTO_OPEN_INSPECTOR"] == "1",
-            shouldAutoStartDOMSelection: environment["MINIBROWSER_AUTO_START_DOM_SELECTION"] == "1",
-            shouldShowDiagnostics: environment["MINIBROWSER_UI_TEST_DIAGNOSTICS"] == "1"
+            shouldAutoOpenInspector: environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR"] == "1",
+            shouldAutoStartDOMSelection: environment["WEBSPECTOR_AUTO_START_DOM_SELECTION"] == "1",
+            shouldShowDiagnostics: environment["WEBSPECTOR_UI_TEST_DIAGNOSTICS"] == "1"
         )
     }
 
     private static func resolveInitialURL(from environment: [String: String]) -> URL {
-        if let configuredURLString = environment["MINIBROWSER_INITIAL_URL"],
+        if let configuredURLString = environment["WEBSPECTOR_INITIAL_URL"],
            let configuredURL = URL(string: configuredURLString) {
             return configuredURL
         }
@@ -54,7 +54,7 @@ struct BrowserLaunchConfiguration {
     }
 
     private static func resolveAutoOpenInspectorTabs(from environment: [String: String]) -> [WITab] {
-        guard let rawValue = environment["MINIBROWSER_AUTO_OPEN_INSPECTOR_TABS"] else {
+        guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
             return [.dom(), .network()]
         }
 

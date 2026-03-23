@@ -6,10 +6,9 @@ import WebInspectorKit
 @MainActor
 final class BrowserPageViewController: NSViewController {
     private let store: BrowserStore
-    private let inspectorController: WIModel
+    private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
-    private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let logger = Logger(subsystem: "MiniBrowser", category: "BrowserPageViewController")
+    private let logger = Logger(subsystem: "Monocly", category: "BrowserPageViewController")
 
     private let progressIndicator = NSProgressIndicator()
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
@@ -20,7 +19,7 @@ final class BrowserPageViewController: NSViewController {
 
     init(
         store: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         self.store = store
@@ -35,9 +34,7 @@ final class BrowserPageViewController: NSViewController {
     }
 
     isolated deinit {
-        if let storeObserverID {
-            store.removeStateObserver(storeObserverID)
-        }
+        tearDownStoreObserverIfNeeded()
     }
 
     override func loadView() {
@@ -49,16 +46,20 @@ final class BrowserPageViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         configureViewHierarchy()
-
-        storeObserverID = store.addStateObserver { [weak self] in
-            self?.renderState()
-            self?.maybeAutoPresentInspectorIfNeeded()
-        }
+        startObservingStoreIfNeeded()
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        startObservingStoreIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        if view.window == nil {
+            tearDownStoreObserverIfNeeded()
+        }
     }
 
     func handleHostWindowDidAttach() {
@@ -115,6 +116,25 @@ final class BrowserPageViewController: NSViewController {
         }
     }
 
+    private func startObservingStoreIfNeeded() {
+        guard storeObserverID == nil else {
+            return
+        }
+
+        storeObserverID = store.addStateObserver { [weak self] in
+            self?.renderState()
+            self?.maybeAutoPresentInspectorIfNeeded()
+        }
+    }
+
+    private func tearDownStoreObserverIfNeeded() {
+        guard let storeObserverID else {
+            return
+        }
+        store.removeStateObserver(storeObserverID)
+        self.storeObserverID = nil
+    }
+
     private func maybeAutoPresentInspectorIfNeeded() {
         guard viewIfLoaded?.window != nil else {
             return
@@ -129,7 +149,7 @@ final class BrowserPageViewController: NSViewController {
             return
         }
 
-        let didPresent = inspectorCoordinator.present(
+        let didPresent = BrowserInspectorCoordinator.present(
             from: view.window,
             browserStore: store,
             inspectorController: inspectorController,
@@ -152,18 +172,30 @@ final class BrowserPageViewController: NSViewController {
 
         didAutoStartSelection = true
 
-        Task { @MainActor in
-            logger.notice("auto-starting DOM selection mode for diagnostics")
+        Task.immediateIfAvailable { [self] in
+            var didCompleteAutoStart = false
+            defer {
+                if didCompleteAutoStart == false {
+                    self.didAutoStartSelection = false
+                }
+            }
+            self.logger.notice("auto-starting DOM selection mode for diagnostics")
             for _ in 0..<100 {
-                if inspectorController.dom.hasPageWebView {
-                    inspectorController.dom.toggleSelectionMode()
-                    return
+                if self.inspectorController.dom.hasPageWebView {
+                    do {
+                        let result = try await self.inspectorController.dom.beginSelectionMode()
+                        didCompleteAutoStart = !result.cancelled
+                        if didCompleteAutoStart {
+                            return
+                        }
+                    } catch {
+                        // Keep retrying until the page bridge is ready or we time out.
+                    }
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
 
-            logger.error("auto-starting DOM selection mode timed out before page web view became available")
-            didAutoStartSelection = false
+            self.logger.error("auto-starting DOM selection mode timed out before page web view became available")
         }
     }
 }
@@ -181,7 +213,7 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
         state = .active
         wantsLayer = true
         layer?.cornerRadius = 10
-        identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.panel")
+        identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.panel")
 
         let stackView = NSStackView(views: [
             terminationCountLabel,
@@ -200,10 +232,10 @@ private final class BrowserDiagnosticsOverlayView: NSVisualEffectView {
             label.maximumNumberOfLines = 2
         }
 
-        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.terminationCount")
-        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.didFinishCount")
-        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.currentURL")
-        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("MiniBrowser.diagnostics.lastNavigationError")
+        terminationCountLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.terminationCount")
+        didFinishCountLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.didFinishCount")
+        currentURLLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.currentURL")
+        lastErrorLabel.identifier = NSUserInterfaceItemIdentifier("Monocly.diagnostics.lastNavigationError")
 
         addSubview(stackView)
         NSLayoutConstraint.activate([

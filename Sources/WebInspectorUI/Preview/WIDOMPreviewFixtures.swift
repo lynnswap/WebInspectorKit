@@ -238,8 +238,13 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
         self.webView = webView
         super.init()
         webView.navigationDelegate = self
-        inspector.wiAttachPreviewPageWebView(webView)
-        webView.loadHTMLString(Self.sampleHTML, baseURL: URL(string: "https://preview.local"))
+        Task.immediateIfAvailable { [inspector, weak webView] in
+            guard let webView else {
+                return
+            }
+            await inspector.wiAttachPreviewPageWebView(webView)
+            webView.loadHTMLString(Self.sampleHTML, baseURL: URL(string: "https://preview.local"))
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

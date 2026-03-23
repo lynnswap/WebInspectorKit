@@ -6,8 +6,6 @@
 
 Web Inspector for `WKWebView` (iOS / macOS).
 
-> This package relies on undocumented APIs and runtime behavior, so extra care is needed before using it in App Store-bound projects.
-
 ## Products
 
 - `WebInspectorKit`: Container UI, `WITab`-based tab composition, Observation state
@@ -20,7 +18,7 @@ Web Inspector for `WKWebView` (iOS / macOS).
 - DOM tree browsing (element picking, highlights, deletion, attribute editing)
 - Network request logging (fetch/XHR/WebSocket) with buffering/active mode switching
 - Configurable tabs via `WITab` (`viewControllerProvider` for custom tabs)
-- Explicit lifecycle via `WIModel` (`connect(to:)`, `suspend()`, `disconnect()`)
+- Explicit lifecycle via `WIInspectorController` (`connect(to:)`, `suspend()`, `disconnect()`)
 
 ## Requirements
 
@@ -39,7 +37,7 @@ import WebInspectorKit
 
 final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
-    private let inspector = WIModel()
+    private let inspector = WIInspectorController()
 
     @objc private func presentInspector() {
         let container = WITabViewController(
@@ -66,7 +64,7 @@ import WebInspectorKit
 
 final class BrowserWindowController: NSWindowController {
     let pageWebView = WKWebView(frame: .zero)
-    let inspector = WIModel()
+    let inspector = WIInspectorController()
 
     @objc func presentInspector() {
         let container = WITabViewController(

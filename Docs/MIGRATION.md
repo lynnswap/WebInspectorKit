@@ -8,10 +8,10 @@ Internal refactors, transport rewrites, module splits, and cache changes are int
 
 `WebInspectorView` was removed.
 
-Use `WITabViewController` with a `WIModel` instead.
+Use `WITabViewController` with a `WIInspectorController` instead.
 
 ```swift
-private let inspector = WIModel()
+private let inspector = WIInspectorController()
 
 @objc private func presentInspector() {
     let controller = WITabViewController(
@@ -29,7 +29,7 @@ If your app used the default inspector UI, this is the main migration.
 
 | `v0.1.x` | Current |
 | --- | --- |
-| `WebInspectorModel` | `WIModel` |
+| `WebInspectorModel` | `WIInspectorController` |
 | `WebInspectorConfiguration` | `WIModelConfiguration` |
 | `attach(webView:)` | `connect(to:)` |
 | `detach()` | `disconnect()` |
@@ -55,7 +55,7 @@ inspector.attach(webView: webView)
 After:
 
 ```swift
-let inspector = WIModel(
+let inspector = WIInspectorController(
     configuration: WIModelConfiguration(
         dom: DOMConfiguration(
             snapshotDepth: 6,

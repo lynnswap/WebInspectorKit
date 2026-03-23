@@ -219,9 +219,16 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
         bridge.fatalFailureHandler = messageSink.didReceiveFatalFailure
 
         do {
+            let resolvedFunctions = WITransportResolvedFunctions(
+                connectFrontendAddress: resolution.connectFrontendAddress,
+                disconnectFrontendAddress: resolution.disconnectFrontendAddress,
+                stringFromUTF8Address: resolution.stringFromUTF8Address,
+                stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
+                destroyStringImplAddress: resolution.destroyStringImplAddress,
+                backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress
+            )
             try bridge.attach(
-                withConnectFrontendAddress: resolution.connectFrontendAddress,
-                disconnectFrontendAddress: resolution.disconnectFrontendAddress
+                with: resolvedFunctions
             )
         } catch {
             let reason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription

@@ -270,7 +270,9 @@ public final class WINetworkListViewController: UICollectionViewController {
     }
 
     private func clearEntries() {
-        inspector.clear()
+        Task.immediateIfAvailable { [inspector] in
+            await inspector.clear()
+        }
     }
 
     public override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

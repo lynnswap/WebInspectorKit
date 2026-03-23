@@ -28,7 +28,7 @@ struct NetworkDetailViewControllerTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         let entry = makeEntry()
         entry.responseBody = makeBody(reference: "resp_ref")
         inspector.selectEntry(entry)
@@ -75,7 +75,7 @@ struct NetworkDetailViewControllerTests {
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchCount == 1 && entry.responseBody?.full == "reattached response body"
@@ -102,7 +102,7 @@ struct NetworkDetailViewControllerTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         let entry = makeEntry()
         inspector.selectEntry(entry)
 
@@ -180,7 +180,7 @@ struct NetworkDetailViewControllerTests {
         #expect(fetcher.fetchCount == 0)
 
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
 
         let fetched = await waitUntil {
             fetcher.fetchCount == 1 && body.full == "reattached preview body"
@@ -208,7 +208,7 @@ struct NetworkDetailViewControllerTests {
         }
         let inspector = WINetworkModel(session: NetworkSession(bodyFetcher: fetcher))
         let webView = WKWebView(frame: .zero)
-        inspector.attach(to: webView)
+        await inspector.attach(to: webView)
         let entry = makeEntry()
         let body = makeBody(reference: "resp_ref")
         entry.responseBody = body

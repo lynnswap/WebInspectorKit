@@ -11,15 +11,19 @@ import WebInspectorBridge
 public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private static let toolbarIdentifier = NSToolbar.Identifier("WITabToolbar")
 
-    public private(set) var inspectorController: WIModel
+    public private(set) var inspectorController: WIInspectorController
+    private var hostID: WIInspectorHostID
     private var requestedTabs: [WITab]
+    private var requestedPageWebView: WKWebView?
     private let synthesizedAppKitDOMTab = WITab.dom()
+    private var needsHostStateSyncAfterSwap = false
 
     private var networkQueryModel: WINetworkQueryModel
     private weak var appKitToolbar: NSToolbar?
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
+    private var isDOMSelectionActionPending = false
     private var toolbarObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
@@ -31,20 +35,26 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private var visibleContentTabObjectID: ObjectIdentifier?
     private var visibleContentTabIdentifier: String?
     private var contentViewControllerByTabObjectID: [ObjectIdentifier: NSViewController] = [:]
+    private var controllerSwapTask: Task<Void, Never>?
 
     public init(
-        _ inspectorController: WIModel,
+        _ inspectorController: WIInspectorController,
         webView: WKWebView?,
         tabs: [WITab] = [.dom(), .network()]
     ) {
         self.inspectorController = inspectorController
+        self.hostID = inspectorController.registerHost()
         self.requestedTabs = tabs
+        self.requestedPageWebView = webView
         self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
         super.init(nibName: nil, bundle: nil)
-        if let webView {
-            inspectorController.setPageWebViewFromUI(webView)
-        }
-        inspectorController.setTabs(tabs)
+        inspectorController.setTabsFromUI(tabs)
+        inspectorController.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
     }
 
     @available(*, unavailable)
@@ -55,6 +65,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     isolated deinit {
         sessionObservationHandles.removeAll()
         stopObservingToolbarState()
+        inspectorController.unregisterHost(hostID)
     }
 
     public override func loadView() {
@@ -83,7 +94,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     public override func viewWillAppear() {
         super.viewWillAppear()
-        inspectorController.activateFromUIIfPossible()
+        syncRegisteredHostState()
         installToolbarIfNeeded()
         startObservingToolbarStateIfNeeded()
         render()
@@ -91,46 +102,72 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     public override func viewDidDisappear() {
         super.viewDidDisappear()
-        if Self.window(for: view) == nil {
-            inspectorController.suspend()
+        guard Self.window(for: view) == nil else {
+            return
         }
+        syncRegisteredHostState()
+        tearDownToolbarStateIfNeeded()
     }
 
     public func setPageWebView(_ webView: WKWebView?) {
-        inspectorController.setPageWebViewFromUI(webView)
-        if isViewLoaded {
-            inspectorController.activateFromUIIfPossible()
-        }
+        requestedPageWebView = webView
+        syncRegisteredHostState()
     }
 
-    public func setInspectorController(_ inspectorController: WIModel) {
-        guard self.inspectorController !== inspectorController else {
+    public func setInspectorController(_ inspectorController: WIInspectorController) {
+        guard self.inspectorController !== inspectorController || controllerSwapTask != nil else {
+            syncRegisteredHostState()
             return
         }
 
-        let currentRequestedTabs = requestedTabs
-        let currentSelectedTab = self.inspectorController.selectedTab
-        let currentPageWebView = self.inspectorController.pageWebViewForUI
+        invalidatePresentationStateForControllerSwap()
 
-        let previousController = self.inspectorController
-        previousController.disconnect()
+        let previousSwapTask = controllerSwapTask
+        controllerSwapTask = Task { [weak self] in
+            await previousSwapTask?.value
+            guard let self else {
+                return
+            }
+            guard self.inspectorController !== inspectorController else {
+                self.controllerSwapTask = nil
+                self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+                return
+            }
 
-        self.inspectorController = inspectorController
-        self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
-        inspectorController.setPageWebViewFromUI(currentPageWebView)
-        inspectorController.setTabs(currentRequestedTabs)
-        inspectorController.setSelectedTabFromUI(currentSelectedTab)
+            let previousController = self.inspectorController
+            let previousHostID = self.hostID
+            let preferredRole = previousController.preferredRole(for: previousHostID)
 
+            await previousController.waitForRuntimeApplyForTesting()
+            let currentSelectedTab = previousController.selectedTab
+            previousController.unregisterHost(previousHostID)
+            previousController.finalizeForControllerSwap()
+            await previousController.waitForRuntimeApplyForTesting()
+
+            self.inspectorController = inspectorController
+            self.hostID = inspectorController.registerHost(preferredRole: preferredRole)
+            self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
+            inspectorController.setTabsFromUI(self.requestedTabs)
+            if let currentSelectedTab {
+                _ = inspectorController.projectSelectedTabFromUI(currentSelectedTab)
+            }
+            self.syncRegisteredHostState(allowDuringSwap: true)
+
+            self.invalidatePresentationStateForControllerSwap()
+            if self.isViewLoaded {
+                self.bindSessionTabs()
+                self.startObservingToolbarStateIfNeeded()
+                self.render()
+            }
+            self.controllerSwapTask = nil
+            self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+        }
+    }
+
+    private func invalidatePresentationStateForControllerSwap() {
         setVisibleContentViewController(nil, for: nil)
         contentViewControllerByTabObjectID.removeAll()
-
         stopObservingToolbarState()
-        if isViewLoaded {
-            bindSessionTabs()
-            startObservingToolbarStateIfNeeded()
-            render()
-            inspectorController.activateFromUIIfPossible()
-        }
     }
 
     public func setTabs(_ tabs: [WITab]) {
@@ -161,15 +198,43 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         visibleContentViewController
     }
 
+    private var currentHostVisibility: WIHostVisibility {
+        guard isViewLoaded, Self.window(for: view) != nil else {
+            return .hidden
+        }
+        return .visible
+    }
+
+    private func syncRegisteredHostState(allowDuringSwap: Bool = false) {
+        guard allowDuringSwap || controllerSwapTask == nil else {
+            needsHostStateSyncAfterSwap = true
+            return
+        }
+        needsHostStateSyncAfterSwap = false
+        inspectorController.updateHost(
+            hostID,
+            pageWebView: requestedPageWebView,
+            visibility: currentHostVisibility,
+            isAttached: true
+        )
+    }
+
+    private func replayDeferredHostStateSyncAfterSwapIfNeeded() {
+        guard controllerSwapTask == nil, needsHostStateSyncAfterSwap else {
+            return
+        }
+        syncRegisteredHostState()
+    }
+
     private func bindSessionTabs() {
         sessionObservationHandles.removeAll()
 
-        inspectorController.observe(\.tabs) { [weak self] _ in
+        inspectorController.observe(\.tabs, options: [.removeDuplicates]) { [weak self] _ in
             self?.render()
         }
         .store(in: &sessionObservationHandles)
 
-        inspectorController.observe(\.selectedTab) { [weak self] _ in
+        inspectorController.observe(\.selectedTab, options: [.removeDuplicates]) { [weak self] _ in
             self?.render()
         }
         .store(in: &sessionObservationHandles)
@@ -238,7 +303,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         guard let domTab = inspectorController.tabs.first(where: { $0.identifier == WITab.domTabID }) else {
             return
         }
-        inspectorController.setSelectedTabFromUI(domTab)
+        inspectorController.setSelectedTab(domTab)
     }
 
     private func resolvedDisplayedSelection(in displayTabs: [WITab]) -> WITab? {
@@ -265,7 +330,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             return nil
         }
         if let fallbackModelTab = resolvedModelTab(forDisplayedTab: fallback) {
-            inspectorController.setSelectedTabFromUI(fallbackModelTab)
+            inspectorController.setSelectedTab(fallbackModelTab)
         }
         return fallback
     }
@@ -400,6 +465,15 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         toolbarObservationHandles.removeAll()
     }
 
+    private func tearDownToolbarStateIfNeeded() {
+        toolbarUpdateCoalescer.cancel()
+        stopObservingToolbarState()
+        appKitToolbar?.delegate = nil
+        appKitToolbar = nil
+        tabPickerControl = nil
+        networkSearchField = nil
+    }
+
     private func scheduleToolbarStateUpdate() {
         toolbarUpdateCoalescer.schedule { [weak self] in
             self?.updateToolbarState()
@@ -407,6 +481,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func updateToolbarLayout() {
+        guard Self.window(for: view) != nil else {
+            return
+        }
         guard let toolbar = appKitToolbar else {
             return
         }
@@ -442,6 +519,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func updateToolbarState() {
+        guard Self.window(for: view) != nil else {
+            return
+        }
         updateToolbarLayout()
         refreshTabPickerState()
         guard let toolbar = appKitToolbar else {
@@ -449,8 +529,10 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         if let pickItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMPick }) {
-            pickItem.isEnabled = inspectorController.dom.hasPageWebView
-            pickItem.image = Self.pickToolbarImage(isSelecting: inspectorController.dom.isSelectingElement)
+            pickItem.isEnabled = inspectorController.dom.hasPageWebView && !isDOMSelectionActionPending
+            pickItem.image = Self.pickToolbarImage(
+                isSelecting: inspectorController.dom.isSelectingElement || isDOMSelectionActionPending
+            )
         }
 
         if let reloadItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMReload }) {
@@ -630,8 +712,26 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     @objc
     private func handleDOMPickToolbarAction(_ sender: Any?) {
-        inspectorController.dom.toggleSelectionMode()
+        guard isDOMSelectionActionPending == false else {
+            return
+        }
+
+        isDOMSelectionActionPending = true
         updateToolbarState()
+
+        Task.immediateIfAvailable { [weak self, inspectorController] in
+            defer {
+                if let self {
+                    self.isDOMSelectionActionPending = false
+                    self.updateToolbarState()
+                }
+            }
+            if inspectorController.dom.isSelectingElement {
+                await inspectorController.dom.cancelSelectionMode()
+            } else {
+                _ = try? await inspectorController.dom.beginSelectionMode()
+            }
+        }
     }
 
     @objc
@@ -662,7 +762,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     @objc
     private func handleNetworkClearToolbarAction(_ sender: Any?) {
-        inspectorController.network.clear()
+        Task.immediateIfAvailable { [inspectorController] in
+            await inspectorController.network.clear()
+        }
         updateToolbarState()
     }
 
@@ -689,7 +791,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
         let selectedDisplayTab = displayTabs[selectedIndex]
         if let selectedModelTab = resolvedModelTab(forDisplayedTab: selectedDisplayTab) {
-            inspectorController.setSelectedTabFromUI(selectedModelTab)
+            inspectorController.setSelectedTab(selectedModelTab)
         }
         render()
     }
@@ -853,9 +955,17 @@ private extension NSToolbarItem.Identifier {
 
 #if DEBUG && canImport(SwiftUI)
 import SwiftUI
+
+extension WITabViewController {
+    func waitForRuntimeStateSyncForTesting() async {
+        await controllerSwapTask?.value
+        await inspectorController.waitForRuntimeApplyForTesting()
+    }
+}
+
 #Preview("Tab Container (AppKit)") {
     WIAppKitPreviewContainer {
-        let session = WIModel()
+        let session = WIInspectorController()
         WIDOMPreviewFixtures.applySampleSelection(to: session.dom, mode: .selected)
         let previewWebView = WIDOMPreviewFixtures.bootstrapDOMTreeForPreview(session.dom)
         WINetworkPreviewFixtures.applySampleData(to: session.network, mode: .detail)

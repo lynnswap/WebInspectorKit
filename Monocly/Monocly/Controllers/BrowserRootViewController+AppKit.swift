@@ -1,22 +1,33 @@
 #if canImport(AppKit)
 import AppKit
-import WebInspectorKit
+@_spi(Monocly) import WebInspectorKit
 
 @MainActor
 final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSToolbarItemValidation {
+    private enum InspectorSessionState {
+        case connected
+        case suspended
+        case disconnected
+    }
+
     private enum ToolbarItemIdentifier {
-        static let navigation = NSToolbarItem.Identifier("MiniBrowser.Toolbar.Navigation")
-        static let inspector = NSToolbarItem.Identifier("MiniBrowser.Toolbar.Inspector")
+        static let navigation = NSToolbarItem.Identifier("Monocly.Toolbar.Navigation")
+        static let inspector = NSToolbarItem.Identifier("Monocly.Toolbar.Inspector")
     }
 
     let store: BrowserStore
-    let inspectorController: WIModel
+    let inspectorController: WIInspectorController
     let launchConfiguration: BrowserLaunchConfiguration
 
-    private let inspectorCoordinator = BrowserInspectorCoordinator()
     private let hostedContentViewController: NSViewController
     private let pageViewController: BrowserPageViewController?
     private var storeObserverID: UUID?
+    private var pendingWindowAttachmentTask: Task<Void, Never>?
+    private var inspectorLifecycleTask: Task<Void, Never>?
+    private var pendingInspectorSessionState: InspectorSessionState?
+    private var isFinalizingInspectorSession = false
+    private weak var observedWindow: NSWindow?
+    private var windowCloseObserver: NSObjectProtocol?
     private weak var installedToolbar: NSToolbar?
     private weak var navigationItemGroup: NSToolbarItemGroup?
 
@@ -24,12 +35,12 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
 
     init(
         store: BrowserStore? = nil,
-        inspectorController: WIModel? = nil,
+        inspectorController: WIInspectorController? = nil,
         launchConfiguration: BrowserLaunchConfiguration,
         contentViewController: NSViewController? = nil
     ) {
         let resolvedStore = store ?? BrowserStore(url: launchConfiguration.initialURL)
-        let resolvedInspectorController = inspectorController ?? WIModel()
+        let resolvedInspectorController = inspectorController ?? WIInspectorController()
         let resolvedContentViewController = contentViewController
             ?? BrowserPageViewController(
                 store: resolvedStore,
@@ -52,10 +63,10 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     }
 
     isolated deinit {
-        if let storeObserverID {
-            store.removeStateObserver(storeObserverID)
-        }
-        inspectorController.disconnect()
+        pendingWindowAttachmentTask?.cancel()
+        inspectorLifecycleTask?.cancel()
+        tearDownWindowIntegration()
+        inspectorController.tearDownForDeinit()
     }
 
     override func loadView() {
@@ -79,20 +90,37 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             hostedContentViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        storeObserverID = store.addStateObserver { [weak self] in
-            self?.updateWindowChrome()
-        }
+        startObservingStoreIfNeeded()
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
+        startObservingStoreIfNeeded()
         handleWindowAttachmentIfNeeded()
+        requestInspectorSessionState(.connected)
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        requestInspectorSessionState(.suspended)
+        if view.window == nil {
+            tearDownWindowIntegration()
+        }
+    }
+
+    func finalizeInspectorSession() {
+        guard isFinalizingInspectorSession == false else {
+            return
+        }
+        isFinalizingInspectorSession = true
+        tearDownWindowIntegration()
+        requestInspectorSessionState(.disconnected)
     }
 
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = inspectorCoordinator.present(
+        _ = BrowserInspectorCoordinator.present(
             from: view.window,
             browserStore: store,
             inspectorController: inspectorController,
@@ -196,7 +224,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             return
         }
 
-        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("MiniBrowser.Toolbar"))
+        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("Monocly.Toolbar"))
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
@@ -216,13 +244,23 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         guard let window = view.window else {
             return
         }
-        installToolbarIfNeeded(in: window)
-        updateWindowChrome()
-        pageViewController?.handleHostWindowDidAttach()
+        installWindowCloseObserverIfNeeded(for: window)
+        pendingWindowAttachmentTask?.cancel()
+        pendingWindowAttachmentTask = Task.immediateIfAvailable { [weak self, weak window] in
+            await Task.yield()
+            guard let self, let window, self.view.window === window else {
+                return
+            }
+            self.installToolbarIfNeeded(in: window)
+            self.updateWindowChrome()
+            self.pageViewController?.handleHostWindowDidAttach()
+            self.pendingWindowAttachmentTask = nil
+        }
     }
 
     func forceWindowAttachmentForTesting(in window: NSWindow) {
         loadViewIfNeeded()
+        installWindowCloseObserverIfNeeded(for: window)
         installToolbarIfNeeded(in: window)
         window.title = store.displayTitle
     }
@@ -239,6 +277,93 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             navigationItemGroup.subitems[1].isEnabled = store.canGoForward
         }
         view.window?.toolbar?.validateVisibleItems()
+    }
+
+    private func startObservingStoreIfNeeded() {
+        guard storeObserverID == nil else {
+            return
+        }
+
+        storeObserverID = store.addStateObserver { [weak self] in
+            self?.updateWindowChrome()
+        }
+    }
+
+    private func tearDownStoreObserverIfNeeded() {
+        guard let storeObserverID else {
+            return
+        }
+        store.removeStateObserver(storeObserverID)
+        self.storeObserverID = nil
+    }
+
+    private func requestInspectorSessionState(_ state: InspectorSessionState) {
+        if isFinalizingInspectorSession, state != .disconnected {
+            return
+        }
+        pendingInspectorSessionState = state
+        guard inspectorLifecycleTask == nil else {
+            return
+        }
+
+        let inspectorController = inspectorController
+        let store = store
+        inspectorLifecycleTask = Task { [weak self, inspectorController, store] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.inspectorLifecycleTask = nil
+            }
+
+            while let desiredState = self.pendingInspectorSessionState {
+                self.pendingInspectorSessionState = nil
+
+                switch desiredState {
+                case .connected:
+                    await inspectorController.applyHostState(pageWebView: store.webView, visibility: .visible)
+                case .suspended:
+                    await inspectorController.applyHostState(pageWebView: store.webView, visibility: .hidden)
+                case .disconnected:
+                    await inspectorController.finalize()
+                }
+            }
+        }
+    }
+
+    private func installWindowCloseObserverIfNeeded(for window: NSWindow) {
+        guard observedWindow !== window else {
+            return
+        }
+        removeWindowCloseObserver()
+        observedWindow = window
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.finalizeInspectorSession()
+            }
+        }
+    }
+
+    private func removeWindowCloseObserver() {
+        if let windowCloseObserver {
+            NotificationCenter.default.removeObserver(windowCloseObserver)
+            self.windowCloseObserver = nil
+        }
+        observedWindow = nil
+    }
+
+    private func tearDownWindowIntegration() {
+        pendingWindowAttachmentTask?.cancel()
+        pendingWindowAttachmentTask = nil
+        tearDownStoreObserverIfNeeded()
+        installedToolbar?.delegate = nil
+        installedToolbar = nil
+        navigationItemGroup = nil
+        removeWindowCloseObserver()
     }
 }
 

@@ -58,6 +58,46 @@ static NSError *makeError(ErrorCode code, NSString *description, NSString *detai
     return [NSError errorWithDomain:errorDomain code:code userInfo:userInfo];
 }
 
+static WITransportResolvedFunctions emptyResolvedFunctions()
+{
+    return {
+        .connectFrontendAddress = 0,
+        .disconnectFrontendAddress = 0,
+        .stringFromUTF8Address = 0,
+        .stringImplToNSStringAddress = 0,
+        .destroyStringImplAddress = 0,
+        .backendDispatcherDispatchAddress = 0,
+    };
+}
+
+static BOOL resolvedFunctionsAreComplete(WITransportResolvedFunctions resolvedFunctions)
+{
+    return resolvedFunctions.connectFrontendAddress
+        && resolvedFunctions.disconnectFrontendAddress
+        && resolvedFunctions.stringFromUTF8Address
+        && resolvedFunctions.stringImplToNSStringAddress
+        && resolvedFunctions.destroyStringImplAddress
+        && resolvedFunctions.backendDispatcherDispatchAddress;
+}
+
+static NSString *missingResolvedFunctionNames(WITransportResolvedFunctions resolvedFunctions)
+{
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    if (!resolvedFunctions.connectFrontendAddress)
+        [names addObject:@"connectFrontend"];
+    if (!resolvedFunctions.disconnectFrontendAddress)
+        [names addObject:@"disconnectFrontend"];
+    if (!resolvedFunctions.stringFromUTF8Address)
+        [names addObject:@"stringFromUTF8"];
+    if (!resolvedFunctions.stringImplToNSStringAddress)
+        [names addObject:@"stringImplToNSString"];
+    if (!resolvedFunctions.destroyStringImplAddress)
+        [names addObject:@"destroyStringImpl"];
+    if (!resolvedFunctions.backendDispatcherDispatchAddress)
+        [names addObject:@"backendDispatcherDispatch"];
+    return [names componentsJoinedByString:@","];
+}
+
 static BOOL safeReadWord(const void *address, uintptr_t *valueOut)
 {
     if (!address || !valueOut)
@@ -412,8 +452,6 @@ static BOOL installSyntheticControllerAtOffset(
     return YES;
 }
 
-extern void backendDispatcherDispatch(void *, const WTF::String&) asm("__ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE");
-
 static NSError *selectorFailureError(
     id inspectorObject,
     void *pageProxy,
@@ -454,8 +492,9 @@ static NSError *selectorFailureError(
 
 class WITransportFrontendChannel final : public Inspector::FrontendChannel {
 public:
-    explicit WITransportFrontendChannel(WITransportBridge *owner)
+    WITransportFrontendChannel(WITransportBridge *owner, uint64_t stringImplToNSStringAddress)
         : m_owner(owner)
+        , m_stringImplToNSStringAddress(stringImplToNSStringAddress)
     {
     }
 
@@ -474,7 +513,7 @@ public:
 
     void sendMessageToFrontend(const WTF::String& message) override
     {
-        NSString *messageString = WITransportInspectorABI::copyNSString(message);
+        NSString *messageString = WITransportInspectorABI::copyNSString(message, m_stringImplToNSStringAddress);
         __weak WITransportBridge *owner = m_owner;
         dispatch_async(dispatch_get_main_queue(), ^{
             [owner handleFrontendMessageString:messageString];
@@ -483,6 +522,7 @@ public:
 
 private:
     __weak WITransportBridge *m_owner;
+    uint64_t m_stringImplToNSStringAddress { 0 };
 };
 
 @implementation WITransportBridge {
@@ -492,6 +532,7 @@ private:
     void *_backendDispatcher;
     ptrdiff_t _controllerOffset;
     WITransportBridgePrivate::DisconnectFrontendFn _disconnectFrontend;
+    WITransportResolvedFunctions _resolvedFunctions;
     std::unique_ptr<WITransportFrontendChannel> _frontendChannel;
     BOOL _frontendAttached;
 }
@@ -504,6 +545,7 @@ private:
 
     _webView = webView;
     _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
+    _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     return self;
 }
 
@@ -534,6 +576,7 @@ private:
     _frontendAttached = NO;
     _frontendChannel.reset();
     _disconnectFrontend = nullptr;
+    _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     _inspector = nil;
     _controller = nullptr;
     _backendDispatcher = nullptr;
@@ -545,9 +588,8 @@ private:
     [self detach];
 }
 
-- (BOOL)attachWithConnectFrontendAddress:(uint64_t)connectFrontendAddress
-              disconnectFrontendAddress:(uint64_t)disconnectFrontendAddress
-                                  error:(NSError * _Nullable __autoreleasing *)error
+- (BOOL)attachWithResolvedFunctions:(WITransportResolvedFunctions)resolvedFunctions
+                              error:(NSError * _Nullable __autoreleasing *)error
 {
     [self detach];
 
@@ -562,10 +604,11 @@ private:
         return NO;
     }
 
-    if (!connectFrontendAddress || !disconnectFrontendAddress) {
+    if (!WITransportBridgePrivate::resolvedFunctionsAreComplete(resolvedFunctions)) {
         NSError *transportError = WITransportBridgePrivate::makeError(
             WITransportBridgePrivate::ErrorCodeUnsupported,
-            @"connect/disconnect symbols were unavailable."
+            @"Required runtime functions were unavailable.",
+            WITransportBridgePrivate::missingResolvedFunctionNames(resolvedFunctions)
         );
         if (error)
             *error = transportError;
@@ -576,8 +619,9 @@ private:
     using ConnectFrontendFn = WITransportBridgePrivate::ConnectFrontendFn;
     using DisconnectFrontendFn = WITransportBridgePrivate::DisconnectFrontendFn;
 
-    auto *connectFrontend = reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(connectFrontendAddress));
-    _disconnectFrontend = reinterpret_cast<DisconnectFrontendFn>(static_cast<uintptr_t>(disconnectFrontendAddress));
+    auto *connectFrontend = reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
+    _disconnectFrontend = reinterpret_cast<DisconnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.disconnectFrontendAddress));
+    _resolvedFunctions = resolvedFunctions;
 
     _inspector = WITransportBridgePrivate::invokeObjectGetter(self.webView, @"_inspector");
     void *page = WITransportBridgePrivate::pageProxyPointer(self.webView);
@@ -635,7 +679,7 @@ private:
     }
 #endif
 
-    _frontendChannel = std::make_unique<WITransportFrontendChannel>(self);
+    _frontendChannel = std::make_unique<WITransportFrontendChannel>(self, resolvedFunctions.stringImplToNSStringAddress);
     connectFrontend(_controller, *_frontendChannel, false, false);
     _frontendAttached = YES;
     return YES;
@@ -643,6 +687,16 @@ private:
 
 - (BOOL)sendRootJSONString:(NSString *)message error:(NSError * _Nullable __autoreleasing *)error
 {
+    if (!WITransportBridgePrivate::resolvedFunctionsAreComplete(_resolvedFunctions)) {
+        [self invalidateAttachmentState];
+        if (error) {
+            *error = WITransportBridgePrivate::makeError(
+                WITransportBridgePrivate::ErrorCodeUnsupported,
+                @"Required runtime functions were unavailable."
+            );
+        }
+        return NO;
+    }
     if (!_backendDispatcher) {
         [self invalidateAttachmentState];
         if (error) {
@@ -675,8 +729,16 @@ private:
         return NO;
     }
 
-    WITransportInspectorABI::ConstructedString payloadString(message);
-    WITransportBridgePrivate::backendDispatcherDispatch(_backendDispatcher, payloadString.get());
+    WITransportInspectorABI::ConstructedString payloadString(
+        message,
+        _resolvedFunctions.stringFromUTF8Address,
+        _resolvedFunctions.destroyStringImplAddress
+    );
+    WITransportInspectorABI::dispatchToBackendDispatcher(
+        _backendDispatcher,
+        payloadString.get(),
+        _resolvedFunctions.backendDispatcherDispatchAddress
+    );
     return YES;
 }
 
@@ -879,10 +941,10 @@ WITransportControllerDiscoveryTestResult WITransportRunControllerDiscoveryScenar
     return self;
 }
 
-- (BOOL)attachWithConnectFrontendAddress:(uint64_t)connectFrontendAddress
-              disconnectFrontendAddress:(uint64_t)disconnectFrontendAddress
-                                  error:(NSError * _Nullable __autoreleasing *)error
+- (BOOL)attachWithResolvedFunctions:(WITransportResolvedFunctions)resolvedFunctions
+                              error:(NSError * _Nullable __autoreleasing *)error
 {
+    (void)resolvedFunctions;
     if (error) {
         *error = [NSError errorWithDomain:@"WebInspectorTransport.Transport"
                                      code:1

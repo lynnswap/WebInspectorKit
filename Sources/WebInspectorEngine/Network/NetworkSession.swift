@@ -36,6 +36,8 @@ public final class NetworkSession: PageSession {
         runtime.transportCapabilities
     }
 
+    package var onPrepareForNavigationReconnect: (@MainActor () -> Void)?
+
     public convenience init(configuration: NetworkConfiguration = .init()) {
         self.init(runtime: WINetworkRuntime(configuration: configuration))
     }
@@ -59,31 +61,27 @@ public final class NetworkSession: PageSession {
         self.lastPageWebView = runtime.lastPageWebView
     }
 
-    public func attach(pageWebView webView: WKWebView) {
-        runtime.attach(pageWebView: webView)
+    public func attach(pageWebView webView: WKWebView) async {
+        await runtime.attach(pageWebView: webView)
         lastPageWebView = runtime.lastPageWebView
     }
 
-    public func suspend() {
-        runtime.suspend()
+    public func suspend() async {
+        await runtime.suspend()
         lastPageWebView = runtime.lastPageWebView
     }
 
-    public func detach() {
-        runtime.detach()
+    public func detach() async {
+        await runtime.detach()
         lastPageWebView = runtime.lastPageWebView
     }
 
-    public func setMode(_ mode: NetworkLoggingMode) {
-        runtime.setMode(mode)
+    public func setMode(_ mode: NetworkLoggingMode) async {
+        await runtime.setMode(mode)
     }
 
-    public func clearNetworkLogs() {
-        runtime.clearNetworkLogs()
-    }
-
-    package func cancelBodyFetches(for entry: NetworkEntry) {
-        runtime.cancelBodyFetches(for: entry)
+    public func clearNetworkLogs() async {
+        await runtime.clearNetworkLogs()
     }
 
     public func fetchBody(
@@ -104,16 +102,26 @@ public final class NetworkSession: PageSession {
         await runtime.fetchBody(locator: locator, role: role)
     }
 
-    package func requestBodyIfNeeded(for entry: NetworkEntry, role: NetworkBody.Role) {
-        runtime.requestBodyIfNeeded(for: entry, role: role)
+    package func loadBodyIfNeeded(for entry: NetworkEntry, role: NetworkBody.Role) async throws -> NetworkBody {
+        try await runtime.loadBodyIfNeeded(for: entry, role: role)
+    }
+
+    package func loadBodyIfNeeded(for entry: NetworkEntry, body: NetworkBody) async throws -> NetworkBody {
+        try await runtime.loadBodyIfNeeded(for: entry, body: body)
     }
 
     package func prepareForNavigationReconnect() {
+        onPrepareForNavigationReconnect?()
         runtime.prepareForNavigationReconnect()
     }
 
     package func resumeAfterNavigationReconnect(to webView: WKWebView) {
         runtime.resumeAfterNavigationReconnect(to: webView)
+        lastPageWebView = runtime.lastPageWebView
+    }
+
+    package func tearDownForDeinit() {
+        runtime.tearDownForDeinit()
         lastPageWebView = runtime.lastPageWebView
     }
 }

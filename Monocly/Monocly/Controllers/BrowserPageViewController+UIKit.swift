@@ -12,10 +12,10 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private let store: BrowserStore
-    private let inspectorController: WIModel
+    private let inspectorController: WIInspectorController
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
-    private let logger = Logger(subsystem: "MiniBrowser", category: "BrowserPageViewController")
+    private let logger = Logger(subsystem: "Monocly", category: "BrowserPageViewController")
 
     private let progressView = UIProgressView(progressViewStyle: .bar)
 
@@ -76,7 +76,7 @@ final class BrowserPageViewController: UIViewController {
 
     init(
         store: BrowserStore,
-        inspectorController: WIModel,
+        inspectorController: WIInspectorController,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         self.store = store
@@ -204,31 +204,31 @@ final class BrowserPageViewController: UIViewController {
         configureNavigationButtonItem(
             compactInspectorButtonItem,
             action: #selector(handleOpenInspectorAction(_:)),
-            accessibilityIdentifier: "MiniBrowser.openInspectorButton.compact"
+            accessibilityIdentifier: "Monocly.openInspectorButton.compact"
         )
         configureNavigationButtonItem(
             compactBackButtonItem,
             action: #selector(handleBackAction(_:)),
-            accessibilityIdentifier: "MiniBrowser.navigation.back.compact"
+            accessibilityIdentifier: "Monocly.navigation.back.compact"
         )
         configureNavigationButtonItem(
             compactForwardButtonItem,
             action: #selector(handleForwardAction(_:)),
-            accessibilityIdentifier: "MiniBrowser.navigation.forward.compact"
+            accessibilityIdentifier: "Monocly.navigation.forward.compact"
         )
         configureNavigationButtonItem(
             regularInspectorButtonItem,
-            accessibilityIdentifier: "MiniBrowser.openInspectorButton.regular"
+            accessibilityIdentifier: "Monocly.openInspectorButton.regular"
         )
         configureNavigationButtonItem(
             regularBackButtonItem,
             action: #selector(handleBackAction(_:)),
-            accessibilityIdentifier: "MiniBrowser.navigation.back.regular"
+            accessibilityIdentifier: "Monocly.navigation.back.regular"
         )
         configureNavigationButtonItem(
             regularForwardButtonItem,
             action: #selector(handleForwardAction(_:)),
-            accessibilityIdentifier: "MiniBrowser.navigation.forward.regular"
+            accessibilityIdentifier: "Monocly.navigation.forward.regular"
         )
         refreshInspectorButtonConfigurations()
 
@@ -438,18 +438,30 @@ final class BrowserPageViewController: UIViewController {
 
         didAutoStartSelection = true
 
-        Task { @MainActor in
-            logger.notice("auto-starting DOM selection mode for diagnostics")
+        Task.immediateIfAvailable { [self] in
+            var didCompleteAutoStart = false
+            defer {
+                if didCompleteAutoStart == false {
+                    self.didAutoStartSelection = false
+                }
+            }
+            self.logger.notice("auto-starting DOM selection mode for diagnostics")
             for _ in 0..<100 {
-                if inspectorController.dom.hasPageWebView {
-                    inspectorController.dom.toggleSelectionMode()
-                    return
+                if self.inspectorController.dom.hasPageWebView {
+                    do {
+                        let result = try await self.inspectorController.dom.beginSelectionMode()
+                        didCompleteAutoStart = !result.cancelled
+                        if didCompleteAutoStart {
+                            return
+                        }
+                    } catch {
+                        // Keep retrying until the page bridge is ready or we time out.
+                    }
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
 
-            logger.error("auto-starting DOM selection mode timed out before page web view became available")
-            didAutoStartSelection = false
+            self.logger.error("auto-starting DOM selection mode timed out before page web view became available")
         }
     }
 
@@ -547,7 +559,7 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         translatesAutoresizingMaskIntoConstraints = false
         layer.cornerRadius = 10
         clipsToBounds = true
-        accessibilityIdentifier = "MiniBrowser.diagnostics.panel"
+        accessibilityIdentifier = "Monocly.diagnostics.panel"
 
         let stackView = UIStackView(arrangedSubviews: [
             terminationCountLabel,
@@ -566,10 +578,10 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
             label.numberOfLines = 2
         }
 
-        terminationCountLabel.accessibilityIdentifier = "MiniBrowser.diagnostics.terminationCount"
-        didFinishCountLabel.accessibilityIdentifier = "MiniBrowser.diagnostics.didFinishCount"
-        currentURLLabel.accessibilityIdentifier = "MiniBrowser.diagnostics.currentURL"
-        lastErrorLabel.accessibilityIdentifier = "MiniBrowser.diagnostics.lastNavigationError"
+        terminationCountLabel.accessibilityIdentifier = "Monocly.diagnostics.terminationCount"
+        didFinishCountLabel.accessibilityIdentifier = "Monocly.diagnostics.didFinishCount"
+        currentURLLabel.accessibilityIdentifier = "Monocly.diagnostics.currentURL"
+        lastErrorLabel.accessibilityIdentifier = "Monocly.diagnostics.lastNavigationError"
 
         NSLayoutConstraint.activate([
             stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
