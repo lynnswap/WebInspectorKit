@@ -47,7 +47,6 @@ public final class WINetworkViewController: NSSplitViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         splitView.autosaveName = Self.splitViewAutosaveName
-        inspector.selectEntry(nil)
         listViewController.loadViewIfNeeded()
         detailViewController.loadViewIfNeeded()
         startObservingInspector()
@@ -71,7 +70,7 @@ public final class WINetworkViewController: NSSplitViewController {
                 return
             }
             self.listViewController.reloadDataFromInspector()
-            self.detailViewController.display(self.inspector.selectedEntry)
+            self.detailViewController.updateVisibility()
         }
         .store(in: &observationHandles)
 
@@ -99,6 +98,12 @@ import SwiftUI
 #Preview("Network Root Long Title (AppKit)") {
     WIAppKitPreviewContainer {
         WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .rootLongTitle))
+    }
+}
+
+#Preview("Network Root Selected Detail (AppKit)") {
+    WIAppKitPreviewContainer {
+        WINetworkViewController(inspector: WINetworkPreviewFixtures.makeInspector(mode: .detail))
     }
 }
 #endif

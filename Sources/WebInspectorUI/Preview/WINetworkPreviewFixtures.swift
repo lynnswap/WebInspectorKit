@@ -38,7 +38,7 @@ enum WINetworkPreviewFixtures {
         inspector.wiApplyPreviewBatch(payload)
         switch mode {
         case .detail, .bodyPreviewObjectTree, .bodyPreviewText:
-            inspector.selectEntry(inspector.displayEntries.first)
+            inspector.selectEntry(preferredDetailEntry(in: inspector))
         case .root, .rootLongTitle:
             inspector.selectEntry(nil)
         }
@@ -46,7 +46,7 @@ enum WINetworkPreviewFixtures {
 
     static func makeDetailContext() -> (inspector: WINetworkModel, entry: NetworkEntry)? {
         let inspector = makeInspector(mode: .detail)
-        guard let entry = inspector.displayEntries.first else {
+        guard let entry = preferredDetailEntry(in: inspector) else {
             return nil
         }
         inspector.selectEntry(entry)
@@ -56,7 +56,7 @@ enum WINetworkPreviewFixtures {
     static func makeBodyPreviewContext(textMode: Bool = false) -> (inspector: WINetworkModel, entry: NetworkEntry, body: NetworkBody)? {
         let inspector = makeInspector(mode: textMode ? .bodyPreviewText : .bodyPreviewObjectTree)
         guard
-            let entry = inspector.displayEntries.first,
+            let entry = preferredDetailEntry(in: inspector),
             let body = entry.responseBody ?? entry.requestBody
         else {
             return nil
@@ -179,6 +179,12 @@ enum WINetworkPreviewFixtures {
             "seq": 1,
             "events": events
         ]
+    }
+
+    private static func preferredDetailEntry(in inspector: WINetworkModel) -> NetworkEntry? {
+        inspector.displayEntries.first(where: {
+            $0.responseBody != nil || $0.requestBody != nil
+        }) ?? inspector.displayEntries.first
     }
 }
 #endif

@@ -8,27 +8,6 @@ import AppKit
 
 @MainActor
 final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
-    private struct ObservedFormEntryState: Equatable {
-        let name: String
-        let value: String
-        let isFile: Bool
-        let fileName: String?
-    }
-
-    private struct ObservedBodyState: Equatable {
-        let role: NetworkBody.Role
-        let kind: NetworkBody.Kind
-        let preview: String?
-        let full: String?
-        let size: Int?
-        let isBase64Encoded: Bool
-        let isTruncated: Bool
-        let summary: String?
-        let reference: String?
-        let formEntries: [ObservedFormEntryState]
-        let fetchState: NetworkBody.FetchState
-    }
-
     private final class TreeItem: NSObject {
         let node: NetworkJSONNode
         let path: String
@@ -57,7 +36,6 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
 
     private let inspector: WINetworkModel
     private let role: NetworkBody.Role
-    private let selectedEntryIDForPresentation: UUID
 
     private var mode: NetworkBodyPreviewRenderModel.Mode = .text
     private var hasUserSelectedMode = false
@@ -67,6 +45,7 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
     private var selectionObservationHandles: Set<ObservationHandle> = []
     private var entryObservationHandles: Set<ObservationHandle> = []
     private var bodyObservationHandles: Set<ObservationHandle> = []
+    private var observedBodyIdentity: ObjectIdentifier?
     private var rootItems: [TreeItem] = []
     private weak var contextMenuItem: TreeItem?
 
@@ -92,10 +71,9 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         return menu
     }()
 
-    init(inspector: WINetworkModel, role: NetworkBody.Role, selectedEntryIDForPresentation: UUID) {
+    init(inspector: WINetworkModel, role: NetworkBody.Role) {
         self.inspector = inspector
         self.role = role
-        self.selectedEntryIDForPresentation = selectedEntryIDForPresentation
 
         let scrollableTextView = NSTextView.scrollableTextView()
         guard let textView = scrollableTextView.documentView as? NSTextView else {
@@ -135,10 +113,6 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         role
     }
 
-    var entryIDForTesting: UUID {
-        selectedEntryIDForPresentation
-    }
-
     override func loadView() {
         view = NSView(frame: .zero)
     }
@@ -147,8 +121,8 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         super.viewDidLoad()
         configureHierarchy()
         applyTitle()
-        startObservingSelectedEntry()
-        rebindSelectedEntry()
+        startObservingSelection()
+        syncCurrentEntryObservation()
     }
 
     private func configureHierarchy() {
@@ -231,34 +205,32 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         applyVisibleMode()
     }
 
-    private func startObservingSelectedEntry() {
+    private func startObservingSelection() {
         inspector.observe(
             [\.selectedEntry],
             onChange: { [weak self] in
-                self?.rebindSelectedEntry()
+                self?.syncCurrentEntryObservation()
             },
             isolation: MainActor.shared
         )
         .store(in: &selectionObservationHandles)
     }
 
-    private func rebindSelectedEntry() {
+    private func syncCurrentEntryObservation() {
+        renderTask?.cancel()
         entryObservationHandles.removeAll()
         bodyObservationHandles.removeAll()
+        observedBodyIdentity = nil
 
         guard let entry = currentEntry else {
-            dismissIfSelectionIsUnavailable()
+            dismissIfCurrentBodyIsUnavailable()
             return
         }
-
-        requestRenderModelUpdate()
 
         let bodyKeyPath: KeyPath<NetworkEntry, NetworkBody?> = role == .request
             ? \.requestBody
             : \.responseBody
 
-        let initialBodyIdentity = entry[keyPath: bodyKeyPath].map(ObjectIdentifier.init)
-        var ignoresInitialEmission = true
         entry.observe(
             bodyKeyPath,
             onChange: { [weak self, weak entry] _ in
@@ -268,26 +240,31 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
                 guard self.currentEntry?.id == entry.id else {
                     return
                 }
-                let currentBodyIdentity = self.currentBody.map(ObjectIdentifier.init)
-                if ignoresInitialEmission {
-                    ignoresInitialEmission = false
-                    guard currentBodyIdentity != initialBodyIdentity else {
-                        return
-                    }
-                }
-                self.rebindSelectedEntry()
+                self.syncCurrentBodyObservation()
             },
             isolation: MainActor.shared
         )
         .store(in: &entryObservationHandles)
 
+        syncCurrentBodyObservation()
+    }
+
+    private func syncCurrentBodyObservation() {
         guard let body = currentBody else {
-            dismissIfSelectionIsUnavailable()
+            renderTask?.cancel()
+            bodyObservationHandles.removeAll()
+            observedBodyIdentity = nil
+            dismissIfCurrentBodyIsUnavailable()
             return
         }
 
-        let initialBodyState = makeObservedBodyState(from: body)
-        var ignoresInitialBodyEmission = true
+        let bodyIdentity = ObjectIdentifier(body)
+        guard observedBodyIdentity != bodyIdentity || bodyObservationHandles.isEmpty else {
+            return
+        }
+
+        bodyObservationHandles.removeAll()
+        observedBodyIdentity = bodyIdentity
         body.observeTask(
             [
                 \.role,
@@ -302,40 +279,33 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
                 \.formEntries,
                 \.fetchState
             ]
-        ) { [weak self, weak entry] in
-            guard let self, let entry else {
+        ) { [weak self] in
+            guard let self else {
                 return
             }
-            guard self.currentEntry?.id == entry.id else {
+            guard self.currentBody.map(ObjectIdentifier.init) == bodyIdentity else {
                 return
-            }
-            guard self.currentBody.map(ObjectIdentifier.init) == ObjectIdentifier(body) else {
-                return
-            }
-            let currentBodyState = self.makeObservedBodyState(from: body)
-            if ignoresInitialBodyEmission {
-                ignoresInitialBodyEmission = false
-                guard currentBodyState != initialBodyState else {
-                    return
-                }
             }
             self.requestRenderModelUpdate()
         }
         .store(in: &bodyObservationHandles)
+        requestRenderModelUpdate()
     }
 
     private func requestRenderModelUpdate() {
         renderTask?.cancel()
         renderGeneration &+= 1
         let generation = renderGeneration
-        guard let bodyState = currentBody else {
-            dismissIfSelectionIsUnavailable()
+        guard let body = currentBody else {
+            dismissIfCurrentBodyIsUnavailable()
             return
         }
+
         let input = NetworkBodyPreviewRenderModel.Input(
-            body: bodyState,
+            body: body,
             unavailableText: wiLocalized("network.body.unavailable", default: "Body unavailable")
         )
+
         renderTask = Task(priority: .userInitiated) { [weak self, generation, input] in
             let workerTask = Task.detached(priority: .userInitiated) {
                 NetworkBodyPreviewRenderModel.make(from: input)
@@ -403,10 +373,7 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
     }
 
     private var currentEntry: NetworkEntry? {
-        guard inspector.selectedEntry?.id == selectedEntryIDForPresentation else {
-            return nil
-        }
-        return inspector.selectedEntry
+        inspector.selectedEntry
     }
 
     private var currentBody: NetworkBody? {
@@ -421,7 +388,7 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         }
     }
 
-    private func dismissIfSelectionIsUnavailable() {
+    private func dismissIfCurrentBodyIsUnavailable() {
         guard currentBody == nil else {
             return
         }
@@ -747,29 +714,6 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         let index = value.index(value.startIndex, offsetBy: limit)
         return String(value[..<index]) + "..."
     }
-
-    private func makeObservedBodyState(from body: NetworkBody) -> ObservedBodyState {
-        ObservedBodyState(
-            role: body.role,
-            kind: body.kind,
-            preview: body.preview,
-            full: body.full,
-            size: body.size,
-            isBase64Encoded: body.isBase64Encoded,
-            isTruncated: body.isTruncated,
-            summary: body.summary,
-            reference: body.reference,
-            formEntries: body.formEntries.map {
-                ObservedFormEntryState(
-                    name: $0.name,
-                    value: $0.value,
-                    isFile: $0.isFile,
-                    fileName: $0.fileName
-                )
-            },
-            fetchState: body.fetchState
-        )
-    }
 }
 
 #if DEBUG && canImport(SwiftUI)
@@ -781,8 +725,7 @@ import SwiftUI
         }
         return WINetworkBodyPreviewViewController(
             inspector: context.inspector,
-            role: context.body.role,
-            selectedEntryIDForPresentation: context.entry.id
+            role: context.body.role
         )
     }
 }
@@ -794,8 +737,7 @@ import SwiftUI
         }
         return WINetworkBodyPreviewViewController(
             inspector: context.inspector,
-            role: context.body.role,
-            selectedEntryIDForPresentation: context.entry.id
+            role: context.body.role
         )
     }
 }

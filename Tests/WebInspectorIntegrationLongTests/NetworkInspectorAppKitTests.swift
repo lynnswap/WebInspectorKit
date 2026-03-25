@@ -49,6 +49,24 @@ struct NetworkInspectorAppKitTests {
     }
 
     @Test
+    func networkTabKeepsBlankDetailWhenEntriesExistButNothingIsSelected() throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 103,
+            url: "https://example.com/blank-detail",
+            initiator: "document",
+            monotonicMs: 1_000
+        )
+
+        let controller = WINetworkViewController(inspector: inspector)
+        controller.loadViewIfNeeded()
+
+        #expect(controller.detailViewControllerForTesting.isShowingEmptyStateForTesting == false)
+        #expect(controller.detailViewControllerForTesting.hasVisibleContentForTesting == false)
+    }
+
+    @Test
     func networkTabListTracksSearchAndFilterResults() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
@@ -172,7 +190,9 @@ struct NetworkInspectorAppKitTests {
         )
 
         let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
         controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
         inspector.selectEntry(entry)
 
         guard let responseButton = try await waitForResponseBodyButton(in: controller) else {
@@ -187,6 +207,47 @@ struct NetworkInspectorAppKitTests {
 
         #expect(await waitUntilAsync(timeout: 1.0) {
             responseButton.title.contains("application/json")
+        })
+        #expect(await waitUntilAsync(timeout: 0.2) {
+            inspector.displayEntriesGeneration == initialGeneration
+        })
+    }
+
+    @Test
+    func networkTabUpdatesVisibleHeaderValueWhenHeaderCountIsUnchanged() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 115,
+            url: "https://example.com/header-value",
+            initiator: "xhr",
+            monotonicMs: 1_000
+        )
+
+        let entry = try #require(inspector.displayEntries.first(where: { $0.requestID == 115 }))
+        entry.responseHeaders = NetworkHeaders(dictionary: [
+            "content-type": "application/json",
+            "etag": "v1"
+        ])
+
+        let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
+        inspector.selectEntry(entry)
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1"
+        })
+
+        let initialGeneration = inspector.displayEntriesGeneration
+        entry.responseHeaders = NetworkHeaders(dictionary: [
+            "content-type": "application/json",
+            "etag": "v2"
+        ])
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v2"
         })
         #expect(await waitUntilAsync(timeout: 0.2) {
             inspector.displayEntriesGeneration == initialGeneration
@@ -338,6 +399,36 @@ struct NetworkInspectorAppKitTests {
             inspector.displayEntriesGeneration == generationBeforeReplacement
         })
 
+        try applyRequestStart(
+            to: inspector,
+            requestID: 402,
+            url: "https://example.com/preview-follow.json",
+            initiator: "xhr",
+            monotonicMs: 1_050
+        )
+        guard let replacementEntry = inspector.displayEntries.first(where: { $0.requestID == 402 }) else {
+            Issue.record("Expected replacement entry")
+            return
+        }
+        let followedBody = NetworkBody(
+            kind: .text,
+            preview: "{\"result\":\"followed\"}",
+            full: "{\"result\":\"followed\"}",
+            role: .response
+        )
+        replacementEntry.mimeType = "application/json"
+        replacementEntry.responseHeaders = NetworkHeaders(dictionary: ["content-type": "application/json"])
+        replacementEntry.responseBody = followedBody
+
+        inspector.selectEntry(replacementEntry)
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.presentedBodyPreviewViewControllerForTesting === preview
+        })
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            preview.currentBodyIdentityForTesting == ObjectIdentifier(followedBody)
+        })
+
         inspector.selectEntry(nil)
         #expect(await waitUntilAsync(timeout: 1.0) {
             controller.detailViewControllerForTesting.presentedBodyPreviewViewControllerForTesting == nil
@@ -379,6 +470,62 @@ struct NetworkInspectorAppKitTests {
             controller.detailViewControllerForTesting.isShowingEmptyStateForTesting == true
         })
         #expect(inspector.store.entries.first?.id != selectedEntryID)
+    }
+
+    @Test
+    func networkTabDismissesBodyPreviewWhenSelectedEntryIsRemoved() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 503,
+            url: "https://example.com/remove-preview.json",
+            initiator: "xhr",
+            monotonicMs: 1_000
+        )
+        var selectedEntry = inspector.displayEntries.first
+        do {
+            guard let selectedEntry else {
+                Issue.record("Expected display entry")
+                return
+            }
+
+            selectedEntry.mimeType = "application/json"
+            selectedEntry.responseHeaders = NetworkHeaders(dictionary: ["content-type": "application/json"])
+            selectedEntry.responseBody = NetworkBody(
+                kind: .text,
+                preview: "{\"result\":\"ok\"}",
+                full: "{\"result\":\"ok\"}",
+                role: .response
+            )
+            inspector.selectEntry(selectedEntry)
+        }
+
+        let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
+        if let selectedEntry {
+            inspector.selectEntry(selectedEntry)
+        }
+
+        guard let responseButton = try await waitForResponseBodyButton(in: controller) else {
+            Issue.record("Expected response body button")
+            return
+        }
+
+        responseButton.performClick(nil)
+
+        guard controller.detailViewControllerForTesting.presentedBodyPreviewViewControllerForTesting != nil else {
+            Issue.record("Expected presented preview")
+            return
+        }
+
+        selectedEntry = nil
+        inspector.store.clear()
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.presentedBodyPreviewViewControllerForTesting == nil
+        })
     }
 
     @Test
