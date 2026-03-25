@@ -43,6 +43,10 @@ let package = Package(
         .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
+        ),
+        .library(
+            name: "WebInspectorKitSPI",
+            targets: ["WebInspectorKitSPI"]
         )
     ],
     dependencies: [
@@ -83,7 +87,8 @@ let package = Package(
         .target(
             name: "WebInspectorBridge",
             dependencies: [
-                "WebInspectorBridgeObjCShim"
+                "WebInspectorBridgeObjCShim",
+                .product(name: "MachOKit", package: "MachOKit")
             ],
             exclude: ["ObjCShim"],
             swiftSettings: strictSwiftSettings
@@ -158,6 +163,15 @@ let package = Package(
                 "WebInspectorRuntime",
                 "WebInspectorBridge",
                 "WebInspectorScripts"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorKitSPI",
+            dependencies: [
+                "WebInspectorKit",
+                "WebInspectorBridge",
+                "WebInspectorBridgeObjCShim"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -251,6 +265,16 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorIntegrationLongTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "WebInspectorSPITests",
+            dependencies: [
+                "WebInspectorKitSPI",
+                "WebInspectorBridge",
+                "WebInspectorTestSupport"
+            ],
+            path: "Tests/WebInspectorSPITests",
             swiftSettings: strictSwiftSettings
         )
 

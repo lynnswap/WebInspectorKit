@@ -4,6 +4,11 @@
 #import <objc/runtime.h>
 #endif
 
+typedef const struct OpaqueWKFrameHandle *WKFrameHandleRef;
+typedef const struct OpaqueWKPage *WKPageRef;
+
+NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntimeBridge";
+
 @implementation WIKRuntimeBridge
 
 + (NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName {
@@ -74,6 +79,224 @@
     Setter function = (Setter)implementation;
     function(target, selector, stateRawValue, notifyObservers);
     return YES;
+}
+
++ (NSNumber *)frameIDForHandle:(id)handle {
+    if (![handle isKindOfClass:[NSObject class]]) {
+        return nil;
+    }
+
+    SEL selector = NSSelectorFromString(@"frameID");
+    if (![handle respondsToSelector:selector]) {
+        return nil;
+    }
+
+    typedef unsigned long long (*Getter)(id, SEL);
+    IMP implementation = [handle methodForSelector:selector];
+    if (implementation == NULL) {
+        return nil;
+    }
+
+    Getter function = (Getter)implementation;
+    return @(function(handle, selector));
+}
+
++ (NSNumber *)frameIDForFrameInfo:(WKFrameInfo *)frameInfo {
+    if (![frameInfo isKindOfClass:[WKFrameInfo class]]) {
+        return nil;
+    }
+
+    id handle = [self objectResultFromTarget:frameInfo selectorName:@"_handle"];
+    return [self frameIDForHandle:handle];
+}
+
++ (WKPageRef)pageRefForWebView:(WKWebView *)webView {
+    SEL selector = NSSelectorFromString(@"_pageForTesting");
+    if (![webView respondsToSelector:selector]) {
+        return NULL;
+    }
+
+    IMP implementation = [webView methodForSelector:selector];
+    if (implementation == NULL) {
+        return NULL;
+    }
+
+    typedef WKPageRef (*Getter)(id, SEL);
+    Getter function = (Getter)implementation;
+    return function(webView, selector);
+}
+
++ (WKFrameHandleRef)frameHandleRefForFrameInfo:(WKFrameInfo *)frameInfo {
+    id handle = [self objectResultFromTarget:frameInfo selectorName:@"_handle"];
+    if (![handle isKindOfClass:[NSObject class]]) {
+        return NULL;
+    }
+    // The frame-lookup C API unwraps the Objective-C WKObject wrapper and calls
+    // -_apiObject internally. Passing the raw
+    // _apiObject pointer here crashes because it is no longer an Objective-C object.
+    return (WKFrameHandleRef)(__bridge void *)handle;
+}
+
++ (NSValue *)pageRefValueForWebView:(WKWebView *)webView {
+    WKPageRef pageRef = [self pageRefForWebView:webView];
+    if (!pageRef) {
+        return nil;
+    }
+    return [NSValue valueWithPointer:(void *)pageRef];
+}
+
++ (NSValue *)frameHandleValueForFrameInfo:(WKFrameInfo *)frameInfo {
+    WKFrameHandleRef frameHandleRef = [self frameHandleRefForFrameInfo:frameInfo];
+    if (!frameHandleRef) {
+        return nil;
+    }
+    return [NSValue valueWithPointer:(void *)frameHandleRef];
+}
+
++ (void)appendFrameInfoIfNeeded:(WKFrameInfo *)frameInfo
+                     frameInfos:(NSMutableArray<WKFrameInfo *> *)frameInfos
+                   seenFrameIDs:(NSMutableSet<NSNumber *> *)seenFrameIDs {
+    NSNumber *frameID = [self frameIDForFrameInfo:frameInfo];
+    if (!frameID || [seenFrameIDs containsObject:frameID]) {
+        return;
+    }
+
+    [seenFrameIDs addObject:frameID];
+    [frameInfos addObject:frameInfo];
+}
+
++ (void)appendFrameInfosFromTreeNode:(id)node
+                          frameInfos:(NSMutableArray<WKFrameInfo *> *)frameInfos
+                        seenFrameIDs:(NSMutableSet<NSNumber *> *)seenFrameIDs {
+    if (![node isKindOfClass:[NSObject class]]) {
+        return;
+    }
+
+    id frameInfo = [self objectResultFromTarget:node selectorName:@"info"];
+    if ([frameInfo isKindOfClass:[WKFrameInfo class]]) {
+        [self appendFrameInfoIfNeeded:frameInfo frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
+    }
+
+    id childFrames = [self objectResultFromTarget:node selectorName:@"childFrames"];
+    if (![childFrames isKindOfClass:[NSArray class]]) {
+        return;
+    }
+
+    for (id childNode in (NSArray *)childFrames) {
+        [self appendFrameInfosFromTreeNode:childNode frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
+    }
+}
+
++ (NSArray<WKFrameInfo *> *)orderedFrameInfos:(NSArray<WKFrameInfo *> *)frameInfos {
+    NSMutableArray<WKFrameInfo *> *orderedFrameInfos = [NSMutableArray arrayWithCapacity:frameInfos.count];
+    for (WKFrameInfo *frameInfo in frameInfos) {
+        if (frameInfo.isMainFrame)
+            [orderedFrameInfos addObject:frameInfo];
+    }
+    for (WKFrameInfo *frameInfo in frameInfos) {
+        if (!frameInfo.isMainFrame)
+            [orderedFrameInfos addObject:frameInfo];
+    }
+    return [orderedFrameInfos copy];
+}
+
++ (void)resolveMainFrameInfoForWebView:(WKWebView *)webView
+                     completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
+    id mainFrameHandle = [self objectResultFromTarget:webView selectorName:@"_mainFrame"];
+    if (!mainFrameHandle) {
+        completionHandler(nil);
+        return;
+    }
+
+    SEL selector = NSSelectorFromString(@"_frameInfoFromHandle:completionHandler:");
+    if (![webView respondsToSelector:selector]) {
+        completionHandler(nil);
+        return;
+    }
+
+    IMP implementation = [webView methodForSelector:selector];
+    if (implementation == NULL) {
+        completionHandler(nil);
+        return;
+    }
+
+    typedef void (*Invoker)(id, SEL, id, id);
+    Invoker function = (Invoker)implementation;
+    function(webView, selector, mainFrameHandle, [^(id frameInfo) {
+        if ([frameInfo isKindOfClass:[WKFrameInfo class]]) {
+            completionHandler([self orderedFrameInfos:@[frameInfo]]);
+            return;
+        }
+        completionHandler(nil);
+    } copy]);
+}
+
++ (void)resolveFrameInfosFromFrameTreesForWebView:(WKWebView *)webView
+                                completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
+    SEL selector = NSSelectorFromString(@"_frameTrees:");
+    if (![webView respondsToSelector:selector]) {
+        [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
+        return;
+    }
+
+    IMP implementation = [webView methodForSelector:selector];
+    if (implementation == NULL) {
+        [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
+        return;
+    }
+
+    typedef void (*Invoker)(id, SEL, id);
+    Invoker function = (Invoker)implementation;
+    function(webView, selector, [^(id frameTrees) {
+        NSMutableArray<WKFrameInfo *> *frameInfos = [NSMutableArray array];
+        NSMutableSet<NSNumber *> *seenFrameIDs = [NSMutableSet set];
+        if ([frameTrees isKindOfClass:[NSSet class]]) {
+            for (id rootNode in [(NSSet *)frameTrees allObjects]) {
+                [self appendFrameInfosFromTreeNode:rootNode frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
+            }
+        }
+
+        if (frameInfos.count) {
+            completionHandler([self orderedFrameInfos:frameInfos]);
+            return;
+        }
+
+        [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
+    } copy]);
+}
+
++ (void)frameInfosForWebView:(WKWebView *)webView
+           completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
+    if (!webView || !completionHandler) {
+        if (completionHandler) {
+            completionHandler(nil);
+        }
+        return;
+    }
+
+    SEL framesSelector = NSSelectorFromString(@"_frames:");
+    if ([webView respondsToSelector:framesSelector]) {
+        IMP implementation = [webView methodForSelector:framesSelector];
+        if (implementation != NULL) {
+            typedef void (*FramesInvoker)(id, SEL, id);
+            FramesInvoker function = (FramesInvoker)implementation;
+            function(webView, framesSelector, [^(id mainFrameNode) {
+                NSMutableArray<WKFrameInfo *> *frameInfos = [NSMutableArray array];
+                NSMutableSet<NSNumber *> *seenFrameIDs = [NSMutableSet set];
+                [self appendFrameInfosFromTreeNode:mainFrameNode
+                                        frameInfos:frameInfos
+                                      seenFrameIDs:seenFrameIDs];
+                if (frameInfos.count) {
+                    completionHandler([self orderedFrameInfos:frameInfos]);
+                    return;
+                }
+                [self resolveFrameInfosFromFrameTreesForWebView:webView completionHandler:completionHandler];
+            } copy]);
+            return;
+        }
+    }
+
+    [self resolveFrameInfosFromFrameTreesForWebView:webView completionHandler:completionHandler];
 }
 
 + (BOOL)invokeSetResourceLoadDelegateOnWebView:(WKWebView *)webView
