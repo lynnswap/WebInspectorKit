@@ -34,12 +34,16 @@ public final class NetworkStore {
         }
 
         performEntriesGenerationBatch {
+            let existingEntry = entry(forRequestID: update.requestID, sessionID: sessionID)
             switch update {
             case .requestStarted, .resourceTimingSnapshot:
-                let entry = existingOrNewEntry(for: update, sessionID: sessionID)
-                entry?.apply(update)
+                if let existingEntry {
+                    apply(update, toTrackedEntry: existingEntry)
+                } else {
+                    appendEntry(NetworkEntry(sessionID: sessionID, update: update))
+                }
             case .webSocketOpened:
-                guard entry(forRequestID: update.requestID, sessionID: sessionID) == nil else {
+                guard existingEntry == nil else {
                     return
                 }
                 appendEntry(NetworkEntry(sessionID: sessionID, update: update))
@@ -49,10 +53,10 @@ public final class NetworkStore {
                  .webSocketHandshake,
                  .webSocketFrameAdded,
                  .webSocketClosed:
-                guard let entry = entry(forRequestID: update.requestID, sessionID: sessionID) else {
+                guard let existingEntry else {
                     return
                 }
-                entry.apply(update)
+                apply(update, toTrackedEntry: existingEntry)
             }
         }
     }
@@ -232,24 +236,6 @@ public final class NetworkStore {
 }
 
 private extension NetworkStore {
-    func existingOrNewEntry(
-        for update: NetworkEntry.Update,
-        sessionID: String
-    ) -> NetworkEntry? {
-        if let existing = entry(forRequestID: update.requestID, sessionID: sessionID) {
-            return existing
-        }
-
-        switch update {
-        case .requestStarted, .resourceTimingSnapshot:
-            let entry = NetworkEntry(sessionID: sessionID, update: update)
-            appendEntry(entry)
-            return entry
-        default:
-            return nil
-        }
-    }
-
     func appendEntry(_ entry: NetworkEntry) {
         pruneIfNeeded(adding: 1)
         entries.append(entry)
@@ -321,6 +307,35 @@ private extension NetworkStore {
     func markEntriesGenerationDirty() {
         hasPendingEntriesGenerationBump = true
         flushEntriesGenerationIfNeeded()
+    }
+
+    func apply(
+        _ update: NetworkEntry.Update,
+        toTrackedEntry entry: NetworkEntry
+    ) {
+        let previousDisplayState = displayEntriesState(for: entry)
+        entry.apply(update)
+        if displayEntriesState(for: entry) != previousDisplayState {
+            markEntriesGenerationDirty()
+        }
+    }
+
+    func displayEntriesState(for entry: NetworkEntry) -> (
+        url: String,
+        method: String,
+        statusCode: Int?,
+        statusText: String,
+        fileTypeLabel: String,
+        resourceFilter: NetworkResourceFilter
+    ) {
+        (
+            url: entry.url,
+            method: entry.method,
+            statusCode: entry.statusCode,
+            statusText: entry.statusText,
+            fileTypeLabel: entry.fileTypeLabel,
+            resourceFilter: entry.resourceFilter
+        )
     }
 
     func flushEntriesGenerationIfNeeded() {

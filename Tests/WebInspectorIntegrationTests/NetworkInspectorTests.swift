@@ -502,6 +502,40 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func displayEntriesGenerationBumpsWhenResponseUpdateChangesSearchableFields() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 82,
+            url: "https://example.com/searchable",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        inspector.searchText = "404"
+        let initialGeneration = inspector.displayEntriesGeneration
+
+        let responseReceived = try decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 82,
+            "status": 404,
+            "statusText": "Not Found",
+            "mimeType": "application/json",
+            "time": [
+                "monotonicMs": 1_020.0,
+                "wallMs": 1_700_000_000_020.0
+            ]
+        ])
+        inspector.store.apply(responseReceived, sessionID: "")
+
+        let updated = await waitUntil {
+            inspector.displayEntriesGeneration > initialGeneration
+                && inspector.displayEntries.map(\.requestID) == [82]
+        }
+        #expect(updated)
+    }
+
+    @Test
     func observeSearchTextSuppressesDuplicateConsecutiveStates() async {
         let inspector = WINetworkModel(session: NetworkSession())
         var emittedValues: [String] = []

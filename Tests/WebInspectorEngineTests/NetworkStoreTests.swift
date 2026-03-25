@@ -510,7 +510,7 @@ struct NetworkStoreTests {
     }
 
     @Test
-    func responseUpdateDoesNotBumpEntriesGenerationForExistingEntry() throws {
+    func responseUpdateBumpsEntriesGenerationForExistingEntryDisplayStateChange() throws {
         let store = NetworkStore()
         let sessionID = "existing-entry-session"
 
@@ -535,7 +535,7 @@ struct NetworkStoreTests {
         ], sessionID: sessionID)
         Self.apply(response, to: store, sessionID: sessionID)
 
-        #expect(store.entriesGeneration == initialGeneration)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 
     @Test
@@ -579,7 +579,7 @@ struct NetworkStoreTests {
     }
 
     @Test
-    func requestStartMergesIntoExistingResourceTimingEntry() throws {
+    func requestStartMergesIntoExistingResourceTimingEntryAndBumpsEntriesGeneration() throws {
         let store = NetworkStore()
         let sessionID = "merge-session"
 
@@ -591,6 +591,7 @@ struct NetworkStoreTests {
             "endTime": NetworkTestHelpers.timePayload(monotonicMs: 7_710.0, wallMs: 1_700_000_007_710.0)
         ], sessionID: sessionID)
         Self.apply(resourceTiming, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
 
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -616,6 +617,7 @@ struct NetworkStoreTests {
         #expect(entry.requestHeaders["content-type"] == "application/json")
         #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
         #expect(entry.phase == .pending)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 
     @Test
