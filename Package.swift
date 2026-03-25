@@ -87,7 +87,8 @@ let package = Package(
         .target(
             name: "WebInspectorBridge",
             dependencies: [
-                "WebInspectorBridgeObjCShim"
+                "WebInspectorBridgeObjCShim",
+                .product(name: "MachOKit", package: "MachOKit")
             ],
             exclude: ["ObjCShim"],
             swiftSettings: strictSwiftSettings

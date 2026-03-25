@@ -8,88 +8,13 @@ import WebKit
 @Suite(.serialized)
 struct WIImageCacheSPITests {
     @Test
-    func archiveParserFindsResourceInNestedSubframeArchives() throws {
-        let targetURL = URL(string: "https://example.com/target.png")!
-        let targetData = Data([0x01, 0x02, 0x03])
-        let archive = makeArchiveDictionary(
-            mainResourceURL: "https://example.com/index.html",
-            subresources: [
-                makeResourceDictionary(url: "https://example.com/other.png", data: Data([0x09]), mimeType: "image/png"),
-            ],
-            subframeArchives: [
-                makeArchiveDictionary(
-                    mainResourceURL: "https://example.com/frame.html",
-                    subresources: [
-                        makeResourceDictionary(url: targetURL.absoluteString, data: targetData, mimeType: "image/png"),
-                    ]
-                ),
-            ]
-        )
-        let data = try PropertyListSerialization.data(fromPropertyList: archive, format: .binary, options: 0)
-
-        let resource = try WIWebArchiveParser.resource(matching: targetURL, in: data)
-
-        #expect(
-            resource == .init(
-                data: targetData,
-                mimeType: "image/png",
-                frameURL: "https://example.com/frame.html",
-                isMainFrame: false
-            )
-        )
-    }
-
-    @Test
-    func archiveParserReturnsNilWhenResourceIsMissing() throws {
-        let archive = makeArchiveDictionary(mainResourceURL: "https://example.com/index.html")
-        let data = try PropertyListSerialization.data(fromPropertyList: archive, format: .binary, options: 0)
-
-        let resource = try WIWebArchiveParser.resource(matching: URL(string: "https://example.com/missing.png")!, in: data)
-
-        #expect(resource == nil)
-    }
-
-    @Test
-    func archiveParserThrowsForMalformedArchiveData() {
-        #expect(throws: WIImageCacheSPIError.webArchiveDecodeFailed) {
-            try WIWebArchiveParser.resource(
-                matching: URL(string: "https://example.com/bad.png")!,
-                in: Data("not-a-plist".utf8)
-            )
-        }
-    }
-
-    @Test
-    func archiveParserPrefersMainFrameResourceForDuplicateURL() throws {
-        let sharedURL = URL(string: "https://example.com/shared.png")!
-        let mainData = Data([0x01])
-        let childData = Data([0x02])
-        let archive = makeArchiveDictionary(
-            mainResourceURL: "https://example.com/index.html",
-            subresources: [
-                makeResourceDictionary(url: sharedURL.absoluteString, data: mainData, mimeType: "image/png"),
-            ],
-            subframeArchives: [
-                makeArchiveDictionary(
-                    mainResourceURL: "https://example.com/frame.html",
-                    subresources: [
-                        makeResourceDictionary(url: sharedURL.absoluteString, data: childData, mimeType: "image/png"),
-                    ]
-                ),
-            ]
-        )
-        let data = try PropertyListSerialization.data(fromPropertyList: archive, format: .binary, options: 0)
-
-        let resource = try WIWebArchiveParser.resource(matching: sharedURL, in: data)
-
-        #expect(
-            resource == .init(
-                data: mainData,
-                mimeType: "image/png",
-                frameURL: "https://example.com/index.html",
-                isMainFrame: true
-            )
-        )
+    func symbolResolverResolvesRequiredWebKitFrameSymbols() throws {
+        #if os(iOS) && !targetEnvironment(simulator)
+        throw Skip("The runtime smoke test is covered separately on device-backed flows.")
+        #else
+        let resolutionSucceeded = unsafe WISPIWebKitFrameSymbolResolver.symbols() != nil
+        #expect(resolutionSucceeded)
+        #endif
     }
 
     @Test
@@ -117,7 +42,50 @@ struct WIImageCacheSPITests {
     }
 
     @Test
-    func displayedImageCachePropagatesCancellationFromArchiveCreation() async throws {
+    func frameInfoProviderUsesFrameTreesWhenFramesSelectorIsUnavailable() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><iframe src="frame.html"></iframe></body></html>
+            """,
+            files: [
+                "frame.html": Data("""
+                <!doctype html>
+                <html><body><img src="frame.png"></body></html>
+                """.utf8),
+                "frame.png": Self.pngData,
+            ]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let framesLoaded = await waitUntil {
+            guard let frameInfos = await WISPIFrameBridge.frameInfos(for: webView) else {
+                return false
+            }
+            return frameInfos.count > 1
+        }
+        #expect(framesLoaded)
+
+        let realFrameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let mainFrameInfo = try #require(realFrameInfos.first(where: { $0.isMainFrame }))
+        let childFrameInfo = try #require(realFrameInfos.first(where: { !$0.isMainFrame }))
+        let fallbackWebView = FrameTreesFallbackWebView(
+            rootNodes: [
+                FrameTreeNodeStub(info: mainFrameInfo, childFrames: [
+                    FrameTreeNodeStub(info: childFrameInfo),
+                ]),
+            ]
+        )
+
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: fallbackWebView))
+
+        #expect(frameInfos.count == 2)
+        #expect(frameInfos.first?.isMainFrame == true)
+        #expect(frameInfos.compactMap(WISPIFrameBridge.frameID).count == 2)
+    }
+
+    @Test
+    func frameBridgeReturnsDataFromWKFrameGetResourceData() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
@@ -127,30 +95,24 @@ struct WIImageCacheSPITests {
         )
         let webView = makeTestWebView()
         try await loadFile(named: "index.html", from: fixture, in: webView)
-        let mainURL = fixture.directory.appendingPathComponent("main.png")
-        _ = try await waitUntilDisplayedImageCache(for: mainURL, in: webView)
 
-        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
-        let loader = WIImageCacheLoader(
-            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
-            webArchiveCreator: CancelledWebArchiveCreator()
+        let frameInfo = try #require(await WISPIFrameBridge.frameInfos(for: webView)?.first)
+        let resource = try await waitUntilFrameResourceData(
+            for: fixture.directory.appendingPathComponent("main.png"),
+            in: frameInfo,
+            webView: webView
         )
 
-        await #expect(throws: CancellationError.self) {
-            try await loader.displayedImageCache(
-                for: fixture.directory.appendingPathComponent("main.png"),
-                in: webView
-            )
-        }
+        #expect(resource?.data == Self.pngData)
+        #expect(resource?.mimeType == "image/png")
     }
 
     @Test
-    func webArchiveCreatorStopsAwaitingWhenTaskIsCancelled() async throws {
-        let creator = WIWebArchiveCreator()
-        let state = SlowArchiveRequestState()
+    func frameBridgeRequestResourceStopsAwaitingWhenTaskIsCancelled() async throws {
+        let state = SlowResourceRequestState()
 
         let task = Task {
-            try await creator.requestArchiveData { completionHandler in
+            try await WISPIFrameBridge.requestResource { completionHandler in
                 state.completionHandler = completionHandler
             }
         }
@@ -165,7 +127,222 @@ struct WIImageCacheSPITests {
             try await task.value
         }
 
-        state.completionHandler?(.success(Self.pngData))
+        state.completionHandler?(.success(.init(data: Self.pngData, mimeType: nil)))
+    }
+
+    @Test
+    func archiveFallbackRequestStopsAwaitingWhenTaskIsCancelled() async throws {
+        let state = SlowArchiveRequestState()
+
+        let task = Task {
+            try await WIImageCacheLoader.requestArchiveData { completionHandler in
+                state.completionHandler = completionHandler
+            }
+        }
+
+        let requestStarted = await waitUntil {
+            state.completionHandler != nil
+        }
+        #expect(requestStarted)
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+
+        state.completionHandler?(.success(Data()))
+    }
+
+    @Test
+    func frameBridgeThrowsWhenDirectLookupCannotResolvePage() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><img src="main.png"></body></html>
+            """,
+            files: ["main.png": Self.pngData]
+        )
+        let workingWebView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: workingWebView)
+        let mainURL = fixture.directory.appendingPathComponent("main.png")
+        _ = try await waitUntilDisplayedImageCache(for: mainURL, in: workingWebView)
+
+        let frameInfo = try #require(await WISPIFrameBridge.frameInfos(for: workingWebView)?.first)
+        let brokenWebView = BrokenPageTestWebView()
+
+        await #expect(throws: Error.self) {
+            try await WISPIFrameBridge.resourceData(for: mainURL, in: frameInfo, webView: brokenWebView)
+        }
+    }
+
+    @Test
+    func displayedImageCacheFallsBackToArchiveWhenDirectSymbolsAreUnavailable() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><img src="main.png"></body></html>
+            """,
+            files: ["main.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let loader = WIImageCacheLoader(
+            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
+            resourceLookup: { _, _, _ in
+                throw NSError(
+                    domain: WISPIResourceLookupBridgeError.domain,
+                    code: WISPIResourceLookupBridgeError.symbolUnavailable.rawValue
+                )
+            }
+        )
+
+        let entry = try await loader.displayedImageCache(
+            for: fixture.directory.appendingPathComponent("main.png"),
+            in: webView
+        )
+
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.mimeType == "image/png")
+    }
+
+    @Test
+    func displayedImageCacheFallsBackToArchiveWhenPageLookupFails() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><img src="main.png"></body></html>
+            """,
+            files: ["main.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let loader = WIImageCacheLoader(
+            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
+            resourceLookup: { _, _, _ in
+                throw NSError(
+                    domain: WISPIResourceLookupBridgeError.domain,
+                    code: WISPIResourceLookupBridgeError.pageUnavailable.rawValue
+                )
+            }
+        )
+
+        let entry = try await loader.displayedImageCache(
+            for: fixture.directory.appendingPathComponent("main.png"),
+            in: webView
+        )
+
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.mimeType == "image/png")
+    }
+
+    @Test
+    func displayedImageCacheFallsBackToArchiveWhenDirectLookupReturnsGenericNSError() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><img src="main.png"></body></html>
+            """,
+            files: ["main.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let loader = WIImageCacheLoader(
+            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
+            resourceLookup: { _, _, _ in
+                throw NSError(domain: "WebKitErrorDomain", code: 1)
+            }
+        )
+
+        let entry = try await loader.displayedImageCache(
+            for: fixture.directory.appendingPathComponent("main.png"),
+            in: webView
+        )
+
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.mimeType == "image/png")
+    }
+
+    @Test
+    func displayedImageCacheThrowsResourceFetchFailedForInvalidLookupArguments() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><img src="main.png"></body></html>
+            """,
+            files: ["main.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let loader = WIImageCacheLoader(
+            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
+            resourceLookup: { _, _, _ in
+                throw NSError(
+                    domain: WISPIResourceLookupBridgeError.domain,
+                    code: WISPIResourceLookupBridgeError.invalidArgument.rawValue
+                )
+            }
+        )
+
+        await #expect(throws: WIImageCacheSPIError.resourceFetchFailed) {
+            _ = try await loader.displayedImageCache(
+                for: fixture.directory.appendingPathComponent("main.png"),
+                in: webView
+            )
+        }
+    }
+
+    @Test
+    func displayedImageCacheContinuesPastStaleFrameLookupFailureToLaterFrameHit() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: { directory in
+                let imageURL = directory.appendingPathComponent("frame.png").absoluteString
+                return """
+                <!doctype html>
+                <html><body><iframe srcdoc="<img src='\(imageURL)'>"></iframe></body></html>
+                """
+            },
+            files: ["frame.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let framesLoaded = await waitUntil {
+            guard let frameInfos = await WISPIFrameBridge.frameInfos(for: webView) else {
+                return false
+            }
+            return frameInfos.count > 1
+        }
+        #expect(framesLoaded)
+
+        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
+        let mainFrameInfo = try #require(frameInfos.first(where: { $0.isMainFrame }))
+        let subframeInfo = try #require(frameInfos.first(where: { !$0.isMainFrame }))
+        let loader = WIImageCacheLoader(
+            frameInfoProvider: StubFrameInfoProvider(frameInfos: frameInfos),
+            resourceLookup: { _, frameInfo, _ in
+                if frameInfo === mainFrameInfo {
+                    throw NSError(
+                        domain: WISPIResourceLookupBridgeError.domain,
+                        code: WISPIResourceLookupBridgeError.frameUnavailable.rawValue
+                    )
+                }
+                if frameInfo === subframeInfo {
+                    return WISPIFetchedResource(data: Self.pngData, mimeType: "image/png")
+                }
+                return nil
+            }
+        )
+
+        let entry = try await loader.displayedImageCache(
+            for: fixture.directory.appendingPathComponent("frame.png"),
+            in: webView
+        )
+
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.frameID == WISPIFrameBridge.frameID(for: subframeInfo))
     }
 
     @Test
@@ -192,7 +369,7 @@ struct WIImageCacheSPITests {
     }
 
     @Test
-    func displayedImageCacheUsesCurrentSrcForPictureSelection() async throws {
+    func displayedImageCacheUsesSelectedPictureResourceURL() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
@@ -271,6 +448,65 @@ struct WIImageCacheSPITests {
     }
 
     @Test
+    func displayedImageCacheReturnsImageDocumentMainResourceFromIframe() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><iframe src="frame.png"></iframe></body></html>
+            """,
+            files: ["frame.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfosLoaded = await waitUntil {
+            guard let frameInfos = await WISPIFrameBridge.frameInfos(for: webView) else {
+                return false
+            }
+            return frameInfos.count > 1
+        }
+        #expect(frameInfosLoaded)
+
+        let mainFrameID = try #require(await WISPIFrameBridge.frameInfos(for: webView)?.first.flatMap(WISPIFrameBridge.frameID))
+        let entry = try await waitUntilDisplayedImageCache(for: fixture.directory.appendingPathComponent("frame.png"), in: webView)
+
+        let resolved = try #require(entry)
+        #expect(resolved.data == Self.pngData)
+        #expect(resolved.frameID != mainFrameID)
+    }
+
+    @Test
+    func displayedImageCacheReturnsImageDocumentMainResourceWhenTargetURLDiffersOnlyByFragment() async throws {
+        let fixture = try makeFixtureSite(
+            indexHTML: """
+            <!doctype html>
+            <html><body><iframe src="frame.png#viewer"></iframe></body></html>
+            """,
+            files: ["frame.png": Self.pngData]
+        )
+        let webView = makeTestWebView()
+        try await loadFile(named: "index.html", from: fixture, in: webView)
+        let frameInfosLoaded = await waitUntil {
+            guard let frameInfos = await WISPIFrameBridge.frameInfos(for: webView) else {
+                return false
+            }
+            return frameInfos.count > 1
+        }
+        #expect(frameInfosLoaded)
+
+        var targetURLComponents = URLComponents(
+            url: fixture.directory.appendingPathComponent("frame.png"),
+            resolvingAgainstBaseURL: false
+        )
+        targetURLComponents?.fragment = "viewer"
+        let targetURL = try #require(targetURLComponents?.url)
+
+        let entry = try await waitUntilDisplayedImageCache(for: targetURL, in: webView)
+
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.mimeType == "image/png")
+    }
+
+    @Test
     func displayedImageCachePrefersMainFrameWhenURLExistsInMainFrameAndIframe() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: { directory in
@@ -299,46 +535,24 @@ struct WIImageCacheSPITests {
     }
 
     @Test
-    func resolveFrameIDUsesMatchedResourceFrameURLForSubframe() async throws {
+    func displayedImageCacheInfersMIMETypeForExtensionlessImageResource() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
-            <html><body><iframe src="frame.html"></iframe></body></html>
+            <html><body><img src="blob"></body></html>
             """,
-            files: [
-                "frame.html": Data("""
-                <!doctype html>
-                <html><body><img src="frame.png"></body></html>
-                """.utf8),
-                "frame.png": Self.pngData,
-            ]
+            files: ["blob": Self.pngData]
         )
         let webView = makeTestWebView()
         try await loadFile(named: "index.html", from: fixture, in: webView)
 
-        let framesLoaded = await waitUntil {
-            guard let frameInfos = await WISPIFrameBridge.frameInfos(for: webView) else {
-                return false
-            }
-            return frameInfos.count > 1
-        }
-        #expect(framesLoaded)
-
-        let frameInfos = try #require(await WISPIFrameBridge.frameInfos(for: webView))
-        let subframe = try #require(frameInfos.first(where: { !$0.isMainFrame }))
-        let subframeID = try #require(WISPIFrameBridge.frameID(for: subframe))
-
-        let resolved = WIImageCacheLoader.resolveFrameID(
-            for: .init(
-                data: Self.pngData,
-                mimeType: "image/png",
-                frameURL: subframe.request.url?.absoluteString,
-                isMainFrame: false
-            ),
-            in: frameInfos
+        let entry = try await waitUntilDisplayedImageCache(
+            for: fixture.directory.appendingPathComponent("blob"),
+            in: webView
         )
 
-        #expect(resolved == subframeID)
+        #expect(entry?.data == Self.pngData)
+        #expect(entry?.mimeType == "image/png")
     }
 
     private func makeTestWebView() -> WKWebView {
@@ -372,6 +586,24 @@ struct WIImageCacheSPITests {
             try? await Task.sleep(nanoseconds: intervalNanoseconds)
         }
         return try await WIImageCacheSPI.displayedImageCache(for: imageURL, in: webView)
+    }
+
+    private func waitUntilFrameResourceData(
+        for imageURL: URL,
+        in frameInfo: WKFrameInfo,
+        webView: WKWebView,
+        maxAttempts: Int = 250,
+        intervalNanoseconds: UInt64 = 20_000_000
+    ) async throws -> WISPIFetchedResource? {
+        var lastResource: WISPIFetchedResource?
+        for _ in 0..<maxAttempts {
+            lastResource = try await WISPIFrameBridge.resourceData(for: imageURL, in: frameInfo, webView: webView)
+            if lastResource != nil {
+                return lastResource
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return try await WISPIFrameBridge.resourceData(for: imageURL, in: frameInfo, webView: webView)
     }
 
     private func waitUntil(
@@ -408,35 +640,6 @@ struct WIImageCacheSPITests {
         return FixtureSite(directory: directory)
     }
 
-    private func makeArchiveDictionary(
-        mainResourceURL: String,
-        subresources: [[String: Any]] = [],
-        subframeArchives: [[String: Any]] = []
-    ) -> [String: Any] {
-        var result: [String: Any] = [
-            "WebMainResource": makeResourceDictionary(
-                url: mainResourceURL,
-                data: Data(mainResourceURL.utf8),
-                mimeType: "text/html"
-            ),
-        ]
-        if !subresources.isEmpty {
-            result["WebSubresources"] = subresources
-        }
-        if !subframeArchives.isEmpty {
-            result["WebSubframeArchives"] = subframeArchives
-        }
-        return result
-    }
-
-    private func makeResourceDictionary(url: String, data: Data, mimeType: String) -> [String: Any] {
-        [
-            "WebResourceURL": url,
-            "WebResourceData": data,
-            "WebResourceMIMEType": mimeType,
-        ]
-    }
-
     private struct FixtureSite {
         let directory: URL
     }
@@ -465,24 +668,22 @@ private final class NavigationDelegate: NSObject, WKNavigationDelegate {
 }
 
 @MainActor
-private struct StubFrameInfoProvider: WIFrameInfoProviding {
-    let frameInfos: [WKFrameInfo]
-
-    func frameInfos(in webView: WKWebView) async -> [WKFrameInfo]? {
-        frameInfos
-    }
-}
-
-@MainActor
-private struct CancelledWebArchiveCreator: WIWebArchiveCreating {
-    func createWebArchiveData(in webView: WKWebView) async throws -> Data {
-        throw CancellationError()
-    }
+private final class SlowResourceRequestState {
+    var completionHandler: ((Result<WISPIFetchedResource?, NSError>) -> Void)?
 }
 
 @MainActor
 private final class SlowArchiveRequestState {
-    var completionHandler: (@Sendable (Result<Data, Error>) -> Void)?
+    var completionHandler: ((Result<Data, Error>) -> Void)?
+}
+
+@MainActor
+private struct StubFrameInfoProvider: WIFrameInfoProviding {
+    let frameInfos: [WKFrameInfo]?
+
+    func frameInfos(in webView: WKWebView) async -> [WKFrameInfo]? {
+        frameInfos
+    }
 }
 
 @objcMembers
@@ -518,6 +719,60 @@ private final class FallbackFrameTestWebView: WKWebView {
 
     @objc(_frameInfoFromHandle:completionHandler:)
     func test_frameInfoFromHandle(_ handle: AnyObject, completionHandler: @escaping (WKFrameInfo?) -> Void) {
+        guard handle === fallbackHandle else {
+            completionHandler(nil)
+            return
+        }
         completionHandler(fallbackFrameInfo)
+    }
+}
+
+private final class BrokenPageTestWebView: WKWebView {
+    init() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        super.init(frame: .zero, configuration: configuration)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc(_pageForTesting)
+    func test_pageForTesting() -> UnsafeMutableRawPointer? {
+        nil
+    }
+}
+
+@objcMembers
+private final class FrameTreeNodeStub: NSObject {
+    let info: WKFrameInfo
+    let childFrames: [FrameTreeNodeStub]
+
+    init(info: WKFrameInfo, childFrames: [FrameTreeNodeStub] = []) {
+        self.info = info
+        self.childFrames = childFrames
+    }
+}
+
+private final class FrameTreesFallbackWebView: WKWebView {
+    private let rootNodes: [FrameTreeNodeStub]
+
+    init(rootNodes: [FrameTreeNodeStub]) {
+        self.rootNodes = rootNodes
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        super.init(frame: .zero, configuration: configuration)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc(_frameTrees:)
+    func test_frameTrees(_ completionHandler: @escaping (NSSet?) -> Void) {
+        completionHandler(NSSet(array: rootNodes))
     }
 }

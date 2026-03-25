@@ -8,6 +8,17 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+FOUNDATION_EXPORT NSErrorDomain const WIKRuntimeBridgeErrorDomain;
+
+typedef NS_ERROR_ENUM(WIKRuntimeBridgeErrorDomain, WIKRuntimeBridgeErrorCode) {
+    WIKRuntimeBridgeErrorCodeInvalidArgument = 1,
+    WIKRuntimeBridgeErrorCodePageUnavailable = 2,
+    WIKRuntimeBridgeErrorCodeFrameHandleUnavailable = 3,
+    WIKRuntimeBridgeErrorCodeFrameUnavailable = 4,
+    WIKRuntimeBridgeErrorCodeURLCreationFailed = 5,
+    WIKRuntimeBridgeErrorCodeSymbolUnavailable = 6,
+};
+
 @interface WIKRuntimeBridge : NSObject
 
 + (nullable NSObject *)objectResultFromTarget:(NSObject *)target selectorName:(NSString *)selectorName;
@@ -20,6 +31,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)frameInfosForWebView:(WKWebView *)webView
            completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler;
 + (nullable NSNumber *)frameIDForFrameInfo:(WKFrameInfo *)frameInfo;
++ (nullable NSValue *)pageRefValueForWebView:(WKWebView *)webView;
++ (nullable NSValue *)frameHandleValueForFrameInfo:(WKFrameInfo *)frameInfo;
 + (BOOL)invokeSetResourceLoadDelegateOnWebView:(WKWebView *)webView
                                   selectorName:(NSString *)selectorName
                                       delegate:(nullable id)delegate;
