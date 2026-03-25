@@ -305,7 +305,7 @@ private enum WIWebArchiveResourceLookup {
     static func matchingResource(for targetURL: URL, in archiveData: Data) throws -> MatchedResource? {
         let propertyList: Any
         do {
-            propertyList = try PropertyListSerialization.propertyList(from: archiveData, options: [], format: nil)
+            propertyList = try unsafe PropertyListSerialization.propertyList(from: archiveData, options: [], format: nil)
         } catch {
             throw WIImageCacheSPIError.webArchiveDecodeFailed
         }
