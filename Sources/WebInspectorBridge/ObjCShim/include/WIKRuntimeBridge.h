@@ -17,6 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
                     selectorName:(NSString *)selectorName
                    stateRawValue:(NSInteger)stateRawValue
                  notifyObservers:(BOOL)notifyObservers;
++ (void)frameInfosForWebView:(WKWebView *)webView
+           completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler;
++ (nullable NSNumber *)frameIDForFrameInfo:(WKFrameInfo *)frameInfo;
 + (BOOL)invokeSetResourceLoadDelegateOnWebView:(WKWebView *)webView
                                   selectorName:(NSString *)selectorName
                                       delegate:(nullable id)delegate;

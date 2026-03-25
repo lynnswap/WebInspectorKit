@@ -76,6 +76,134 @@
     return YES;
 }
 
++ (NSNumber *)frameIDForHandle:(id)handle {
+    if (![handle isKindOfClass:[NSObject class]]) {
+        return nil;
+    }
+
+    SEL selector = NSSelectorFromString(@"frameID");
+    if (![handle respondsToSelector:selector]) {
+        return nil;
+    }
+
+    typedef unsigned long long (*Getter)(id, SEL);
+    IMP implementation = [handle methodForSelector:selector];
+    if (implementation == NULL) {
+        return nil;
+    }
+
+    Getter function = (Getter)implementation;
+    return @(function(handle, selector));
+}
+
++ (NSNumber *)frameIDForFrameInfo:(WKFrameInfo *)frameInfo {
+    if (![frameInfo isKindOfClass:[WKFrameInfo class]]) {
+        return nil;
+    }
+
+    id handle = [self objectResultFromTarget:frameInfo selectorName:@"_handle"];
+    return [self frameIDForHandle:handle];
+}
+
++ (void)appendFrameInfoIfNeeded:(WKFrameInfo *)frameInfo
+                     frameInfos:(NSMutableArray<WKFrameInfo *> *)frameInfos
+                   seenFrameIDs:(NSMutableSet<NSNumber *> *)seenFrameIDs {
+    NSNumber *frameID = [self frameIDForFrameInfo:frameInfo];
+    if (!frameID || [seenFrameIDs containsObject:frameID]) {
+        return;
+    }
+
+    [seenFrameIDs addObject:frameID];
+    [frameInfos addObject:frameInfo];
+}
+
++ (void)appendFrameInfosFromTreeNode:(id)node
+                          frameInfos:(NSMutableArray<WKFrameInfo *> *)frameInfos
+                        seenFrameIDs:(NSMutableSet<NSNumber *> *)seenFrameIDs {
+    if (![node isKindOfClass:[NSObject class]]) {
+        return;
+    }
+
+    id frameInfo = [self objectResultFromTarget:node selectorName:@"info"];
+    if ([frameInfo isKindOfClass:[WKFrameInfo class]]) {
+        [self appendFrameInfoIfNeeded:frameInfo frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
+    }
+
+    id childFrames = [self objectResultFromTarget:node selectorName:@"childFrames"];
+    if (![childFrames isKindOfClass:[NSArray class]]) {
+        return;
+    }
+
+    for (id childNode in (NSArray *)childFrames) {
+        [self appendFrameInfosFromTreeNode:childNode frameInfos:frameInfos seenFrameIDs:seenFrameIDs];
+    }
+}
+
++ (void)resolveMainFrameInfoForWebView:(WKWebView *)webView
+                     completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
+    id mainFrameHandle = [self objectResultFromTarget:webView selectorName:@"_mainFrame"];
+    if (!mainFrameHandle) {
+        completionHandler(nil);
+        return;
+    }
+
+    SEL selector = NSSelectorFromString(@"_frameInfoFromHandle:completionHandler:");
+    if (![webView respondsToSelector:selector]) {
+        completionHandler(nil);
+        return;
+    }
+
+    IMP implementation = [webView methodForSelector:selector];
+    if (implementation == NULL) {
+        completionHandler(nil);
+        return;
+    }
+
+    typedef void (*Invoker)(id, SEL, id, id);
+    Invoker function = (Invoker)implementation;
+    function(webView, selector, mainFrameHandle, [^(id frameInfo) {
+        if ([frameInfo isKindOfClass:[WKFrameInfo class]]) {
+            completionHandler(@[frameInfo]);
+            return;
+        }
+        completionHandler(nil);
+    } copy]);
+}
+
++ (void)frameInfosForWebView:(WKWebView *)webView
+           completionHandler:(void (^)(NSArray<WKFrameInfo *> * _Nullable frameInfos))completionHandler {
+    if (!webView || !completionHandler) {
+        if (completionHandler) {
+            completionHandler(nil);
+        }
+        return;
+    }
+
+    SEL framesSelector = NSSelectorFromString(@"_frames:");
+    if ([webView respondsToSelector:framesSelector]) {
+        IMP implementation = [webView methodForSelector:framesSelector];
+        if (implementation != NULL) {
+            typedef void (*FramesInvoker)(id, SEL, id);
+            FramesInvoker function = (FramesInvoker)implementation;
+            function(webView, framesSelector, [^(id mainFrameNode) {
+                NSMutableArray<WKFrameInfo *> *frameInfos = [NSMutableArray array];
+                NSMutableSet<NSNumber *> *seenFrameIDs = [NSMutableSet set];
+                [self appendFrameInfosFromTreeNode:mainFrameNode
+                                        frameInfos:frameInfos
+                                      seenFrameIDs:seenFrameIDs];
+                if (frameInfos.count) {
+                    completionHandler([frameInfos copy]);
+                    return;
+                }
+                [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
+            } copy]);
+            return;
+        }
+    }
+
+    [self resolveMainFrameInfoForWebView:webView completionHandler:completionHandler];
+}
+
 + (BOOL)invokeSetResourceLoadDelegateOnWebView:(WKWebView *)webView
                                   selectorName:(NSString *)selectorName
                                       delegate:(id)delegate {
