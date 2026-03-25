@@ -633,6 +633,7 @@ struct NetworkStoreTests {
             "time": NetworkTestHelpers.timePayload(monotonicMs: 8_800.0, wallMs: 1_700_000_008_800.0)
         ], sessionID: sessionID)
         Self.apply(start, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
 
         let resourceTiming = try NetworkTestHelpers.decodeEvent([
             "kind": "resourceTiming",
@@ -648,6 +649,7 @@ struct NetworkStoreTests {
         #expect(entry.phase == .completed)
         #expect(abs(entry.startTimestamp - 8.79) < 0.0001)
         #expect(abs((entry.endTimestamp ?? 0) - 8.82) < 0.0001)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 
     @Test
@@ -683,6 +685,37 @@ struct NetworkStoreTests {
         #expect(entry.phase == .completed)
         #expect(abs(entry.startTimestamp - 9.89) < 0.0001)
         #expect(abs((entry.endTimestamp ?? 0) - 9.93) < 0.0001)
+    }
+
+    @Test
+    func completionUpdateBumpsEntriesGenerationForExistingEntrySortMetrics() throws {
+        let store = NetworkStore()
+        let sessionID = "completion-sort-session"
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 123,
+            "url": "https://example.com/completed",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: sessionID)
+        Self.apply(start, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
+
+        let completed = try NetworkTestHelpers.decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 123,
+            "encodedBodyLength": 512,
+            "decodedBodySize": 1_024,
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_080.0, wallMs: 1_700_000_000_080.0)
+        ], sessionID: sessionID)
+        Self.apply(completed, to: store, sessionID: sessionID)
+
+        let entry = try #require(store.entry(forRequestID: 123, sessionID: sessionID))
+        #expect(entry.phase == .completed)
+        #expect(entry.encodedBodyLength == 512)
+        #expect(entry.decodedBodyLength == 1_024)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 }
 
