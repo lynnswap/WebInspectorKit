@@ -207,8 +207,9 @@ final class BrowserInspectorCoordinator {
         )
         Self.inspectorWindowRegistry.beginPendingPresentation()
         let userActivity = Self.makeInspectorWindowUserActivity()
+        let requestingScene = MonoclyWindowContextStore.shared.currentWindowScene ?? presenter.view.window?.windowScene
 
-        sceneActivationRequester.activateScene(userActivity, presenter.view.window?.windowScene) { [weak self] _ in
+        sceneActivationRequester.activateScene(userActivity, requestingScene) { [weak self] _ in
             Self.inspectorWindowRegistry.clear()
             self?.notifyPresentationStateChanged()
         }
@@ -375,6 +376,8 @@ final class BrowserInspectorCoordinator {
         inspectorController: WIInspectorController,
         tabs: [WITab] = [.dom(), .network()]
     ) -> Bool {
+        let resolvedParentWindow = parentWindow ?? MonoclyWindowContextStore.shared.currentWindow
+
         if let existingWindow = Self.inspectorWindowStore.window,
            let existingContainer = existingWindow.contentViewController as? WITabViewController {
             existingContainer.setTabs(tabs)
@@ -396,8 +399,8 @@ final class BrowserInspectorCoordinator {
         window.setContentSize(NSSize(width: 960, height: 720))
         window.minSize = NSSize(width: 640, height: 480)
 
-        if let parentWindow {
-            let parentFrame = parentWindow.frame
+        if let resolvedParentWindow {
+            let parentFrame = resolvedParentWindow.frame
             let origin = NSPoint(
                 x: parentFrame.midX - (window.frame.width / 2),
                 y: parentFrame.midY - (window.frame.height / 2)

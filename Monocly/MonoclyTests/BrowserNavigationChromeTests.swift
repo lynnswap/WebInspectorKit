@@ -8,6 +8,20 @@ import XCTest
 final class BrowserNavigationChromeTests: XCTestCase {
     private var retainedWindows: [UIWindow] = []
 
+    override func tearDown() {
+        let cleanupExpectation = XCTestExpectation(description: "reset window context store")
+        Task { @MainActor in
+            MonoclyWindowContextStore.shared.resetForTesting()
+            BrowserInspectorCoordinator.clearInspectorWindowPresentation()
+            cleanupExpectation.fulfill()
+        }
+        let waitResult = XCTWaiter().wait(for: [cleanupExpectation], timeout: 2)
+        if waitResult != .completed {
+            XCTFail("Timed out while resetting the window context store.")
+        }
+        super.tearDown()
+    }
+
     private struct HostedRootViewControllerFixture {
         let window: UIWindow
         let rootViewController: BrowserRootViewController
@@ -212,13 +226,16 @@ final class BrowserNavigationChromeTests: XCTestCase {
         let pageViewController = fixture.pageViewController
         var activationCount = 0
         var requestedActivity: NSUserActivity?
+        var requestingScene: UIScene?
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
+        MonoclyWindowContextStore.shared.resetForTesting()
         pageViewController.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { userActivity, _, _ in
+                activateScene: { userActivity, scene, _ in
                     requestedActivity = userActivity
+                    requestingScene = scene
                     activationCount += 1
                 }
             )
@@ -228,6 +245,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(activationCount, 1)
         XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
         XCTAssertEqual(requestedActivity?.targetContentIdentifier, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
+        XCTAssertTrue(requestingScene === fixture.window.windowScene)
 
         XCTAssertTrue(pageViewController.hasInspectorWindowForTesting)
         XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
@@ -235,6 +253,41 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertFalse(pageViewController.triggerInspectorWindowActionForTesting())
         XCTAssertEqual(activationCount, 1)
         pageViewController.dismissInspectorWindowForTesting()
+    }
+
+    @MainActor
+    func testRegularInspectorWindowActionUsesCurrentSceneContextWhenPresenterIsUnattached() throws {
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
+        let unattachedPresenter = UIViewController()
+        var activationCount = 0
+        var requestingScene: UIScene?
+
+        let windowScene = try XCTUnwrap(fixture.window.windowScene)
+        MonoclyWindowContextStore.shared.setCurrentSceneForTesting(windowScene, window: fixture.window)
+        addTeardownBlock {
+            coordinator.dismissInspectorWindow()
+        }
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { _, scene, _ in
+                    requestingScene = scene
+                    activationCount += 1
+                }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: unattachedPresenter,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertTrue(requestingScene === windowScene)
     }
 
     @MainActor

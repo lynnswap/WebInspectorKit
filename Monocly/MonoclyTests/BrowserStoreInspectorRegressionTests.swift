@@ -53,6 +53,7 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
             for inspector in inspectorsToDisconnect {
                 await inspector.disconnect()
             }
+            MonoclyWindowContextStore.shared.resetForTesting()
             drainMainRunLoop()
             for directoryURL in directoriesToDelete {
                 try? FileManager.default.removeItem(at: directoryURL)
@@ -307,6 +308,52 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
             inspectorController.lifecycle == .active && inspectorController.dom.hasPageWebView
         }
         XCTAssertTrue(reconnected, "The browser root did not reconnect the inspector after appearing again.")
+    }
+
+    @MainActor
+    func testInspectorWindowPresentationUsesCurrentWindowContextWhenParentWindowIsNil() async throws {
+        let initialURL = try XCTUnwrap(URL(string: "about:blank"))
+        let model = BrowserStore(url: initialURL)
+        let inspectorController = WIInspectorController()
+        retainedState.inspectors.append(inspectorController)
+        let (browserWindow, _) = makeBrowserWindow(model: model, inspectorController: inspectorController)
+
+        browserWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        MonoclyWindowContextStore.shared.setCurrentWindowForTesting(browserWindow)
+
+        let didPresent = BrowserInspectorCoordinator.present(
+            from: nil,
+            browserStore: model,
+            inspectorController: inspectorController,
+            tabs: [.dom(), .network()]
+        )
+        XCTAssertTrue(didPresent, "The inspector coordinator failed to present using the current window context.")
+
+        let inspectorWindowAppeared = await waitForCondition(description: "inspector window from current context") {
+            NSApp.windows.contains { $0.title == "Web Inspector" && $0.isVisible }
+        }
+        XCTAssertTrue(inspectorWindowAppeared, "The inspector window did not appear when the current window context was used.")
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        XCTAssertEqual(inspectorWindow.frame.midX, browserWindow.frame.midX, accuracy: 2)
+        XCTAssertEqual(inspectorWindow.frame.midY, browserWindow.frame.midY, accuracy: 2)
+    }
+
+    @MainActor
+    func testClosingCurrentWindowContextFallsBackToNextMainWindow() {
+        let firstWindow = NSWindow()
+        let secondWindow = NSWindow()
+
+        MonoclyWindowContextStore.shared.setCurrentWindowForTesting(firstWindow)
+        MonoclyWindowContextStore.shared.refreshCurrentWindowForTesting(
+            keyWindow: nil,
+            mainWindow: secondWindow
+        )
+
+        XCTAssertTrue(MonoclyWindowContextStore.shared.currentWindow === secondWindow)
     }
 }
 
