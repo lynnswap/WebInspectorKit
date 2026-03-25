@@ -75,7 +75,7 @@ public final class WINetworkViewController: NSSplitViewController {
         }
         .store(in: &observationHandles)
 
-        inspector.observeTask(
+        inspector.observe(
             [\.selectedEntry]
         ) { [weak self] in
             guard let self else {

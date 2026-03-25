@@ -153,6 +153,47 @@ struct NetworkInspectorAppKitTests {
     }
 
     @Test
+    func networkTabUpdatesBodyTitleWhenContentTypeHeaderChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 114,
+            url: "https://example.com/body-title",
+            initiator: "xhr",
+            monotonicMs: 1_000
+        )
+
+        let entry = try #require(inspector.displayEntries.first(where: { $0.requestID == 114 }))
+        entry.responseBody = NetworkBody(
+            kind: .text,
+            preview: "{\"status\":\"ok\"}",
+            full: "{\"status\":\"ok\"}",
+            role: .response
+        )
+
+        let controller = WINetworkViewController(inspector: inspector)
+        controller.loadViewIfNeeded()
+        inspector.selectEntry(entry)
+
+        guard let responseButton = try await waitForResponseBodyButton(in: controller) else {
+            Issue.record("Expected response body button")
+            return
+        }
+
+        let initialGeneration = inspector.displayEntriesGeneration
+        #expect(responseButton.title.contains("TEXT"))
+
+        entry.responseHeaders = NetworkHeaders(dictionary: ["content-type": "application/json; charset=utf-8"])
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            responseButton.title.contains("application/json")
+        })
+        #expect(await waitUntilAsync(timeout: 0.2) {
+            inspector.displayEntriesGeneration == initialGeneration
+        })
+    }
+
+    @Test
     func networkModelGenerationDoesNotBumpWhenSelectionChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
@@ -402,6 +443,17 @@ struct NetworkInspectorAppKitTests {
         let data = try JSONSerialization.data(withJSONObject: payload)
         return try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
     }
+
+    private func waitForResponseBodyButton(
+        in controller: WINetworkViewController
+    ) async throws -> NSButton? {
+        let exists = await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseBodyButtonForTesting != nil
+        }
+        #expect(exists)
+        return controller.detailViewControllerForTesting.responseBodyButtonForTesting
+    }
+
     private func waitUntilAsync(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

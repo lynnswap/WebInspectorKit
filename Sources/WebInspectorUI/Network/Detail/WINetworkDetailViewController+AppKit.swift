@@ -7,47 +7,22 @@ import WebInspectorRuntime
 import AppKit
 
 @MainActor
+private enum WINetworkHeaderRole {
+    case request
+    case response
+}
+
+@MainActor
 final class WINetworkDetailViewController: NSViewController {
-    fileprivate struct DetailStructureState: Equatable {
+    private struct DetailStructureState: Equatable {
         let requestBodyIdentity: ObjectIdentifier?
         let responseBodyIdentity: ObjectIdentifier?
         let hasError: Bool
     }
 
-    fileprivate struct OverviewSnapshot: Equatable {
-        let statusLabel: String
-        let statusSeverity: NetworkStatusSeverity
-        let url: String
-        let durationText: String?
-        let encodedBodyLengthText: String?
-    }
-
-    fileprivate struct HeaderSnapshot: Equatable {
-        let name: String
-        let value: String
-    }
-
-    fileprivate struct BodySnapshot: Equatable {
-        let role: NetworkBody.Role
-        let primaryText: String
-        let summaryText: String
-        let previewText: String
-    }
-
-    fileprivate struct DetailSnapshot: Equatable {
-        let entryID: UUID?
-        let structureState: DetailStructureState?
-        let overview: OverviewSnapshot?
-        let requestHeaders: [HeaderSnapshot]
-        let requestBody: BodySnapshot?
-        let responseHeaders: [HeaderSnapshot]
-        let responseBody: BodySnapshot?
-        let errorDescription: String?
-    }
-
     private let inspector: WINetworkModel
     private var observationHandles: Set<ObservationHandle> = []
-    private var renderedSnapshot: DetailSnapshot?
+    private var selectedEntryStructureObservationHandles: Set<ObservationHandle> = []
 
     private let scrollView = NSScrollView()
     private let documentView = WINetworkFlippedContentView()
@@ -61,12 +36,7 @@ final class WINetworkDetailViewController: NSViewController {
     private weak var responseBodyButton: NSButton?
     private var renderedSectionTitles: [String] = []
     private var displayedEntryID: UUID?
-    private var overviewSectionView: WINetworkOverviewSectionView?
-    private var requestHeadersSectionView: WINetworkHeadersSectionView?
-    private var requestBodySectionView: WINetworkBodySectionView?
-    private var responseHeadersSectionView: WINetworkHeadersSectionView?
-    private var responseBodySectionView: WINetworkBodySectionView?
-    private var errorSectionView: WINetworkErrorSectionView?
+    private var displayedStructureState: DetailStructureState?
 
     init(inspector: WINetworkModel) {
         self.inspector = inspector
@@ -167,13 +137,38 @@ final class WINetworkDetailViewController: NSViewController {
         ])
     }
 
+    private func startObservingInspector() {
+        inspector.observe(
+            [\.selectedEntry],
+            onChange: { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.display(self.inspector.selectedEntry)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+    }
+
     func display(_ entry: NetworkEntry?) {
-        let snapshot = makeDetailSnapshot(for: entry)
-        if displayedEntryID != snapshot.entryID {
+        let structureState = makeStructureState(for: entry)
+        let entryDidChange = displayedEntryID != entry?.id
+        let needsRebuild = entryDidChange || displayedStructureState != structureState
+        if entryDidChange {
             dismissPresentedBodyPreviewIfNeeded()
         }
-        displayedEntryID = snapshot.entryID
-        applyObservedSnapshot(snapshot)
+        displayedEntryID = entry?.id
+        displayedStructureState = structureState
+        selectedEntryStructureObservationHandles.removeAll()
+        if needsRebuild {
+            rebuildContent(for: entry)
+        }
+        updateVisibility()
+        guard let entry else {
+            return
+        }
+        startObservingEntryStructure(entry)
     }
 
     func updateVisibility() {
@@ -183,31 +178,33 @@ final class WINetworkDetailViewController: NSViewController {
         emptyStateView.isHidden = hasEntries
     }
 
-    private func startObservingInspector() {
-        inspector.observe(
-            \.appKitDetailSnapshot,
-            options: [.removeDuplicates],
-            onChange: { [weak self] snapshot in
-                guard let self, snapshot.entryID == self.displayedEntryID else {
+    private func startObservingEntryStructure(_ entry: NetworkEntry) {
+        let initialStructureState = makeStructureState(for: entry)
+        var ignoresInitialEmission = true
+        entry.observe(
+            [\.requestBody, \.responseBody, \.errorDescription],
+            onChange: { [weak self, weak entry] in
+                guard let self, let entry else {
                     return
                 }
-                self.applyObservedSnapshot(snapshot)
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                let currentStructureState = self.makeStructureState(for: entry)
+                if ignoresInitialEmission {
+                    ignoresInitialEmission = false
+                    guard currentStructureState != initialStructureState else {
+                        return
+                    }
+                }
+                self.display(entry)
             },
             isolation: MainActor.shared
         )
-        .store(in: &observationHandles)
+        .store(in: &selectedEntryStructureObservationHandles)
     }
 
-    private func applyObservedSnapshot(_ snapshot: DetailSnapshot) {
-        if renderedSnapshot?.structureState != snapshot.structureState || renderedSnapshot?.entryID != snapshot.entryID {
-            rebuildContent(for: snapshot)
-        }
-        applySnapshot(snapshot)
-        renderedSnapshot = snapshot
-        updateVisibility()
-    }
-
-    private func rebuildContent(for snapshot: DetailSnapshot) {
+    private func rebuildContent(for entry: NetworkEntry?) {
         contentStack.arrangedSubviews.forEach { subview in
             contentStack.removeArrangedSubview(subview)
             subview.removeFromSuperview()
@@ -215,64 +212,88 @@ final class WINetworkDetailViewController: NSViewController {
         requestBodyButton = nil
         responseBodyButton = nil
         renderedSectionTitles = []
-        overviewSectionView = nil
-        requestHeadersSectionView = nil
-        requestBodySectionView = nil
-        responseHeadersSectionView = nil
-        responseBodySectionView = nil
-        errorSectionView = nil
 
-        guard snapshot.entryID != nil else {
+        guard let entry else {
             view.needsLayout = true
             return
         }
 
         var sections: [NSView] = []
+        let invalidateLayout: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.view.needsLayout = true
+        }
+
         let overviewTitle = wiLocalized("network.detail.section.overview", default: "Overview")
-        let overviewSectionView = WINetworkOverviewSectionView(title: overviewTitle)
-        self.overviewSectionView = overviewSectionView
-        sections.append(overviewSectionView)
+        sections.append(
+            WINetworkOverviewSectionView(
+                inspector: inspector,
+                title: overviewTitle,
+                invalidateLayout: invalidateLayout
+            )
+        )
         renderedSectionTitles.append(overviewTitle)
 
         let requestTitle = wiLocalized("network.section.request", default: "Request")
-        let requestHeadersSectionView = WINetworkHeadersSectionView(title: requestTitle)
-        self.requestHeadersSectionView = requestHeadersSectionView
-        sections.append(requestHeadersSectionView)
+        sections.append(
+            WINetworkHeadersSectionView(
+                inspector: inspector,
+                role: .request,
+                title: requestTitle,
+                invalidateLayout: invalidateLayout
+            )
+        )
         renderedSectionTitles.append(requestTitle)
 
-        if snapshot.requestBody != nil {
+        if entry.requestBody != nil {
             let requestBodyTitle = wiLocalized("network.section.body.request", default: "Request Body")
-            let requestBodySectionView = WINetworkBodySectionView(title: requestBodyTitle)
+            let requestBodySectionView = WINetworkBodySectionView(
+                inspector: inspector,
+                role: .request,
+                title: requestBodyTitle,
+                invalidateLayout: invalidateLayout
+            )
             requestBodySectionView.actionButton.target = self
             requestBodySectionView.actionButton.action = #selector(showRequestBodyPreview)
-            self.requestBodySectionView = requestBodySectionView
             requestBodyButton = requestBodySectionView.actionButton
             sections.append(requestBodySectionView)
             renderedSectionTitles.append(requestBodyTitle)
         }
 
         let responseTitle = wiLocalized("network.section.response", default: "Response")
-        let responseHeadersSectionView = WINetworkHeadersSectionView(title: responseTitle)
-        self.responseHeadersSectionView = responseHeadersSectionView
-        sections.append(responseHeadersSectionView)
+        sections.append(
+            WINetworkHeadersSectionView(
+                inspector: inspector,
+                role: .response,
+                title: responseTitle,
+                invalidateLayout: invalidateLayout
+            )
+        )
         renderedSectionTitles.append(responseTitle)
 
-        if snapshot.responseBody != nil {
+        if entry.responseBody != nil {
             let responseBodyTitle = wiLocalized("network.section.body.response", default: "Response Body")
-            let responseBodySectionView = WINetworkBodySectionView(title: responseBodyTitle)
+            let responseBodySectionView = WINetworkBodySectionView(
+                inspector: inspector,
+                role: .response,
+                title: responseBodyTitle,
+                invalidateLayout: invalidateLayout
+            )
             responseBodySectionView.actionButton.target = self
             responseBodySectionView.actionButton.action = #selector(showResponseBodyPreview)
-            self.responseBodySectionView = responseBodySectionView
             responseBodyButton = responseBodySectionView.actionButton
             sections.append(responseBodySectionView)
             renderedSectionTitles.append(responseBodyTitle)
         }
 
-        if let errorDescription = snapshot.errorDescription, errorDescription.isEmpty == false {
+        if let errorDescription = entry.errorDescription, errorDescription.isEmpty == false {
             let errorTitle = wiLocalized("network.section.error", default: "Error")
-            let errorSectionView = WINetworkErrorSectionView(title: errorTitle)
-            self.errorSectionView = errorSectionView
-            sections.append(errorSectionView)
+            sections.append(
+                WINetworkErrorSectionView(
+                    inspector: inspector,
+                    title: errorTitle,
+                    invalidateLayout: invalidateLayout
+                )
+            )
             renderedSectionTitles.append(errorTitle)
         }
 
@@ -283,16 +304,6 @@ final class WINetworkDetailViewController: NSViewController {
             }
         }
 
-        view.needsLayout = true
-    }
-
-    private func applySnapshot(_ snapshot: DetailSnapshot) {
-        overviewSectionView?.apply(snapshot: snapshot.overview)
-        requestHeadersSectionView?.apply(snapshot: snapshot.requestHeaders)
-        requestBodySectionView?.apply(snapshot: snapshot.requestBody)
-        responseHeadersSectionView?.apply(snapshot: snapshot.responseHeaders)
-        responseBodySectionView?.apply(snapshot: snapshot.responseBody)
-        errorSectionView?.apply(errorDescription: snapshot.errorDescription ?? "")
         view.needsLayout = true
     }
 
@@ -342,76 +353,24 @@ final class WINetworkDetailViewController: NSViewController {
         presented.dismiss(nil)
     }
 
-    private func makeDetailSnapshot(for entry: NetworkEntry?) -> DetailSnapshot {
-        Self.makeDetailSnapshot(from: entry)
-    }
-}
-
-fileprivate extension WINetworkDetailViewController {
-    static func makeDetailSnapshot(from entry: NetworkEntry?) -> DetailSnapshot {
+    private func makeStructureState(for entry: NetworkEntry?) -> DetailStructureState? {
         guard let entry else {
-            return DetailSnapshot(
-                entryID: nil,
-                structureState: nil,
-                overview: nil,
-                requestHeaders: [],
-                requestBody: nil,
-                responseHeaders: [],
-                responseBody: nil,
-                errorDescription: nil
-            )
+            return nil
         }
-
-        let structureState = DetailStructureState(
+        return DetailStructureState(
             requestBodyIdentity: entry.requestBody.map(ObjectIdentifier.init),
             responseBodyIdentity: entry.responseBody.map(ObjectIdentifier.init),
-            hasError: (entry.errorDescription?.isEmpty == false)
+            hasError: entry.errorDescription?.isEmpty == false
         )
-        let overview = OverviewSnapshot(
-            statusLabel: entry.statusLabel,
-            statusSeverity: entry.statusSeverity,
-            url: entry.url,
-            durationText: entry.duration.map(entry.durationText(for:)),
-            encodedBodyLengthText: entry.encodedBodyLength.map(entry.sizeText(for:))
-        )
-        let requestHeaders = entry.requestHeaders.fields.map { HeaderSnapshot(name: $0.name, value: $0.value) }
-        let responseHeaders = entry.responseHeaders.fields.map { HeaderSnapshot(name: $0.name, value: $0.value) }
-
-        return DetailSnapshot(
-            entryID: entry.id,
-            structureState: structureState,
-            overview: overview,
-            requestHeaders: requestHeaders,
-            requestBody: entry.requestBody.map { body in
-                BodySnapshot(
-                    role: body.role,
-                    primaryText: networkDetailBodyPrimaryText(entry: entry, body: body),
-                    summaryText: body.summary ?? "",
-                    previewText: networkDetailBodySecondaryText(body)
-                )
-            },
-            responseHeaders: responseHeaders,
-            responseBody: entry.responseBody.map { body in
-                BodySnapshot(
-                    role: body.role,
-                    primaryText: networkDetailBodyPrimaryText(entry: entry, body: body),
-                    summaryText: body.summary ?? "",
-                    previewText: networkDetailBodySecondaryText(body)
-                )
-            },
-            errorDescription: entry.errorDescription.flatMap { $0.isEmpty ? nil : $0 }
-        )
-    }
-}
-
-private extension WINetworkModel {
-    var appKitDetailSnapshot: WINetworkDetailViewController.DetailSnapshot {
-        WINetworkDetailViewController.makeDetailSnapshot(from: selectedEntry)
     }
 }
 
 @MainActor
 private final class WINetworkOverviewSectionView: NSStackView {
+    private let inspector: WINetworkModel
+    private let invalidateLayout: @MainActor () -> Void
+    private var observationHandles: Set<ObservationHandle> = []
+
     private let statusMetricView = WINetworkAppKitViewFactory.makeMetricView(symbolName: "circle.fill", text: "")
     private let durationMetricView = WINetworkAppKitViewFactory.makeMetricView(symbolName: "clock", text: "")
     private let encodedMetricView = WINetworkAppKitViewFactory.makeMetricView(symbolName: "arrow.down.to.line", text: "")
@@ -440,7 +399,9 @@ private final class WINetworkOverviewSectionView: NSStackView {
         encodedMetricView.arrangedSubviews[1] as! NSTextField
     }
 
-    init(title: String) {
+    init(inspector: WINetworkModel, title: String, invalidateLayout: @escaping @MainActor () -> Void) {
+        self.inspector = inspector
+        self.invalidateLayout = invalidateLayout
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
@@ -456,6 +417,8 @@ private final class WINetworkOverviewSectionView: NSStackView {
         addArrangedSubview(WINetworkAppKitViewFactory.makeSectionTitleLabel(title))
         addArrangedSubview(metricsStack)
         addArrangedSubview(urlLabel)
+
+        bindCurrentSelectedEntry()
     }
 
     @available(*, unavailable)
@@ -463,21 +426,74 @@ private final class WINetworkOverviewSectionView: NSStackView {
         nil
     }
 
-    func apply(snapshot: WINetworkDetailViewController.OverviewSnapshot?) {
-        guard let snapshot else {
-            statusLabel.stringValue = ""
-            statusImageView.contentTintColor = networkStatusColor(for: .neutral)
-            urlLabel.stringValue = ""
-            applyMetric(durationMetricView, label: durationLabel, text: nil)
-            applyMetric(encodedMetricView, label: encodedLabel, text: nil)
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        if newSuperview == nil {
+            observationHandles.removeAll()
+        }
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    private func bindCurrentSelectedEntry() {
+        observationHandles.removeAll()
+        guard let entry = inspector.selectedEntry else {
+            clear()
             return
         }
 
-        statusLabel.stringValue = snapshot.statusLabel
-        statusImageView.contentTintColor = networkStatusColor(for: snapshot.statusSeverity)
-        urlLabel.stringValue = snapshot.url
-        applyMetric(durationMetricView, label: durationLabel, text: snapshot.durationText)
-        applyMetric(encodedMetricView, label: encodedLabel, text: snapshot.encodedBodyLengthText)
+        apply(entry: entry)
+
+        entry.observe(
+            \.url,
+            onChange: { [weak self, weak entry] _ in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.urlLabel.stringValue = entry.url
+                self.invalidateLayout()
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+
+        entry.observe(
+            [\.statusCode, \.statusText, \.phase, \.duration, \.encodedBodyLength],
+            onChange: { [weak self, weak entry] in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.apply(entry: entry)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+    }
+
+    private func clear() {
+        statusLabel.stringValue = ""
+        statusImageView.contentTintColor = networkStatusColor(for: .neutral)
+        urlLabel.stringValue = ""
+        applyMetric(durationMetricView, label: durationLabel, text: nil)
+        applyMetric(encodedMetricView, label: encodedLabel, text: nil)
+        invalidateLayout()
+    }
+
+    private func apply(entry: NetworkEntry) {
+        statusLabel.stringValue = entry.statusLabel
+        statusImageView.contentTintColor = networkStatusColor(for: entry.statusSeverity)
+        urlLabel.stringValue = entry.url
+        applyMetric(durationMetricView, label: durationLabel, text: entry.duration.map(entry.durationText(for:)))
+        applyMetric(
+            encodedMetricView,
+            label: encodedLabel,
+            text: entry.encodedBodyLength.map(entry.sizeText(for:))
+        )
+        invalidateLayout()
     }
 
     private func applyMetric(_ metricView: NSStackView, label: NSTextField, text: String?) {
@@ -488,9 +504,21 @@ private final class WINetworkOverviewSectionView: NSStackView {
 
 @MainActor
 private final class WINetworkHeadersSectionView: NSStackView {
+    private let inspector: WINetworkModel
+    private let role: WINetworkHeaderRole
+    private let invalidateLayout: @MainActor () -> Void
+    private var observationHandles: Set<ObservationHandle> = []
     private let rowsStack = NSStackView()
 
-    init(title: String) {
+    init(
+        inspector: WINetworkModel,
+        role: WINetworkHeaderRole,
+        title: String,
+        invalidateLayout: @escaping @MainActor () -> Void
+    ) {
+        self.inspector = inspector
+        self.role = role
+        self.invalidateLayout = invalidateLayout
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
@@ -502,6 +530,8 @@ private final class WINetworkHeadersSectionView: NSStackView {
 
         addArrangedSubview(WINetworkAppKitViewFactory.makeSectionTitleLabel(title))
         addArrangedSubview(rowsStack)
+
+        bindCurrentSelectedEntry()
     }
 
     @available(*, unavailable)
@@ -509,30 +539,73 @@ private final class WINetworkHeadersSectionView: NSStackView {
         nil
     }
 
-    func apply(snapshot: [WINetworkDetailViewController.HeaderSnapshot]) {
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        if newSuperview == nil {
+            observationHandles.removeAll()
+        }
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    private func bindCurrentSelectedEntry() {
+        observationHandles.removeAll()
+        guard let entry = inspector.selectedEntry else {
+            apply(headers: NetworkHeaders())
+            return
+        }
+
+        let headersKeyPath: KeyPath<NetworkEntry, NetworkHeaders> = role == .request
+            ? \.requestHeaders
+            : \.responseHeaders
+
+        apply(headers: entry[keyPath: headersKeyPath])
+
+        entry.observe(
+            headersKeyPath,
+            onChange: { [weak self, weak entry] headers in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.apply(headers: headers)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+    }
+
+    private func apply(headers: NetworkHeaders) {
         rowsStack.arrangedSubviews.forEach { subview in
             rowsStack.removeArrangedSubview(subview)
             subview.removeFromSuperview()
         }
 
-        if snapshot.isEmpty {
+        if headers.isEmpty {
             rowsStack.addArrangedSubview(
                 WINetworkAppKitViewFactory.makeSecondaryLabel(
                     wiLocalized("network.headers.empty", default: "No headers")
                 )
             )
+            invalidateLayout()
             return
         }
 
-        for field in snapshot {
+        for field in headers.fields {
             rowsStack.addArrangedSubview(makeNetworkHeaderFieldView(field))
         }
+        invalidateLayout()
     }
 }
 
 @MainActor
 private final class WINetworkBodySectionView: NSStackView {
     let actionButton = NSButton(title: "", target: nil, action: nil)
+
+    private let inspector: WINetworkModel
+    private let role: NetworkBody.Role
+    private let invalidateLayout: @MainActor () -> Void
+    private var observationHandles: Set<ObservationHandle> = []
 
     private let summaryLabel = WINetworkAppKitViewFactory.makeSecondaryLabel(
         "",
@@ -549,7 +622,15 @@ private final class WINetworkBodySectionView: NSStackView {
         selectable: true
     )
 
-    init(title: String) {
+    init(
+        inspector: WINetworkModel,
+        role: NetworkBody.Role,
+        title: String,
+        invalidateLayout: @escaping @MainActor () -> Void
+    ) {
+        self.inspector = inspector
+        self.role = role
+        self.invalidateLayout = invalidateLayout
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
@@ -571,6 +652,8 @@ private final class WINetworkBodySectionView: NSStackView {
         addArrangedSubview(actionButton)
         addArrangedSubview(summaryLabel)
         addArrangedSubview(previewLabel)
+
+        bindCurrentSelectedEntry()
     }
 
     @available(*, unavailable)
@@ -578,18 +661,105 @@ private final class WINetworkBodySectionView: NSStackView {
         nil
     }
 
-    func apply(snapshot: WINetworkDetailViewController.BodySnapshot?) {
-        actionButton.title = snapshot?.primaryText
-            ?? wiLocalized("network.body.unavailable", default: "Body unavailable")
-        summaryLabel.stringValue = snapshot?.summaryText ?? ""
-        summaryLabel.isHidden = (snapshot?.summaryText.isEmpty ?? true)
-        previewLabel.stringValue = snapshot?.previewText
-            ?? wiLocalized("network.body.unavailable", default: "Body unavailable")
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        if newSuperview == nil {
+            observationHandles.removeAll()
+        }
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    private func bindCurrentSelectedEntry() {
+        observationHandles.removeAll()
+        guard let entry = inspector.selectedEntry, let body = body(from: entry) else {
+            applyUnavailable()
+            return
+        }
+
+        apply(entry: entry, body: body)
+
+        let entryKeyPaths: [PartialKeyPath<NetworkEntry>] = [
+            \.mimeType,
+            \.decodedBodyLength,
+            \.encodedBodyLength,
+            \.requestBodyBytesSent,
+            \.requestHeaders,
+            \.responseHeaders
+        ]
+        entry.observe(
+            entryKeyPaths,
+            onChange: { [weak self, weak entry] in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id, let body = self.body(from: entry) else {
+                    return
+                }
+                self.apply(entry: entry, body: body)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+
+        body.observe(
+            [
+                \.role,
+                \.kind,
+                \.preview,
+                \.full,
+                \.size,
+                \.isBase64Encoded,
+                \.isTruncated,
+                \.summary,
+                \.reference,
+                \.formEntries,
+                \.fetchState
+            ],
+            onChange: { [weak self, weak entry, weak body] in
+                guard let self, let entry, let body else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.apply(entry: entry, body: body)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+    }
+
+    private func body(from entry: NetworkEntry) -> NetworkBody? {
+        switch role {
+        case .request:
+            return entry.requestBody
+        case .response:
+            return entry.responseBody
+        }
+    }
+
+    private func applyUnavailable() {
+        actionButton.title = wiLocalized("network.body.unavailable", default: "Body unavailable")
+        summaryLabel.stringValue = ""
+        summaryLabel.isHidden = true
+        previewLabel.stringValue = wiLocalized("network.body.unavailable", default: "Body unavailable")
+        invalidateLayout()
+    }
+
+    private func apply(entry: NetworkEntry, body: NetworkBody) {
+        actionButton.title = networkDetailBodyPrimaryText(entry: entry, body: body)
+        let summary = body.summary ?? ""
+        summaryLabel.stringValue = summary
+        summaryLabel.isHidden = summary.isEmpty
+        previewLabel.stringValue = networkDetailBodySecondaryText(body)
+        invalidateLayout()
     }
 }
 
 @MainActor
 private final class WINetworkErrorSectionView: NSStackView {
+    private let inspector: WINetworkModel
+    private let invalidateLayout: @MainActor () -> Void
+    private var observationHandles: Set<ObservationHandle> = []
     private let errorLabel = WINetworkAppKitViewFactory.makeLabel(
         "",
         font: .systemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize),
@@ -599,7 +769,9 @@ private final class WINetworkErrorSectionView: NSStackView {
         selectable: true
     )
 
-    init(title: String) {
+    init(inspector: WINetworkModel, title: String, invalidateLayout: @escaping @MainActor () -> Void) {
+        self.inspector = inspector
+        self.invalidateLayout = invalidateLayout
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
@@ -607,6 +779,8 @@ private final class WINetworkErrorSectionView: NSStackView {
 
         addArrangedSubview(WINetworkAppKitViewFactory.makeSectionTitleLabel(title))
         addArrangedSubview(errorLabel)
+
+        bindCurrentSelectedEntry()
     }
 
     @available(*, unavailable)
@@ -614,13 +788,43 @@ private final class WINetworkErrorSectionView: NSStackView {
         nil
     }
 
-    func apply(errorDescription: String) {
-        errorLabel.stringValue = errorDescription
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        if newSuperview == nil {
+            observationHandles.removeAll()
+        }
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    private func bindCurrentSelectedEntry() {
+        observationHandles.removeAll()
+        guard let entry = inspector.selectedEntry else {
+            errorLabel.stringValue = ""
+            invalidateLayout()
+            return
+        }
+
+        errorLabel.stringValue = entry.errorDescription ?? ""
+        invalidateLayout()
+        entry.observe(
+            \.errorDescription,
+            onChange: { [weak self, weak entry] value in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == entry.id else {
+                    return
+                }
+                self.errorLabel.stringValue = value ?? ""
+                self.invalidateLayout()
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
     }
 }
 
 @MainActor
-private func makeNetworkHeaderFieldView(_ field: WINetworkDetailViewController.HeaderSnapshot) -> NSView {
+private func makeNetworkHeaderFieldView(_ field: NetworkHeaderField) -> NSView {
     let stack = NSStackView()
     stack.orientation = .vertical
     stack.alignment = .leading

@@ -8,23 +8,25 @@ import AppKit
 
 @MainActor
 final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
-    fileprivate struct PreviewSnapshot: Equatable {
-        fileprivate struct FormEntrySnapshot: Equatable {
-            let name: String
-            let value: String
-        }
+    private struct ObservedFormEntryState: Equatable {
+        let name: String
+        let value: String
+        let isFile: Bool
+        let fileName: String?
+    }
 
-        let bodyIdentity: ObjectIdentifier?
-        let kind: NetworkBody.Kind?
+    private struct ObservedBodyState: Equatable {
+        let role: NetworkBody.Role
+        let kind: NetworkBody.Kind
         let preview: String?
         let full: String?
         let size: Int?
-        let isBase64Encoded: Bool?
-        let isTruncated: Bool?
+        let isBase64Encoded: Bool
+        let isTruncated: Bool
         let summary: String?
         let reference: String?
-        let formEntries: [FormEntrySnapshot]
-        let fetchState: NetworkBody.FetchState?
+        let formEntries: [ObservedFormEntryState]
+        let fetchState: NetworkBody.FetchState
     }
 
     private final class TreeItem: NSObject {
@@ -62,7 +64,9 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
     private var renderModel: NetworkBodyPreviewRenderModel?
     private var renderTask: Task<Void, Never>?
     private var renderGeneration: UInt64 = 0
-    private var observationHandles: Set<ObservationHandle> = []
+    private var selectionObservationHandles: Set<ObservationHandle> = []
+    private var entryObservationHandles: Set<ObservationHandle> = []
+    private var bodyObservationHandles: Set<ObservationHandle> = []
     private var rootItems: [TreeItem] = []
     private weak var contextMenuItem: TreeItem?
 
@@ -110,7 +114,9 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
 
     isolated deinit {
         renderTask?.cancel()
-        observationHandles.removeAll()
+        selectionObservationHandles.removeAll()
+        entryObservationHandles.removeAll()
+        bodyObservationHandles.removeAll()
     }
 
     var availableModesForTesting: [NetworkBodyPreviewRenderModel.Mode] {
@@ -141,8 +147,8 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         super.viewDidLoad()
         configureHierarchy()
         applyTitle()
-        startObservingInspector()
-        requestRenderModelUpdate()
+        startObservingSelectedEntry()
+        rebindSelectedEntry()
     }
 
     private func configureHierarchy() {
@@ -225,6 +231,99 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         applyVisibleMode()
     }
 
+    private func startObservingSelectedEntry() {
+        inspector.observe(
+            [\.selectedEntry],
+            onChange: { [weak self] in
+                self?.rebindSelectedEntry()
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &selectionObservationHandles)
+    }
+
+    private func rebindSelectedEntry() {
+        entryObservationHandles.removeAll()
+        bodyObservationHandles.removeAll()
+
+        guard let entry = currentEntry else {
+            dismissIfSelectionIsUnavailable()
+            return
+        }
+
+        requestRenderModelUpdate()
+
+        let bodyKeyPath: KeyPath<NetworkEntry, NetworkBody?> = role == .request
+            ? \.requestBody
+            : \.responseBody
+
+        let initialBodyIdentity = entry[keyPath: bodyKeyPath].map(ObjectIdentifier.init)
+        var ignoresInitialEmission = true
+        entry.observe(
+            bodyKeyPath,
+            onChange: { [weak self, weak entry] _ in
+                guard let self, let entry else {
+                    return
+                }
+                guard self.currentEntry?.id == entry.id else {
+                    return
+                }
+                let currentBodyIdentity = self.currentBody.map(ObjectIdentifier.init)
+                if ignoresInitialEmission {
+                    ignoresInitialEmission = false
+                    guard currentBodyIdentity != initialBodyIdentity else {
+                        return
+                    }
+                }
+                self.rebindSelectedEntry()
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &entryObservationHandles)
+
+        guard let body = currentBody else {
+            dismissIfSelectionIsUnavailable()
+            return
+        }
+
+        let initialBodyState = makeObservedBodyState(from: body)
+        var ignoresInitialBodyEmission = true
+        body.observeTask(
+            [
+                \.role,
+                \.kind,
+                \.preview,
+                \.full,
+                \.size,
+                \.isBase64Encoded,
+                \.isTruncated,
+                \.summary,
+                \.reference,
+                \.formEntries,
+                \.fetchState
+            ]
+        ) { [weak self, weak entry] in
+            guard let self, let entry else {
+                return
+            }
+            guard self.currentEntry?.id == entry.id else {
+                return
+            }
+            guard self.currentBody.map(ObjectIdentifier.init) == ObjectIdentifier(body) else {
+                return
+            }
+            let currentBodyState = self.makeObservedBodyState(from: body)
+            if ignoresInitialBodyEmission {
+                ignoresInitialBodyEmission = false
+                guard currentBodyState != initialBodyState else {
+                    return
+                }
+            }
+            self.requestRenderModelUpdate()
+        }
+        .store(in: &bodyObservationHandles)
+    }
+
     private func requestRenderModelUpdate() {
         renderTask?.cancel()
         renderGeneration &+= 1
@@ -303,61 +402,6 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
             : wiLocalized("network.section.body.response", default: "Response Body")
     }
 
-    private func startObservingInspector() {
-        inspector.observe(
-            [\.selectedEntry],
-            onChange: { [weak self] in
-                guard let self else {
-                    return
-                }
-                guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
-                    self.dismissIfSelectionIsUnavailable()
-                    return
-                }
-                self.requestRenderModelUpdate()
-            },
-            isolation: MainActor.shared
-        )
-        .store(in: &observationHandles)
-
-        let bodySnapshotHandle: ObservationHandle
-        switch role {
-        case .request:
-            bodySnapshotHandle = inspector.observe(
-                \.appKitSelectedRequestBodyPreviewSnapshot,
-                options: [.removeDuplicates],
-                onChange: { [weak self] _ in
-                    guard let self else {
-                        return
-                    }
-                    guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
-                        self.dismissIfSelectionIsUnavailable()
-                        return
-                    }
-                    self.requestRenderModelUpdate()
-                },
-                isolation: MainActor.shared
-            )
-        case .response:
-            bodySnapshotHandle = inspector.observe(
-                \.appKitSelectedResponseBodyPreviewSnapshot,
-                options: [.removeDuplicates],
-                onChange: { [weak self] _ in
-                    guard let self else {
-                        return
-                    }
-                    guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
-                        self.dismissIfSelectionIsUnavailable()
-                        return
-                    }
-                    self.requestRenderModelUpdate()
-                },
-                isolation: MainActor.shared
-            )
-        }
-        bodySnapshotHandle.store(in: &observationHandles)
-    }
-
     private var currentEntry: NetworkEntry? {
         guard inspector.selectedEntry?.id == selectedEntryIDForPresentation else {
             return nil
@@ -385,6 +429,7 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
             dismiss(nil)
         }
     }
+
     private func reloadOutlineView() {
         let expandedPaths = currentExpandedPaths()
         outlineView.reloadData()
@@ -660,44 +705,38 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
 
     private func treeSymbolImage(for node: NetworkJSONNode) -> NSImage? {
         let symbolName: String
-        let tintColor: NSColor
         switch node.displayKind {
         case .object:
             symbolName = "curlybraces"
-            tintColor = .systemYellow
         case .array:
             symbolName = "list.number"
-            tintColor = .systemYellow
         case .string:
-            symbolName = "text.quote"
-            tintColor = .systemPink
+            symbolName = "textformat.abc"
         case .number:
             symbolName = "number"
-            tintColor = .systemBlue
         case .bool(let flag):
-            symbolName = flag ? "checkmark.circle.fill" : "xmark.circle.fill"
-            tintColor = .systemPurple
+            symbolName = flag ? "checkmark.circle" : "xmark.circle"
         case .null:
-            symbolName = "minus.circle"
-            tintColor = .systemGray
+            symbolName = "nosign"
         }
-        _ = tintColor
         return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
     }
 
     private func treeSymbolTintColor(for node: NetworkJSONNode) -> NSColor {
         switch node.displayKind {
-        case .object, .array:
-            return .systemYellow
-        case .string:
-            return .systemPink
-        case .number:
+        case .object:
             return .systemBlue
-        case .bool:
+        case .array:
             return .systemPurple
+        case .string:
+            return .systemOrange
+        case .number:
+            return .systemGreen
+        case .bool:
+            return .systemRed
         case .null:
-            return .systemGray
+            return .secondaryLabelColor
         }
     }
 
@@ -708,33 +747,28 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         let index = value.index(value.startIndex, offsetBy: limit)
         return String(value[..<index]) + "..."
     }
-}
 
-private extension WINetworkBodyPreviewViewController {
-    static func makePreviewSnapshot(from body: NetworkBody?) -> PreviewSnapshot {
-        PreviewSnapshot(
-            bodyIdentity: body.map(ObjectIdentifier.init),
-            kind: body?.kind,
-            preview: body?.preview,
-            full: body?.full,
-            size: body?.size,
-            isBase64Encoded: body?.isBase64Encoded,
-            isTruncated: body?.isTruncated,
-            summary: body?.summary,
-            reference: body?.reference,
-            formEntries: body?.formEntries.map { PreviewSnapshot.FormEntrySnapshot(name: $0.name, value: $0.value) } ?? [],
-            fetchState: body?.fetchState
+    private func makeObservedBodyState(from body: NetworkBody) -> ObservedBodyState {
+        ObservedBodyState(
+            role: body.role,
+            kind: body.kind,
+            preview: body.preview,
+            full: body.full,
+            size: body.size,
+            isBase64Encoded: body.isBase64Encoded,
+            isTruncated: body.isTruncated,
+            summary: body.summary,
+            reference: body.reference,
+            formEntries: body.formEntries.map {
+                ObservedFormEntryState(
+                    name: $0.name,
+                    value: $0.value,
+                    isFile: $0.isFile,
+                    fileName: $0.fileName
+                )
+            },
+            fetchState: body.fetchState
         )
-    }
-}
-
-private extension WINetworkModel {
-    var appKitSelectedRequestBodyPreviewSnapshot: WINetworkBodyPreviewViewController.PreviewSnapshot {
-        WINetworkBodyPreviewViewController.makePreviewSnapshot(from: selectedEntry?.requestBody)
-    }
-
-    var appKitSelectedResponseBodyPreviewSnapshot: WINetworkBodyPreviewViewController.PreviewSnapshot {
-        WINetworkBodyPreviewViewController.makePreviewSnapshot(from: selectedEntry?.responseBody)
     }
 }
 
