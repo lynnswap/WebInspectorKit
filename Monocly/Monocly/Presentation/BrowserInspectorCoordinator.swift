@@ -207,7 +207,7 @@ final class BrowserInspectorCoordinator {
         )
         Self.inspectorWindowRegistry.beginPendingPresentation()
         let userActivity = Self.makeInspectorWindowUserActivity()
-        let requestingScene = MonoclyWindowContextStore.shared.currentWindowScene ?? presenter.view.window?.windowScene
+        let requestingScene = presenter.view.window?.windowScene ?? MonoclyWindowContextStore.shared.currentWindowScene
 
         sceneActivationRequester.activateScene(userActivity, requestingScene) { [weak self] _ in
             Self.inspectorWindowRegistry.clear()

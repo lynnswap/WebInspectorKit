@@ -121,7 +121,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
         _ = BrowserInspectorCoordinator.present(
-            from: nil,
+            from: view.window,
             browserStore: store,
             inspectorController: inspectorController,
             tabs: [.dom(), .network()]

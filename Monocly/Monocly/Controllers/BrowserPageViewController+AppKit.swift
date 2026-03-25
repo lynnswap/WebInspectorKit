@@ -150,7 +150,7 @@ final class BrowserPageViewController: NSViewController {
         }
 
         let didPresent = BrowserInspectorCoordinator.present(
-            from: nil,
+            from: view.window,
             browserStore: store,
             inspectorController: inspectorController,
             tabs: launchConfiguration.autoOpenInspectorTabs

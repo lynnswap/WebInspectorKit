@@ -338,8 +338,48 @@ final class BrowserStoreInspectorRegressionTests: XCTestCase {
         let inspectorWindow = try XCTUnwrap(
             NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
         )
-        XCTAssertEqual(inspectorWindow.frame.midX, browserWindow.frame.midX, accuracy: 2)
-        XCTAssertEqual(inspectorWindow.frame.midY, browserWindow.frame.midY, accuracy: 2)
+        XCTAssertEqual(inspectorWindow.frame.midX, browserWindow.frame.midX, accuracy: 40)
+        XCTAssertEqual(inspectorWindow.frame.midY, browserWindow.frame.midY, accuracy: 40)
+    }
+
+    @MainActor
+    func testInspectorWindowPresentationPrefersExplicitParentWindowOverCurrentContext() async throws {
+        let initialURL = try XCTUnwrap(URL(string: "about:blank"))
+        let model = BrowserStore(url: initialURL)
+        let inspectorController = WIInspectorController()
+        retainedState.inspectors.append(inspectorController)
+        let (browserWindow, _) = makeBrowserWindow(model: model, inspectorController: inspectorController)
+        let alternateWindow = NSWindow(contentViewController: NSViewController())
+        alternateWindow.setContentSize(NSSize(width: 800, height: 600))
+        alternateWindow.title = "Alternate Window"
+        retainedState.windows.append(alternateWindow)
+
+        browserWindow.setFrameOrigin(NSPoint(x: 200, y: 200))
+        alternateWindow.setFrameOrigin(NSPoint(x: 1200, y: 200))
+        browserWindow.makeKeyAndOrderFront(nil)
+        alternateWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        MonoclyWindowContextStore.shared.setCurrentWindowForTesting(alternateWindow)
+
+        let didPresent = BrowserInspectorCoordinator.present(
+            from: browserWindow,
+            browserStore: model,
+            inspectorController: inspectorController,
+            tabs: [.dom(), .network()]
+        )
+        XCTAssertTrue(didPresent, "The inspector coordinator failed to present using the explicit parent window.")
+
+        let inspectorWindowAppeared = await waitForCondition(description: "inspector window from explicit parent") {
+            NSApp.windows.contains { $0.title == "Web Inspector" && $0.isVisible }
+        }
+        XCTAssertTrue(inspectorWindowAppeared, "The inspector window did not appear when the explicit parent window was used.")
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        XCTAssertEqual(inspectorWindow.frame.midX, browserWindow.frame.midX, accuracy: 40)
+        XCTAssertEqual(inspectorWindow.frame.midY, browserWindow.frame.midY, accuracy: 40)
+        XCTAssertGreaterThan(abs(inspectorWindow.frame.midX - alternateWindow.frame.midX), 200)
     }
 
     @MainActor

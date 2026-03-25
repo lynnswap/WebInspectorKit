@@ -230,7 +230,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.setSupportsMultipleScenesForTesting(true)
         applyHorizontalSizeClass(.regular, to: rootViewController)
-        MonoclyWindowContextStore.shared.resetForTesting()
+        let hostWindowScene = try XCTUnwrap(fixture.window.windowScene)
+        let alternateWindow = try makeWindow()
+        retainedWindows.append(alternateWindow)
+        alternateWindow.isHidden = false
+        alternateWindow.makeKeyAndVisible()
+        MonoclyWindowContextStore.shared.setCurrentSceneForTesting(
+            try XCTUnwrap(alternateWindow.windowScene),
+            window: alternateWindow
+        )
         pageViewController.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { userActivity, scene, _ in
@@ -245,7 +253,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(activationCount, 1)
         XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
         XCTAssertEqual(requestedActivity?.targetContentIdentifier, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
-        XCTAssertTrue(requestingScene === fixture.window.windowScene)
+        XCTAssertTrue(requestingScene === hostWindowScene)
 
         XCTAssertTrue(pageViewController.hasInspectorWindowForTesting)
         XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
