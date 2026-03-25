@@ -300,6 +300,54 @@ struct NetworkInspectorAppKitTests {
     }
 
     @Test
+    func networkTabListReordersWhenSortRelevantEntryFieldChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 215,
+            url: "https://example.com/first",
+            initiator: "xhr",
+            monotonicMs: 1_000,
+            bodySize: 10
+        )
+        try applyRequestStart(
+            to: inspector,
+            requestID: 216,
+            url: "https://example.com/second",
+            initiator: "xhr",
+            monotonicMs: 1_010,
+            bodySize: 20
+        )
+        inspector.sortDescriptors = [
+            SortDescriptor(\.requestBodyBytesSentSortValueForTesting, order: .reverse),
+            SortDescriptor(\.requestID, order: .forward)
+        ]
+
+        let controller = WINetworkViewController(inspector: inspector)
+        controller.loadViewIfNeeded()
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.listViewControllerForTesting.displayedRequestIDsForTesting == [216, 215]
+        })
+
+        let initialGeneration = inspector.displayEntriesGeneration
+        try applyRequestStart(
+            to: inspector,
+            requestID: 215,
+            url: "https://example.com/first",
+            initiator: "xhr",
+            monotonicMs: 1_020,
+            bodySize: 30
+        )
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.listViewControllerForTesting.displayedRequestIDsForTesting == [215, 216]
+        })
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            inspector.displayEntriesGeneration > initialGeneration
+        })
+    }
+
+    @Test
     func networkModelGenerationDoesNotBumpForFetchedBodySizeMetadata() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
@@ -568,9 +616,10 @@ struct NetworkInspectorAppKitTests {
         requestID: Int,
         url: String,
         initiator: String,
-        monotonicMs: Double
+        monotonicMs: Double,
+        bodySize: Int? = nil
     ) throws {
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "kind": "requestWillBeSent",
             "requestId": requestID,
             "url": url,
@@ -581,6 +630,9 @@ struct NetworkInspectorAppKitTests {
                 "wallMs": 1_700_000_000_000.0 + monotonicMs
             ]
         ]
+        if let bodySize {
+            payload["bodySize"] = bodySize
+        }
         let event = try decodeEvent(payload)
         inspector.store.apply(event, sessionID: "")
     }
@@ -611,6 +663,12 @@ struct NetworkInspectorAppKitTests {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return await MainActor.run(body: condition)
+    }
+}
+
+private extension NetworkEntry {
+    nonisolated var requestBodyBytesSentSortValueForTesting: Int {
+        MainActor.assumeIsolated { requestBodyBytesSent ?? 0 }
     }
 }
 #endif

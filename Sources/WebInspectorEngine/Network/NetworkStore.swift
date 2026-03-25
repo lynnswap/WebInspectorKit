@@ -236,19 +236,6 @@ public final class NetworkStore {
 }
 
 private extension NetworkStore {
-    struct DisplayEntriesState: Equatable {
-        let url: String
-        let method: String
-        let statusCode: Int?
-        let statusText: String
-        let fileTypeLabel: String
-        let resourceFilter: NetworkResourceFilter
-        let phase: NetworkEntry.Phase
-        let duration: TimeInterval?
-        let encodedBodyLength: Int?
-        let decodedBodyLength: Int?
-    }
-
     func appendEntry(_ entry: NetworkEntry) {
         pruneIfNeeded(adding: 1)
         entries.append(entry)
@@ -326,26 +313,28 @@ private extension NetworkStore {
         _ update: NetworkEntry.Update,
         toTrackedEntry entry: NetworkEntry
     ) {
-        let previousDisplayState = displayEntriesState(for: entry)
         entry.apply(update)
-        if displayEntriesState(for: entry) != previousDisplayState {
+        if updateRequiresListInvalidation(update) {
             markEntriesGenerationDirty()
         }
     }
 
-    func displayEntriesState(for entry: NetworkEntry) -> DisplayEntriesState {
-        DisplayEntriesState(
-            url: entry.url,
-            method: entry.method,
-            statusCode: entry.statusCode,
-            statusText: entry.statusText,
-            fileTypeLabel: entry.fileTypeLabel,
-            resourceFilter: entry.resourceFilter,
-            phase: entry.phase,
-            duration: entry.duration,
-            encodedBodyLength: entry.encodedBodyLength,
-            decodedBodyLength: entry.decodedBodyLength
-        )
+    func updateRequiresListInvalidation(_ update: NetworkEntry.Update) -> Bool {
+        switch update {
+        case .requestStarted,
+             .responseReceived,
+             .completed,
+             .failed,
+             .resourceTimingSnapshot,
+             .webSocketHandshake,
+             .webSocketClosed:
+            return true
+        case .webSocketFrameAdded:
+            return false
+        case .webSocketOpened:
+            assertionFailure("Unexpected tracked-entry update: webSocketOpened")
+            return false
+        }
     }
 
     func flushEntriesGenerationIfNeeded() {

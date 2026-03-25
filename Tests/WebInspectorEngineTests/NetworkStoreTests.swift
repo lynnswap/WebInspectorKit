@@ -210,6 +210,43 @@ struct NetworkStoreTests {
     }
 
     @Test
+    func websocketFrameUpdateDoesNotBumpEntriesGeneration() {
+        let store = NetworkStore()
+        store.apply(
+            .webSocketOpened(
+                .init(
+                    requestID: 2,
+                    url: "wss://example.com/frames",
+                    timestamp: 1,
+                    wallTime: 2
+                )
+            ),
+            sessionID: ""
+        )
+        let initialGeneration = store.entriesGeneration
+
+        store.apply(
+            .webSocketFrameAdded(
+                .init(
+                    requestID: 2,
+                    frame: .init(
+                        direction: .incoming,
+                        opcode: 1,
+                        payload: "hello",
+                        payloadIsBase64: false,
+                        payloadSize: 5,
+                        payloadTruncated: false,
+                        timestamp: 2
+                    )
+                )
+            ),
+            sessionID: ""
+        )
+
+        #expect(store.entriesGeneration == initialGeneration)
+    }
+
+    @Test
     func decodesNetworkEventBatchPayload() throws {
         let payload: [String: Any] = [
             "version": 1,
