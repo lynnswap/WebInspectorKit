@@ -132,11 +132,54 @@ package struct WIWebArchiveCreator: WIWebArchiveCreating {
     package init() {}
 
     package func createWebArchiveData(in webView: WKWebView) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
+        try await requestArchiveData { completionHandler in
             webView.createWebArchiveData { result in
-                continuation.resume(with: result)
+                completionHandler(result)
             }
         }
+    }
+
+    package func requestArchiveData(
+        _ startRequest: (@escaping @Sendable (Result<Data, Error>) -> Void) -> Void
+    ) async throws -> Data {
+        let state = ArchiveRequestState()
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                state.install(continuation)
+
+                if Task.isCancelled {
+                    state.resume(with: .failure(CancellationError()))
+                    return
+                }
+
+                startRequest { result in
+                    state.resume(with: result)
+                }
+            }
+        } onCancel: {
+            state.resume(with: .failure(CancellationError()))
+        }
+    }
+}
+
+private final class ArchiveRequestState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    func install(_ continuation: CheckedContinuation<Data, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.continuation = continuation
+    }
+
+    func resume(with result: Result<Data, Error>) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(with: result)
     }
 }
 

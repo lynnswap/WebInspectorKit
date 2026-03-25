@@ -145,6 +145,30 @@ struct WIImageCacheSPITests {
     }
 
     @Test
+    func webArchiveCreatorStopsAwaitingWhenTaskIsCancelled() async throws {
+        let creator = WIWebArchiveCreator()
+        let state = SlowArchiveRequestState()
+
+        let task = Task {
+            try await creator.requestArchiveData { completionHandler in
+                state.completionHandler = completionHandler
+            }
+        }
+
+        let requestStarted = await waitUntil {
+            state.completionHandler != nil
+        }
+        #expect(requestStarted)
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+
+        state.completionHandler?(.success(Self.pngData))
+    }
+
+    @Test
     func displayedImageCacheReturnsMainFrameImageData() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
@@ -454,6 +478,11 @@ private struct CancelledWebArchiveCreator: WIWebArchiveCreating {
     func createWebArchiveData(in webView: WKWebView) async throws -> Data {
         throw CancellationError()
     }
+}
+
+@MainActor
+private final class SlowArchiveRequestState {
+    var completionHandler: (@Sendable (Result<Data, Error>) -> Void)?
 }
 
 @objcMembers
