@@ -146,7 +146,9 @@ final class DOMMutationPipeline {
         }
 
         guard
-            let data = try? JSONSerialization.data(withJSONObject: payloads),
+            let jsonSafePayloads = Self.makeBufferTransportPayload(payloads),
+            JSONSerialization.isValidJSONObject(jsonSafePayloads),
+            let data = try? JSONSerialization.data(withJSONObject: jsonSafePayloads),
             data.count > WIJSBufferTransport.bufferThresholdBytes
         else {
             return false
@@ -195,5 +197,74 @@ final class DOMMutationPipeline {
     private func nextBufferName() -> String {
         jsBufferSequence += 1
         return "wi_dom_bundle_\(jsBufferSequence)"
+    }
+}
+
+extension DOMMutationPipeline {
+    static func makeBufferTransportPayload(_ payloads: [[String: Any]]) -> [Any]? {
+        makeBufferTransportValue(payloads) as? [Any]
+    }
+
+    static func makeBufferTransportValue(_ value: Any) -> Any? {
+        if value is NSNull {
+            return NSNull()
+        }
+
+        if let string = value as? String {
+            return string
+        }
+
+        if let number = value as? NSNumber {
+            return number
+        }
+
+        if let array = value as? [Any] {
+            var resolved: [Any] = []
+            resolved.reserveCapacity(array.count)
+            for item in array {
+                guard let safeItem = makeBufferTransportValue(item) else {
+                    return nil
+                }
+                resolved.append(safeItem)
+            }
+            return resolved
+        }
+
+        if let array = value as? NSArray {
+            return makeBufferTransportValue(array.map { $0 })
+        }
+
+        if let dictionary = value as? [String: Any] {
+            if dictionary["type"] as? String == "serialized-node-envelope" {
+                guard let fallback = dictionary["fallback"] else {
+                    return nil
+                }
+                return makeBufferTransportValue(fallback)
+            }
+
+            var resolved: [String: Any] = [:]
+            resolved.reserveCapacity(dictionary.count)
+            for (key, nestedValue) in dictionary {
+                guard let safeValue = makeBufferTransportValue(nestedValue) else {
+                    return nil
+                }
+                resolved[key] = safeValue
+            }
+            return resolved
+        }
+
+        if let dictionary = value as? NSDictionary {
+            var swiftDictionary: [String: Any] = [:]
+            swiftDictionary.reserveCapacity(dictionary.count)
+            for (rawKey, rawValue) in dictionary {
+                guard let key = rawKey as? String else {
+                    return nil
+                }
+                swiftDictionary[key] = rawValue
+            }
+            return makeBufferTransportValue(swiftDictionary)
+        }
+
+        return nil
     }
 }

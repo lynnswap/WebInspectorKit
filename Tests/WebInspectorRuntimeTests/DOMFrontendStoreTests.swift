@@ -256,6 +256,103 @@ struct DOMFrontendStoreTests {
     }
 
     @Test
+    func mutationPipelineBuildsJSONSafeBufferPayloadFromSerializedNodeEnvelopeFallback() throws {
+        let payloads: [[String: Any]] = [[
+            "bundle": [
+                "version": 1,
+                "kind": "snapshot",
+                "snapshot": [
+                    "type": "serialized-node-envelope",
+                    "node": NSObject(),
+                    "fallback": [
+                        "root": [
+                            "nodeId": 321,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                        "selectedNodeId": 321,
+                    ],
+                    "selectedNodeId": 321,
+                ],
+            ],
+            "preserveState": true,
+        ]]
+
+        let jsonSafePayloads = try #require(DOMMutationPipeline.makeBufferTransportPayload(payloads))
+        #expect(JSONSerialization.isValidJSONObject(jsonSafePayloads))
+
+        let firstPayload = try #require(jsonSafePayloads.first as? [String: Any])
+        let bundle = try #require(firstPayload["bundle"] as? [String: Any])
+        let snapshot = try #require(bundle["snapshot"] as? [String: Any])
+        #expect(snapshot["selectedNodeId"] as? Int == 321)
+        let root = try #require(snapshot["root"] as? [String: Any])
+        #expect(root["nodeId"] as? Int == 321)
+        #expect(snapshot["type"] == nil)
+    }
+
+    @Test
+    func mutationPipelineRejectsBufferPayloadWhenUnknownObjectCannotBeSanitized() {
+        let payloads: [[String: Any]] = [[
+            "bundle": [
+                "version": 1,
+                "kind": "snapshot",
+                "snapshot": [
+                    "type": "serialized-node-envelope",
+                    "node": NSObject(),
+                    "fallback": NSObject(),
+                ],
+            ],
+            "preserveState": true,
+        ]]
+
+        #expect(DOMMutationPipeline.makeBufferTransportPayload(payloads) == nil)
+    }
+
+    @Test
+    func mutationPipelineBufferPayloadStillNormalizesThroughFallbackSnapshot() throws {
+        let payloads: [[String: Any]] = [[
+            "bundle": [
+                "version": 1,
+                "kind": "snapshot",
+                "snapshot": [
+                    "type": "serialized-node-envelope",
+                    "node": NSObject(),
+                    "fallback": [
+                        "root": [
+                            "nodeId": 888,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                        "selectedNodeId": 888,
+                    ],
+                    "selectedNodeId": 888,
+                ],
+            ],
+            "preserveState": true,
+        ]]
+        let normalizer = DOMPayloadNormalizer()
+
+        let jsonSafePayloads = try #require(DOMMutationPipeline.makeBufferTransportPayload(payloads))
+        let firstPayload = try #require(jsonSafePayloads.first as? [String: Any])
+        let bundle = try #require(firstPayload["bundle"] as? [String: Any])
+
+        guard case let .snapshot(snapshot, _) = normalizer.normalizeBundlePayload(bundle) else {
+            Issue.record("Failed to normalize buffer-safe fallback snapshot payload")
+            return
+        }
+        #expect(snapshot.root.localID == 888)
+        #expect(snapshot.selectedLocalID == 888)
+    }
+
+    @Test
     func payloadNormalizerParsesStringResultForRequestChildNodesResponse() {
         let normalizer = DOMPayloadNormalizer()
         let resultJSON = """
