@@ -7484,6 +7484,7 @@
     },
     "network.table.column.duration" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7627,6 +7628,7 @@
     },
     "network.table.column.method" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7770,6 +7772,7 @@
     },
     "network.table.column.request" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -7913,6 +7916,7 @@
     },
     "network.table.column.size" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8056,6 +8060,7 @@
     },
     "network.table.column.status" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -8199,6 +8204,7 @@
     },
     "network.table.column.type" : {
       "comment" : "Network table column title.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

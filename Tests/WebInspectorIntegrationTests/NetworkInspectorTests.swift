@@ -451,6 +451,26 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func selectedEntryClearsWhenStoreIsClearedDirectly() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 73,
+            url: "https://example.com/direct-clear",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        inspector.selectEntry(inspector.store.entries.first)
+        inspector.store.clear()
+
+        let cleared = await waitUntil {
+            inspector.selectedEntry == nil
+        }
+        #expect(cleared)
+    }
+
+    @Test
     func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
