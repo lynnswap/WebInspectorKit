@@ -122,6 +122,37 @@ struct NetworkInspectorAppKitTests {
     }
 
     @Test
+    func networkTabUpdatesDetailWhenSelectedEntryContentChanges() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 113,
+            url: "https://example.com/live-update",
+            initiator: "xhr",
+            monotonicMs: 1_000
+        )
+
+        let controller = WINetworkViewController(inspector: inspector)
+        controller.loadViewIfNeeded()
+        let selected = try #require(inspector.displayEntries.first(where: { $0.requestID == 113 }))
+
+        inspector.selectEntry(selected)
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.contains("Overview")
+        })
+
+        let initialGeneration = inspector.displayEntriesGeneration
+        selected.errorDescription = "Request failed"
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.contains("Error")
+        })
+        #expect(await waitUntilAsync(timeout: 0.2) {
+            inspector.displayEntriesGeneration == initialGeneration
+        })
+    }
+
+    @Test
     func networkModelGenerationDoesNotBumpWhenSelectionChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(

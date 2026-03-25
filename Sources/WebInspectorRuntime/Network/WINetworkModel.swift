@@ -56,11 +56,9 @@ public final class WINetworkModel {
     package var displayEntriesGeneration: UInt64 {
         store.entriesGeneration &+ displayCriteriaGeneration
     }
-    package private(set) var selectedEntryPresentationGeneration: UInt64 = 0
 
     @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
     @ObservationIgnored private var selectedEntryObservationHandles: Set<ObservationHandle> = []
-    @ObservationIgnored private var selectedEntryBodyObservationHandles: Set<ObservationHandle> = []
     @ObservationIgnored private var observedSelectedBodyState: ObservedSelectedBodyState?
     package private(set) var isAttachedToPage: Bool = false
 
@@ -109,10 +107,8 @@ public final class WINetworkModel {
     func detach() async {
         cancelSelectedEntryBodyFetch()
         selectedEntryObservationHandles.removeAll()
-        selectedEntryBodyObservationHandles.removeAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
-        bumpSelectedEntryPresentationGeneration()
         await session.detach()
         isAttachedToPage = false
     }
@@ -134,10 +130,8 @@ public final class WINetworkModel {
     public func clear() async {
         cancelSelectedEntryBodyFetch()
         selectedEntryObservationHandles.removeAll()
-        selectedEntryBodyObservationHandles.removeAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
-        bumpSelectedEntryPresentationGeneration()
         await session.clearNetworkLogs()
     }
 
@@ -148,10 +142,8 @@ public final class WINetworkModel {
     func tearDownForDeinit() {
         cancelSelectedEntryBodyFetch()
         selectedEntryObservationHandles.removeAll()
-        selectedEntryBodyObservationHandles.removeAll()
         observedSelectedBodyState = nil
         selectedEntry = nil
-        bumpSelectedEntryPresentationGeneration()
         session.tearDownForDeinit()
         isAttachedToPage = false
     }
@@ -162,48 +154,28 @@ private extension WINetworkModel {
         displayCriteriaGeneration &+= 1
     }
 
-    func bumpSelectedEntryPresentationGeneration() {
-        selectedEntryPresentationGeneration &+= 1
-    }
-
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
         selectedEntryObservationHandles.removeAll()
-        selectedEntryBodyObservationHandles.removeAll()
         observedSelectedBodyState = bodyState(for: entry)
-        bumpSelectedEntryPresentationGeneration()
         guard let entry else {
             return
         }
 
-        entry.observe(
-            [
-                \.url,
-                \.statusCode,
-                \.statusText,
-                \.phase,
-                \.duration,
-                \.encodedBodyLength,
-                \.requestHeaders,
-                \.responseHeaders,
-                \.mimeType,
-                \.decodedBodyLength,
-                \.requestBodyBytesSent,
-                \.requestBody,
-                \.responseBody,
-                \.errorDescription
-            ]
-        ) { [weak self, weak entry] in
+        entry.observe([\.requestBody, \.responseBody]) { [weak self, weak entry] in
             guard let self, let entry else {
                 return
             }
             guard self.selectedEntry?.id == entry.id else {
                 return
             }
-            self.handleSelectedEntryPresentationMutation(for: entry)
+            let currentBodyState = self.bodyState(for: entry)
+            guard self.observedSelectedBodyState != currentBodyState else {
+                return
+            }
+            self.observedSelectedBodyState = currentBodyState
+            self.restartSelectedEntryBodyFetch()
         }
         .store(in: &selectedEntryObservationHandles)
-
-        installSelectedEntryBodyObservers(for: entry)
     }
 
     func restartSelectedEntryBodyFetch() {
@@ -261,52 +233,6 @@ private extension WINetworkModel {
         if case .fetching = body.fetchState {
             body.fetchState = .inline
         }
-    }
-
-    func handleSelectedEntryPresentationMutation(for entry: NetworkEntry) {
-        let currentBodyState = bodyState(for: entry)
-        if observedSelectedBodyState != currentBodyState {
-            observedSelectedBodyState = currentBodyState
-            installSelectedEntryBodyObservers(for: entry)
-            restartSelectedEntryBodyFetch()
-        }
-        bumpSelectedEntryPresentationGeneration()
-    }
-
-    func installSelectedEntryBodyObservers(for entry: NetworkEntry) {
-        selectedEntryBodyObservationHandles.removeAll()
-        if let requestBody = entry.requestBody {
-            observeSelectedEntryBody(requestBody, entry: entry)
-        }
-        if let responseBody = entry.responseBody {
-            observeSelectedEntryBody(responseBody, entry: entry)
-        }
-    }
-
-    func observeSelectedEntryBody(_ body: NetworkBody, entry: NetworkEntry) {
-        body.observeTask(
-            [
-                \.kind,
-                \.preview,
-                \.full,
-                \.size,
-                \.isBase64Encoded,
-                \.isTruncated,
-                \.summary,
-                \.reference,
-                \.formEntries,
-                \.fetchState
-            ]
-        ) { [weak self, weak entry] in
-            guard let self, let entry else {
-                return
-            }
-            guard self.selectedEntry?.id == entry.id else {
-                return
-            }
-            self.bumpSelectedEntryPresentationGeneration()
-        }
-        .store(in: &selectedEntryBodyObservationHandles)
     }
 
     private func bodyState(for entry: NetworkEntry?) -> ObservedSelectedBodyState? {

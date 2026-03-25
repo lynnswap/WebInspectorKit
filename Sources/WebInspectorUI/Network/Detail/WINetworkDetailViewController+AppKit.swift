@@ -1,4 +1,5 @@
 import Foundation
+import ObservationBridge
 import WebInspectorEngine
 import WebInspectorRuntime
 
@@ -45,6 +46,7 @@ final class WINetworkDetailViewController: NSViewController {
     }
 
     private let inspector: WINetworkModel
+    private var observationHandles: Set<ObservationHandle> = []
     private var renderedSnapshot: DetailSnapshot?
 
     private let scrollView = NSScrollView()
@@ -107,6 +109,7 @@ final class WINetworkDetailViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         configureHierarchy()
+        startObservingInspector()
         display(inspector.selectedEntry)
     }
 
@@ -170,12 +173,7 @@ final class WINetworkDetailViewController: NSViewController {
             dismissPresentedBodyPreviewIfNeeded()
         }
         displayedEntryID = snapshot.entryID
-        if renderedSnapshot?.structureState != snapshot.structureState || renderedSnapshot?.entryID != snapshot.entryID {
-            rebuildContent(for: snapshot)
-        }
-        applySnapshot(snapshot)
-        renderedSnapshot = snapshot
-        updateVisibility()
+        applyObservedSnapshot(snapshot)
     }
 
     func updateVisibility() {
@@ -183,6 +181,30 @@ final class WINetworkDetailViewController: NSViewController {
         let hasSelection = inspector.selectedEntry != nil
         scrollView.isHidden = hasSelection == false
         emptyStateView.isHidden = hasEntries
+    }
+
+    private func startObservingInspector() {
+        inspector.observe(
+            \.appKitDetailSnapshot,
+            options: [.removeDuplicates],
+            onChange: { [weak self] snapshot in
+                guard let self, snapshot.entryID == self.displayedEntryID else {
+                    return
+                }
+                self.applyObservedSnapshot(snapshot)
+            },
+            isolation: MainActor.shared
+        )
+        .store(in: &observationHandles)
+    }
+
+    private func applyObservedSnapshot(_ snapshot: DetailSnapshot) {
+        if renderedSnapshot?.structureState != snapshot.structureState || renderedSnapshot?.entryID != snapshot.entryID {
+            rebuildContent(for: snapshot)
+        }
+        applySnapshot(snapshot)
+        renderedSnapshot = snapshot
+        updateVisibility()
     }
 
     private func rebuildContent(for snapshot: DetailSnapshot) {
@@ -379,6 +401,12 @@ fileprivate extension WINetworkDetailViewController {
             },
             errorDescription: entry.errorDescription.flatMap { $0.isEmpty ? nil : $0 }
         )
+    }
+}
+
+private extension WINetworkModel {
+    var appKitDetailSnapshot: WINetworkDetailViewController.DetailSnapshot {
+        WINetworkDetailViewController.makeDetailSnapshot(from: selectedEntry)
     }
 }
 

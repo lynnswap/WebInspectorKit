@@ -76,9 +76,8 @@ public final class WINetworkViewController: NSSplitViewController {
         .store(in: &observationHandles)
 
         inspector.observeTask(
-            \.selectedEntryPresentationGeneration,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
+            [\.selectedEntry]
+        ) { [weak self] in
             guard let self else {
                 return
             }

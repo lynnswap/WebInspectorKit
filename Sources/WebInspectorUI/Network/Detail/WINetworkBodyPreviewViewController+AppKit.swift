@@ -8,6 +8,25 @@ import AppKit
 
 @MainActor
 final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
+    fileprivate struct PreviewSnapshot: Equatable {
+        fileprivate struct FormEntrySnapshot: Equatable {
+            let name: String
+            let value: String
+        }
+
+        let bodyIdentity: ObjectIdentifier?
+        let kind: NetworkBody.Kind?
+        let preview: String?
+        let full: String?
+        let size: Int?
+        let isBase64Encoded: Bool?
+        let isTruncated: Bool?
+        let summary: String?
+        let reference: String?
+        let formEntries: [FormEntrySnapshot]
+        let fetchState: NetworkBody.FetchState?
+    }
+
     private final class TreeItem: NSObject {
         let node: NetworkJSONNode
         let path: String
@@ -286,14 +305,57 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
 
     private func startObservingInspector() {
         inspector.observe(
-            \.selectedEntryPresentationGeneration,
-            options: [.removeDuplicates],
-            onChange: { [weak self] _ in
-                self?.requestRenderModelUpdate()
+            [\.selectedEntry],
+            onChange: { [weak self] in
+                guard let self else {
+                    return
+                }
+                guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
+                    self.dismissIfSelectionIsUnavailable()
+                    return
+                }
+                self.requestRenderModelUpdate()
             },
             isolation: MainActor.shared
         )
         .store(in: &observationHandles)
+
+        let bodySnapshotHandle: ObservationHandle
+        switch role {
+        case .request:
+            bodySnapshotHandle = inspector.observe(
+                \.appKitSelectedRequestBodyPreviewSnapshot,
+                options: [.removeDuplicates],
+                onChange: { [weak self] _ in
+                    guard let self else {
+                        return
+                    }
+                    guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
+                        self.dismissIfSelectionIsUnavailable()
+                        return
+                    }
+                    self.requestRenderModelUpdate()
+                },
+                isolation: MainActor.shared
+            )
+        case .response:
+            bodySnapshotHandle = inspector.observe(
+                \.appKitSelectedResponseBodyPreviewSnapshot,
+                options: [.removeDuplicates],
+                onChange: { [weak self] _ in
+                    guard let self else {
+                        return
+                    }
+                    guard self.inspector.selectedEntry?.id == self.selectedEntryIDForPresentation else {
+                        self.dismissIfSelectionIsUnavailable()
+                        return
+                    }
+                    self.requestRenderModelUpdate()
+                },
+                isolation: MainActor.shared
+            )
+        }
+        bodySnapshotHandle.store(in: &observationHandles)
     }
 
     private var currentEntry: NetworkEntry? {
@@ -645,6 +707,34 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         }
         let index = value.index(value.startIndex, offsetBy: limit)
         return String(value[..<index]) + "..."
+    }
+}
+
+private extension WINetworkBodyPreviewViewController {
+    static func makePreviewSnapshot(from body: NetworkBody?) -> PreviewSnapshot {
+        PreviewSnapshot(
+            bodyIdentity: body.map(ObjectIdentifier.init),
+            kind: body?.kind,
+            preview: body?.preview,
+            full: body?.full,
+            size: body?.size,
+            isBase64Encoded: body?.isBase64Encoded,
+            isTruncated: body?.isTruncated,
+            summary: body?.summary,
+            reference: body?.reference,
+            formEntries: body?.formEntries.map { PreviewSnapshot.FormEntrySnapshot(name: $0.name, value: $0.value) } ?? [],
+            fetchState: body?.fetchState
+        )
+    }
+}
+
+private extension WINetworkModel {
+    var appKitSelectedRequestBodyPreviewSnapshot: WINetworkBodyPreviewViewController.PreviewSnapshot {
+        WINetworkBodyPreviewViewController.makePreviewSnapshot(from: selectedEntry?.requestBody)
+    }
+
+    var appKitSelectedResponseBodyPreviewSnapshot: WINetworkBodyPreviewViewController.PreviewSnapshot {
+        WINetworkBodyPreviewViewController.makePreviewSnapshot(from: selectedEntry?.responseBody)
     }
 }
 
