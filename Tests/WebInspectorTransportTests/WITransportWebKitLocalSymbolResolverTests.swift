@@ -44,8 +44,9 @@ struct WITransportNativeInspectorSymbolResolverTests {
         let resolution = WITransportNativeInspectorSymbolResolver.resolveForTesting(
             stringFromUTF8Symbol: "__ZN3WTF6String27definitelyMissingFromUTF8FooEv"
         )
+        let failureReason = resolution.failureReason
 
-        #expect(resolution.failureReason != nil)
+        #expect(failureReason != nil)
         #expect(resolution.connectFrontendAddress == 0)
         #expect(resolution.disconnectFrontendAddress == 0)
         #expect(resolution.stringFromUTF8Address == 0)
@@ -53,6 +54,13 @@ struct WITransportNativeInspectorSymbolResolverTests {
         #expect(resolution.destroyStringImplAddress == 0)
         #expect(resolution.backendDispatcherDispatchAddress == 0)
         #expect(resolution.supportSnapshot.isSupported == false)
+        if let failureReason {
+            #expect(!failureReason.contains("WebKit"))
+            #expect(!failureReason.contains("JavaScriptCore"))
+            #expect(!failureReason.contains("WTF"))
+            #expect(!failureReason.contains("definitelyMissingFromUTF8Foo"))
+            #expect(!failureReason.contains("/System/"))
+        }
     }
 
     @Test

@@ -3,20 +3,112 @@ import Foundation
 import MachO
 import MachOKit
 
-private enum WITransportNativeInspectorSymbolFailure: String {
-    case sharedCacheUnavailable = "shared cache unavailable"
-    case localSymbolsUnavailable = "local symbols unavailable"
-    case webKitImageMissing = "WebKit image missing"
-    case javaScriptCoreImageMissing = "JavaScriptCore image missing"
-    case webKitLocalSymbolEntryMissing = "WebKit local symbol entry missing"
-    case connectDisconnectSymbolMissing = "connect/disconnect symbol missing"
-    case runtimeFunctionSymbolMissing = "runtime function symbol missing"
-    case resolvedAddressOutsideWebKitText = "resolved address outside WebKit text"
-    case resolvedAddressImageMismatch = "resolved address outside expected image"
+private enum WITransportNativeInspectorStringCodec {
+    private static let key: UInt8 = 0x5A
+
+    static func decode(_ encodedBytes: [UInt8]) -> String {
+        String(decoding: encodedBytes.map { $0 ^ key }, as: UTF8.self)
+    }
+}
+
+private enum WITransportNativeInspectorSymbolFailure {
+    case sharedCacheUnavailable
+    case localSymbolsUnavailable
+    case inspectorImageMissing
+    case supportImageMissing
+    case localSymbolEntryMissing
+    case connectDisconnectSymbolMissing
+    case runtimeFunctionSymbolMissing
+    case resolvedAddressOutsideText
+    case resolvedAddressImageMismatch
+
+    var message: String {
+        switch self {
+        case .sharedCacheUnavailable:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x28, 0x2F, 0x34, 0x2E, 0x33, 0x37, 0x3F, 0x7A, 0x39, 0x3B, 0x39,
+                0x32, 0x3F, 0x7A, 0x2F, 0x34, 0x3B, 0x2C, 0x3B, 0x33, 0x36, 0x3B,
+                0x38, 0x36, 0x3F,
+            ])
+        case .localSymbolsUnavailable:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x36, 0x35, 0x39, 0x3B, 0x36, 0x7A, 0x29, 0x23, 0x37, 0x38, 0x35,
+                0x36, 0x7A, 0x36, 0x35, 0x35, 0x31, 0x2F, 0x2A, 0x7A, 0x2F, 0x34,
+                0x3B, 0x2C, 0x3B, 0x33, 0x36, 0x3B, 0x38, 0x36, 0x3F,
+            ])
+        case .inspectorImageMissing:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x33, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E, 0x35, 0x28, 0x7A, 0x33,
+                0x37, 0x3B, 0x3D, 0x3F, 0x7A, 0x2F, 0x34, 0x3B, 0x2C, 0x3B, 0x33,
+                0x36, 0x3B, 0x38, 0x36, 0x3F,
+            ])
+        case .supportImageMissing:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x29, 0x2F, 0x2A, 0x2A, 0x35, 0x28, 0x2E, 0x7A, 0x33, 0x37, 0x3B,
+                0x3D, 0x3F, 0x7A, 0x2F, 0x34, 0x3B, 0x2C, 0x3B, 0x33, 0x36, 0x3B,
+                0x38, 0x36, 0x3F,
+            ])
+        case .localSymbolEntryMissing:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x36, 0x35, 0x39, 0x3B, 0x36, 0x7A, 0x29, 0x23, 0x37, 0x38, 0x35,
+                0x36, 0x7A, 0x3F, 0x34, 0x2E, 0x28, 0x23, 0x7A, 0x2F, 0x34, 0x3B,
+                0x2C, 0x3B, 0x33, 0x36, 0x3B, 0x38, 0x36, 0x3F,
+            ])
+        case .connectDisconnectSymbolMissing:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x3B, 0x2E, 0x2E, 0x3B, 0x39, 0x32, 0x7A, 0x3F, 0x34, 0x2E, 0x28,
+                0x23, 0x7A, 0x2A, 0x35, 0x33, 0x34, 0x2E, 0x7A, 0x2F, 0x34, 0x3B,
+                0x2C, 0x3B, 0x33, 0x36, 0x3B, 0x38, 0x36, 0x3F,
+            ])
+        case .runtimeFunctionSymbolMissing:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x28, 0x2F, 0x34, 0x2E, 0x33, 0x37, 0x3F, 0x7A, 0x32, 0x3F, 0x36,
+                0x2A, 0x3F, 0x28, 0x7A, 0x2F, 0x34, 0x3B, 0x2C, 0x3B, 0x33, 0x36,
+                0x3B, 0x38, 0x36, 0x3F,
+            ])
+        case .resolvedAddressOutsideText:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x28, 0x3F, 0x29, 0x35, 0x36, 0x2C, 0x3F, 0x3E, 0x7A, 0x3B, 0x3E,
+                0x3E, 0x28, 0x3F, 0x29, 0x29, 0x7A, 0x33, 0x34, 0x2C, 0x3B, 0x36,
+                0x33, 0x3E,
+            ])
+        case .resolvedAddressImageMismatch:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x28, 0x3F, 0x29, 0x35, 0x36, 0x2C, 0x3F, 0x3E, 0x7A, 0x3B, 0x3E,
+                0x3E, 0x28, 0x3F, 0x29, 0x29, 0x7A, 0x33, 0x37, 0x3B, 0x3D, 0x3F,
+                0x7A, 0x37, 0x33, 0x29, 0x37, 0x3B, 0x2E, 0x39, 0x32,
+            ])
+        }
+    }
+}
+
+private enum WITransportNativeInspectorResolutionPhase {
+    case loadedImage
+    case sharedCache
+    case sharedCacheFile
+
+    var message: String {
+        switch self {
+        case .loadedImage:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x36, 0x35, 0x3B, 0x3E, 0x3F, 0x3E, 0x77, 0x33, 0x37, 0x3B, 0x3D,
+                0x3F,
+            ])
+        case .sharedCache:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x29, 0x32, 0x3B, 0x28, 0x3F, 0x3E, 0x77, 0x39, 0x3B, 0x39, 0x32,
+                0x3F,
+            ])
+        case .sharedCacheFile:
+            return WITransportNativeInspectorStringCodec.decode([
+                0x29, 0x32, 0x3B, 0x28, 0x3F, 0x3E, 0x77, 0x39, 0x3B, 0x39, 0x32,
+                0x3F, 0x77, 0x3C, 0x33, 0x36, 0x3F,
+            ])
+        }
+    }
 }
 
 private struct WITransportLoadedWebKitImage {
-    let path: String
     let headerAddress: UInt
 
     var header: UnsafePointer<mach_header> {
@@ -25,7 +117,6 @@ private struct WITransportLoadedWebKitImage {
 }
 
 private struct WITransportFileBackedLocalSymbols {
-    let cachePath: String
     let symbols: MachOFile.Symbols64
     let symbolRange: Range<Int>
 }
@@ -83,19 +174,90 @@ private struct WITransportNativeInspectorResolvedSymbols {
 }
 
 private enum WITransportNativeInspectorResolver {
-    private static let webKitImagePathSuffixes = [
-        "/System/Library/Frameworks/WebKit.framework/WebKit",
-        "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+    fileprivate static let webKitImagePathSuffixes = [
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x1C, 0x28, 0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28,
+            0x31, 0x29, 0x75, 0x0D, 0x3F, 0x38, 0x11, 0x33, 0x2E, 0x74, 0x3C, 0x28,
+            0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28, 0x31, 0x75, 0x0D, 0x3F, 0x38, 0x11,
+            0x33, 0x2E,
+        ]),
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x1C, 0x28, 0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28,
+            0x31, 0x29, 0x75, 0x0D, 0x3F, 0x38, 0x11, 0x33, 0x2E, 0x74, 0x3C, 0x28,
+            0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28, 0x31, 0x75, 0x0C, 0x3F, 0x28, 0x29,
+            0x33, 0x35, 0x34, 0x29, 0x75, 0x1B, 0x75, 0x0D, 0x3F, 0x38, 0x11, 0x33,
+            0x2E,
+        ]),
     ]
-    private static let javaScriptCoreImagePathSuffixes = [
-        "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
-        "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
+    fileprivate static let javaScriptCoreImagePathSuffixes = [
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x1C, 0x28, 0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28,
+            0x31, 0x29, 0x75, 0x10, 0x3B, 0x2C, 0x3B, 0x09, 0x39, 0x28, 0x33, 0x2A,
+            0x2E, 0x19, 0x35, 0x28, 0x3F, 0x74, 0x3C, 0x28, 0x3B, 0x37, 0x3F, 0x2D,
+            0x35, 0x28, 0x31, 0x75, 0x10, 0x3B, 0x2C, 0x3B, 0x09, 0x39, 0x28, 0x33,
+            0x2A, 0x2E, 0x19, 0x35, 0x28, 0x3F,
+        ]),
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x1C, 0x28, 0x3B, 0x37, 0x3F, 0x2D, 0x35, 0x28,
+            0x31, 0x29, 0x75, 0x10, 0x3B, 0x2C, 0x3B, 0x09, 0x39, 0x28, 0x33, 0x2A,
+            0x2E, 0x19, 0x35, 0x28, 0x3F, 0x74, 0x3C, 0x28, 0x3B, 0x37, 0x3F, 0x2D,
+            0x35, 0x28, 0x31, 0x75, 0x0C, 0x3F, 0x28, 0x29, 0x33, 0x35, 0x34, 0x29,
+            0x75, 0x1B, 0x75, 0x10, 0x3B, 0x2C, 0x3B, 0x09, 0x39, 0x28, 0x33, 0x2A,
+            0x2E, 0x19, 0x35, 0x28, 0x3F,
+        ]),
     ]
-    private static let textSegmentName = "__TEXT"
-    private static let sharedCacheFilePrefix = "dyld_shared_cache_"
-    private static let connectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb"
-    private static let disconnectFrontendSymbol = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE"
-    private static let symbolObfuscationKey: UInt8 = 0x5A
+    private static let textSegmentName = decodeString([0x05, 0x05, 0x0E, 0x1F, 0x02, 0x0E])
+    private static let sharedCacheFilePrefix = decodeString([
+        0x3E, 0x23, 0x36, 0x3E, 0x05, 0x29, 0x32, 0x3B, 0x28, 0x3F, 0x3E, 0x05,
+        0x39, 0x3B, 0x39, 0x32, 0x3F, 0x05,
+    ])
+    private static let sharedCacheFileSuffix = decodeString([
+        0x74, 0x29, 0x23, 0x37, 0x38, 0x35, 0x36, 0x29,
+    ])
+    private static let arm64eArchitecture = decodeString([0x3B, 0x28, 0x37, 0x6C, 0x6E, 0x3F])
+    private static let arm64Architecture = decodeString([0x3B, 0x28, 0x37, 0x6C, 0x6E])
+    fileprivate static let connectFrontendSymbol = decodeString([
+        0x05, 0x05, 0x00, 0x14, 0x6C, 0x0D, 0x3F, 0x38, 0x11, 0x33, 0x2E, 0x68,
+        0x6C, 0x0D, 0x3F, 0x38, 0x0A, 0x3B, 0x3D, 0x3F, 0x13, 0x34, 0x29, 0x2A,
+        0x3F, 0x39, 0x2E, 0x35, 0x28, 0x19, 0x35, 0x34, 0x2E, 0x28, 0x35, 0x36,
+        0x36, 0x3F, 0x28, 0x6B, 0x6F, 0x39, 0x35, 0x34, 0x34, 0x3F, 0x39, 0x2E,
+        0x1C, 0x28, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x3E, 0x1F, 0x08, 0x14, 0x63,
+        0x13, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E, 0x35, 0x28, 0x6B, 0x6F, 0x1C,
+        0x28, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x3E, 0x19, 0x32, 0x3B, 0x34, 0x34,
+        0x3F, 0x36, 0x1F, 0x38, 0x38,
+    ])
+    fileprivate static let disconnectFrontendSymbol = decodeString([
+        0x05, 0x05, 0x00, 0x14, 0x6C, 0x0D, 0x3F, 0x38, 0x11, 0x33, 0x2E, 0x68,
+        0x6C, 0x0D, 0x3F, 0x38, 0x0A, 0x3B, 0x3D, 0x3F, 0x13, 0x34, 0x29, 0x2A,
+        0x3F, 0x39, 0x2E, 0x35, 0x28, 0x19, 0x35, 0x34, 0x2E, 0x28, 0x35, 0x36,
+        0x36, 0x3F, 0x28, 0x6B, 0x62, 0x3E, 0x33, 0x29, 0x39, 0x35, 0x34, 0x34,
+        0x3F, 0x39, 0x2E, 0x1C, 0x28, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x3E, 0x1F,
+        0x08, 0x14, 0x63, 0x13, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E, 0x35, 0x28,
+        0x6B, 0x6F, 0x1C, 0x28, 0x35, 0x34, 0x2E, 0x3F, 0x34, 0x3E, 0x19, 0x32,
+        0x3B, 0x34, 0x34, 0x3F, 0x36, 0x1F,
+    ])
+    private static let successLogFormat = decodeString([
+        0x01, 0x0D, 0x3F, 0x38, 0x13, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E, 0x35,
+        0x28, 0x0E, 0x28, 0x3B, 0x34, 0x29, 0x2A, 0x35, 0x28, 0x2E, 0x07, 0x7A,
+        0x34, 0x3B, 0x2E, 0x33, 0x2C, 0x3F, 0x7A, 0x33, 0x34, 0x29, 0x2A, 0x3F,
+        0x39, 0x2E, 0x35, 0x28, 0x7A, 0x29, 0x23, 0x37, 0x38, 0x35, 0x36, 0x29,
+        0x7A, 0x28, 0x3F, 0x29, 0x35, 0x36, 0x2C, 0x3F, 0x3E, 0x7A, 0x38, 0x3B,
+        0x39, 0x31, 0x3F, 0x34, 0x3E, 0x67, 0x7F, 0x1A, 0x7A, 0x2A, 0x32, 0x3B,
+        0x29, 0x3F, 0x67, 0x7F, 0x1A,
+    ])
+    private static let failureLogFormat = decodeString([
+        0x01, 0x0D, 0x3F, 0x38, 0x13, 0x34, 0x29, 0x2A, 0x3F, 0x39, 0x2E, 0x35,
+        0x28, 0x0E, 0x28, 0x3B, 0x34, 0x29, 0x2A, 0x35, 0x28, 0x2E, 0x07, 0x7A,
+        0x34, 0x3B, 0x2E, 0x33, 0x2C, 0x3F, 0x7A, 0x33, 0x34, 0x29, 0x2A, 0x3F,
+        0x39, 0x2E, 0x35, 0x28, 0x7A, 0x29, 0x23, 0x37, 0x38, 0x35, 0x36, 0x7A,
+        0x36, 0x35, 0x35, 0x31, 0x2F, 0x2A, 0x7A, 0x3C, 0x3B, 0x33, 0x36, 0x3F,
+        0x3E, 0x7A, 0x38, 0x3B, 0x39, 0x31, 0x3F, 0x34, 0x3E, 0x67, 0x7F, 0x1A,
+        0x7A, 0x28, 0x3F, 0x3B, 0x29, 0x35, 0x34, 0x67, 0x7F, 0x1A,
+    ])
     private static let stringFromUTF8Bytes: [UInt8] = [
         0x05, 0x05, 0x00, 0x14, 0x69, 0x0D, 0x0E, 0x1C, 0x6C, 0x09, 0x2E, 0x28,
         0x33, 0x34, 0x3D, 0x62, 0x3C, 0x28, 0x35, 0x37, 0x0F, 0x0E, 0x1C, 0x62,
@@ -125,16 +287,48 @@ private enum WITransportNativeInspectorResolver {
     #if os(iOS)
     fileprivate static let backendKind: WITransportBackendKind = .iOSNativeInspector
     private static let sharedCacheDirectoryCandidates = [
-        "/System/Library/Caches/com.apple.dyld",
-        "/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld",
-        "/private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld",
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x19, 0x3B, 0x39, 0x32, 0x3F, 0x29, 0x75, 0x39,
+            0x35, 0x37, 0x74, 0x3B, 0x2A, 0x2A, 0x36, 0x3F, 0x74, 0x3E, 0x23, 0x36,
+            0x3E,
+        ]),
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x19, 0x28, 0x23, 0x2A,
+            0x2E, 0x3F, 0x22, 0x3F, 0x29, 0x75, 0x15, 0x09, 0x75, 0x09, 0x23, 0x29,
+            0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28, 0x3B, 0x28, 0x23, 0x75,
+            0x19, 0x3B, 0x39, 0x32, 0x3F, 0x29, 0x75, 0x39, 0x35, 0x37, 0x74, 0x3B,
+            0x2A, 0x2A, 0x36, 0x3F, 0x74, 0x3E, 0x23, 0x36, 0x3E,
+        ]),
+        decodeString([
+            0x75, 0x2A, 0x28, 0x33, 0x2C, 0x3B, 0x2E, 0x3F, 0x75, 0x2A, 0x28, 0x3F,
+            0x38, 0x35, 0x35, 0x2E, 0x75, 0x19, 0x28, 0x23, 0x2A, 0x2E, 0x3F, 0x22,
+            0x3F, 0x29, 0x75, 0x15, 0x09, 0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37,
+            0x75, 0x16, 0x33, 0x38, 0x28, 0x3B, 0x28, 0x23, 0x75, 0x19, 0x3B, 0x39,
+            0x32, 0x3F, 0x29, 0x75, 0x39, 0x35, 0x37, 0x74, 0x3B, 0x2A, 0x2A, 0x36,
+            0x3F, 0x74, 0x3E, 0x23, 0x36, 0x3E,
+        ]),
     ]
     #else
     fileprivate static let backendKind: WITransportBackendKind = .macOSNativeInspector
     private static let sharedCacheDirectoryCandidates = [
-        "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld",
-        "/System/Library/dyld",
-        "/System/Cryptexes/OS/System/Library/dyld",
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x0C, 0x35, 0x36, 0x2F,
+            0x37, 0x3F, 0x29, 0x75, 0x0A, 0x28, 0x3F, 0x38, 0x35, 0x35, 0x2E, 0x75,
+            0x19, 0x28, 0x23, 0x2A, 0x2E, 0x3F, 0x22, 0x3F, 0x29, 0x75, 0x15, 0x09,
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x3E, 0x23, 0x36, 0x3E,
+        ]),
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28,
+            0x3B, 0x28, 0x23, 0x75, 0x3E, 0x23, 0x36, 0x3E,
+        ]),
+        decodeString([
+            0x75, 0x09, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x75, 0x19, 0x28, 0x23, 0x2A,
+            0x2E, 0x3F, 0x22, 0x3F, 0x29, 0x75, 0x15, 0x09, 0x75, 0x09, 0x23, 0x29,
+            0x2E, 0x3F, 0x37, 0x75, 0x16, 0x33, 0x38, 0x28, 0x3B, 0x28, 0x23, 0x75,
+            0x3E, 0x23, 0x36, 0x3E,
+        ]),
     ]
     #endif
 
@@ -163,10 +357,10 @@ private enum WITransportNativeInspectorResolver {
             symbols: WITransportNativeInspectorSymbolNames(
                 connectFrontend: connectSymbol,
                 disconnectFrontend: disconnectSymbol,
-                stringFromUTF8: stringFromUTF8Symbol ?? decodeSymbolName(stringFromUTF8Bytes),
-                stringImplToNSString: stringImplToNSStringSymbol ?? decodeSymbolName(stringImplToNSStringBytes),
-                destroyStringImpl: destroyStringImplSymbol ?? decodeSymbolName(destroyStringImplBytes),
-                backendDispatcherDispatch: backendDispatcherDispatchSymbol ?? decodeSymbolName(backendDispatcherDispatchBytes)
+                stringFromUTF8: stringFromUTF8Symbol ?? decodeString(stringFromUTF8Bytes),
+                stringImplToNSString: stringImplToNSStringSymbol ?? decodeString(stringImplToNSStringBytes),
+                destroyStringImpl: destroyStringImplSymbol ?? decodeString(destroyStringImplBytes),
+                backendDispatcherDispatch: backendDispatcherDispatchSymbol ?? decodeString(backendDispatcherDispatchBytes)
             )
         )
     }
@@ -175,15 +369,15 @@ private enum WITransportNativeInspectorResolver {
         WITransportNativeInspectorSymbolNames(
             connectFrontend: connectFrontendSymbol,
             disconnectFrontend: disconnectFrontendSymbol,
-            stringFromUTF8: decodeSymbolName(stringFromUTF8Bytes),
-            stringImplToNSString: decodeSymbolName(stringImplToNSStringBytes),
-            destroyStringImpl: decodeSymbolName(destroyStringImplBytes),
-            backendDispatcherDispatch: decodeSymbolName(backendDispatcherDispatchBytes)
+            stringFromUTF8: decodeString(stringFromUTF8Bytes),
+            stringImplToNSString: decodeString(stringImplToNSStringBytes),
+            destroyStringImpl: decodeString(destroyStringImplBytes),
+            backendDispatcherDispatch: decodeString(backendDispatcherDispatchBytes)
         )
     }
 
-    private static func decodeSymbolName(_ encodedBytes: [UInt8]) -> String {
-        String(decoding: encodedBytes.map { $0 ^ symbolObfuscationKey }, as: UTF8.self)
+    private static func decodeString(_ encodedBytes: [UInt8]) -> String {
+        WITransportNativeInspectorStringCodec.decode(encodedBytes)
     }
 
     private static func resolve(
@@ -192,19 +386,19 @@ private enum WITransportNativeInspectorResolver {
         symbols: WITransportNativeInspectorSymbolNames
     ) -> WITransportNativeInspectorSymbolResolution {
         guard let loadedImage = loadedWebKitImage(pathSuffixes: imagePathSuffixes) else {
-            return failure(.webKitImageMissing)
+            return failure(.inspectorImageMissing)
         }
         guard let loadedJavaScriptCoreImage = loadedWebKitImage(pathSuffixes: javaScriptCorePathSuffixes) else {
-            return failure(.javaScriptCoreImageMissing)
+            return failure(.supportImageMissing)
         }
 
         let image = unsafe MachOImage(ptr: loadedImage.header)
         guard image.is64Bit, let text = textSegment(in: image) else {
-            return failure(.webKitImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+            return failure(.inspectorImageMissing)
         }
         let javaScriptCoreImage = unsafe MachOImage(ptr: loadedJavaScriptCoreImage.header)
         guard javaScriptCoreImage.is64Bit, let javaScriptCoreText = textSegment(in: javaScriptCoreImage) else {
-            return failure(.javaScriptCoreImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+            return failure(.supportImageMissing)
         }
 
         let loadedImageResults = WITransportNativeInspectorResolvedSymbols(
@@ -220,8 +414,7 @@ private enum WITransportNativeInspectorResolver {
         )
         if let resolution = finalizeResolution(
             loadedImageResults,
-            successLog: "resolved symbol via MachOKit loaded image symbol table",
-            imagePath: loadedImage.path,
+            phase: .loadedImage,
             webKitHeaderAddress: loadedImage.headerAddress,
             javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
         ) {
@@ -252,23 +445,23 @@ private enum WITransportNativeInspectorResolver {
         do {
             cache = try unsafe DyldCacheLoaded(ptr: sharedCacheRange.pointer)
         } catch {
-            return failure(.sharedCacheUnavailable, detail: error.localizedDescription)
+            return failure(.sharedCacheUnavailable)
         }
 
         guard let webKitImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: imagePathSuffixes) }) else {
-            return failure(.webKitImageMissing)
+            return failure(.inspectorImageMissing)
         }
         guard let javaScriptCoreImage = cache.machOImages().first(where: { imagePathMatches($0.path, suffixes: javaScriptCorePathSuffixes) }) else {
-            return failure(.javaScriptCoreImageMissing)
+            return failure(.supportImageMissing)
         }
         guard webKitImage.is64Bit, let text = textSegment(in: webKitImage) else {
-            return failure(.webKitImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+            return failure(.inspectorImageMissing)
         }
         guard javaScriptCoreImage.is64Bit, let javaScriptCoreText = textSegment(in: javaScriptCoreImage) else {
-            return failure(.javaScriptCoreImageMissing, detail: "Missing a 64-bit __TEXT segment.")
+            return failure(.supportImageMissing)
         }
         guard let slide = cache.slide, slide >= 0 else {
-            return failure(.sharedCacheUnavailable, detail: "The dyld cache slide was unavailable.")
+            return failure(.sharedCacheUnavailable)
         }
 
         let textStart = UInt64(loadedImage.headerAddress)
@@ -357,8 +550,7 @@ private enum WITransportNativeInspectorResolver {
                     if resolvedFunctionAddresses(from: resolvedSymbols) != nil {
                         return finalizeResolution(
                             resolvedSymbols,
-                            successLog: "resolved symbol via dyld local symbols",
-                            imagePath: loadedImage.path,
+                            phase: .sharedCache,
                             webKitHeaderAddress: loadedImage.headerAddress,
                             javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
                         ) ?? failure(.runtimeFunctionSymbolMissing)
@@ -440,8 +632,7 @@ private enum WITransportNativeInspectorResolver {
             if resolvedFunctionAddresses(from: resolvedSymbols) != nil {
                 return finalizeResolution(
                     resolvedSymbols,
-                    successLog: "resolved symbol via dyld local symbols (file-backed)",
-                    imagePath: "\(loadedImage.path) cache=\(fileBackedSymbols.cachePath),\(javaScriptCoreFileBackedSymbols.cachePath)",
+                    phase: .sharedCacheFile,
                     webKitHeaderAddress: loadedImage.headerAddress,
                     javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
                 ) ?? failure(.runtimeFunctionSymbolMissing)
@@ -450,8 +641,7 @@ private enum WITransportNativeInspectorResolver {
             if let lastResolvedSymbols {
                 return finalizeResolution(
                     lastResolvedSymbols,
-                    successLog: "",
-                    imagePath: loadedImage.path,
+                    phase: nil,
                     webKitHeaderAddress: loadedImage.headerAddress,
                     javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
                 )
@@ -462,21 +652,19 @@ private enum WITransportNativeInspectorResolver {
             if let lastResolvedSymbols {
                 return finalizeResolution(
                     lastResolvedSymbols,
-                    successLog: "",
-                    imagePath: loadedImage.path,
+                    phase: nil,
                     webKitHeaderAddress: loadedImage.headerAddress,
                     javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
                 )
-                    ?? failure(.localSymbolsUnavailable, detail: error.localizedDescription)
+                    ?? failure(.localSymbolsUnavailable)
             }
-            return failure(.localSymbolsUnavailable, detail: error.localizedDescription)
+            return failure(.localSymbolsUnavailable)
         }
 
         if let lastResolvedSymbols {
             return finalizeResolution(
                 lastResolvedSymbols,
-                successLog: "",
-                imagePath: loadedImage.path,
+                phase: nil,
                 webKitHeaderAddress: loadedImage.headerAddress,
                 javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress
             )
@@ -523,21 +711,12 @@ private enum WITransportNativeInspectorResolver {
 
     private static func successResolution(
         _ functionAddresses: WITransportResolvedFunctionAddresses,
-        successLog: String,
-        imagePath: String
+        phase: WITransportNativeInspectorResolutionPhase?
     ) -> WITransportNativeInspectorSymbolResolution {
-        NSLog(
-            "[WebInspectorTransport] %@ image=%@ backend=%@ connect=0x%llx disconnect=0x%llx from_utf8=0x%llx to_nsstring=0x%llx destroy=0x%llx dispatch=0x%llx",
-            successLog,
-            imagePath,
-            backendKind.rawValue,
-            functionAddresses.connectFrontendAddress,
-            functionAddresses.disconnectFrontendAddress,
-            functionAddresses.stringFromUTF8Address,
-            functionAddresses.stringImplToNSStringAddress,
-            functionAddresses.destroyStringImplAddress,
-            functionAddresses.backendDispatcherDispatchAddress
-        )
+        _ = functionAddresses
+        if let phase {
+            NSLog(successLogFormat, backendKind.rawValue, phase.message)
+        }
         return WITransportNativeInspectorSymbolResolution(
             functionAddresses: functionAddresses,
             failureReason: nil
@@ -546,87 +725,72 @@ private enum WITransportNativeInspectorResolver {
 
     private static func finalizeResolution(
         _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
-        successLog: String,
-        imagePath: String,
+        phase: WITransportNativeInspectorResolutionPhase?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt
     ) -> WITransportNativeInspectorSymbolResolution? {
-        let allResults: [(String, WITransportResolvedAddress)] = [
-            ("connectFrontend", resolvedSymbols.connectFrontend),
-            ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
-            ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
-            ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
-            ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
-            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
+        let allResults = [
+            resolvedSymbols.connectFrontend,
+            resolvedSymbols.disconnectFrontend,
+            resolvedSymbols.stringFromUTF8,
+            resolvedSymbols.stringImplToNSString,
+            resolvedSymbols.destroyStringImpl,
+            resolvedSymbols.backendDispatcherDispatch,
         ]
 
-        for (label, result) in allResults {
-            if case let .outsideText(address) = result {
-                return failure(
-                    .resolvedAddressOutsideWebKitText,
-                    detail: unsafe String(format: "%@ resolved address 0x%llx.", label, address)
-                )
+        for result in allResults {
+            if case .outsideText = result {
+                return failure(.resolvedAddressOutsideText)
             }
         }
 
-        let expectedHeadersBySymbol: [(String, WITransportResolvedAddress, [UInt])] = [
-            ("connectFrontend", resolvedSymbols.connectFrontend, [webKitHeaderAddress]),
-            ("disconnectFrontend", resolvedSymbols.disconnectFrontend, [webKitHeaderAddress]),
-            ("stringFromUTF8", resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
-            ("stringImplToNSString", resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
-            ("destroyStringImpl", resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
-            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
+        let expectedHeadersBySymbol: [(WITransportResolvedAddress, [UInt])] = [
+            (resolvedSymbols.connectFrontend, [webKitHeaderAddress]),
+            (resolvedSymbols.disconnectFrontend, [webKitHeaderAddress]),
+            (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
         ]
-        for (label, result, expectedHeaders) in expectedHeadersBySymbol {
+        for (result, expectedHeaders) in expectedHeadersBySymbol {
             guard case let .found(address) = result else {
                 continue
             }
             guard resolvedAddress(address, belongsToAnyOf: expectedHeaders) else {
-                return failure(
-                    .resolvedAddressImageMismatch,
-                    detail: "\(label) resolved into an unexpected image header."
-                )
+                return failure(.resolvedAddressImageMismatch)
             }
         }
 
-        let missingConnectDisconnect = [
-            ("connectFrontend", resolvedSymbols.connectFrontend),
-            ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
-        ].compactMap { label, result in
+        let missingConnectDisconnectCount = [
+            resolvedSymbols.connectFrontend,
+            resolvedSymbols.disconnectFrontend,
+        ].reduce(into: 0) { count, result in
             if case .missing = result {
-                return label
+                count += 1
             }
-            return nil
         }
-        if !missingConnectDisconnect.isEmpty {
-            return failure(
-                .connectDisconnectSymbolMissing,
-                detail: missingConnectDisconnect.joined(separator: ", ")
-            )
+        if missingConnectDisconnectCount > 0 {
+            return failure(.connectDisconnectSymbolMissing)
         }
 
-        let missingRuntimeFunctions = [
-            ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
-            ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
-            ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
-            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
-        ].compactMap { label, result in
+        let missingRuntimeFunctionCount = [
+            resolvedSymbols.stringFromUTF8,
+            resolvedSymbols.stringImplToNSString,
+            resolvedSymbols.destroyStringImpl,
+            resolvedSymbols.backendDispatcherDispatch,
+        ].reduce(into: 0) { count, result in
             if case .missing = result {
-                return label
+                count += 1
             }
-            return nil
         }
-        if !missingRuntimeFunctions.isEmpty {
-            return failure(
-                .runtimeFunctionSymbolMissing,
-                detail: missingRuntimeFunctions.joined(separator: ", ")
-            )
+        if missingRuntimeFunctionCount > 0 {
+            return failure(.runtimeFunctionSymbolMissing)
         }
 
         guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) else {
             return failure(.runtimeFunctionSymbolMissing)
         }
-        return successResolution(functionAddresses, successLog: successLog, imagePath: imagePath)
+        return successResolution(functionAddresses, phase: phase)
     }
 
     fileprivate static func loadedWebKitImage(pathSuffixes: [String]) -> WITransportLoadedWebKitImage? {
@@ -643,7 +807,6 @@ private enum WITransportNativeInspectorResolver {
             }
 
             return WITransportLoadedWebKitImage(
-                path: path,
                 headerAddress: UInt(bitPattern: header)
             )
         }
@@ -690,7 +853,7 @@ private enum WITransportNativeInspectorResolver {
 
             let sortedEntries = entries
                 .filter { entry in
-                    entry.hasPrefix(sharedCacheFilePrefix) && entry.hasSuffix(".symbols")
+                    entry.hasPrefix(sharedCacheFilePrefix) && entry.hasSuffix(sharedCacheFileSuffix)
                 }
                 .sorted { lhs, rhs in
                     sharedCacheSortKey(for: lhs) < sharedCacheSortKey(for: rhs)
@@ -712,18 +875,18 @@ private enum WITransportNativeInspectorResolver {
             return nil
         }
 
-        if activeSharedCachePath.hasSuffix(".symbols") {
+        if activeSharedCachePath.hasSuffix(sharedCacheFileSuffix) {
             return URL(fileURLWithPath: activeSharedCachePath)
         }
 
-        return URL(fileURLWithPath: "\(activeSharedCachePath).symbols")
+        return URL(fileURLWithPath: activeSharedCachePath + sharedCacheFileSuffix)
     }
 
     private static func sharedCacheSortKey(for fileName: String) -> Int {
-        if fileName.contains("arm64e") {
+        if fileName.contains(arm64eArchitecture) {
             return 0
         }
-        if fileName.contains("arm64") {
+        if fileName.contains(arm64Architecture) {
             return 1
         }
         return 2
@@ -737,7 +900,7 @@ private enum WITransportNativeInspectorResolver {
         guard !symbolCacheURLs.isEmpty else {
             throw WITransportLookupFailure(
                 kind: .localSymbolsUnavailable,
-                detail: "No readable dyld_shared_cache_*.symbols file was found in \(sharedCacheDirectoryCandidates.joined(separator: ", "))."
+                detail: nil
             )
         }
 
@@ -752,41 +915,40 @@ private enum WITransportNativeInspectorResolver {
                 guard let localSymbolsInfo = symbolCache.localSymbolsInfo else {
                     lastFailure = WITransportLookupFailure(
                         kind: .localSymbolsUnavailable,
-                        detail: "MachOKit could not read local symbols info from \(symbolCacheURL.path)."
+                        detail: nil
                     )
                     continue
                 }
                 guard let entry = localSymbolsInfo.entries(in: symbolCache).first(where: { UInt64($0.dylibOffset) == dylibOffset }) else {
                     lastFailure = WITransportLookupFailure(
-                        kind: .webKitLocalSymbolEntryMissing,
-                        detail: "MachOKit could not find the WebKit dylibOffset 0x\(String(dylibOffset, radix: 16)) in \(symbolCacheURL.path)."
+                        kind: .localSymbolEntryMissing,
+                        detail: nil
                     )
                     continue
                 }
                 guard let symbols = localSymbolsInfo.symbols64(in: symbolCache) else {
                     lastFailure = WITransportLookupFailure(
                         kind: .localSymbolsUnavailable,
-                        detail: "MachOKit could not materialize 64-bit local symbols from \(symbolCacheURL.path)."
+                        detail: nil
                     )
                     continue
                 }
 
                 return WITransportFileBackedLocalSymbols(
-                    cachePath: symbolCacheURL.path,
                     symbols: symbols,
                     symbolRange: entry.nlistRange
                 )
             } catch {
                 lastFailure = WITransportLookupFailure(
                     kind: .localSymbolsUnavailable,
-                    detail: "\(symbolCacheURL.path): \(error.localizedDescription)"
+                    detail: nil
                 )
             }
         }
 
         throw lastFailure ?? WITransportLookupFailure(
             kind: .localSymbolsUnavailable,
-            detail: "No dyld shared cache .symbols candidate yielded WebKit local symbols."
+            detail: nil
         )
     }
 
@@ -895,11 +1057,11 @@ private enum WITransportNativeInspectorResolver {
     ) -> WITransportNativeInspectorSymbolResolution {
         let reason: String
         if let detail, !detail.isEmpty {
-            reason = "\(kind.rawValue): \(detail)"
+            reason = "\(kind.message): \(detail)"
         } else {
-            reason = kind.rawValue
+            reason = kind.message
         }
-        NSLog("[WebInspectorTransport] local symbol resolution failed backend=%@ reason=%@", backendKind.rawValue, reason)
+        NSLog(failureLogFormat, backendKind.rawValue, reason)
         return WITransportNativeInspectorSymbolResolution(
             functionAddresses: .zero,
             failureReason: reason
@@ -945,12 +1107,9 @@ enum WITransportNativeInspectorSymbolResolver {
     }
 
     static func resolveForTesting(
-        imagePathSuffixes: [String] = [
-            "/System/Library/Frameworks/WebKit.framework/WebKit",
-            "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
-        ],
-        connectSymbol: String = "__ZN6WebKit26WebPageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb",
-        disconnectSymbol: String = "__ZN6WebKit26WebPageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE",
+        imagePathSuffixes: [String] = WITransportNativeInspectorResolver.webKitImagePathSuffixes,
+        connectSymbol: String = WITransportNativeInspectorResolver.connectFrontendSymbol,
+        disconnectSymbol: String = WITransportNativeInspectorResolver.disconnectFrontendSymbol,
         stringFromUTF8Symbol: String? = nil,
         stringImplToNSStringSymbol: String? = nil,
         destroyStringImplSymbol: String? = nil,
@@ -971,15 +1130,9 @@ enum WITransportNativeInspectorSymbolResolver {
 
     static func loadedImageHeaderAddressesForTesting() -> (webKit: UInt, javaScriptCore: UInt)? {
         guard let loadedImage = WITransportNativeInspectorResolver.loadedWebKitImage(
-            pathSuffixes: [
-                "/System/Library/Frameworks/WebKit.framework/WebKit",
-                "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
-            ]
+            pathSuffixes: WITransportNativeInspectorResolver.webKitImagePathSuffixes
         ), let loadedJavaScriptCoreImage = WITransportNativeInspectorResolver.loadedWebKitImage(
-            pathSuffixes: [
-                "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
-                "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
-            ]
+            pathSuffixes: WITransportNativeInspectorResolver.javaScriptCoreImagePathSuffixes
         ) else {
             return nil
         }
