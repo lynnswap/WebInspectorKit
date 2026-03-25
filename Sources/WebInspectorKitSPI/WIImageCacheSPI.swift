@@ -24,6 +24,13 @@ public enum WIImageCacheSPIError: Error, Sendable, Equatable {
 
 @MainActor
 public enum WIImageCacheSPI {
+    /// Returns cached bytes for the first loaded image subresource in the current page
+    /// whose resource URL exactly matches `imageURL`.
+    ///
+    /// This lookup does not evaluate JavaScript and does not attempt to determine whether
+    /// the image is currently rendered or visible in the DOM. It searches the current
+    /// page archive across the main frame and subframes, preferring the main frame when
+    /// duplicate URLs exist.
     public static func displayedImageCache(
         for imageURL: URL,
         in webView: WKWebView
@@ -38,15 +45,6 @@ package protocol WIFrameInfoProviding {
 }
 
 @MainActor
-package protocol WIDisplayedImageMatching {
-    func firstMatchingFrame(
-        for imageURL: URL,
-        in webView: WKWebView,
-        frames: [WKFrameInfo]
-    ) async -> WKFrameInfo?
-}
-
-@MainActor
 package protocol WIWebArchiveCreating {
     func createWebArchiveData(in webView: WKWebView) async throws -> Data
 }
@@ -54,16 +52,13 @@ package protocol WIWebArchiveCreating {
 @MainActor
 package struct WIImageCacheLoader {
     package let frameInfoProvider: any WIFrameInfoProviding
-    package let imageMatcher: any WIDisplayedImageMatching
     package let webArchiveCreator: any WIWebArchiveCreating
 
     package init(
         frameInfoProvider: any WIFrameInfoProviding = WIFrameInfoProvider(),
-        imageMatcher: any WIDisplayedImageMatching = WIDisplayedImageMatcher(),
         webArchiveCreator: any WIWebArchiveCreating = WIWebArchiveCreator()
     ) {
         self.frameInfoProvider = frameInfoProvider
-        self.imageMatcher = imageMatcher
         self.webArchiveCreator = webArchiveCreator
     }
 
@@ -72,17 +67,6 @@ package struct WIImageCacheLoader {
         in webView: WKWebView
     ) async throws -> WIDisplayedImageCacheEntry? {
         guard let frameInfos = await frameInfoProvider.frameInfos(in: webView), !frameInfos.isEmpty else {
-            throw WIImageCacheSPIError.frameEnumerationUnavailable
-        }
-
-        guard let matchedFrame = await imageMatcher.firstMatchingFrame(
-            for: imageURL,
-            in: webView,
-            frames: frameInfos
-        ) else {
-            return nil
-        }
-        guard let frameID = WISPIFrameBridge.frameID(for: matchedFrame) else {
             throw WIImageCacheSPIError.frameEnumerationUnavailable
         }
 
@@ -95,13 +79,11 @@ package struct WIImageCacheLoader {
             throw WIImageCacheSPIError.webArchiveCreationFailed
         }
 
-        guard let resource = try WIWebArchiveParser.resource(
-            matching: imageURL,
-            in: archiveData,
-            frameURL: matchedFrame.request.url?.absoluteString,
-            isMainFrame: matchedFrame.isMainFrame
-        ) else {
+        guard let resource = try WIWebArchiveParser.resource(matching: imageURL, in: archiveData) else {
             return nil
+        }
+        guard let frameID = Self.resolveFrameID(for: resource, in: frameInfos) else {
+            throw WIImageCacheSPIError.frameEnumerationUnavailable
         }
 
         return WIDisplayedImageCacheEntry(
@@ -110,6 +92,29 @@ package struct WIImageCacheLoader {
             resolvedURL: imageURL,
             frameID: frameID
         )
+    }
+
+    package static func resolveFrameID(
+        for matchedResource: WIWebArchiveParser.MatchedResource,
+        in frameInfos: [WKFrameInfo]
+    ) -> UInt64? {
+        let matchedFrame: WKFrameInfo?
+        if matchedResource.isMainFrame {
+            matchedFrame = frameInfos.first(where: \.isMainFrame)
+        } else {
+            matchedFrame =
+                frameInfos.first(where: {
+                    !$0.isMainFrame && $0.request.url?.absoluteString == matchedResource.frameURL
+                })
+                ?? frameInfos.first(where: {
+                    $0.request.url?.absoluteString == matchedResource.frameURL
+                })
+        }
+
+        guard let matchedFrame else {
+            return nil
+        }
+        return WISPIFrameBridge.frameID(for: matchedFrame)
     }
 }
 
@@ -120,43 +125,6 @@ package struct WIFrameInfoProvider: WIFrameInfoProviding {
     package func frameInfos(in webView: WKWebView) async -> [WKFrameInfo]? {
         await WISPIFrameBridge.frameInfos(for: webView)
     }
-}
-
-@MainActor
-package struct WIDisplayedImageMatcher: WIDisplayedImageMatching {
-    package init() {}
-
-    package func firstMatchingFrame(
-        for imageURL: URL,
-        in webView: WKWebView,
-        frames: [WKFrameInfo]
-    ) async -> WKFrameInfo? {
-        for frame in frames {
-            let rawResult = try? await webView.callAsyncJavaScript(
-                Self.script,
-                arguments: ["targetURL": imageURL.absoluteString],
-                in: frame,
-                contentWorld: .page
-            )
-            let matches = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
-            if matches {
-                return frame
-            }
-        }
-        return nil
-    }
-
-    private static let script = #"""
-    return Array.from(document.images).some((img) => {
-        if (!img || !img.isConnected) {
-            return false;
-        }
-        if (img.currentSrc !== targetURL) {
-            return false;
-        }
-        return img.getClientRects().length > 0;
-    });
-    """#
 }
 
 @MainActor
@@ -173,9 +141,11 @@ package struct WIWebArchiveCreator: WIWebArchiveCreating {
 }
 
 package enum WIWebArchiveParser {
-    package struct Resource: Equatable {
+    package struct MatchedResource: Equatable {
         package let data: Data
         package let mimeType: String?
+        package let frameURL: String?
+        package let isMainFrame: Bool
     }
 
     private static let mainResourceKey = "WebMainResource"
@@ -185,12 +155,7 @@ package enum WIWebArchiveParser {
     private static let resourceURLKey = "WebResourceURL"
     private static let resourceMIMETypeKey = "WebResourceMIMEType"
 
-    package static func resource(
-        matching imageURL: URL,
-        in archiveData: Data,
-        frameURL: String?,
-        isMainFrame: Bool
-    ) throws -> Resource? {
+    package static func resource(matching imageURL: URL, in archiveData: Data) throws -> MatchedResource? {
         let propertyList: Any
         do {
             propertyList = try unsafe PropertyListSerialization.propertyList(from: archiveData, options: [], format: nil)
@@ -202,30 +167,47 @@ package enum WIWebArchiveParser {
             throw WIImageCacheSPIError.webArchiveDecodeFailed
         }
 
-        if isMainFrame {
-            return resourceInCurrentArchive(matching: imageURL.absoluteString, archive: root)
-        }
-
-        guard let frameURL else {
-            throw WIImageCacheSPIError.frameEnumerationUnavailable
-        }
-
-        guard let scopedArchive = scopedArchive(matchingFrameURL: frameURL, inArchiveDictionary: root) else {
-            return nil
-        }
-        return resourceInCurrentArchive(matching: imageURL.absoluteString, archive: scopedArchive)
+        return matchedResource(matching: imageURL.absoluteString, inArchiveDictionary: root, isMainFrame: true)
     }
 
-    private static func resourceInCurrentArchive(matching targetURL: String, archive: [String: Any]) -> Resource? {
+    private static func matchedResource(
+        matching targetURL: String,
+        inArchiveDictionary archive: [String: Any],
+        isMainFrame: Bool
+    ) -> MatchedResource? {
+        let currentFrameURL = mainResourceURL(in: archive)
+
         if let mainResource = archive[mainResourceKey] as? [String: Any],
-           let resource = makeResource(from: mainResource, matching: targetURL) {
+           let resource = makeResource(
+               from: mainResource,
+               matching: targetURL,
+               frameURL: currentFrameURL,
+               isMainFrame: isMainFrame
+           ) {
             return resource
         }
 
         if let subresources = archive[subresourcesKey] as? [[String: Any]] {
             for subresource in subresources {
-                if let resource = makeResource(from: subresource, matching: targetURL) {
+                if let resource = makeResource(
+                    from: subresource,
+                    matching: targetURL,
+                    frameURL: currentFrameURL,
+                    isMainFrame: isMainFrame
+                ) {
                     return resource
+                }
+            }
+        }
+
+        if let subframeArchives = archive[subframeArchivesKey] as? [[String: Any]] {
+            for subframeArchive in subframeArchives {
+                if let matched = matchedResource(
+                    matching: targetURL,
+                    inArchiveDictionary: subframeArchive,
+                    isMainFrame: false
+                ) {
+                    return matched
                 }
             }
         }
@@ -233,38 +215,30 @@ package enum WIWebArchiveParser {
         return nil
     }
 
-    private static func scopedArchive(
-        matchingFrameURL frameURL: String,
-        inArchiveDictionary archiveDictionary: [String: Any]
-    ) -> [String: Any]? {
-        if let mainResource = archiveDictionary[mainResourceKey] as? [String: Any],
-           let mainResourceURL = mainResource[resourceURLKey] as? String,
-           mainResourceURL == frameURL {
-            return archiveDictionary
-        }
-
-        guard let subframeArchives = archiveDictionary[subframeArchivesKey] as? [[String: Any]] else {
+    private static func mainResourceURL(in archive: [String: Any]) -> String? {
+        guard let mainResource = archive[mainResourceKey] as? [String: Any] else {
             return nil
         }
-
-        for subframeArchive in subframeArchives {
-            if let matched = scopedArchive(matchingFrameURL: frameURL, inArchiveDictionary: subframeArchive) {
-                return matched
-            }
-        }
-        return nil
+        return mainResource[resourceURLKey] as? String
     }
 
-    private static func makeResource(from resource: [String: Any], matching targetURL: String) -> Resource? {
+    private static func makeResource(
+        from resource: [String: Any],
+        matching targetURL: String,
+        frameURL: String?,
+        isMainFrame: Bool
+    ) -> MatchedResource? {
         guard let resourceURL = resource[resourceURLKey] as? String, resourceURL == targetURL else {
             return nil
         }
         guard let data = resource[resourceDataKey] as? Data else {
             return nil
         }
-        return Resource(
+        return MatchedResource(
             data: data,
-            mimeType: resource[resourceMIMETypeKey] as? String
+            mimeType: resource[resourceMIMETypeKey] as? String,
+            frameURL: frameURL,
+            isMainFrame: isMainFrame
         )
     }
 }
