@@ -20,7 +20,14 @@ public final class WINetworkModel {
     let session: NetworkSession
 
     public private(set) weak var selectedEntry: NetworkEntry?
-    public var searchText: String = ""
+    public var searchText: String = "" {
+        didSet {
+            guard oldValue != searchText else {
+                return
+            }
+            bumpDisplayCriteriaGeneration()
+        }
+    }
     public var activeResourceFilters: Set<NetworkResourceFilter> = [] {
         didSet {
             let normalized = NetworkResourceFilter.normalizedSelection(activeResourceFilters)
@@ -29,11 +36,26 @@ public final class WINetworkModel {
             }
         }
     }
-    public private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = []
+    public private(set) var effectiveResourceFilters: Set<NetworkResourceFilter> = [] {
+        didSet {
+            guard oldValue != effectiveResourceFilters else {
+                return
+            }
+            bumpDisplayCriteriaGeneration()
+        }
+    }
     public var sortDescriptors: [SortDescriptor<NetworkEntry>] = [
         SortDescriptor<NetworkEntry>(\.createdAt, order: .reverse),
         SortDescriptor<NetworkEntry>(\.requestID, order: .reverse)
-    ]
+    ] {
+        didSet {
+            bumpDisplayCriteriaGeneration()
+        }
+    }
+    package private(set) var displayCriteriaGeneration: UInt64 = 0
+    package var displayEntriesGeneration: UInt64 {
+        store.entriesGeneration &+ displayCriteriaGeneration
+    }
 
     @ObservationIgnored private var selectedEntryFetchTask: Task<Void, Never>?
     @ObservationIgnored private var selectedEntryObservationHandles: Set<ObservationHandle> = []
@@ -128,6 +150,10 @@ public final class WINetworkModel {
 }
 
 private extension WINetworkModel {
+    func bumpDisplayCriteriaGeneration() {
+        displayCriteriaGeneration &+= 1
+    }
+
     func startObservingSelectedEntry(_ entry: NetworkEntry?) {
         selectedEntryObservationHandles.removeAll()
         observedSelectedBodyState = bodyState(for: entry)

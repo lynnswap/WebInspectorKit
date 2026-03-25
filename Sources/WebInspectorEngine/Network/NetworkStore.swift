@@ -8,8 +8,11 @@ public final class NetworkStore {
 
     public private(set) var isRecording = true
     public private(set) var entries: [NetworkEntry] = []
+    package private(set) var entriesGeneration: UInt64 = 0
     @ObservationIgnored private var sessionBuckets: [String: SessionBucket] = [:]
     @ObservationIgnored private var maxEntriesStorage: Int?
+    @ObservationIgnored private var entriesGenerationBatchDepth = 0
+    @ObservationIgnored private var hasPendingEntriesGenerationBump = false
 
     var maxEntries: Int? {
         get {
@@ -30,25 +33,31 @@ public final class NetworkStore {
             return
         }
 
-        switch update {
-        case .requestStarted, .resourceTimingSnapshot:
-            let entry = existingOrNewEntry(for: update, sessionID: sessionID)
-            entry?.apply(update)
-        case .webSocketOpened:
-            guard entry(forRequestID: update.requestID, sessionID: sessionID) == nil else {
-                return
+        performEntriesGenerationBatch {
+            let existingEntry = entry(forRequestID: update.requestID, sessionID: sessionID)
+            switch update {
+            case .requestStarted, .resourceTimingSnapshot:
+                if let existingEntry {
+                    apply(update, toTrackedEntry: existingEntry)
+                } else {
+                    appendEntry(NetworkEntry(sessionID: sessionID, update: update))
+                }
+            case .webSocketOpened:
+                guard existingEntry == nil else {
+                    return
+                }
+                appendEntry(NetworkEntry(sessionID: sessionID, update: update))
+            case .responseReceived,
+                 .completed,
+                 .failed,
+                 .webSocketHandshake,
+                 .webSocketFrameAdded,
+                 .webSocketClosed:
+                guard let existingEntry else {
+                    return
+                }
+                apply(update, toTrackedEntry: existingEntry)
             }
-            appendEntry(NetworkEntry(sessionID: sessionID, update: update))
-        case .responseReceived,
-             .completed,
-             .failed,
-             .webSocketHandshake,
-             .webSocketFrameAdded,
-             .webSocketClosed:
-            guard let entry = entry(forRequestID: update.requestID, sessionID: sessionID) else {
-                return
-            }
-            entry.apply(update)
         }
     }
 
@@ -67,8 +76,10 @@ public final class NetworkStore {
             return
         }
 
-        for payload in batch.events where payload.kindValue == .resourceTiming {
-            apply(payload, sessionID: batch.sessionID)
+        performEntriesGenerationBatch {
+            for payload in batch.events where payload.kindValue == .resourceTiming {
+                apply(payload, sessionID: batch.sessionID)
+            }
         }
     }
 
@@ -77,8 +88,10 @@ public final class NetworkStore {
             return
         }
 
-        for payload in batch.events {
-            apply(payload, sessionID: batch.sessionID)
+        performEntriesGenerationBatch {
+            for payload in batch.events {
+                apply(payload, sessionID: batch.sessionID)
+            }
         }
     }
 
@@ -91,10 +104,12 @@ public final class NetworkStore {
         var insertedEntries: [NetworkEntry] = []
         insertedEntries.reserveCapacity(snapshots.count)
 
-        for snapshot in snapshots {
-            let entry = NetworkEntry(snapshot: snapshot)
-            appendEntry(entry)
-            insertedEntries.append(entry)
+        performEntriesGenerationBatch {
+            for snapshot in snapshots {
+                let entry = NetworkEntry(snapshot: snapshot)
+                appendEntry(entry)
+                insertedEntries.append(entry)
+            }
         }
 
         return insertedEntries.filter(entryIsTracked)
@@ -194,8 +209,12 @@ public final class NetworkStore {
     }
 
     package func reset() {
+        guard entries.isEmpty == false else {
+            return
+        }
         sessionBuckets.removeAll()
         entries.removeAll()
+        markEntriesGenerationDirty()
     }
 
     package func clear() {
@@ -217,28 +236,11 @@ public final class NetworkStore {
 }
 
 private extension NetworkStore {
-    func existingOrNewEntry(
-        for update: NetworkEntry.Update,
-        sessionID: String
-    ) -> NetworkEntry? {
-        if let existing = entry(forRequestID: update.requestID, sessionID: sessionID) {
-            return existing
-        }
-
-        switch update {
-        case .requestStarted, .resourceTimingSnapshot:
-            let entry = NetworkEntry(sessionID: sessionID, update: update)
-            appendEntry(entry)
-            return entry
-        default:
-            return nil
-        }
-    }
-
     func appendEntry(_ entry: NetworkEntry) {
         pruneIfNeeded(adding: 1)
         entries.append(entry)
         bucket(for: entry.sessionID).set(entry, requestID: entry.requestID)
+        markEntriesGenerationDirty()
     }
 
     func entryIsTracked(_ entry: NetworkEntry) -> Bool {
@@ -282,6 +284,7 @@ private extension NetworkStore {
         }
         entries.removeFirst(excess)
         rebuildIndexAndBuckets()
+        markEntriesGenerationDirty()
     }
 
     func rebuildIndexAndBuckets() {
@@ -290,6 +293,56 @@ private extension NetworkStore {
         for entry in entries {
             bucket(for: entry.sessionID).set(entry, requestID: entry.requestID)
         }
+    }
+
+    func performEntriesGenerationBatch(_ operation: () -> Void) {
+        entriesGenerationBatchDepth += 1
+        defer {
+            entriesGenerationBatchDepth -= 1
+            flushEntriesGenerationIfNeeded()
+        }
+        operation()
+    }
+
+    func markEntriesGenerationDirty() {
+        hasPendingEntriesGenerationBump = true
+        flushEntriesGenerationIfNeeded()
+    }
+
+    func apply(
+        _ update: NetworkEntry.Update,
+        toTrackedEntry entry: NetworkEntry
+    ) {
+        entry.apply(update)
+        if updateRequiresListInvalidation(update) {
+            markEntriesGenerationDirty()
+        }
+    }
+
+    func updateRequiresListInvalidation(_ update: NetworkEntry.Update) -> Bool {
+        switch update {
+        case .requestStarted,
+             .responseReceived,
+             .completed,
+             .failed,
+             .resourceTimingSnapshot,
+             .webSocketHandshake,
+             .webSocketClosed:
+            return true
+        case .webSocketFrameAdded:
+            return false
+        case .webSocketOpened:
+            assertionFailure("Unexpected tracked-entry update: webSocketOpened")
+            return false
+        }
+    }
+
+    func flushEntriesGenerationIfNeeded() {
+        guard entriesGenerationBatchDepth == 0, hasPendingEntriesGenerationBump else {
+            return
+        }
+        hasPendingEntriesGenerationBump = false
+        entriesGeneration &+= 1
     }
 }
 

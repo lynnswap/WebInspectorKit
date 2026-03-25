@@ -451,6 +451,26 @@ struct NetworkInspectorTests {
     }
 
     @Test
+    func selectedEntryClearsWhenStoreIsClearedDirectly() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 73,
+            url: "https://example.com/direct-clear",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        inspector.selectEntry(inspector.store.entries.first)
+        inspector.store.clear()
+
+        let cleared = await waitUntil {
+            inspector.selectedEntry == nil
+        }
+        #expect(cleared)
+    }
+
+    @Test
     func displayEntriesUpdatesWhenObservedEntryStateChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
@@ -479,6 +499,79 @@ struct NetworkInspectorTests {
         #expect(updated)
         #expect(inspector.displayEntries.first?.statusSeverity == .warning)
         #expect(inspector.displayEntries.first?.fileTypeLabel == "json")
+    }
+
+    @Test
+    func displayEntriesGenerationBumpsWhenResponseUpdateChangesSearchableFields() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 82,
+            url: "https://example.com/searchable",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        inspector.searchText = "404"
+        let initialGeneration = inspector.displayEntriesGeneration
+
+        let responseReceived = try decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 82,
+            "status": 404,
+            "statusText": "Not Found",
+            "mimeType": "application/json",
+            "time": [
+                "monotonicMs": 1_020.0,
+                "wallMs": 1_700_000_000_020.0
+            ]
+        ])
+        inspector.store.apply(responseReceived, sessionID: "")
+
+        let updated = await waitUntil {
+            inspector.displayEntriesGeneration > initialGeneration
+                && inspector.displayEntries.map(\.requestID) == [82]
+        }
+        #expect(updated)
+    }
+
+    @Test
+    func displayEntriesGenerationBumpsWhenCompletionUpdateChangesSortableFields() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 83,
+            url: "https://example.com/sortable",
+            initiator: "fetch",
+            monotonicMs: 1_000
+        )
+
+        let initialGeneration = inspector.displayEntriesGeneration
+
+        let completed = try decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 83,
+            "encodedBodyLength": 512,
+            "decodedBodySize": 1_024,
+            "time": [
+                "monotonicMs": 1_080.0,
+                "wallMs": 1_700_000_000_080.0
+            ]
+        ])
+        inspector.store.apply(completed, sessionID: "")
+
+        let updated = await waitUntil {
+            guard let entry = inspector.displayEntries.first else {
+                return false
+            }
+            return inspector.displayEntriesGeneration > initialGeneration
+                && entry.requestID == 83
+                && entry.phase == .completed
+                && entry.duration != nil
+                && entry.encodedBodyLength == 512
+                && entry.decodedBodyLength == 1_024
+        }
+        #expect(updated)
     }
 
     @Test

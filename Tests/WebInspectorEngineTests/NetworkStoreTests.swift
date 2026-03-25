@@ -51,6 +51,41 @@ struct NetworkStoreTests {
     }
 
     @Test
+    func requestStartBumpsEntriesGeneration() throws {
+        let store = NetworkStore()
+        let initialGeneration = store.entriesGeneration
+
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 12,
+            "url": "https://example.com/callback",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
+        Self.apply(payload, to: store)
+
+        #expect(store.entriesGeneration == initialGeneration + 1)
+    }
+
+    @Test
+    func clearBumpsEntriesGeneration() throws {
+        let store = NetworkStore()
+        let payload = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 13,
+            "url": "https://example.com/clear",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ])
+        Self.apply(payload, to: store)
+        let initialGeneration = store.entriesGeneration
+
+        store.clear()
+
+        #expect(store.entriesGeneration == initialGeneration + 1)
+    }
+
+    @Test
     func preservesRequestIdFromPayload() throws {
         let payload = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -172,6 +207,43 @@ struct NetworkStoreTests {
         #expect(entry.phase == .failed)
         #expect(entry.errorDescription == "WebSocket error")
         #expect(entry.requestHeaders["sec-websocket-protocol"] == "chat")
+    }
+
+    @Test
+    func websocketFrameUpdateDoesNotBumpEntriesGeneration() {
+        let store = NetworkStore()
+        store.apply(
+            .webSocketOpened(
+                .init(
+                    requestID: 2,
+                    url: "wss://example.com/frames",
+                    timestamp: 1,
+                    wallTime: 2
+                )
+            ),
+            sessionID: ""
+        )
+        let initialGeneration = store.entriesGeneration
+
+        store.apply(
+            .webSocketFrameAdded(
+                .init(
+                    requestID: 2,
+                    frame: .init(
+                        direction: .incoming,
+                        opcode: 1,
+                        payload: "hello",
+                        payloadIsBase64: false,
+                        payloadSize: 5,
+                        payloadTruncated: false,
+                        timestamp: 2
+                    )
+                )
+            ),
+            sessionID: ""
+        )
+
+        #expect(store.entriesGeneration == initialGeneration)
     }
 
     @Test
@@ -300,10 +372,12 @@ struct NetworkStoreTests {
 
         let batchCandidate = NetworkWire.PageHook.Batch.decode(from: payload)
         let batch = try #require(batchCandidate)
+        let initialGeneration = store.entriesGeneration
 
         store.applyResourceTimingBatch(batch)
 
         #expect(store.entries.count == 3)
+        #expect(store.entriesGeneration == initialGeneration + 1)
         #expect(store.entries.map(\.requestID) == [8, 9, 10])
         #expect(store.entry(forRequestID: 1, sessionID: "batch-session") == nil)
         #expect(store.entry(forRequestID: 2, sessionID: "batch-session") == nil)
@@ -342,9 +416,11 @@ struct NetworkStoreTests {
             "method": "GET",
             "time": NetworkTestHelpers.timePayload(monotonicMs: 1_020.0, wallMs: 1_700_000_000_020.0)
         ])
+        let initialGeneration = store.entriesGeneration
         Self.apply(third, to: store)
 
         #expect(store.entries.count == 2)
+        #expect(store.entriesGeneration == initialGeneration + 1)
         #expect(store.entry(forRequestID: 1, sessionID: nil) == nil)
         #expect(store.entry(forRequestID: 2, sessionID: nil)?.requestID == 2)
         #expect(store.entry(forRequestID: 3, sessionID: nil)?.requestID == 3)
@@ -471,7 +547,76 @@ struct NetworkStoreTests {
     }
 
     @Test
-    func requestStartMergesIntoExistingResourceTimingEntry() throws {
+    func responseUpdateBumpsEntriesGenerationForExistingEntryDisplayStateChange() throws {
+        let store = NetworkStore()
+        let sessionID = "existing-entry-session"
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 1,
+            "url": "https://example.com/existing",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: sessionID)
+        Self.apply(start, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
+
+        let response = try NetworkTestHelpers.decodeEvent([
+            "kind": "responseReceived",
+            "requestId": 1,
+            "status": 200,
+            "statusText": "OK",
+            "mimeType": "application/json",
+            "headers": ["content-type": "application/json"],
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_050.0, wallMs: 1_700_000_000_050.0)
+        ], sessionID: sessionID)
+        Self.apply(response, to: store, sessionID: sessionID)
+
+        #expect(store.entriesGeneration == initialGeneration + 1)
+    }
+
+    @Test
+    func networkBatchWithSingleAppendBumpsEntriesGenerationOnce() throws {
+        let store = NetworkStore()
+        let sessionID = "batch-generation-session"
+        let initialGeneration = store.entriesGeneration
+
+        let batch = try NetworkTestHelpers.decodeBatch([
+            "version": 1,
+            "sessionId": sessionID,
+            "seq": 1,
+            "events": [
+                [
+                    "kind": "requestWillBeSent",
+                    "requestId": 1,
+                    "url": "https://example.com/batch",
+                    "method": "GET",
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+                ],
+                [
+                    "kind": "responseReceived",
+                    "requestId": 1,
+                    "status": 200,
+                    "statusText": "OK",
+                    "mimeType": "application/json",
+                    "headers": ["content-type": "application/json"],
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_050.0, wallMs: 1_700_000_000_050.0)
+                ],
+                [
+                    "kind": "loadingFinished",
+                    "requestId": 1,
+                    "time": NetworkTestHelpers.timePayload(monotonicMs: 1_100.0, wallMs: 1_700_000_000_100.0)
+                ]
+            ]
+        ])
+
+        store.applyNetworkBatch(batch)
+
+        #expect(store.entriesGeneration == initialGeneration + 1)
+    }
+
+    @Test
+    func requestStartMergesIntoExistingResourceTimingEntryAndBumpsEntriesGeneration() throws {
         let store = NetworkStore()
         let sessionID = "merge-session"
 
@@ -483,6 +628,7 @@ struct NetworkStoreTests {
             "endTime": NetworkTestHelpers.timePayload(monotonicMs: 7_710.0, wallMs: 1_700_000_007_710.0)
         ], sessionID: sessionID)
         Self.apply(resourceTiming, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
 
         let start = try NetworkTestHelpers.decodeEvent([
             "kind": "requestWillBeSent",
@@ -508,6 +654,7 @@ struct NetworkStoreTests {
         #expect(entry.requestHeaders["content-type"] == "application/json")
         #expect(entry.requestBody?.displayText == #"{"hello":"world"}"#)
         #expect(entry.phase == .pending)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 
     @Test
@@ -523,6 +670,7 @@ struct NetworkStoreTests {
             "time": NetworkTestHelpers.timePayload(monotonicMs: 8_800.0, wallMs: 1_700_000_008_800.0)
         ], sessionID: sessionID)
         Self.apply(start, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
 
         let resourceTiming = try NetworkTestHelpers.decodeEvent([
             "kind": "resourceTiming",
@@ -538,6 +686,7 @@ struct NetworkStoreTests {
         #expect(entry.phase == .completed)
         #expect(abs(entry.startTimestamp - 8.79) < 0.0001)
         #expect(abs((entry.endTimestamp ?? 0) - 8.82) < 0.0001)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 
     @Test
@@ -573,6 +722,37 @@ struct NetworkStoreTests {
         #expect(entry.phase == .completed)
         #expect(abs(entry.startTimestamp - 9.89) < 0.0001)
         #expect(abs((entry.endTimestamp ?? 0) - 9.93) < 0.0001)
+    }
+
+    @Test
+    func completionUpdateBumpsEntriesGenerationForExistingEntrySortMetrics() throws {
+        let store = NetworkStore()
+        let sessionID = "completion-sort-session"
+
+        let start = try NetworkTestHelpers.decodeEvent([
+            "kind": "requestWillBeSent",
+            "requestId": 123,
+            "url": "https://example.com/completed",
+            "method": "GET",
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_000.0, wallMs: 1_700_000_000_000.0)
+        ], sessionID: sessionID)
+        Self.apply(start, to: store, sessionID: sessionID)
+        let initialGeneration = store.entriesGeneration
+
+        let completed = try NetworkTestHelpers.decodeEvent([
+            "kind": "loadingFinished",
+            "requestId": 123,
+            "encodedBodyLength": 512,
+            "decodedBodySize": 1_024,
+            "time": NetworkTestHelpers.timePayload(monotonicMs: 1_080.0, wallMs: 1_700_000_000_080.0)
+        ], sessionID: sessionID)
+        Self.apply(completed, to: store, sessionID: sessionID)
+
+        let entry = try #require(store.entry(forRequestID: 123, sessionID: sessionID))
+        #expect(entry.phase == .completed)
+        #expect(entry.encodedBodyLength == 512)
+        #expect(entry.decodedBodyLength == 1_024)
+        #expect(store.entriesGeneration == initialGeneration + 1)
     }
 }
 
