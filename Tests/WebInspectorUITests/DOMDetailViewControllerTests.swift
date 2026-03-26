@@ -25,7 +25,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.selectedEntry?.preview = "<div class=\"after\">"
 
         let previewUpdated = await waitUntil {
@@ -53,7 +53,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.selectedEntry?.selectorPath = "#after"
 
         let selectorUpdated = await waitUntil {
@@ -82,7 +82,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.session.graphStore.applyMutationBundle(
             .init(
                 events: [
@@ -122,7 +122,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.session.graphStore.updateSelectedAttribute(name: "class", value: "after")
 
         let valueUpdated = await waitUntil {
@@ -150,7 +150,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.session.graphStore.updateSelectedAttribute(name: "id", value: "target")
 
         let structureUpdated = await waitUntil {
@@ -180,14 +180,14 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = viewController.snapshotApplyCountForTesting
+        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.session.graphStore.applyMutationBundle(
             .init(
                 events: [
                     .setChildNodes(
                         parentLocalID: 1,
                         nodes: [
-                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "data-state", value: "replaced")]),
+                            makeNode(localID: 42, attributes: [DOMAttribute(nodeId: 42, name: "class", value: "replaced")]),
                             makeNode(localID: 99),
                         ]
                     )
@@ -197,6 +197,7 @@ struct DOMDetailViewControllerTests {
 
         let replacementTracked = await waitUntil {
             inspector.selectedEntry !== originalSelection
+                && collectionView.numberOfItems(inSection: 3) == 1
                 && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "replaced"
                 && viewController.snapshotApplyCountForTesting > initialSnapshotCount
         }
@@ -292,6 +293,29 @@ struct DOMDetailViewControllerTests {
             await Task.yield()
         }
         return condition()
+    }
+
+    private func stableSnapshotApplyCount(
+        for viewController: WIDOMDetailViewController,
+        stableTicks: Int = 8,
+        maxTicks: Int = 256
+    ) async -> Int? {
+        var lastCount = viewController.snapshotApplyCountForTesting
+        var currentStableTicks = 0
+        for _ in 0..<maxTicks {
+            await Task.yield()
+            let currentCount = viewController.snapshotApplyCountForTesting
+            if currentCount == lastCount {
+                currentStableTicks += 1
+                if currentStableTicks >= stableTicks {
+                    return currentCount
+                }
+            } else {
+                lastCount = currentCount
+                currentStableTicks = 0
+            }
+        }
+        return nil
     }
 
     private func makeNode(

@@ -85,7 +85,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     private struct ItemIdentifier: Hashable, Sendable {
         let stableID: ItemStableID
-        let selectionID: DOMEntryID?
+        let selectionGeneration: UInt64
     }
 
     private struct DetailSection {
@@ -136,6 +136,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
     private var pendingForcedStructureRefresh = false
+    private var selectedEntryRenderGeneration: UInt64 = 0
 
 #if DEBUG
     private(set) var snapshotApplyCountForTesting = 0
@@ -298,6 +299,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func handleSelectedEntryChange() {
         selectedEntryObservationHandles.removeAll()
         observedSelectedEntry = inspector.selectedEntry
+        selectedEntryRenderGeneration &+= 1
         let currentSelectionID = inspector.selectedEntry?.id
         if editingAttributeKey?.nodeID != currentSelectionID {
             clearInlineEditingState()
@@ -596,12 +598,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
 
         var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, ItemIdentifier>()
-        let selectionID = inspector.selectedEntry?.id
         for renderSection in renderSections {
             snapshot.appendSections([renderSection.sectionIdentifier])
             snapshot.appendItems(
                 renderSection.stableIDs.map { stableID in
-                    makeItemIdentifier(stableID: stableID, selectionID: selectionID)
+                    makeItemIdentifier(
+                        stableID: stableID,
+                        selectionGeneration: selectedEntryRenderGeneration
+                    )
                 },
                 toSection: renderSection.sectionIdentifier
             )
@@ -670,8 +674,11 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         current.sectionIdentifiers != proposed.sectionIdentifiers || current.itemIdentifiers != proposed.itemIdentifiers
     }
 
-    private func makeItemIdentifier(stableID: ItemStableID, selectionID: DOMEntryID?) -> ItemIdentifier {
-        ItemIdentifier(stableID: stableID, selectionID: selectionID)
+    private func makeItemIdentifier(
+        stableID: ItemStableID,
+        selectionGeneration: UInt64
+    ) -> ItemIdentifier {
+        ItemIdentifier(stableID: stableID, selectionGeneration: selectionGeneration)
     }
 
     private func itemStableID(
