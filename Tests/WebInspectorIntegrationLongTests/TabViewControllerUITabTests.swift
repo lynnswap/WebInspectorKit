@@ -694,10 +694,6 @@ struct TabViewControllerUITabTests {
             Issue.record("Expected compact DOM split column to be a navigation controller")
             return
         }
-        guard let primaryColumn = domViewController.primaryColumnViewControllerForTesting as? UINavigationController else {
-            Issue.record("Expected primary DOM split column to be a navigation controller")
-            return
-        }
         guard let secondaryColumn = domViewController.secondaryColumnViewControllerForTesting as? UINavigationController else {
             Issue.record("Expected secondary DOM split column to be a navigation controller")
             return
@@ -706,12 +702,22 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.activeHostKindForTesting == "compact")
         #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
         #expect(compactColumn.topViewController is WIDOMTreeViewController)
-        #expect(primaryColumn.topViewController is WIDOMTreeViewController)
-        #expect(secondaryColumn.topViewController is WIDOMDetailViewController)
+        if #available(iOS 26.0, *) {
+            #expect(domViewController.primaryColumnViewControllerForTesting == nil)
+            #expect(secondaryColumn.topViewController is WIDOMTreeViewController)
+            #expect(domViewController.inspectorColumnViewControllerForTesting is UINavigationController)
+        } else {
+            guard let primaryColumn = domViewController.primaryColumnViewControllerForTesting as? UINavigationController else {
+                Issue.record("Expected primary DOM split column to be a navigation controller")
+                return
+            }
+            #expect(primaryColumn.topViewController is WIDOMTreeViewController)
+            #expect(secondaryColumn.topViewController is WIDOMDetailViewController)
+        }
     }
 
     @Test
-    func domTabProviderRetainsSplitColumnsInRegularSizeClass() {
+    func domTabProviderUsesInspectorColumnInRegularSizeClassOnIOS26() {
         let controller = WIInspectorController()
         let container = WITabViewController(
             controller,
@@ -725,13 +731,57 @@ struct TabViewControllerUITabTests {
             Issue.record("Expected regular DOM tab root to be WIDOMViewController")
             return
         }
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = domViewController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
         domViewController.loadViewIfNeeded()
+        drainMainQueue()
 
         #expect(domViewController.activeHostKindForTesting == "regular")
         #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
+        #expect(domViewController.compactColumnViewControllerForTesting is UINavigationController)
+
+        if #available(iOS 26.0, *) {
+            #expect(domViewController.primaryColumnViewControllerForTesting == nil)
+            #expect(domViewController.secondaryColumnViewControllerForTesting is UINavigationController)
+            #expect(domViewController.inspectorColumnViewControllerForTesting is UINavigationController)
+            #expect(domViewController.isInspectorColumnVisibleForTesting)
+        } else {
+            #expect(domViewController.primaryColumnViewControllerForTesting is UINavigationController)
+            #expect(domViewController.secondaryColumnViewControllerForTesting is UINavigationController)
+            #expect(domViewController.inspectorColumnViewControllerForTesting == nil)
+            #expect(domViewController.isInspectorColumnVisibleForTesting == false)
+        }
+    }
+
+    @Test
+    func domTabProviderCanForceLegacyRegularSplitForTesting() {
+        let domViewController = WIDOMViewController(inspector: WIInspectorController().dom)
+        domViewController.regularLayoutModeOverrideForTesting = .legacyPrimarySecondary
+        domViewController.horizontalSizeClassOverrideForTesting = .regular
+
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = domViewController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        domViewController.loadViewIfNeeded()
+        drainMainQueue()
+
+        #expect(domViewController.activeHostKindForTesting == "regular")
         #expect(domViewController.primaryColumnViewControllerForTesting is UINavigationController)
         #expect(domViewController.secondaryColumnViewControllerForTesting is UINavigationController)
         #expect(domViewController.compactColumnViewControllerForTesting is UINavigationController)
+        #expect(domViewController.inspectorColumnViewControllerForTesting == nil)
+        #expect(domViewController.isInspectorColumnVisibleForTesting == false)
     }
 
     @Test
