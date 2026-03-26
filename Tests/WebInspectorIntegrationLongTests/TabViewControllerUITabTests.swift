@@ -828,7 +828,7 @@ struct TabViewControllerUITabTests {
         drainMainQueue()
 
         let buttonIdentifiers = hostNavigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
-        #expect(buttonIdentifiers == ["WI.DOM.PickButton", "WI.DOM.MenuButton"])
+        #expect(buttonIdentifiers == ["WI.DOM.MenuButton", "WI.DOM.PickButton"])
     }
 
     @Test

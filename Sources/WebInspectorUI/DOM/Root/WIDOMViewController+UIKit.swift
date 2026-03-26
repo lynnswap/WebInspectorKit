@@ -200,7 +200,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         navigationItem.preferredSearchBarPlacement = .automatic
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.setLeftBarButtonItems(nil, animated: false)
-        navigationItem.setRightBarButtonItems([pickItem, menuItem], animated: false)
+        navigationItem.setRightBarButtonItems([menuItem, pickItem], animated: false)
         navigationItem.additionalOverflowItems = nil
     }
 
