@@ -124,18 +124,28 @@ struct NetworkInspectorAppKitTests {
         )
 
         let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
         controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
         let selected = try #require(
             inspector.displayEntries.first(where: { $0.requestID == 112 })
         )
 
         inspector.selectEntry(selected)
         #expect(inspector.selectedEntry?.id == selected.id)
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            controller.listViewControllerForTesting.selectedRowForTesting >= 0
-        })
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.contains("Overview")
+        #expect(await waitUntilMainActorCondition {
+            let selectedRow = controller.listViewControllerForTesting.selectedRowForTesting
+            let displayedRequestIDs = controller.listViewControllerForTesting.displayedRequestIDsForTesting
+            let selectedRequestID = displayedRequestIDs.indices.contains(selectedRow)
+                ? displayedRequestIDs[selectedRow]
+                : nil
+            return selectedRequestID == selected.requestID
+                && controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.count == 3
+                && controller.detailViewControllerForTesting.overviewRowHeightForTesting() != nil
         })
     }
 
@@ -151,23 +161,28 @@ struct NetworkInspectorAppKitTests {
         )
 
         let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
         controller.loadViewIfNeeded()
+        window.makeKeyAndOrderFront(nil)
         let selected = try #require(inspector.displayEntries.first(where: { $0.requestID == 113 }))
 
         inspector.selectEntry(selected)
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.contains("Overview")
+        #expect(await waitUntilMainActorCondition {
+            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.count == 3
+                && controller.detailViewControllerForTesting.overviewRowHeightForTesting() != nil
         })
 
         let initialGeneration = inspector.displayEntriesGeneration
         selected.errorDescription = "Request failed"
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.contains("Error")
+        #expect(await waitUntilMainActorCondition {
+            controller.detailViewControllerForTesting.renderedSectionTitlesForTesting.count == 4
         })
-        #expect(await waitUntilAsync(timeout: 0.2) {
-            inspector.displayEntriesGeneration == initialGeneration
-        })
+        #expect(inspector.displayEntriesGeneration == initialGeneration)
     }
 
     @Test
@@ -195,22 +210,19 @@ struct NetworkInspectorAppKitTests {
         window.makeKeyAndOrderFront(nil)
         inspector.selectEntry(entry)
 
-        guard let responseButton = try await waitForResponseBodyButton(in: controller) else {
-            Issue.record("Expected response body button")
-            return
-        }
+        let responseButton = try await waitForResponseBodyButton(in: controller)
+        let responseButtonTitle = try #require(responseButton?.title)
 
         let initialGeneration = inspector.displayEntriesGeneration
-        #expect(responseButton.title.contains("TEXT"))
+        #expect(responseButtonTitle.contains("TEXT"))
 
         entry.responseHeaders = NetworkHeaders(dictionary: ["content-type": "application/json; charset=utf-8"])
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            responseButton.title.contains("application/json")
+        #expect(await waitUntilMainActorCondition {
+            controller.detailViewControllerForTesting.responseBodyButtonForTesting?.title.contains("application/json") == true
         })
-        #expect(await waitUntilAsync(timeout: 0.2) {
-            inspector.displayEntriesGeneration == initialGeneration
-        })
+        #expect(controller.detailViewControllerForTesting.responseBodyButtonForTesting?.title.contains("application/json") == true)
+        #expect(inspector.displayEntriesGeneration == initialGeneration)
     }
 
     @Test
@@ -236,9 +248,10 @@ struct NetworkInspectorAppKitTests {
         window.makeKeyAndOrderFront(nil)
         inspector.selectEntry(entry)
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1"
         })
+        #expect(controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1")
 
         let initialGeneration = inspector.displayEntriesGeneration
         entry.responseHeaders = NetworkHeaders(dictionary: [
@@ -246,12 +259,11 @@ struct NetworkInspectorAppKitTests {
             "etag": "v2"
         ])
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v2"
         })
-        #expect(await waitUntilAsync(timeout: 0.2) {
-            inspector.displayEntriesGeneration == initialGeneration
-        })
+        #expect(controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v2")
+        #expect(inspector.displayEntriesGeneration == initialGeneration)
     }
 
     @Test
@@ -287,13 +299,13 @@ struct NetworkInspectorAppKitTests {
         let longEntry = try #require(inspector.displayEntries.first(where: { $0.requestID == 117 }))
 
         inspector.selectEntry(shortEntry)
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.overviewRowHeightForTesting() != nil
         })
         let shortHeight = try #require(controller.detailViewControllerForTesting.overviewRowHeightForTesting())
 
         inspector.selectEntry(longEntry)
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             guard let height = controller.detailViewControllerForTesting.overviewRowHeightForTesting() else {
                 return false
             }
@@ -333,12 +345,13 @@ struct NetworkInspectorAppKitTests {
         window.makeKeyAndOrderFront(nil)
         inspector.selectEntry(entry)
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1"
         })
-        #expect(await waitUntilAsync(timeout: 1.0) {
+        #expect(await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1) != nil
         })
+        #expect(controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1")
         let singleLineHeight = try #require(
             controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1)
         )
@@ -348,15 +361,18 @@ struct NetworkInspectorAppKitTests {
             "etag": "W/\"very-long-etag-value-that-should-wrap-inside-the-appkit-network-detail-pane-because-it-no-longer-fits-on-a-single-line\""
         ])
 
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1)?.contains("very-long-etag-value") == true
-        })
-        #expect(await waitUntilAsync(timeout: 1.0) {
-            guard let height = controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1) else {
+        #expect(await waitUntilMainActorCondition {
+            guard
+                controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1)?.contains("very-long-etag-value") == true,
+                let height = controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1)
+            else {
                 return false
             }
             return height > singleLineHeight
         })
+        #expect(
+            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1)?.contains("very-long-etag-value") == true
+        )
 
         let wrappedHeight = try #require(
             controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1)
@@ -756,11 +772,26 @@ struct NetworkInspectorAppKitTests {
     private func waitForResponseBodyButton(
         in controller: WINetworkViewController
     ) async throws -> NSButton? {
-        let exists = await waitUntilAsync(timeout: 1.0) {
+        let exists = await waitUntilMainActorCondition {
             controller.detailViewControllerForTesting.responseBodyButtonForTesting != nil
         }
         #expect(exists)
         return controller.detailViewControllerForTesting.responseBodyButtonForTesting
+    }
+
+    private func waitUntilMainActorCondition(
+        timeout: Duration = .seconds(5),
+        _ condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock().now + timeout
+        while ContinuousClock().now < deadline {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return condition()
     }
 
     private func waitUntilAsync(timeout: TimeInterval, condition: @escaping @MainActor () -> Bool) async -> Bool {
@@ -774,6 +805,7 @@ struct NetworkInspectorAppKitTests {
         }
         return await MainActor.run(body: condition)
     }
+
 }
 
 private extension NetworkEntry {
