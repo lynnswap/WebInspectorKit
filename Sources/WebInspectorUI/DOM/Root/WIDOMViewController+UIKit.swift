@@ -5,6 +5,12 @@ import WebInspectorRuntime
 
 @MainActor
 public final class WIDOMViewController: UISplitViewController, UISplitViewControllerDelegate {
+    enum RegularLayoutMode {
+        case automatic
+        case legacyPrimarySecondary
+        case secondaryWithInspector
+    }
+
     private let inspector: WIDOMModel
     private let compactRootViewController: WIDOMTreeViewController
     private let compactNavigationController: UINavigationController
@@ -18,6 +24,16 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private var isSelectionActionPending = false
     // Keep coalescing because this navigation state is recomputed from multiple observation streams.
     private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
+
+    var regularLayoutModeOverrideForTesting: RegularLayoutMode = .automatic {
+        didSet {
+            hasAppliedInitialRegularColumnWidth = false
+            configureSplitViewLayout()
+            if isViewLoaded {
+                applyRegularLayoutPresentationIfNeeded()
+            }
+        }
+    }
 
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
         didSet {
@@ -48,6 +64,20 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     var compactColumnViewControllerForTesting: UIViewController? {
         viewController(for: .compact)
+    }
+
+    var inspectorColumnViewControllerForTesting: UIViewController? {
+        guard #available(iOS 26.0, *) else {
+            return nil
+        }
+        return viewController(for: .inspector)
+    }
+
+    var isInspectorColumnVisibleForTesting: Bool {
+        guard #available(iOS 26.0, *) else {
+            return false
+        }
+        return isShowing(.inspector)
     }
 
     private lazy var pickItem: UIBarButtonItem = {
@@ -106,18 +136,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
         delegate = self
         title = nil
-        preferredSplitBehavior = .tile
-        presentsWithGesture = false
-        displayModeButtonVisibility = .never
-        preferredDisplayMode = .oneBesideSecondary
-
-        setViewController(domTreeNavigationController, for: .primary)
-        setViewController(elementDetailsNavigationController, for: .secondary)
-        setViewController(compactNavigationController, for: .compact)
-
-        minimumPrimaryColumnWidth = 320
-        maximumPrimaryColumnWidth = .greatestFiniteMagnitude
-        preferredPrimaryColumnWidthFraction = 0.7
+        configureSplitViewLayout()
     }
 
     @available(*, unavailable)
@@ -132,7 +151,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             if self.traitCollection.horizontalSizeClass == .compact {
                 self.hasAppliedInitialRegularColumnWidth = false
             }
-            self.applyInitialRegularColumnWidthIfNeeded()
+            self.applyRegularLayoutPresentationIfNeeded()
             self.scheduleNavigationStateUpdate()
         }
 
@@ -142,7 +161,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        applyInitialRegularColumnWidthIfNeeded()
+        applyRegularLayoutPresentationIfNeeded()
     }
 
     public override func viewWillAppear(_ animated: Bool) {
@@ -157,7 +176,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        applyInitialRegularColumnWidthIfNeeded()
+        applyRegularLayoutPresentationIfNeeded()
     }
 
     private func updateNavigationItemState() {
@@ -198,18 +217,80 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         traitCollection.horizontalSizeClass == .compact ? "viewfinder.circle" : "scope"
     }
 
-    private func applyInitialRegularColumnWidthIfNeeded() {
-        guard traitCollection.horizontalSizeClass != .compact else {
-            return
+    private var resolvedRegularLayoutMode: RegularLayoutMode {
+        switch regularLayoutModeOverrideForTesting {
+        case .automatic:
+            if #available(iOS 26.0, *) {
+                return .secondaryWithInspector
+            }
+            return .legacyPrimarySecondary
+        case .legacyPrimarySecondary:
+            return .legacyPrimarySecondary
+        case .secondaryWithInspector:
+            return .secondaryWithInspector
         }
-        guard hasAppliedInitialRegularColumnWidth == false else {
+    }
+
+    private func configureSplitViewLayout() {
+        preferredSplitBehavior = .tile
+        presentsWithGesture = false
+        displayModeButtonVisibility = .never
+
+        setViewController(compactNavigationController, for: .compact)
+        setViewController(nil, for: .primary)
+        setViewController(nil, for: .secondary)
+        if #available(iOS 26.0, *) {
+            setViewController(nil, for: .inspector)
+        }
+
+        switch resolvedRegularLayoutMode {
+        case .automatic:
+            break
+        case .legacyPrimarySecondary:
+            preferredDisplayMode = .oneBesideSecondary
+            setViewController(domTreeNavigationController, for: .primary)
+            setViewController(elementDetailsNavigationController, for: .secondary)
+            minimumPrimaryColumnWidth = 320
+            maximumPrimaryColumnWidth = .greatestFiniteMagnitude
+            preferredPrimaryColumnWidthFraction = 0.7
+        case .secondaryWithInspector:
+            preferredDisplayMode = .secondaryOnly
+            setViewController(domTreeNavigationController, for: .secondary)
+            if #available(iOS 26.0, *) {
+                setViewController(elementDetailsNavigationController, for: .inspector)
+                minimumInspectorColumnWidth = 320
+                preferredInspectorColumnWidthFraction = 0.3
+                maximumInspectorColumnWidth = 420
+            }
+        }
+    }
+
+    private func applyRegularLayoutPresentationIfNeeded() {
+        guard traitCollection.horizontalSizeClass != .compact else {
             return
         }
         guard view.bounds.width > 0 else {
             return
         }
-        preferredPrimaryColumnWidth = max(minimumPrimaryColumnWidth, view.bounds.width * 0.7)
-        hasAppliedInitialRegularColumnWidth = true
+
+        switch resolvedRegularLayoutMode {
+        case .automatic:
+            return
+        case .legacyPrimarySecondary:
+            guard hasAppliedInitialRegularColumnWidth == false else {
+                return
+            }
+            preferredPrimaryColumnWidth = max(minimumPrimaryColumnWidth, view.bounds.width * 0.7)
+            hasAppliedInitialRegularColumnWidth = true
+        case .secondaryWithInspector:
+            guard #available(iOS 26.0, *) else {
+                return
+            }
+            guard isShowing(.inspector) == false else {
+                return
+            }
+            show(.inspector)
+        }
     }
 
     private func startObservingNavigationStateIfNeeded() {
