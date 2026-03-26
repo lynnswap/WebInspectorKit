@@ -139,7 +139,7 @@ struct DOMSessionTests {
 
         #expect(secondAttach.shouldReload == false)
         #expect(secondAttach.preserveState == false)
-        #expect(session.graphStore.selectedID?.localID == 42)
+        #expect(session.graphStore.selectedEntry?.id.localID == 42)
         #expect(session.graphStore.selectedEntry?.preview == "<div id=\"selected\">")
     }
 

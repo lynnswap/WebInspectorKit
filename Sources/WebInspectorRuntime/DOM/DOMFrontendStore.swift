@@ -427,7 +427,7 @@ private extension DOMFrontendStore {
 
     private func isCurrentMatchedStylesRequest(generation: Int, selectionID: DOMEntryID) -> Bool {
         matchedStylesRequestCount == generation
-            && session.graphStore.selectedID == selectionID
+            && session.graphStore.selectedEntry?.id == selectionID
     }
 
     private func cancelMatchedStylesRequest() {

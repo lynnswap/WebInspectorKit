@@ -12,6 +12,7 @@ struct DOMGraphStoreTests {
             )
         )
         store.select(localID: 2)
+        let originalSelection = store.selectedEntry
 
         store.applyMutationBundle(
             .init(
@@ -24,8 +25,8 @@ struct DOMGraphStoreTests {
             )
         )
 
-        #expect(store.selectedID?.localID == 2)
         #expect(store.selectedEntry?.id.localID == 2)
+        #expect(store.selectedEntry !== originalSelection)
         #expect(store.selectedEntry?.attributes.first?.value == "updated")
     }
 
@@ -47,7 +48,6 @@ struct DOMGraphStoreTests {
             )
         )
 
-        #expect(store.selectedID == nil)
         #expect(store.selectedEntry == nil)
     }
 
@@ -69,7 +69,7 @@ struct DOMGraphStoreTests {
         #expect(store.documentGeneration == initialGeneration + 1)
         #expect(store.entriesByID.isEmpty)
         #expect(store.rootID == nil)
-        #expect(store.selectedID == nil)
+        #expect(store.selectedEntry == nil)
     }
 
     @Test
@@ -104,7 +104,7 @@ struct DOMGraphStoreTests {
 
         store.applySelectionSnapshot(nil)
 
-        #expect(store.selectedID == nil)
+        #expect(store.selectedEntry == nil)
         #expect(store.entry(forLocalID: 42)?.matchedStyles.isEmpty == true)
         #expect(store.entry(forLocalID: 42)?.matchedStylesTruncated == false)
         #expect(store.entry(forLocalID: 42)?.blockedStylesheetCount == 0)

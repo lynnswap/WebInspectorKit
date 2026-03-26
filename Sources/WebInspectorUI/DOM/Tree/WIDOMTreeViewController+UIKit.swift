@@ -128,7 +128,7 @@ public final class WIDOMTreeViewController: UIViewController {
         }
         .store(in: &observationHandles)
         inspector.session.graphStore.observe(
-            \.selectedID,
+            \.selectedEntry,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationControlsUpdate()

@@ -314,7 +314,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         }
         .store(in: &navigationObservationHandles)
         inspector.session.graphStore.observe(
-            \.selectedID,
+            \.selectedEntry,
             options: [.removeDuplicates]
         ) { [weak self] _ in
             self?.scheduleNavigationStateUpdate()
