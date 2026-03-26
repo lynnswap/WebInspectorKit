@@ -15,7 +15,9 @@ enum WINetworkAppKitViewFactory {
         selectable: Bool = false,
         alignment: NSTextAlignment = .natural
     ) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
+        let label = numberOfLines == 1
+            ? NSTextField(labelWithString: text)
+            : NSTextField(wrappingLabelWithString: text)
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = font
         label.textColor = color

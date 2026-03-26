@@ -100,16 +100,42 @@ final class WINetworkDetailViewController: NSViewController, NSTableViewDelegate
         headerValueForTesting(rowIdentifier: .responseHeader(index))
     }
 
+    func overviewRowHeightForTesting() -> CGFloat? {
+        rowHeightForTesting(rowIdentifier: .overview)
+    }
+
+    func requestHeaderRowHeightForTesting(index: Int) -> CGFloat? {
+        rowHeightForTesting(rowIdentifier: .requestHeader(index))
+    }
+
+    func responseHeaderRowHeightForTesting(index: Int) -> CGFloat? {
+        rowHeightForTesting(rowIdentifier: .responseHeader(index))
+    }
+
     private func headerValueForTesting(rowIdentifier: WINetworkDetailRowIdentifier) -> String? {
+        guard let row = rowForTesting(rowIdentifier: rowIdentifier) else {
+            return nil
+        }
+        guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: true) as? WINetworkHeaderFieldTableCellView else {
+            return nil
+        }
+        return cell.valueTextForTesting
+    }
+
+    private func rowHeightForTesting(rowIdentifier: WINetworkDetailRowIdentifier) -> CGFloat? {
+        guard let row = rowForTesting(rowIdentifier: rowIdentifier) else {
+            return nil
+        }
+        return tableView.rect(ofRow: row).height
+    }
+
+    private func rowForTesting(rowIdentifier: WINetworkDetailRowIdentifier) -> Int? {
         guard let row = dataSource.row(forItemIdentifier: rowIdentifier) else {
             return nil
         }
         tableView.scrollRowToVisible(row)
         tableView.layoutSubtreeIfNeeded()
-        guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: true) as? WINetworkHeaderFieldTableCellView else {
-            return nil
-        }
-        return cell.valueTextForTesting
+        return row
     }
 
     override func loadView() {
@@ -594,7 +620,7 @@ private final class WINetworkOverviewTableCellView: NSTableCellView {
     private let urlLabel = WINetworkAppKitViewFactory.makeLabel(
         "",
         font: .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular),
-        lineBreakMode: .byTruncatingMiddle,
+        lineBreakMode: .byCharWrapping,
         numberOfLines: 4,
         selectable: true
     )
@@ -645,7 +671,8 @@ private final class WINetworkOverviewTableCellView: NSTableCellView {
             stackView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            urlLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor)
         ])
     }
 
@@ -751,7 +778,7 @@ private final class WINetworkHeaderFieldTableCellView: NSTableCellView {
     private let valueLabel = WINetworkAppKitViewFactory.makeLabel(
         "",
         font: .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular),
-        lineBreakMode: .byWordWrapping,
+        lineBreakMode: .byCharWrapping,
         numberOfLines: 0,
         selectable: true
     )
@@ -805,7 +832,8 @@ private final class WINetworkHeaderFieldTableCellView: NSTableCellView {
             stackView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            valueLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor)
         ])
     }
 
@@ -917,7 +945,7 @@ private final class WINetworkBodyTableCellView: NSTableCellView {
         "",
         font: .monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular),
         color: .secondaryLabelColor,
-        lineBreakMode: .byWordWrapping,
+        lineBreakMode: .byCharWrapping,
         numberOfLines: 6,
         selectable: true
     )
@@ -985,7 +1013,9 @@ private final class WINetworkBodyTableCellView: NSTableCellView {
             stackView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            summaryLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor),
+            previewLabel.widthAnchor.constraint(equalTo: stackView.widthAnchor)
         ])
     }
 
