@@ -255,6 +255,116 @@ struct NetworkInspectorAppKitTests {
     }
 
     @Test
+    func networkTabWrapsOverviewURLInNarrowDetailPane() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 116,
+            url: "https://example.com/short",
+            initiator: "document",
+            monotonicMs: 1_000
+        )
+        try applyRequestStart(
+            to: inspector,
+            requestID: 117,
+            url: "https://example.com/network/detail/very/long/path/that/should/wrap/in/the/appkit/detail/pane?query=alpha-beta-gamma-delta-epsilon-zeta-eta-theta-iota-kappa-lambda-mu-nu-xi-omicron-pi-rho-sigma-tau",
+            initiator: "document",
+            monotonicMs: 1_010
+        )
+
+        let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
+
+        controller.loadViewIfNeeded()
+        window.setContentSize(NSSize(width: 620, height: 700))
+        window.makeKeyAndOrderFront(nil)
+
+        let shortEntry = try #require(inspector.displayEntries.first(where: { $0.requestID == 116 }))
+        let longEntry = try #require(inspector.displayEntries.first(where: { $0.requestID == 117 }))
+
+        inspector.selectEntry(shortEntry)
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.overviewRowHeightForTesting() != nil
+        })
+        let shortHeight = try #require(controller.detailViewControllerForTesting.overviewRowHeightForTesting())
+
+        inspector.selectEntry(longEntry)
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            guard let height = controller.detailViewControllerForTesting.overviewRowHeightForTesting() else {
+                return false
+            }
+            return height > shortHeight
+        })
+
+        let wrappedHeight = try #require(controller.detailViewControllerForTesting.overviewRowHeightForTesting())
+        #expect(wrappedHeight > shortHeight)
+    }
+
+    @Test
+    func networkTabWrapsResponseHeaderValueInNarrowDetailPane() async throws {
+        let inspector = WINetworkModel(session: NetworkSession())
+        try applyRequestStart(
+            to: inspector,
+            requestID: 118,
+            url: "https://example.com/header-wrap",
+            initiator: "xhr",
+            monotonicMs: 1_000
+        )
+
+        let entry = try #require(inspector.displayEntries.first(where: { $0.requestID == 118 }))
+        entry.responseHeaders = NetworkHeaders(dictionary: [
+            "content-type": "application/json",
+            "etag": "v1"
+        ])
+
+        let controller = WINetworkViewController(inspector: inspector)
+        let window = NSWindow(contentViewController: controller)
+        defer {
+            window.orderOut(nil)
+            window.close()
+        }
+
+        controller.loadViewIfNeeded()
+        window.setContentSize(NSSize(width: 620, height: 700))
+        window.makeKeyAndOrderFront(nil)
+        inspector.selectEntry(entry)
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1) == "v1"
+        })
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1) != nil
+        })
+        let singleLineHeight = try #require(
+            controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1)
+        )
+
+        entry.responseHeaders = NetworkHeaders(dictionary: [
+            "content-type": "application/json",
+            "etag": "W/\"very-long-etag-value-that-should-wrap-inside-the-appkit-network-detail-pane-because-it-no-longer-fits-on-a-single-line\""
+        ])
+
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            controller.detailViewControllerForTesting.responseHeaderValueForTesting(index: 1)?.contains("very-long-etag-value") == true
+        })
+        #expect(await waitUntilAsync(timeout: 1.0) {
+            guard let height = controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1) else {
+                return false
+            }
+            return height > singleLineHeight
+        })
+
+        let wrappedHeight = try #require(
+            controller.detailViewControllerForTesting.responseHeaderRowHeightForTesting(index: 1)
+        )
+        #expect(wrappedHeight > singleLineHeight)
+    }
+
+    @Test
     func networkModelGenerationDoesNotBumpWhenSelectionChanges() async throws {
         let inspector = WINetworkModel(session: NetworkSession())
         try applyRequestStart(
