@@ -24,8 +24,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
     private var toolbarObservationHandles: Set<ObservationHandle> = []
-    // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
-    private let toolbarUpdateCoalescer = UIUpdateCoalescer()
     private var isApplyingPickerSelection = false
     private var sessionObservationHandles: Set<ObservationHandle> = []
 
@@ -420,41 +418,41 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
         inspectorController.dom.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
         inspectorController.network.store.observe(
             [\.entries]
         ) { [weak self] in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
         networkQueryModel.observe(
             \.searchText,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
         networkQueryModel.observe(
             \.activeFilters,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
         networkQueryModel.observe(
             \.effectiveFilters,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleToolbarStateUpdate()
+            self?.updateToolbarState()
         }
         .store(in: &toolbarObservationHandles)
     }
@@ -465,18 +463,11 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     private func tearDownToolbarStateIfNeeded() {
-        toolbarUpdateCoalescer.cancel()
         stopObservingToolbarState()
         appKitToolbar?.delegate = nil
         appKitToolbar = nil
         tabPickerControl = nil
         networkSearchField = nil
-    }
-
-    private func scheduleToolbarStateUpdate() {
-        toolbarUpdateCoalescer.schedule { [weak self] in
-            self?.updateToolbarState()
-        }
     }
 
     private func updateToolbarLayout() {

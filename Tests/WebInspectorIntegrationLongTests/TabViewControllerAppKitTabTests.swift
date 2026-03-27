@@ -193,12 +193,12 @@ struct TabViewControllerAppKitTabTests {
             Issue.record("Expected DOM pick toolbar action")
             return
         }
-        _ = target.perform(action, with: pickItem)
+        _ = unsafe target.perform(action, with: pickItem)
 
         #expect(controller.dom.isSelectingElement)
         #expect(domPickToolbarItem(in: window)?.isEnabled == true)
 
-        _ = target.perform(action, with: pickItem)
+        _ = unsafe target.perform(action, with: pickItem)
         #expect(controller.dom.isSelectingElement == false)
 
         #expect(waitUntil {
