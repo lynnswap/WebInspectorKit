@@ -34,6 +34,34 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func requestSelectionModeToggleUpdatesSelectionStateImmediately() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+
+        #expect(inspector.isSelectingElement == false)
+
+        inspector.requestSelectionModeToggle()
+        #expect(inspector.isSelectingElement)
+
+        let selectionStarted = await waitForCondition {
+            await self.selectionIsActive(in: webView)
+        }
+        #expect(selectionStarted == true)
+
+        inspector.requestSelectionModeToggle()
+        #expect(inspector.isSelectingElement == false)
+
+        let selectionEnded = await waitForCondition {
+            await self.selectionIsActive(in: webView) == false
+        }
+        #expect(selectionEnded == true)
+    }
+
+    @Test
     func attachSwitchingPageClearsPendingMutationBundles() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
@@ -233,6 +261,16 @@ struct DOMInspectorTests {
         let rawValue = try? await webView.callAsyncJavaScript(
             "return document.getElementById(identifier) !== null;",
             arguments: ["identifier": id],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
+    }
+
+    private func selectionIsActive(in webView: WKWebView) async -> Bool {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return window.webInspectorDOM.debugStatus().selectionActive;",
+            arguments: [:],
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )

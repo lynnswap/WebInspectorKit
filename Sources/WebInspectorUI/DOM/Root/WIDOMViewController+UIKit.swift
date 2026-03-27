@@ -19,11 +19,8 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private let elementDetailsViewController: WIDOMDetailViewController
     private let elementDetailsNavigationController: UINavigationController
     private var hasAppliedInitialRegularColumnWidth = false
-    private var hasStartedObservingNavigationState = false
-    private var navigationObservationHandles: Set<ObservationHandle> = []
-    private var isSelectionActionPending = false
-    // Keep coalescing because this navigation state is recomputed from multiple observation streams.
-    private let navigationStateUpdateCoalescer = UIUpdateCoalescer()
+    private var hasStartedObservingPickItemState = false
+    private var pickItemObservationHandles: Set<ObservationHandle> = []
 
     var regularLayoutModeOverrideForTesting: RegularLayoutMode = .automatic {
         didSet {
@@ -66,6 +63,14 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         viewController(for: .compact)
     }
 
+    var resolvedSecondaryMenuForTesting: UIMenu {
+        makeDOMSecondaryMenu()
+    }
+
+    var usesDeferredSecondaryMenuForTesting: Bool {
+        menuItem.menu?.children.contains(where: { $0 is UIDeferredMenuElement }) == true
+    }
+
     var inspectorColumnViewControllerForTesting: UIViewController? {
         guard #available(iOS 26.0, *) else {
             return nil
@@ -94,7 +99,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     private lazy var menuItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: "ellipsis"),
-            menu: makeDOMSecondaryMenu()
+            menu: makeDeferredDOMSecondaryMenu()
         )
         item.accessibilityIdentifier = "WI.DOM.MenuButton"
         return item
@@ -104,8 +109,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         self.inspector = inspector
 
         let compactRootViewController = WIDOMTreeViewController(
-            inspector: inspector,
-            showsNavigationControls: true
+            inspector: inspector
         )
         self.compactRootViewController = compactRootViewController
         let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
@@ -113,8 +117,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         self.compactNavigationController = compactNavigationController
 
         let domTreeViewController = WIDOMTreeViewController(
-            inspector: inspector,
-            showsNavigationControls: false
+            inspector: inspector
         )
         self.domTreeViewController = domTreeViewController
         let domTreeNavigationController = UINavigationController(rootViewController: domTreeViewController)
@@ -152,11 +155,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
                 self.hasAppliedInitialRegularColumnWidth = false
             }
             self.applyRegularLayoutPresentationIfNeeded()
-            self.scheduleNavigationStateUpdate()
+            self.updatePickItemAppearance()
+            self.applyNavigationPlacement()
         }
 
-        startObservingNavigationStateIfNeeded()
-        updateNavigationItemState()
+        startObservingPickItemStateIfNeeded()
+        updatePickItemAppearance()
+        applyNavigationPlacement()
     }
 
     public override func viewDidLayoutSubviews() {
@@ -166,12 +171,12 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        updateNavigationItemState()
+        applyNavigationPlacement()
     }
 
     public override func didMove(toParent parent: UIViewController?) {
         super.didMove(toParent: parent)
-        updateNavigationItemState()
+        applyNavigationPlacement()
     }
 
     public override func viewDidAppear(_ animated: Bool) {
@@ -179,23 +184,21 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         applyRegularLayoutPresentationIfNeeded()
     }
 
-    private func updateNavigationItemState() {
-        pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
+    private func updatePickItemAppearance() {
+        pickItem.isEnabled = inspector.hasPageWebView
         pickItem.image = UIImage(systemName: pickSymbolName)
-        pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
-        menuItem.menu = makeDOMSecondaryMenu()
-
-        if let hostNavigationItem = parent?.navigationItem,
-           parent?.navigationController != nil {
-            clearNavigationItemState(on: navigationItem)
-            applyNavigationItemState(to: hostNavigationItem)
-            return
-        }
-
-        applyNavigationItemState(to: navigationItem)
+        pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
     }
 
-    private func applyNavigationItemState(to navigationItem: UINavigationItem) {
+    private func applyNavigationPlacement() {
+        for navigationItem in managedNavigationItems() {
+            clearNavigationItemState(on: navigationItem)
+        }
+
+        installNavigationItems(on: resolveActiveNavigationItem())
+    }
+
+    private func installNavigationItems(on navigationItem: UINavigationItem) {
         navigationItem.searchController = nil
         navigationItem.preferredSearchBarPlacement = .automatic
         navigationItem.hidesSearchBarWhenScrolling = false
@@ -293,39 +296,61 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         }
     }
 
-    private func startObservingNavigationStateIfNeeded() {
-        guard hasStartedObservingNavigationState == false else {
+    private func startObservingPickItemStateIfNeeded() {
+        guard hasStartedObservingPickItemState == false else {
             return
         }
-        hasStartedObservingNavigationState = true
+        hasStartedObservingPickItemState = true
 
         inspector.observe(
             \.hasPageWebView,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleNavigationStateUpdate()
+            self?.updatePickItemAppearance()
         }
-        .store(in: &navigationObservationHandles)
+        .store(in: &pickItemObservationHandles)
         inspector.observe(
             \.isSelectingElement,
             options: [.removeDuplicates]
         ) { [weak self] _ in
-            self?.scheduleNavigationStateUpdate()
+            self?.updatePickItemAppearance()
         }
-        .store(in: &navigationObservationHandles)
-        inspector.session.graphStore.observe(
-            \.selectedEntry,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.scheduleNavigationStateUpdate()
-        }
-        .store(in: &navigationObservationHandles)
+        .store(in: &pickItemObservationHandles)
     }
 
-    private func scheduleNavigationStateUpdate() {
-        navigationStateUpdateCoalescer.schedule { [weak self] in
-            self?.updateNavigationItemState()
+    private func resolveActiveNavigationItem() -> UINavigationItem {
+        if traitCollection.horizontalSizeClass == .compact {
+            return compactRootViewController.navigationItem
         }
+        if let hostNavigationItem,
+           parent?.navigationController != nil {
+            return hostNavigationItem
+        }
+        return navigationItem
+    }
+
+    private var hostNavigationItem: UINavigationItem? {
+        parent?.navigationItem
+    }
+
+    private func managedNavigationItems() -> [UINavigationItem] {
+        var items: [UINavigationItem] = [
+            navigationItem,
+            compactRootViewController.navigationItem
+        ]
+        if let hostNavigationItem,
+           items.contains(where: { $0 === hostNavigationItem }) == false {
+            items.append(hostNavigationItem)
+        }
+        return items
+    }
+
+    private func makeDeferredDOMSecondaryMenu() -> UIMenu {
+        UIMenu(children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                completion((self?.makeDOMSecondaryMenu() ?? UIMenu()).children)
+            }
+        ])
     }
 
     private func makeDOMSecondaryMenu() -> UIMenu {
@@ -360,26 +385,8 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     @objc
     private func toggleSelectionMode() {
-        guard isSelectionActionPending == false else {
-            return
-        }
-
-        isSelectionActionPending = true
-        updateNavigationItemState()
-
-        Task.immediateIfAvailable { [weak self, inspector] in
-            defer {
-                if let self {
-                    self.isSelectionActionPending = false
-                    self.scheduleNavigationStateUpdate()
-                }
-            }
-            if inspector.isSelectingElement {
-                await inspector.cancelSelectionMode()
-            } else {
-                _ = try? await inspector.beginSelectionMode()
-            }
-        }
+        inspector.requestSelectionModeToggle()
+        updatePickItemAppearance()
     }
 
     private func deleteSelectedNode() {

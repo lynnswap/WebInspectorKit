@@ -130,7 +130,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private weak var observedSelectedEntry: DOMEntry?
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var editingDraftValue: String?
-    private var isSelectionActionPending = false
     private var isInlineEditingActive = false
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
@@ -288,9 +287,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
                 completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
             }
-            pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
+            pickItem.isEnabled = inspector.hasPageWebView
             pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
+            pickItem.tintColor = inspector.isSelectingElement ? .systemBlue : .label
         } else {
             navigationItem.additionalOverflowItems = nil
         }
@@ -870,27 +869,8 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func toggleSelectionMode() {
-        guard isSelectionActionPending == false else {
-            return
-        }
-
-        isSelectionActionPending = true
+        inspector.requestSelectionModeToggle()
         updateNavigationControls()
-
-        let inspector = inspector
-        Task.immediateIfAvailable { [weak self] in
-            defer {
-                if let self {
-                    self.isSelectionActionPending = false
-                    self.scheduleNavigationControlsUpdate()
-                }
-            }
-            if inspector.isSelectingElement {
-                await inspector.cancelSelectionMode()
-            } else {
-                _ = try? await inspector.beginSelectionMode()
-            }
-        }
     }
 
     @objc

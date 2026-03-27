@@ -23,7 +23,6 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private weak var tabPickerControl: NSSegmentedControl?
     private weak var networkSearchField: NSSearchField?
     private var hasStartedObservingToolbarState = false
-    private var isDOMSelectionActionPending = false
     private var toolbarObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because toolbar updates can be triggered by many state sources in quick bursts.
     private let toolbarUpdateCoalescer = UIUpdateCoalescer()
@@ -529,9 +528,9 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         }
 
         if let pickItem = toolbar.items.first(where: { $0.itemIdentifier == .wiDOMPick }) {
-            pickItem.isEnabled = inspectorController.dom.hasPageWebView && !isDOMSelectionActionPending
+            pickItem.isEnabled = inspectorController.dom.hasPageWebView
             pickItem.image = Self.pickToolbarImage(
-                isSelecting: inspectorController.dom.isSelectingElement || isDOMSelectionActionPending
+                isSelecting: inspectorController.dom.isSelectingElement
             )
         }
 
@@ -712,26 +711,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     @objc
     private func handleDOMPickToolbarAction(_ sender: Any?) {
-        guard isDOMSelectionActionPending == false else {
-            return
-        }
-
-        isDOMSelectionActionPending = true
+        inspectorController.dom.requestSelectionModeToggle()
         updateToolbarState()
-
-        Task.immediateIfAvailable { [weak self, inspectorController] in
-            defer {
-                if let self {
-                    self.isDOMSelectionActionPending = false
-                    self.updateToolbarState()
-                }
-            }
-            if inspectorController.dom.isSelectingElement {
-                await inspectorController.dom.cancelSelectionMode()
-            } else {
-                _ = try? await inspectorController.dom.beginSelectionMode()
-            }
-        }
     }
 
     @objc
@@ -918,6 +899,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             item.label = wiLocalized("dom.controls.pick")
             item.paletteLabel = item.label
             item.toolTip = item.label
+            item.isEnabled = inspectorController.dom.hasPageWebView
             item.image = Self.pickToolbarImage(isSelecting: inspectorController.dom.isSelectingElement)
             item.action = #selector(handleDOMPickToolbarAction(_:))
             return item

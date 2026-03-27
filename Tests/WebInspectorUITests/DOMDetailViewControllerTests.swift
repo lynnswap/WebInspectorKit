@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+import WebKit
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 @testable import WebInspectorUI
@@ -204,6 +205,45 @@ struct DOMDetailViewControllerTests {
         #expect(replacementTracked)
     }
 
+    @Test
+    func detailViewPickControlReflectsSelectionStateImmediately() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+
+        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
+        defer { tearDown(window: window) }
+
+        guard let pickItem = viewController.navigationItem.rightBarButtonItems?.first else {
+            Issue.record("Expected detail view pick button")
+            return
+        }
+
+        let initialStateReady = await waitUntil {
+            pickItem.isEnabled && pickItem.tintColor == .label
+        }
+        #expect(initialStateReady)
+
+        inspector.requestSelectionModeToggle()
+        #expect(inspector.isSelectingElement)
+
+        let activeStateReady = await waitUntil {
+            pickItem.isEnabled && pickItem.tintColor == .systemBlue
+        }
+        #expect(activeStateReady)
+
+        inspector.requestSelectionModeToggle()
+        #expect(inspector.isSelectingElement == false)
+
+        let restoredStateReady = await waitUntil {
+            pickItem.isEnabled && pickItem.tintColor == .label
+        }
+        #expect(restoredStateReady)
+    }
+
     private func makeInspector(
         selectedLocalID: UInt64,
         preview: String,
@@ -235,6 +275,23 @@ struct DOMDetailViewControllerTests {
             )
         )
         return inspector
+    }
+
+    private func makeTestWebView() -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
     }
 
     private func makeHostedDetailViewController(
@@ -336,6 +393,25 @@ struct DOMDetailViewControllerTests {
             isRendered: true,
             children: children
         )
+    }
+}
+
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
     }
 }
 #endif

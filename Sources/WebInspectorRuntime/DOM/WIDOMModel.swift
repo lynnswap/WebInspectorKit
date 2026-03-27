@@ -24,6 +24,8 @@ public final class WIDOMModel {
     public private(set) var isSelectingElement = false
 
     @ObservationIgnored private var activeSelectionRequest: SelectionRequest?
+    @ObservationIgnored private var selectionInteractionTask: Task<Void, Never>?
+    @ObservationIgnored private var selectionInteractionGeneration: UInt64 = 0
     @ObservationIgnored private var pendingDeleteTask: Task<Void, Never>?
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
 #if canImport(UIKit)
@@ -121,7 +123,16 @@ public final class WIDOMModel {
         try await beginSelectionModeImpl()
     }
 
+    package func requestSelectionModeToggle() {
+        if isSelectingElement {
+            cancelSelectionInteraction()
+        } else {
+            startSelectionInteractionIfPossible()
+        }
+    }
+
     func tearDownForDeinit() {
+        invalidateSelectionInteractionTask()
         activeSelectionRequest = nil
         pendingDeleteTask?.cancel()
         pendingDeleteTask = nil
@@ -187,11 +198,8 @@ private extension WIDOMModel {
 
     func cancelSelectionModeImpl() async {
         guard isSelectingElement else { return }
-        activeSelectionRequest = nil
-        isSelectingElement = false
-#if canImport(UIKit)
-        restorePageScrollingState()
-#endif
+        invalidateSelectionInteractionTask()
+        clearSelectionRequestState()
         await session.cancelSelectionMode()
     }
 
@@ -226,43 +234,7 @@ private extension WIDOMModel {
         if isSelectingElement {
             await cancelSelectionModeImpl()
         }
-        let request = SelectionRequest()
-        beginSelectionRequest(request)
-        await session.hideHighlight()
-        errorMessage = nil
-        defer {
-            finishSelectionRequest(request)
-        }
-        activatePageWindowForSelectionIfPossible()
-#if canImport(UIKit)
-        await waitForPageWindowActivationIfNeeded()
-#endif
-        let result: DOMSelectionResult
-        do {
-            result = try await session.beginSelectionMode()
-        } catch is CancellationError {
-            if activeSelectionRequest === request {
-                await session.cancelSelectionMode()
-            }
-            throw CancellationError()
-        } catch {
-            domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-            errorMessage = error.localizedDescription
-            throw error
-        }
-
-        try Task.checkCancellation()
-        try ensureSelectionRequestIsCurrent(request)
-        guard !result.cancelled else {
-            return result
-        }
-
-        let requestedDepth = max(session.configuration.snapshotDepth, result.requiredDepth + 1)
-        await updateSnapshotDepthImpl(requestedDepth)
-        try Task.checkCancellation()
-        try ensureSelectionRequestIsCurrent(request)
-        await reloadInspectorImpl(preserveState: true)
-        return result
+        return try await beginSelectionRequestAndPerform()
     }
 
     func resetInteractionState() async {
@@ -394,10 +366,7 @@ private extension WIDOMModel {
         isSelectingElement = true
     }
 
-    private func finishSelectionRequest(_ request: SelectionRequest) {
-        guard activeSelectionRequest === request else {
-            return
-        }
+    private func clearSelectionRequestState() {
         activeSelectionRequest = nil
         isSelectingElement = false
 #if canImport(UIKit)
@@ -405,10 +374,108 @@ private extension WIDOMModel {
 #endif
     }
 
+    private func finishSelectionRequest(_ request: SelectionRequest) {
+        guard activeSelectionRequest === request else {
+            return
+        }
+        clearSelectionRequestState()
+    }
+
     private func ensureSelectionRequestIsCurrent(_ request: SelectionRequest) throws {
         guard activeSelectionRequest === request else {
             throw CancellationError()
         }
+    }
+
+    private func invalidateSelectionInteractionTask() {
+        selectionInteractionGeneration &+= 1
+        selectionInteractionTask?.cancel()
+        selectionInteractionTask = nil
+    }
+
+    private func startSelectionInteractionIfPossible() {
+        guard session.hasPageWebView else {
+            return
+        }
+
+        invalidateSelectionInteractionTask()
+        let request = startSelectionRequest()
+        let generation = selectionInteractionGeneration
+        selectionInteractionTask = Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                if self.selectionInteractionGeneration == generation {
+                    self.selectionInteractionTask = nil
+                }
+            }
+            _ = try? await self.performSelectionRequest(request)
+        }
+    }
+
+    private func cancelSelectionInteraction() {
+        guard isSelectingElement else {
+            return
+        }
+
+        invalidateSelectionInteractionTask()
+        clearSelectionRequestState()
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.session.cancelSelectionMode()
+        }
+    }
+
+    private func beginSelectionRequestAndPerform() async throws -> DOMSelectionResult {
+        let request = startSelectionRequest()
+        return try await performSelectionRequest(request)
+    }
+
+    private func startSelectionRequest() -> SelectionRequest {
+        let request = SelectionRequest()
+        beginSelectionRequest(request)
+        return request
+    }
+
+    private func performSelectionRequest(_ request: SelectionRequest) async throws -> DOMSelectionResult {
+        await session.hideHighlight()
+        errorMessage = nil
+        defer {
+            finishSelectionRequest(request)
+        }
+        activatePageWindowForSelectionIfPossible()
+#if canImport(UIKit)
+        await waitForPageWindowActivationIfNeeded()
+#endif
+        let result: DOMSelectionResult
+        do {
+            result = try await session.beginSelectionMode()
+        } catch is CancellationError {
+            if activeSelectionRequest === request {
+                await session.cancelSelectionMode()
+            }
+            throw CancellationError()
+        } catch {
+            domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        try Task.checkCancellation()
+        try ensureSelectionRequestIsCurrent(request)
+        guard !result.cancelled else {
+            return result
+        }
+
+        let requestedDepth = max(session.configuration.snapshotDepth, result.requiredDepth + 1)
+        await updateSnapshotDepthImpl(requestedDepth)
+        try Task.checkCancellation()
+        try ensureSelectionRequestIsCurrent(request)
+        await reloadInspectorImpl(preserveState: true)
+        return result
     }
 
     func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {

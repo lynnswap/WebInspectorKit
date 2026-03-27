@@ -702,6 +702,8 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.activeHostKindForTesting == "compact")
         #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
         #expect(compactColumn.topViewController is WIDOMTreeViewController)
+        let buttonIdentifiers = compactColumn.topViewController?.navigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
+        #expect(buttonIdentifiers == ["WI.DOM.MenuButton", "WI.DOM.PickButton"])
         if #available(iOS 26.0, *) {
             #expect(domViewController.primaryColumnViewControllerForTesting == nil)
             #expect(secondaryColumn.topViewController is WIDOMTreeViewController)
@@ -782,6 +784,28 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.compactColumnViewControllerForTesting is UINavigationController)
         #expect(domViewController.inspectorColumnViewControllerForTesting == nil)
         #expect(domViewController.isInspectorColumnVisibleForTesting == false)
+    }
+
+    @Test
+    func domHostMenuResolvesLatestSelectionStateOnDemand() {
+        let inspector = makeDOMInspectorWithSelection()
+        let viewController = WIDOMViewController(inspector: inspector)
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.usesDeferredSecondaryMenuForTesting)
+
+        let selectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
+        let selectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
+        #expect(selectedDeleteAction?.attributes.contains(.disabled) == false)
+        #expect(selectedHTMLAction?.attributes.contains(.disabled) == false)
+
+        inspector.session.graphStore.applySelectionSnapshot(nil)
+
+        let unselectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
+        let unselectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
+        #expect(unselectedDeleteAction?.attributes.contains(.disabled) == true)
+        #expect(unselectedHTMLAction?.attributes.contains(.disabled) == true)
     }
 
     @Test
@@ -1045,6 +1069,70 @@ struct TabViewControllerUITabTests {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return WKWebView(frame: .zero, configuration: configuration)
+    }
+
+    private func makeDOMInspectorWithSelection() -> WIDOMModel {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let selectedLocalID: UInt64 = 42
+        let attributes = [DOMAttribute(nodeId: Int(selectedLocalID), name: "id", value: "selected")]
+
+        inspector.session.graphStore.applySnapshot(
+            .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: Int(selectedLocalID),
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: attributes,
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+        inspector.session.graphStore.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                preview: "<div id=\"selected\"></div>",
+                attributes: attributes,
+                path: ["html", "body", "div"],
+                selectorPath: "#selected",
+                styleRevision: 0
+            )
+        )
+        return inspector
+    }
+
+    private func copyHTMLAction(in menu: UIMenu) -> UIAction? {
+        guard let copyMenu = menu.children.first as? UIMenu else {
+            return nil
+        }
+        return copyMenu.children.first as? UIAction
+    }
+
+    private func deleteAction(in menu: UIMenu) -> UIAction? {
+        guard let destructiveMenu = menu.children.last as? UIMenu else {
+            return nil
+        }
+        return destructiveMenu.children.first as? UIAction
     }
 
     private func configureSizeClass(

@@ -1,5 +1,4 @@
 import WebKit
-import WebInspectorEngine
 import WebInspectorRuntime
 import ObservationBridge
 
@@ -9,26 +8,11 @@ import UIKit
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
     private let inspector: WIDOMModel
-    private let showsNavigationControls: Bool
     private var observationHandles: Set<ObservationHandle> = []
-    private var isSelectionActionPending = false
-    // Keep coalescing here because navigation controls are driven by multiple observed states.
-    private let navigationUpdateCoalescer = UIUpdateCoalescer()
 
-    private lazy var pickItem: UIBarButtonItem = {
-        UIBarButtonItem(
-            image: UIImage(systemName: pickSymbolName),
-            style: .plain,
-            target: self,
-            action: #selector(toggleSelectionMode)
-        )
-    }()
-
-    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+    public init(inspector: WIDOMModel) {
         self.inspector = inspector
-        self.showsNavigationControls = showsNavigationControls
         super.init(nibName: nil, bundle: nil)
-        
     }
 
     @available(*, unavailable)
@@ -44,8 +28,6 @@ public final class WIDOMTreeViewController: UIViewController {
         inspectorWebView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(inspectorWebView)
 
-        setupNavigationItems()
-
         NSLayoutConstraint.activate([
             inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -53,56 +35,8 @@ public final class WIDOMTreeViewController: UIViewController {
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-            self.scheduleNavigationControlsUpdate()
-        }
-
         observeState()
         updateErrorPresentation(errorMessage: inspector.errorMessage)
-        updateNavigationControls()
-    }
-
-    private var pickSymbolName: String {
-        traitCollection.horizontalSizeClass == .compact ? "viewfinder.circle" : "scope"
-    }
-
-    private func setupNavigationItems() {
-        guard showsNavigationControls else {
-            navigationItem.rightBarButtonItems = nil
-            return
-        }
-        navigationItem.rightBarButtonItems = [pickItem]
-    }
-
-    private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.selectedEntry != nil
-        let hasPageWebView = inspector.hasPageWebView
-
-        return DOMSecondaryMenuBuilder.makeMenu(
-            hasSelection: hasSelection,
-            hasPageWebView: hasPageWebView,
-            onCopyHTML: { [weak self] in
-                self?.copySelection(.html)
-            },
-            onCopySelectorPath: { [weak self] in
-                self?.copySelection(.selectorPath)
-            },
-            onCopyXPath: { [weak self] in
-                self?.copySelection(.xpath)
-            },
-            onReloadInspector: { [weak self] in
-                guard let self else { return }
-                Task {
-                    await self.inspector.reloadInspector()
-                }
-            },
-            onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
-            },
-            onDeleteNode: { [weak self] in
-                self?.deleteNode()
-            }
-        )
     }
 
     private func observeState() {
@@ -113,33 +47,6 @@ public final class WIDOMTreeViewController: UIViewController {
             self?.updateErrorPresentation(errorMessage: newErrorMessage)
         }
         .store(in: &observationHandles)
-        inspector.observe(
-            \.hasPageWebView,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.scheduleNavigationControlsUpdate()
-        }
-        .store(in: &observationHandles)
-        inspector.observe(
-            \.isSelectingElement,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.scheduleNavigationControlsUpdate()
-        }
-        .store(in: &observationHandles)
-        inspector.session.graphStore.observe(
-            \.selectedEntry,
-            options: [.removeDuplicates]
-        ) { [weak self] _ in
-            self?.scheduleNavigationControlsUpdate()
-        }
-        .store(in: &observationHandles)
-    }
-
-    private func scheduleNavigationControlsUpdate() {
-        navigationUpdateCoalescer.schedule { [weak self] in
-            self?.updateNavigationControls()
-        }
     }
 
     private func updateErrorPresentation(errorMessage: String?) {
@@ -150,68 +57,6 @@ public final class WIDOMTreeViewController: UIViewController {
             contentUnavailableConfiguration = configuration
         } else {
             contentUnavailableConfiguration = nil
-        }
-    }
-
-    private func updateNavigationControls() {
-        if showsNavigationControls {
-            navigationItem.additionalOverflowItems = UIDeferredMenuElement.uncached { [weak self] completion in
-                completion((self?.makeSecondaryMenu() ?? UIMenu()).children)
-            }
-            pickItem.isEnabled = inspector.hasPageWebView && !isSelectionActionPending
-            pickItem.image = UIImage(systemName: pickSymbolName)
-            pickItem.tintColor = (inspector.isSelectingElement || isSelectionActionPending) ? .systemBlue : .label
-        } else {
-            navigationItem.additionalOverflowItems = nil
-        }
-    }
-
-    @objc
-    private func toggleSelectionMode() {
-        guard isSelectionActionPending == false else {
-            return
-        }
-
-        isSelectionActionPending = true
-        updateNavigationControls()
-
-        let inspector = inspector
-        Task.immediateIfAvailable { [weak self] in
-            defer {
-                if let self {
-                    self.isSelectionActionPending = false
-                    self.scheduleNavigationControlsUpdate()
-                }
-            }
-            if inspector.isSelectingElement {
-                await inspector.cancelSelectionMode()
-            } else {
-                _ = try? await inspector.beginSelectionMode()
-            }
-        }
-    }
-
-    @objc
-    private func deleteNode() {
-        let inspector = inspector
-        let undoManager = undoManager
-        Task.immediateIfAvailable {
-            await inspector.deleteSelectedNode(undoManager: undoManager)
-        }
-    }
-
-    private func copySelection(_ kind: DOMSelectionCopyKind) {
-        let inspector = inspector
-        Task.immediateIfAvailable {
-            do {
-                let text = try await inspector.copySelection(kind)
-                guard !text.isEmpty else {
-                    return
-                }
-                UIPasteboard.general.string = text
-            } catch {
-                return
-            }
         }
     }
 }
