@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import Testing
+import SwiftUI
 import UIKit
 import WebKit
 @testable import WKViewport
@@ -97,6 +98,7 @@ struct ViewportCoordinatorTests {
         coordinator.handleViewDidAppear()
 
         #expect(coordinator.hasObservationViewForTesting == true)
+        #expect(coordinator.observationSuperviewForTesting === hostViewController.view)
         #expect(coordinator.resolvedMetricsForTesting != nil)
     }
 
@@ -156,6 +158,109 @@ struct ViewportCoordinatorTests {
         coordinator.invalidate()
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
+    }
+
+    @Test
+    func coordinatorUsesSwiftUIContainerAsObservationSuperview() async throws {
+        let webView = WKWebView(frame: .zero)
+        let box = ContainerViewBox()
+        let hostingController = UIHostingController(
+            rootView: HostingWebViewContainer(webView: webView, box: box)
+        )
+        let window = makeWindow(rootViewController: hostingController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostingController.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(10))
+
+        let containerView = try #require(box.view)
+        let coordinator = ViewportCoordinator(webView: webView)
+
+        coordinator.updateViewport()
+
+        #expect(coordinator.resolvedHostViewControllerForTesting === hostingController)
+        #expect(coordinator.observationSuperviewForTesting === containerView)
+        #expect(coordinator.observationSuperviewForTesting !== hostingController.view)
+        #expect(hostingController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(hostingController.contentScrollView(for: .bottom) === webView.scrollView)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorReusesObservationViewWhileSuperviewIsStable() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor)
+        ])
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let firstObservationView = coordinator.observationViewForTesting
+        let firstSuperview = coordinator.observationSuperviewForTesting
+
+        coordinator.updateViewport()
+        coordinator.updateViewport()
+
+        #expect(coordinator.observationViewForTesting === firstObservationView)
+        #expect(coordinator.observationSuperviewForTesting === firstSuperview)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorMovesObservationViewWhenWebViewSuperviewChanges() {
+        let hostViewController = UIViewController()
+        let firstContainer = UIView()
+        let secondContainer = UIView()
+        let webView = WKWebView(frame: .zero)
+        [firstContainer, secondContainer].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            hostViewController.view.addSubview($0)
+        }
+        NSLayoutConstraint.activate([
+            firstContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            firstContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            firstContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            firstContainer.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+            secondContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            secondContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            secondContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            secondContainer.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+        ])
+
+        let firstConstraints = attach(webView, to: firstContainer)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        #expect(coordinator.observationSuperviewForTesting === firstContainer)
+
+        webView.removeFromSuperview()
+        NSLayoutConstraint.deactivate(firstConstraints)
+        attach(webView, to: secondContainer)
+        hostViewController.view.layoutIfNeeded()
+
+        coordinator.updateViewport()
+
+        #expect(coordinator.observationSuperviewForTesting === secondContainer)
+        coordinator.invalidate()
     }
 
     @Test
@@ -295,5 +400,48 @@ private final class TestViewportSPIObject: NSObject {
         invocationOrder.append(ViewportSPISelectorNames.frameOrBoundsMayHaveChanged)
         frameOrBoundsMayHaveChangedCallCount += 1
     }
+}
+
+@MainActor
+private final class ContainerViewBox {
+    var view: UIView?
+}
+
+private struct HostingWebViewContainer: View {
+    let webView: WKWebView
+    let box: ContainerViewBox
+
+    var body: some View {
+        HostingWebViewRepresentable(webView: webView, box: box)
+    }
+}
+
+private struct HostingWebViewRepresentable: UIViewRepresentable {
+    let webView: WKWebView
+    let box: ContainerViewBox
+
+    func makeUIView(context: Context) -> UIView {
+        let containerView = UIView()
+        box.view = containerView
+        attach(webView, to: containerView)
+        return containerView
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+@MainActor
+@discardableResult
+private func attach(_ webView: WKWebView, to containerView: UIView) -> [NSLayoutConstraint] {
+    webView.translatesAutoresizingMaskIntoConstraints = false
+    containerView.addSubview(webView)
+    let constraints = [
+        webView.topAnchor.constraint(equalTo: containerView.topAnchor),
+        webView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+        webView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+        webView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+    ]
+    NSLayoutConstraint.activate(constraints)
+    return constraints
 }
 #endif

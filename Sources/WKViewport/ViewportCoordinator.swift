@@ -173,6 +173,14 @@ public final class ViewportCoordinator: NSObject {
     var resolvedHostViewControllerForTesting: UIViewController? {
         resolvedHostViewController()
     }
+
+    var observationSuperviewForTesting: UIView? {
+        observationView?.superview
+    }
+
+    var observationViewForTesting: UIView? {
+        observationView
+    }
 #endif
 
     public init(
@@ -213,16 +221,24 @@ public final class ViewportCoordinator: NSObject {
     }
 
     public func updateViewport() {
-        guard let webView, let resolvedHostViewController = resolvedHostViewController() else {
+        guard let webView else {
             return
         }
-        guard let hostView = resolvedHostViewController.view else {
+        let resolvedHostViewController = resolvedHostViewController()
+        guard let observationContainerView = resolvedObservationContainerView() else {
+            clearTransientViewportStateIfNeeded(
+                resolvedHostViewController: resolvedHostViewController,
+                webView: webView
+            )
+            return
+        }
+        guard let resolvedHostViewController, let hostView = resolvedHostViewController.view else {
             return
         }
 
         updateObservedHostViewControllerIfNeeded(resolvedHostViewController, webView: webView)
 
-        installObservationViewIfPossible(in: hostView)
+        installObservationViewIfPossible(in: observationContainerView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
         resolvedHostViewController.setContentScrollView(webView.scrollView)
@@ -235,8 +251,9 @@ public final class ViewportCoordinator: NSObject {
         )
         effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
 
-        let screenScale = hostView.window?.screen.scale
-            ?? hostView.traitCollection.displayScale
+        let screenScale = observationContainerView.window?.screen.scale
+            ?? webView.window?.screen.scale
+            ?? observationContainerView.traitCollection.displayScale
         let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
             screenScale: screenScale
@@ -271,9 +288,7 @@ public final class ViewportCoordinator: NSObject {
     public func invalidate() {
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
-        observationView?.onViewportGeometryChanged = nil
-        observationView?.removeFromSuperview()
-        observationView = nil
+        clearObservationViewIfNeeded()
 
         guard let webView else {
             return
@@ -297,11 +312,11 @@ public final class ViewportCoordinator: NSObject {
     }
 
     private func installObservationViewIfPossible() {
-        guard let hostView = resolvedHostViewController()?.viewIfLoaded else {
+        guard let observationContainerView = resolvedObservationContainerView() else {
             return
         }
 
-        installObservationViewIfPossible(in: hostView)
+        installObservationViewIfPossible(in: observationContainerView)
     }
 
     private func installObservationViewIfPossible(in hostView: UIView) {
@@ -309,12 +324,15 @@ public final class ViewportCoordinator: NSObject {
             return
         }
 
-        observationView?.onViewportGeometryChanged = nil
-        observationView?.removeFromSuperview()
+        clearObservationViewIfNeeded()
 
         let observationView = ViewportObservationView()
-        observationView.onViewportGeometryChanged = { [weak self] in
-            self?.updateViewport()
+        self.observationView = observationView
+        observationView.onViewportGeometryChanged = { [weak self, weak observationView] in
+            guard let self, let observationView, self.observationView === observationView else {
+                return
+            }
+            self.updateViewport()
         }
         observationView.translatesAutoresizingMaskIntoConstraints = false
         observationView.isUserInteractionEnabled = false
@@ -329,9 +347,31 @@ public final class ViewportCoordinator: NSObject {
             observationView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor)
         ])
 
-        self.observationView = observationView
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
+    }
+
+    private func resolvedObservationContainerView() -> UIView? {
+        webView?.superview
+    }
+
+    private func clearTransientViewportStateIfNeeded(
+        resolvedHostViewController: UIViewController?,
+        webView: WKWebView
+    ) {
+        clearObservedScrollViewIfNeeded(
+            on: observedHostViewController ?? resolvedHostViewController,
+            webView: webView
+        )
+        observedHostViewController = nil
+        lastAppliedResolvedMetrics = nil
+        clearObservationViewIfNeeded()
+    }
+
+    private func clearObservationViewIfNeeded() {
+        observationView?.onViewportGeometryChanged = nil
+        observationView?.removeFromSuperview()
+        observationView = nil
     }
 
     private func resolvedHostViewController() -> UIViewController? {
