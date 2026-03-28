@@ -31,8 +31,6 @@ struct WKViewportConsumerSmokeTests {
 
         let coordinator = ViewportCoordinator(webView: webView)
 
-        coordinator.updateViewport()
-
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         coordinator.invalidate()
     }
@@ -57,7 +55,6 @@ struct WKViewportConsumerSmokeTests {
 
         let containerView = try #require(box.view)
         let coordinator = ViewportCoordinator(webView: webView)
-        coordinator.updateViewport()
 
         #expect(hostingController.contentScrollView(for: .top) === webView.scrollView)
         #expect(hostingController.contentScrollView(for: .bottom) === webView.scrollView)
@@ -98,17 +95,47 @@ struct WKViewportConsumerSmokeTests {
         }
 
         let coordinator = ViewportCoordinator(webView: webView)
-        coordinator.updateViewport()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         #expect(containsViewportObservationView(in: containerView))
 
         webView.removeFromSuperview()
-        coordinator.updateViewport()
+        coordinator.handleWebViewHierarchyDidChange()
 
         #expect(hostViewController.contentScrollView(for: .top) == nil)
         #expect(hostViewController.contentScrollView(for: .bottom) == nil)
         #expect(containsViewportObservationView(in: containerView) == false)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func consumerCustomSubclassCanForwardLifecycleHooks() {
+        let hostViewController = UIViewController()
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = navigationController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let webView = CustomConsumerViewportWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let coordinator = ViewportCoordinator(webView: webView)
+        webView.viewportCoordinator = coordinator
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        hostViewController.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+        ])
+        hostViewController.view.layoutIfNeeded()
+
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+        #expect(containsViewportObservationView(in: hostViewController.view))
         coordinator.invalidate()
     }
 }
@@ -116,6 +143,26 @@ struct WKViewportConsumerSmokeTests {
 @MainActor
 private final class ContainerViewBox {
     var view: UIView?
+}
+
+@MainActor
+private final class CustomConsumerViewportWebView: WKWebView {
+    weak var viewportCoordinator: ViewportCoordinator?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
 }
 
 private struct HostingWebViewContainer: View {
