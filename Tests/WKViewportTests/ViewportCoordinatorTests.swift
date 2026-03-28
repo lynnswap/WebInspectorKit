@@ -95,7 +95,7 @@ struct ViewportCoordinatorTests {
             window.rootViewController = nil
         }
 
-        coordinator.handleViewDidAppear()
+        coordinator.handleWebViewHierarchyDidChange()
 
         #expect(coordinator.hasObservationViewForTesting == true)
         #expect(coordinator.observationSuperviewForTesting === hostViewController.view)
@@ -179,8 +179,6 @@ struct ViewportCoordinatorTests {
         let containerView = try #require(box.view)
         let coordinator = ViewportCoordinator(webView: webView)
 
-        coordinator.updateViewport()
-
         #expect(coordinator.resolvedHostViewControllerForTesting === hostingController)
         #expect(coordinator.observationSuperviewForTesting === containerView)
         #expect(coordinator.observationSuperviewForTesting !== hostingController.view)
@@ -213,10 +211,31 @@ struct ViewportCoordinatorTests {
         let firstSuperview = coordinator.observationSuperviewForTesting
 
         coordinator.updateViewport()
-        coordinator.updateViewport()
 
         #expect(coordinator.observationViewForTesting === firstObservationView)
         #expect(coordinator.observationSuperviewForTesting === firstSuperview)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorRefreshesWhenSameHostViewControllerIsAssignedAgain() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(hostViewController: hostViewController, webView: webView)
+        let initialUpdateCount = coordinator.appliedViewportUpdateCountForTesting
+
+        coordinator.hostViewController = hostViewController
+
+        #expect(coordinator.appliedViewportUpdateCountForTesting == initialUpdateCount + 1)
+        #expect(coordinator.resolvedHostViewControllerForTesting === hostViewController)
         coordinator.invalidate()
     }
 
@@ -256,10 +275,58 @@ struct ViewportCoordinatorTests {
         NSLayoutConstraint.deactivate(firstConstraints)
         attach(webView, to: secondContainer)
         hostViewController.view.layoutIfNeeded()
-
-        coordinator.updateViewport()
+        coordinator.handleWebViewHierarchyDidChange()
 
         #expect(coordinator.observationSuperviewForTesting === secondContainer)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorClearsObservedScrollViewWhenHostResolutionFails() {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let hostedConstraints = attach(webView, to: hostViewController.view)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
+
+        let orphanContainer = UIView()
+        NSLayoutConstraint.deactivate(hostedConstraints)
+        attach(webView, to: orphanContainer)
+        coordinator.handleWebViewHierarchyDidChange()
+
+        #expect(hostViewController.contentScrollView(for: .top) == nil)
+        #expect(hostViewController.contentScrollView(for: .bottom) == nil)
+        #expect(coordinator.observationSuperviewForTesting === orphanContainer)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorUpdatesCustomSubclassWithExplicitLifecycleForwarding() {
+        let hostViewController = UIViewController()
+        let navigationController = UINavigationController(rootViewController: hostViewController)
+        let window = makeWindow(rootViewController: navigationController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let webView = CustomViewportTestWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let coordinator = ViewportCoordinator(webView: webView)
+        webView.viewportCoordinator = coordinator
+
+        attach(webView, to: hostViewController.view)
+        hostViewController.view.layoutIfNeeded()
+
+        #expect(coordinator.resolvedHostViewControllerForTesting === hostViewController)
+        #expect(coordinator.observationSuperviewForTesting === hostViewController.view)
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         coordinator.invalidate()
     }
 
@@ -405,6 +472,26 @@ private final class TestViewportSPIObject: NSObject {
 @MainActor
 private final class ContainerViewBox {
     var view: UIView?
+}
+
+@MainActor
+private final class CustomViewportTestWebView: WKWebView {
+    weak var viewportCoordinator: ViewportCoordinator?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
 }
 
 private struct HostingWebViewContainer: View {
