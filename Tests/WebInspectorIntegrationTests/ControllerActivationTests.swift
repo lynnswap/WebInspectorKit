@@ -445,7 +445,7 @@ struct ControllerActivationTests {
     }
 
     @Test
-    func explicitDirectReconnectStillReactivatesAfterUIHostClose() async {
+    func idempotentVisibleDirectReconnectStillReactivatesAfterUIHostClose() async {
         let controller = makeBoundSession(tabs: [.dom(), .network()], selectedTabID: "wi_network")
         let webView = makeTestWebView()
 
@@ -480,7 +480,6 @@ struct ControllerActivationTests {
         )
 
         controller.unregisterHost(uiHostID)
-        await controller.connect(to: nil)
         await controller.connect(to: webView)
         await waitForControllerState(
             controller,

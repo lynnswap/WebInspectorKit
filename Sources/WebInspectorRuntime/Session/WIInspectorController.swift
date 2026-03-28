@@ -270,16 +270,12 @@ public final class WIInspectorController {
         }
 
         let previousVisibleUIHostCount = visibleUIHostCount()
-        let previousVisibility = host.visibility
-        let previousIsAttached = host.isAttached
         host.pageWebView = pageWebView
         host.visibility = visibility
         host.isAttached = isAttached
         updateDirectHostActivationSuppression(
             afterMutatingHost: hostID,
             previousVisibleUIHostCount: previousVisibleUIHostCount,
-            previousVisibility: previousVisibility,
-            previousIsAttached: previousIsAttached,
             newVisibility: visibility
         )
         scheduleRuntimeApply()
@@ -332,15 +328,14 @@ private extension WIInspectorController {
     private func updateDirectHostActivationSuppression(
         afterMutatingHost hostID: WIInspectorHostID,
         previousVisibleUIHostCount: Int,
-        previousVisibility: WIHostVisibility = .hidden,
-        previousIsAttached: Bool = false,
         newVisibility: WIHostVisibility?
     ) {
         if hostID == directHostID {
             let currentVisibleUIHostCount = visibleUIHostCount()
             if newVisibility == .visible,
-               (previousVisibility != .visible || previousIsAttached == false),
                currentVisibleUIHostCount == 0 {
+                // Treat an explicit visible direct-host update as a reconnect signal
+                // once every UI host has gone away.
                 suppressesDirectHostActivation = false
             }
             return
