@@ -59,6 +59,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
     private var pendingConfigurationTask: Task<Void, Never>?
+    private var pendingConfigurationGeneration: UInt64 = 0
 
     package var currentBridgeMode: WIBridgeMode {
         bridgeMode
@@ -72,13 +73,12 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     }
 
     isolated deinit {
-        pendingConfigurationTask?.cancel()
+        cancelPendingConfigurationTask()
         detachPageWebView()
     }
 
     package func setMode(_ mode: NetworkLoggingMode) async {
-        pendingConfigurationTask?.cancel()
-        pendingConfigurationTask = nil
+        cancelPendingConfigurationTask()
         loggingMode = mode
         store.setRecording(mode != .stopped)
         if mode == .stopped {
@@ -98,8 +98,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
     }
 
     package func tearDownForDeinit() {
-        pendingConfigurationTask?.cancel()
-        pendingConfigurationTask = nil
+        cancelPendingConfigurationTask()
         preservesStoreAcrossNextAttach = false
         loggingMode = .stopped
         store.setRecording(false)
@@ -112,8 +111,7 @@ public final class NetworkPageAgent: NSObject, PageAgent {
 
 extension NetworkPageAgent {
     package func attachPageWebView(_ newWebView: WKWebView?) async {
-        pendingConfigurationTask?.cancel()
-        pendingConfigurationTask = nil
+        cancelPendingConfigurationTask()
         let shouldClearExisting = preservesStoreAcrossNextAttach == false
         replacePageWebView(with: newWebView)
         guard let newWebView else {
@@ -123,8 +121,7 @@ extension NetworkPageAgent {
     }
 
     package func detachPageWebView(preparing modeBeforeDetach: NetworkLoggingMode? = nil) async {
-        pendingConfigurationTask?.cancel()
-        pendingConfigurationTask = nil
+        cancelPendingConfigurationTask()
         if let modeBeforeDetach {
             loggingMode = modeBeforeDetach
             store.setRecording(modeBeforeDetach != .stopped)
@@ -325,14 +322,27 @@ private extension NetworkPageAgent {
     }
 
     func startPendingConfiguration(on webView: WKWebView?) {
-        pendingConfigurationTask?.cancel()
+        cancelPendingConfigurationTask()
         let loggingMode = loggingMode
+        pendingConfigurationGeneration &+= 1
+        let generation = pendingConfigurationGeneration
         pendingConfigurationTask = Task.immediateIfAvailable { [weak self, weak webView] in
             guard let self else {
                 return
             }
+            defer {
+                if self.pendingConfigurationGeneration == generation {
+                    self.pendingConfigurationTask = nil
+                }
+            }
             await self.configureNetworkLogging(mode: loggingMode, clearExisting: false, on: webView)
         }
+    }
+
+    func cancelPendingConfigurationTask() {
+        pendingConfigurationGeneration &+= 1
+        pendingConfigurationTask?.cancel()
+        pendingConfigurationTask = nil
     }
 
     private func performBodyFetch(

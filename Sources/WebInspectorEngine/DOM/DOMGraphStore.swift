@@ -6,18 +6,11 @@ import Observation
 public final class DOMGraphStore {
     public private(set) var entriesByID: [DOMEntryID: DOMEntry] = [:]
     public private(set) var rootID: DOMEntryID?
-    public private(set) var selectedID: DOMEntryID?
+    public private(set) weak var selectedEntry: DOMEntry?
     public private(set) var documentGeneration: UInt64
 
     public init(documentGeneration: UInt64 = 1) {
         self.documentGeneration = max(1, documentGeneration)
-    }
-
-    public var selectedEntry: DOMEntry? {
-        guard let selectedID else {
-            return nil
-        }
-        return entriesByID[selectedID]
     }
 
     public func entry(for id: DOMEntryID) -> DOMEntry? {
@@ -30,15 +23,15 @@ public final class DOMGraphStore {
 
     public func select(_ id: DOMEntryID?) {
         guard let id else {
-            selectedID = nil
+            selectedEntry = nil
             return
         }
-        selectedID = entriesByID[id] != nil ? id : nil
+        selectedEntry = entriesByID[id]
     }
 
     public func select(localID: UInt64?) {
         guard let localID else {
-            selectedID = nil
+            selectedEntry = nil
             return
         }
         select(makeID(localID: localID))
@@ -52,23 +45,25 @@ public final class DOMGraphStore {
 
         entriesByID.removeAll(keepingCapacity: true)
         rootID = nil
-        selectedID = nil
+        selectedEntry = nil
     }
 
     public func applySnapshot(_ snapshot: DOMGraphSnapshot) {
-        let previousSelectedLocalID = selectedID?.localID
+        let previousSelectedLocalID = selectedEntry?.id.localID
 
         entriesByID.removeAll(keepingCapacity: true)
         let root = buildSubtree(from: snapshot.root, parent: nil)
         rootID = root.id
 
         if let selectedLocalID = snapshot.selectedLocalID {
-            selectedID = makeID(localID: selectedLocalID)
+            selectedEntry = entry(forLocalID: selectedLocalID)
         } else if let previousSelectedLocalID {
-            selectedID = makeID(localID: previousSelectedLocalID)
+            selectedEntry = entry(forLocalID: previousSelectedLocalID)
+        } else {
+            selectedEntry = nil
         }
 
-        reconcileSelectedID()
+        reconcileSelectedEntry()
     }
 
     public func applyMutationBundle(_ bundle: DOMGraphMutationBundle) {
@@ -76,7 +71,7 @@ public final class DOMGraphStore {
             return
         }
 
-        let previousSelectedID = selectedID
+        let previousSelectedID = selectedEntry?.id
         for event in bundle.events {
             switch event {
             case let .childNodeInserted(parentLocalID, previousLocalID, node):
@@ -121,22 +116,22 @@ public final class DOMGraphStore {
             }
         }
 
-        reconcileSelectedID()
-        if selectedID == nil,
+        reconcileSelectedEntry()
+        if selectedEntry == nil,
            let previousSelectedID,
-           entriesByID[previousSelectedID] != nil {
-            selectedID = previousSelectedID
+           let previousSelectedEntry = entriesByID[previousSelectedID] {
+            selectedEntry = previousSelectedEntry
         }
     }
 
     public func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
-        let previousSelectedID = selectedID
+        let previousSelectedID = selectedEntry?.id
         guard let payload, let localID = payload.localID else {
             if let previousSelectedID, let previousSelected = entriesByID[previousSelectedID] {
                 previousSelected.clearMatchedStyles()
                 entriesByID[previousSelectedID] = previousSelected
             }
-            selectedID = nil
+            selectedEntry = nil
             return
         }
 
@@ -149,7 +144,7 @@ public final class DOMGraphStore {
         entry.attributes = normalizeAttributes(payload.attributes, backendNodeID: entry.backendNodeID)
 
         entriesByID[entryID] = entry
-        selectedID = entryID
+        selectedEntry = entry
     }
 
     public func applySelectorPath(_ payload: DOMSelectorPathPayload) {
@@ -158,7 +153,7 @@ public final class DOMGraphStore {
         }
 
         let entryID = makeID(localID: localID)
-        guard selectedID == entryID, let entry = entriesByID[entryID] else {
+        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
             return
         }
 
@@ -170,7 +165,7 @@ public final class DOMGraphStore {
 
     public func beginMatchedStylesLoading(for localID: UInt64) {
         let entryID = makeID(localID: localID)
-        guard selectedID == entryID, let entry = entriesByID[entryID] else {
+        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
             return
         }
 
@@ -183,7 +178,7 @@ public final class DOMGraphStore {
 
     public func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for localID: UInt64) {
         let entryID = makeID(localID: localID)
-        guard selectedID == entryID, let entry = entriesByID[entryID] else {
+        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
             return
         }
 
@@ -203,7 +198,7 @@ public final class DOMGraphStore {
         if let localID {
             resolvedID = makeID(localID: localID)
         } else {
-            resolvedID = selectedID
+            resolvedID = selectedEntry?.id
         }
 
         guard let resolvedID, let entry = entriesByID[resolvedID] else {
@@ -215,7 +210,7 @@ public final class DOMGraphStore {
     }
 
     public func updateSelectedAttribute(name: String, value: String) {
-        guard let selectedID, let entry = entriesByID[selectedID] else {
+        guard let selectedEntryID = selectedEntry?.id, let entry = entriesByID[selectedEntryID] else {
             return
         }
 
@@ -227,16 +222,16 @@ public final class DOMGraphStore {
             )
         }
 
-        entriesByID[selectedID] = entry
+        entriesByID[selectedEntryID] = entry
     }
 
     public func removeSelectedAttribute(name: String) {
-        guard let selectedID, let entry = entriesByID[selectedID] else {
+        guard let selectedEntryID = selectedEntry?.id, let entry = entriesByID[selectedEntryID] else {
             return
         }
 
         entry.attributes.removeAll { $0.name == name }
-        entriesByID[selectedID] = entry
+        entriesByID[selectedEntryID] = entry
     }
 }
 
@@ -517,8 +512,8 @@ private extension DOMGraphStore {
             removeSubtree(child, removeFromParent: false)
         }
 
-        if selectedID == root.id {
-            selectedID = nil
+        if selectedEntry?.id == root.id {
+            selectedEntry = nil
         }
         if self.rootID == root.id {
             self.rootID = nil
@@ -531,10 +526,16 @@ private extension DOMGraphStore {
         entriesByID.removeValue(forKey: root.id)
     }
 
-    func reconcileSelectedID() {
-        guard let selectedID, entriesByID[selectedID] == nil else {
+    func reconcileSelectedEntry() {
+        guard let currentSelection = selectedEntry else {
             return
         }
-        self.selectedID = nil
+        guard let resolvedEntry = entriesByID[currentSelection.id] else {
+            selectedEntry = nil
+            return
+        }
+        if resolvedEntry !== currentSelection {
+            selectedEntry = resolvedEntry
+        }
     }
 }

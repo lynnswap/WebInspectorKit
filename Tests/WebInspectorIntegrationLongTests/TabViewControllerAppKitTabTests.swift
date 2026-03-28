@@ -159,6 +159,54 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func appKitDOMPickToolbarReflectsSelectionStateImmediately() async {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        let descriptors = [
+            makeDescriptor(id: WITab.domTabID, title: "DOM"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: webView, tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await container.waitForRuntimeStateSyncForTesting()
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+
+        guard domPickToolbarItem(in: window) != nil else {
+            Issue.record("Expected DOM pick toolbar item")
+            return
+        }
+
+        #expect(waitUntil {
+            domPickToolbarItem(in: window)?.isEnabled == true
+        })
+
+        guard
+            let pickItem = domPickToolbarItem(in: window),
+            let action = pickItem.action,
+            let target = pickItem.target as? NSObject
+        else {
+            Issue.record("Expected DOM pick toolbar action")
+            return
+        }
+        _ = unsafe target.perform(action, with: pickItem)
+
+        #expect(controller.dom.isSelectingElement)
+        #expect(domPickToolbarItem(in: window)?.isEnabled == true)
+
+        _ = unsafe target.perform(action, with: pickItem)
+        #expect(controller.dom.isSelectingElement == false)
+
+        #expect(waitUntil {
+            domPickToolbarItem(in: window)?.isEnabled == true
+        })
+    }
+
+    @Test
     func pickerSelectionUpdatesVisibleContentAndModelSelectionWhenConnected() {
         let controller = WIInspectorController()
         let descriptors = [
@@ -750,6 +798,11 @@ struct TabViewControllerAppKitTabTests {
         return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == tabPickerIdentifierRaw })
     }
 
+    private func domPickToolbarItem(in window: NSWindow) -> NSToolbarItem? {
+        waitForToolbarItemsIfNeeded(in: window)
+        return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == domPickIdentifierRaw })
+    }
+
     private func networkFilterToolbarItem(in window: NSWindow) -> NSMenuToolbarItem? {
         waitForToolbarItemsIfNeeded(in: window)
         return window.toolbar?.items
@@ -768,8 +821,28 @@ struct TabViewControllerAppKitTabTests {
         }
     }
 
+    private func waitUntil(cycles: Int = 20, _ condition: () -> Bool) -> Bool {
+        for _ in 0..<cycles {
+            drainMainQueue()
+            if condition() {
+                return true
+            }
+        }
+        return condition()
+    }
+
     private func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
     }
 
     private func selectTabViaPicker(index: Int, in window: NSWindow) {
@@ -799,6 +872,25 @@ struct TabViewControllerAppKitTabTests {
                 return
             }
         }
+    }
+}
+
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
     }
 }
 
