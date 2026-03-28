@@ -4,9 +4,12 @@ import {
     NetworkLoggingMode,
     clearThrottledEvents,
     enqueueNetworkEvent,
+    handleResourceEntry,
     makeBodyHandle,
+    materializeReservedResourceEntry,
     networkState,
     queuedEvents,
+    reserveResourceEntry,
     serializeRequestBody,
     setThrottleOptions,
     shouldCaptureNetworkBodies
@@ -37,6 +40,7 @@ function resetNetworkState() {
     clearThrottledEvents();
     networkState.mode = NetworkLoggingMode.ACTIVE;
     networkState.installed = false;
+    networkState.nextId = 1;
     networkState.batchSeq = 0;
     networkState.droppedEvents = 0;
     networkState.sessionID = "test-session";
@@ -44,6 +48,7 @@ function resetNetworkState() {
     networkState.messageAuthToken = "test-control-token";
     networkState.resourceObserver = null;
     networkState.resourceSeen = null;
+    networkState.resourceReserved = null;
     setThrottleOptions({
         intervalMs: 0,
         maxQueuedEvents: 500
@@ -313,6 +318,263 @@ describe("network-agent-utils", () => {
         });
 
         entriesSpy.mockRestore();
+    });
+
+    it("delivers bootstrapped resource snapshots losslessly while preserving throttle cadence", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return Array.from({length: 5}, (_, index) => ({
+                name: `https://example.com/bootstrap-${index + 1}.js`,
+                startTime: 12 + index,
+                duration: 4,
+                initiatorType: "script",
+                encodedBodySize: 128 + index,
+                decodedBodySize: 256 + index,
+                responseStatus: 200,
+                requestMethod: "GET"
+            })) as unknown as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled",
+            throttle: {
+                intervalMs: 100,
+                maxQueuedEvents: 2
+            }
+        });
+
+        expect(networkEventsHandler().postMessage).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(100);
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+
+        vi.advanceTimersByTime(100);
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(2);
+
+        vi.advanceTimersByTime(100);
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(3);
+
+        const urls = networkEventsHandler().postMessage.mock.calls.flatMap(call => {
+            const payload = call[0] as {
+                events: Array<Record<string, unknown>>;
+            };
+            return payload.events.map(event => String(event.url));
+        });
+        expect(urls).toEqual([
+            "https://example.com/bootstrap-1.js",
+            "https://example.com/bootstrap-2.js",
+            "https://example.com/bootstrap-3.js",
+            "https://example.com/bootstrap-4.js",
+            "https://example.com/bootstrap-5.js"
+        ]);
+        expect(networkState.droppedEvents).toBe(0);
+
+        entriesSpy.mockRestore();
+    });
+
+    it("drains live throttled events alongside bootstrapped replay batches", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return Array.from({length: 4}, (_, index) => ({
+                name: `https://example.com/bootstrap-live-${index + 1}.js`,
+                startTime: 20 + index,
+                duration: 4,
+                initiatorType: "script",
+                encodedBodySize: 64 + index,
+                decodedBodySize: 96 + index,
+                responseStatus: 200,
+                requestMethod: "GET"
+            })) as unknown as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled",
+            throttle: {
+                intervalMs: 100,
+                maxQueuedEvents: 2
+            }
+        });
+        enqueueNetworkEvent({
+            kind: "requestWillBeSent",
+            requestId: 99
+        });
+
+        vi.advanceTimersByTime(100);
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+        const firstPayload = networkEventsHandler().postMessage.mock.calls[0][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(firstPayload.events).toHaveLength(2);
+        expect(firstPayload.events[0]).toMatchObject({
+            kind: "requestWillBeSent",
+            requestId: 99
+        });
+        expect(firstPayload.events[1]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/bootstrap-live-1.js"
+        });
+
+        vi.advanceTimersByTime(100);
+        vi.advanceTimersByTime(100);
+
+        const replayedURLs = networkEventsHandler().postMessage.mock.calls.flatMap(call => {
+            const payload = call[0] as {
+                events: Array<Record<string, unknown>>;
+            };
+            return payload.events
+                .filter(event => event.kind === "resourceTiming")
+                .map(event => String(event.url));
+        });
+        expect(replayedURLs).toEqual([
+            "https://example.com/bootstrap-live-1.js",
+            "https://example.com/bootstrap-live-2.js",
+            "https://example.com/bootstrap-live-3.js",
+            "https://example.com/bootstrap-live-4.js"
+        ]);
+
+        entriesSpy.mockRestore();
+    });
+
+    it("keeps replay batches progressing when throttled delivery is limited to one event", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return Array.from({length: 2}, (_, index) => ({
+                name: `https://example.com/bootstrap-single-${index + 1}.js`,
+                startTime: 30 + index,
+                duration: 4,
+                initiatorType: "script",
+                encodedBodySize: 48 + index,
+                decodedBodySize: 64 + index,
+                responseStatus: 200,
+                requestMethod: "GET"
+            })) as unknown as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled",
+            throttle: {
+                intervalMs: 100,
+                maxQueuedEvents: 1
+            }
+        });
+
+        for (let requestId = 1; requestId <= 4; requestId += 1) {
+            enqueueNetworkEvent({
+                kind: "requestWillBeSent",
+                requestId
+            });
+            vi.advanceTimersByTime(100);
+        }
+
+        const replayedURLs = networkEventsHandler().postMessage.mock.calls.flatMap(call => {
+            const payload = call[0] as {
+                events: Array<Record<string, unknown>>;
+            };
+            return payload.events
+                .filter(event => event.kind === "resourceTiming")
+                .map(event => String(event.url));
+        });
+        expect(replayedURLs).toEqual([
+            "https://example.com/bootstrap-single-1.js",
+            "https://example.com/bootstrap-single-2.js"
+        ]);
+
+        entriesSpy.mockRestore();
+    });
+
+    it("reserves bootstrapped resource entries before throttled replay drains", () => {
+        const reservedEntry = {
+            name: "https://example.com/reserved-bootstrap.js",
+            startTime: 44,
+            duration: 4,
+            initiatorType: "script",
+            encodedBodySize: 80,
+            decodedBodySize: 96,
+            responseStatus: 200,
+            requestMethod: "GET"
+        } as unknown as PerformanceEntry;
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return [reservedEntry] as unknown as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            throttle: {
+                intervalMs: 100,
+                maxQueuedEvents: 1
+            }
+        });
+
+        expect(handleResourceEntry(reservedEntry)).toBeNull();
+
+        vi.advanceTimersByTime(100);
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+        const payload = networkEventsHandler().postMessage.mock.calls[0][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(payload.events).toHaveLength(1);
+        expect(payload.events[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/reserved-bootstrap.js"
+        });
+
+        entriesSpy.mockRestore();
+    });
+
+    it("allocates resource timing request IDs only when entries are emitted", () => {
+        const firstEntry = {
+            name: "https://example.com/reserved-id.js",
+            startTime: 10,
+            duration: 2,
+            initiatorType: "script",
+            encodedBodySize: 32,
+            decodedBodySize: 48,
+            responseStatus: 200,
+            requestMethod: "GET"
+        } as unknown as PerformanceEntry;
+        const secondEntry = {
+            name: "https://example.com/live-id.js",
+            startTime: 20,
+            duration: 2,
+            initiatorType: "script",
+            encodedBodySize: 32,
+            decodedBodySize: 48,
+            responseStatus: 200,
+            requestMethod: "GET"
+        } as unknown as PerformanceEntry;
+
+        const reservedKey = reserveResourceEntry(firstEntry);
+        expect(reservedKey).toBeTruthy();
+
+        const reservedPayload = materializeReservedResourceEntry(String(reservedKey)) as Record<string, unknown> | null;
+        expect(reservedPayload).not.toBeNull();
+        expect(reservedPayload?.requestId).toBe(1);
+
+        const livePayload = handleResourceEntry(secondEntry) as Record<string, unknown> | null;
+        expect(livePayload).not.toBeNull();
+        expect(livePayload?.requestId).toBe(2);
     });
 
     it("deduplicates bootstrapped resource timings until clear resets the snapshot state", () => {

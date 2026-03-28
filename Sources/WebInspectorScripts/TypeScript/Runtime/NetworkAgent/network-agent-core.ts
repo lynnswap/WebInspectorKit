@@ -18,11 +18,14 @@ import {
     makeBodyPreviewPayload,
     makeBodyRef,
     makeNetworkTime,
+    materializeReservedResourceEntry,
     networkState,
     now,
     normalizeHeaders,
     parseRawHeaders,
     queuedEvents,
+    reserveResourceEntry,
+    setLosslessThrottledReplayProvider,
     setThrottleOptions,
     shouldQueueNetworkEvent,
     shouldThrottleDelivery,
@@ -257,6 +260,10 @@ const resetNetworkState = () => {
     if (resourceSeen) {
         resourceSeen.clear();
     }
+    const resourceReserved = networkState.resourceReserved;
+    if (resourceReserved) {
+        resourceReserved.clear();
+    }
     networkState.sessionID = generateSessionID();
     networkState.nextId = 1;
     networkState.batchSeq = 0;
@@ -385,6 +392,10 @@ const clearNetworkRecordsInternal = () => {
     if (resourceSeen) {
         resourceSeen.clear();
     }
+    const resourceReserved = networkState.resourceReserved;
+    if (resourceReserved) {
+        resourceReserved.clear();
+    }
     bodyCache.clear();
     clearThrottledEvents();
     queuedEvents.splice(0, queuedEvents.length);
@@ -415,13 +426,26 @@ const deliverBootstrappedResourcePayloads = (
         }
         return;
     }
-    if (shouldThrottleDelivery()) {
-        for (let i = 0; i < payloads.length; ++i) {
-            enqueueThrottledEvent(payloads[i]!);
-        }
-        return;
-    }
     deliverNetworkEvents(payloads);
+};
+
+const makeBootstrappedReplayProvider = (reservedKeys: ArrayLike<string>) => {
+    let index = 0;
+    return (limit: number) => {
+        const batchLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 1;
+        const payloads: Array<NonNullable<ReturnType<typeof handleResourceEntry>>> = [];
+        while (index < reservedKeys.length && payloads.length < batchLimit) {
+            const payload = materializeReservedResourceEntry(reservedKeys[index]!);
+            index += 1;
+            if (payload) {
+                payloads.push(payload);
+            }
+        }
+        return {
+            events: payloads,
+            hasMore: index < reservedKeys.length
+        };
+    };
 };
 
 const bootstrapCurrentPageResourceTimings = (shouldBootstrap: boolean) => {
@@ -436,6 +460,24 @@ const bootstrapCurrentPageResourceTimings = (shouldBootstrap: boolean) => {
     try {
         entries = performance.getEntriesByType("resource");
     } catch {
+        return;
+    }
+    if (!entries.length) {
+        return;
+    }
+
+    if (isActiveLogging() && shouldThrottleDelivery()) {
+        const reservedKeys: string[] = [];
+        for (let i = 0; i < entries.length; ++i) {
+            const reservedKey = reserveResourceEntry(entries[i]!);
+            if (reservedKey) {
+                reservedKeys.push(reservedKey);
+            }
+        }
+        if (!reservedKeys.length) {
+            return;
+        }
+        setLosslessThrottledReplayProvider(makeBootstrappedReplayProvider(reservedKeys));
         return;
     }
 
