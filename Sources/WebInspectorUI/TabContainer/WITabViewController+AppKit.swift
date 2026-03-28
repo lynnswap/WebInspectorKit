@@ -100,6 +100,11 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
         render()
     }
 
+    public override func viewDidAppear() {
+        super.viewDidAppear()
+        syncRegisteredHostState()
+    }
+
     public override func viewDidDisappear() {
         super.viewDidDisappear()
         guard Self.window(for: view) == nil else {

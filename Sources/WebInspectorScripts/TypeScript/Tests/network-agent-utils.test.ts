@@ -272,4 +272,207 @@ describe("network-agent-utils", () => {
         expect((window.fetch as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
         expect((XMLHttpRequest.prototype.open as ((...args: unknown[]) => unknown) & { __wiNetworkPatched?: boolean }).__wiNetworkPatched).toBe(true);
     });
+
+    it("bootstraps existing resource timings when configure activates current page capture", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/app.js",
+                startTime: 12,
+                duration: 4,
+                initiatorType: "script",
+                encodedBodySize: 128,
+                decodedBodySize: 256,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+        const payload = networkEventsHandler().postMessage.mock.calls[0][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(payload.events).toHaveLength(1);
+        expect(payload.events[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/app.js",
+            initiator: "script",
+            encodedBodyLength: 128,
+            decodedBodySize: 256,
+            status: 200,
+            method: "GET"
+        });
+
+        entriesSpy.mockRestore();
+    });
+
+    it("deduplicates bootstrapped resource timings until clear resets the snapshot state", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/bootstrap.css",
+                startTime: 18,
+                duration: 3,
+                initiatorType: "link",
+                encodedBodySize: 64,
+                decodedBodySize: 80,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled",
+            clear: true
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(2);
+        const replayedPayload = networkEventsHandler().postMessage.mock.calls[1][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(replayedPayload.events).toHaveLength(1);
+        expect(replayedPayload.events[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/bootstrap.css"
+        });
+
+        entriesSpy.mockRestore();
+    });
+
+    it("does not rebootstrap the same page snapshot when resourceSeen was populated by another path", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/native-captured.css",
+                startTime: 24,
+                duration: 5,
+                initiatorType: "link",
+                encodedBodySize: 72,
+                decodedBodySize: 96,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+
+        entriesSpy.mockRestore();
+    });
+
+    it("clears the buffering cutoff before replaying a cleared page snapshot", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/reopened.js",
+                startTime: 12,
+                duration: 2,
+                initiatorType: "script",
+                encodedBodySize: 32,
+                decodedBodySize: 48,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        networkState.resourceStartCutoffMs = 100;
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+        const payload = networkEventsHandler().postMessage.mock.calls[0][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(payload.events[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/reopened.js"
+        });
+
+        entriesSpy.mockRestore();
+    });
+
+    it("bootstraps current page resources when transitioning from stopped back to active", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/resume.js",
+                startTime: 18,
+                duration: 2,
+                initiatorType: "script",
+                encodedBodySize: 24,
+                decodedBodySize: 36,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        networkState.mode = NetworkLoggingMode.STOPPED;
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            mode: NetworkLoggingMode.ACTIVE,
+            resourceObserverMode: "disabled"
+        });
+
+        expect(networkEventsHandler().postMessage).toHaveBeenCalledTimes(1);
+        const payload = networkEventsHandler().postMessage.mock.calls[0][0] as {
+            events: Array<Record<string, unknown>>;
+        };
+        expect(payload.events[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/resume.js"
+        });
+
+        entriesSpy.mockRestore();
+    });
 });

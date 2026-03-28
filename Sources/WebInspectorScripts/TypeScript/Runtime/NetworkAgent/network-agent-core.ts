@@ -4,6 +4,7 @@
 import {
     NETWORK_EVENT_VERSION,
     NetworkLoggingMode,
+    bufferEvent,
     bodyCache,
     buildStoredBodyPayload,
     clearThrottledEvents,
@@ -11,6 +12,8 @@ import {
     enqueueNetworkEvent,
     enqueueThrottledEvent,
     generateSessionID,
+    handleResourceEntry,
+    isActiveLogging,
     makeBodyHandle,
     makeBodyPreviewPayload,
     makeBodyRef,
@@ -21,6 +24,7 @@ import {
     parseRawHeaders,
     queuedEvents,
     setThrottleOptions,
+    shouldQueueNetworkEvent,
     shouldThrottleDelivery,
     trackedRequests
 } from "./network-agent-utils";
@@ -257,6 +261,7 @@ const resetNetworkState = () => {
     networkState.nextId = 1;
     networkState.batchSeq = 0;
     networkState.droppedEvents = 0;
+    networkState.resourceStartCutoffMs = null;
     postNetworkReset();
 };
 
@@ -385,6 +390,7 @@ const clearNetworkRecordsInternal = () => {
     queuedEvents.splice(0, queuedEvents.length);
     networkState.batchSeq = 0;
     networkState.droppedEvents = 0;
+    networkState.resourceStartCutoffMs = null;
     postNetworkReset();
 };
 
@@ -393,6 +399,54 @@ const clearNetworkRecords = (options?: { controlAuthToken?: unknown } | null) =>
         return;
     }
     clearNetworkRecordsInternal();
+};
+
+const deliverBootstrappedResourcePayloads = (
+    payloads: Array<NonNullable<ReturnType<typeof handleResourceEntry>>>
+) => {
+    if (!payloads.length) {
+        return;
+    }
+    if (!isActiveLogging()) {
+        if (shouldQueueNetworkEvent()) {
+            for (let i = 0; i < payloads.length; ++i) {
+                bufferEvent(payloads[i]!);
+            }
+        }
+        return;
+    }
+    if (shouldThrottleDelivery()) {
+        for (let i = 0; i < payloads.length; ++i) {
+            enqueueThrottledEvent(payloads[i]!);
+        }
+        return;
+    }
+    deliverNetworkEvents(payloads);
+};
+
+const bootstrapCurrentPageResourceTimings = (shouldBootstrap: boolean) => {
+    if (!shouldBootstrap || networkState.mode === NetworkLoggingMode.STOPPED || pageHookModeState === "disabled") {
+        return;
+    }
+    if (typeof performance === "undefined" || typeof performance.getEntriesByType !== "function") {
+        return;
+    }
+
+    let entries: PerformanceEntryList;
+    try {
+        entries = performance.getEntriesByType("resource");
+    } catch {
+        return;
+    }
+
+    const payloads: Array<NonNullable<ReturnType<typeof handleResourceEntry>>> = [];
+    for (let i = 0; i < entries.length; ++i) {
+        const payload = handleResourceEntry(entries[i]);
+        if (payload) {
+            payloads.push(payload);
+        }
+    }
+    deliverBootstrappedResourcePayloads(payloads);
 };
 
 const installNetworkObserver = (
@@ -546,6 +600,7 @@ const configureNetwork = (
     if (!isAuthorizedControlCall(options)) {
         return;
     }
+    const previousMode = networkState.mode;
     if (Object.prototype.hasOwnProperty.call(options, "mode")) {
         const mode = typeof options.mode === "string" ? options.mode : "";
         setNetworkLoggingMode(mode);
@@ -565,6 +620,9 @@ const configureNetwork = (
     if (options.clear === true) {
         clearNetworkRecordsInternal();
     }
+    const shouldBootstrapCurrentPage = options.clear === true
+        || (previousMode === NetworkLoggingMode.STOPPED && networkState.mode !== NetworkLoggingMode.STOPPED);
+    bootstrapCurrentPageResourceTimings(shouldBootstrapCurrentPage);
 };
 
 const setNetworkThrottling = (options: { intervalMs?: number; maxQueuedEvents?: number } | null | undefined) => {

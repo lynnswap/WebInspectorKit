@@ -45,6 +45,7 @@ public final class WIInspectorController {
         let selectedTab: WITab?
         let preferredCompactSelectedTabIdentifier: String?
         let hasExplicitTabsConfiguration: Bool
+        let suppressesDirectHostActivation: Bool
         let primaryHostVisibility: WIHostVisibility
         let primaryHostPageWebViewIdentity: ObjectIdentifier?
         let primaryHostPageWebView: WKWebView?
@@ -87,6 +88,7 @@ public final class WIInspectorController {
     @ObservationIgnored private var runtimeApplyTask: Task<Void, Never>?
     @ObservationIgnored private var latestScheduledRevision = 0
     @ObservationIgnored private var isTearingDown = false
+    @ObservationIgnored private var suppressesDirectHostActivation = false
 
     public init(configuration: WIModelConfiguration = .init()) {
         let domSession = DOMSession(configuration: configuration.dom)
@@ -234,7 +236,13 @@ public final class WIInspectorController {
     }
 
     package func unregisterHost(_ hostID: WIInspectorHostID) {
+        let previousVisibleUIHostCount = visibleUIHostCount()
         hostRegistry.removeValue(forKey: hostID)
+        updateDirectHostActivationSuppression(
+            afterMutatingHost: hostID,
+            previousVisibleUIHostCount: previousVisibleUIHostCount,
+            newVisibility: nil
+        )
         scheduleRuntimeApply()
     }
 
@@ -261,9 +269,19 @@ public final class WIInspectorController {
             return
         }
 
+        let previousVisibleUIHostCount = visibleUIHostCount()
+        let previousVisibility = host.visibility
+        let previousIsAttached = host.isAttached
         host.pageWebView = pageWebView
         host.visibility = visibility
         host.isAttached = isAttached
+        updateDirectHostActivationSuppression(
+            afterMutatingHost: hostID,
+            previousVisibleUIHostCount: previousVisibleUIHostCount,
+            previousVisibility: previousVisibility,
+            previousIsAttached: previousIsAttached,
+            newVisibility: visibility
+        )
         scheduleRuntimeApply()
     }
 
@@ -277,6 +295,7 @@ public final class WIInspectorController {
         runtimeApplyTask?.cancel()
         runtimeApplyTask = nil
         hostRegistry.removeAll()
+        suppressesDirectHostActivation = false
         dom.tearDownForDeinit()
         network.tearDownForDeinit()
         state.setRecoverableError(nil)
@@ -297,6 +316,45 @@ private extension WIInspectorController {
     private func setRecoverableError(_ message: String?) {
         state.setRecoverableError(message)
         syncObservedState()
+    }
+
+    private func visibleUIHostCount() -> Int {
+        hostRegistry.values.reduce(into: 0) { count, host in
+            guard host.id != directHostID,
+                  host.isAttached,
+                  host.visibility == .visible else {
+                return
+            }
+            count += 1
+        }
+    }
+
+    private func updateDirectHostActivationSuppression(
+        afterMutatingHost hostID: WIInspectorHostID,
+        previousVisibleUIHostCount: Int,
+        previousVisibility: WIHostVisibility = .hidden,
+        previousIsAttached: Bool = false,
+        newVisibility: WIHostVisibility?
+    ) {
+        if hostID == directHostID {
+            let currentVisibleUIHostCount = visibleUIHostCount()
+            if newVisibility == .visible,
+               (previousVisibility != .visible || previousIsAttached == false),
+               currentVisibleUIHostCount == 0 {
+                suppressesDirectHostActivation = false
+            }
+            return
+        }
+
+        let currentVisibleUIHostCount = visibleUIHostCount()
+        if currentVisibleUIHostCount > 0 {
+            suppressesDirectHostActivation = false
+            return
+        }
+
+        if previousVisibleUIHostCount > 0 {
+            suppressesDirectHostActivation = true
+        }
     }
 
     private func syncObservedState() {
@@ -379,7 +437,10 @@ private extension WIInspectorController {
     }
 
     private func makeRuntimeSnapshot(revision: Int) -> WIRuntimeSnapshot {
-        let visiblePrimaryHost = effectiveVisiblePrimaryHost()
+        let suppressesDirectHostActivation = suppressesDirectHostActivation
+        let visiblePrimaryHost = effectiveVisiblePrimaryHost(
+            suppressingDirectHostActivation: suppressesDirectHostActivation
+        )
         let retainedPrimaryHost = retainedPrimaryHostCandidate()
         let primaryHost = visiblePrimaryHost ?? retainedPrimaryHost
 
@@ -398,6 +459,7 @@ private extension WIInspectorController {
             selectedTab: state.selectedTab,
             preferredCompactSelectedTabIdentifier: state.preferredCompactSelectedTabIdentifier,
             hasExplicitTabsConfiguration: state.hasExplicitTabsConfiguration,
+            suppressesDirectHostActivation: suppressesDirectHostActivation,
             primaryHostVisibility: visiblePrimaryHost == nil ? .hidden : .visible,
             primaryHostPageWebViewIdentity: primaryHost?.pageWebView.map(ObjectIdentifier.init),
             primaryHostPageWebView: primaryHost?.pageWebView,
@@ -405,13 +467,17 @@ private extension WIInspectorController {
         )
     }
 
-    private func effectiveVisiblePrimaryHost() -> WIHostRecord? {
+    private func effectiveVisiblePrimaryHost(
+        suppressingDirectHostActivation: Bool
+    ) -> WIHostRecord? {
         let visibleHosts = hostRegistry.values
             .filter { $0.isAttached && $0.visibility == .visible }
             .sorted { $0.registrationOrder < $1.registrationOrder }
 
         let visibleUIHosts = visibleHosts.filter { $0.id != directHostID }
-        let visibleDirectHosts = visibleHosts.filter { $0.id == directHostID }
+        let visibleDirectHosts = suppressingDirectHostActivation
+            ? []
+            : visibleHosts.filter { $0.id == directHostID }
 
         if let primaryHost = visibleUIHosts.first(where: {
             $0.preferredRole == .primary && $0.pageWebView != nil
@@ -553,6 +619,7 @@ private extension WIInspectorController {
             host.visibility = .finalizing
             host.isAttached = false
         }
+        suppressesDirectHostActivation = false
         scheduleRuntimeApply()
     }
 }

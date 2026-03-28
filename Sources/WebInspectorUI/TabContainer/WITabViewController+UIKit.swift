@@ -236,6 +236,10 @@ public final class WITabViewController: UIViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+    }
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
         syncRegisteredHostState()
     }
 
@@ -281,7 +285,17 @@ public final class WITabViewController: UIViewController {
         return .visible
     }
 
-    private func syncRegisteredHostState(allowDuringSwap: Bool = false) {
+    private var isDismissOrRemovalTransition: Bool {
+        isBeingDismissed
+            || navigationController?.isBeingDismissed == true
+            || isMovingFromParent
+            || navigationController?.isMovingFromParent == true
+    }
+
+    private func syncRegisteredHostState(
+        allowDuringSwap: Bool = false,
+        forcedVisibility: WIHostVisibility? = nil
+    ) {
         guard allowDuringSwap || controllerSwapTask == nil else {
             needsHostStateSyncAfterSwap = true
             return
@@ -290,7 +304,7 @@ public final class WITabViewController: UIViewController {
         inspectorController.updateHost(
             hostID,
             pageWebView: requestedPageWebView,
-            visibility: currentHostVisibility,
+            visibility: forcedVisibility ?? currentHostVisibility,
             isAttached: true
         )
     }

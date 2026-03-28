@@ -394,6 +394,103 @@ struct ControllerActivationTests {
         )
     }
 
+    @Test
+    func hidingLastVisibleUIHostSuspendsRuntimeUntilUIHostReturns() async {
+        let controller = makeBoundSession(tabs: [.dom(), .network()], selectedTabID: "wi_network")
+        let webView = makeTestWebView()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        let uiHostID = controller.registerHost()
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
+        await waitForControllerState(
+            controller,
+            lifecycle: .suspended,
+            selectedTabID: "wi_network",
+            hasAttachedPage: false,
+            networkMode: .stopped
+        )
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+    }
+
+    @Test
+    func explicitDirectReconnectStillReactivatesAfterUIHostClose() async {
+        let controller = makeBoundSession(tabs: [.dom(), .network()], selectedTabID: "wi_network")
+        let webView = makeTestWebView()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        let uiHostID = controller.registerHost()
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+
+        controller.updateHost(
+            uiHostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
+        await waitForControllerState(
+            controller,
+            lifecycle: .suspended,
+            selectedTabID: "wi_network",
+            hasAttachedPage: false,
+            networkMode: .stopped
+        )
+
+        controller.unregisterHost(uiHostID)
+        await controller.connect(to: nil)
+        await controller.connect(to: webView)
+        await waitForControllerState(
+            controller,
+            lifecycle: .active,
+            selectedTabID: "wi_network",
+            hasAttachedPage: true,
+            networkMode: .active
+        )
+    }
+
 #if canImport(UIKit)
     @Test
     func pageWindowActivationMakesPageWindowKeyWithinSameScene() async throws {
