@@ -355,30 +355,25 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     private func makeDOMSecondaryMenu() -> UIMenu {
         DOMSecondaryMenuBuilder.makeMenu(
-            hasSelection: inspector.selectedEntry != nil,
+            hasSelection: inspector.documentStore.selectedEntry != nil,
             hasPageWebView: inspector.hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.copySelection(.html)
+                self?.copySelectedHTML()
             },
             onCopySelectorPath: { [weak self] in
-                self?.copySelection(.selectorPath)
+                self?.copySelectedSelectorPath()
             },
             onCopyXPath: { [weak self] in
-                self?.copySelection(.xpath)
+                self?.copySelectedXPath()
             },
             onReloadInspector: { [weak self] in
-                guard let self else {
-                    return
-                }
-                Task {
-                    await self.inspector.reloadInspector()
-                }
+                self?.inspector.requestReloadDocument()
             },
             onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
+                self?.inspector.requestReloadPage()
             },
             onDeleteNode: { [weak self] in
-                self?.deleteSelectedNode()
+                self?.deleteSelection()
             }
         )
     }
@@ -389,19 +384,45 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         updatePickItemAppearance()
     }
 
-    private func deleteSelectedNode() {
-        let inspector = inspector
-        let undoManager = undoManager
-        Task.immediateIfAvailable {
-            await inspector.deleteSelectedNode(undoManager: undoManager)
-        }
+    private func deleteSelection() {
+        inspector.requestDeleteSelection(undoManager: undoManager)
     }
 
-    private func copySelection(_ kind: DOMSelectionCopyKind) {
+    private func copySelectedHTML() {
         let inspector = inspector
         Task.immediateIfAvailable {
             do {
-                let text = try await inspector.copySelection(kind)
+                let text = try await inspector.copySelectedHTML()
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func copySelectedSelectorPath() {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelectedSelectorPath()
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func copySelectedXPath() {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelectedXPath()
                 guard !text.isEmpty else {
                     return
                 }

@@ -9,6 +9,7 @@ import UIKit
 public final class WIDOMTreeViewController: UIViewController {
     private let inspector: WIDOMModel
     private var observationHandles: Set<ObservationHandle> = []
+    private var documentStoreObservationHandles: Set<ObservationHandle> = []
 
     public init(inspector: WIDOMModel) {
         self.inspector = inspector
@@ -36,15 +37,25 @@ public final class WIDOMTreeViewController: UIViewController {
         ])
 
         observeState()
-        updateErrorPresentation(errorMessage: inspector.errorMessage)
+        updateErrorPresentation(errorMessage: inspector.documentStore.errorMessage)
     }
 
     private func observeState() {
         inspector.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] newErrorMessage in
-            self?.updateErrorPresentation(errorMessage: newErrorMessage)
+            \.documentStore
+        ) { [weak self] documentStore in
+            guard let self else {
+                return
+            }
+            self.documentStoreObservationHandles.removeAll()
+            documentStore.observe(
+                \.errorMessage,
+                options: [.removeDuplicates]
+            ) { [weak self] newErrorMessage in
+                self?.updateErrorPresentation(errorMessage: newErrorMessage)
+            }
+            .store(in: &self.documentStoreObservationHandles)
+            self.updateErrorPresentation(errorMessage: documentStore.errorMessage)
         }
         .store(in: &observationHandles)
     }

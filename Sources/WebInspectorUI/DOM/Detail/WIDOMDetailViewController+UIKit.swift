@@ -9,7 +9,7 @@ import SwiftUI
 private protocol DiffableStableID: Hashable, Sendable {}
 
 private struct ElementAttributeEditingKey: Hashable {
-    let nodeID: DOMEntryID?
+    let entryIdentity: ObjectIdentifier?
     let name: String
 }
 
@@ -74,7 +74,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector
         case styleRule(signature: StyleRuleSignature, ordinal: Int)
         case styleMeta(kind: StyleMetaKind)
-        case attribute(nodeID: DOMEntryID?, name: String)
+        case attribute(entryIdentity: ObjectIdentifier?, name: String)
         case emptyAttribute
     }
 
@@ -99,7 +99,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector
         case styleRule(signature: StyleRuleSignature)
         case styleMeta(kind: StyleMetaKind)
-        case attribute(nodeID: DOMEntryID?, name: String)
+        case attribute(entryIdentity: ObjectIdentifier?, name: String)
         case emptyAttribute
     }
 
@@ -108,7 +108,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector(path: String)
         case styleRule(selector: String, detail: String)
         case styleMeta(message: String)
-        case attribute(nodeID: DOMEntryID?, name: String, value: String)
+        case attribute(entryIdentity: ObjectIdentifier?, name: String, value: String)
         case emptyAttribute
     }
 
@@ -121,13 +121,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
     private var stateObservationHandles: Set<ObservationHandle> = []
+    private var documentStoreObservationHandles: Set<ObservationHandle> = []
     private var selectedEntryObservationHandles: Set<ObservationHandle> = []
     // Keep coalescing because navigation controls react to several independent state updates.
     private let navigationUpdateCoalescer = UIUpdateCoalescer()
     // Keep coalescing because structure snapshots can burst under DOM updates.
     private let structureUpdateCoalescer = UIUpdateCoalescer()
     private var sections: [DetailSection] = []
-    private weak var observedSelectedEntry: DOMEntry?
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var editingDraftValue: String?
     private var isInlineEditingActive = false
@@ -166,6 +166,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     isolated deinit {
         pendingReloadDataTask?.cancel()
         stateObservationHandles.removeAll()
+        documentStoreObservationHandles.removeAll()
         selectedEntryObservationHandles.removeAll()
     }
 
@@ -213,7 +214,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return
         }
         hasStartedObservingState = true
-        let graphStore = inspector.session.graphStore
 
         inspector.observe(
             \.hasPageWebView,
@@ -229,34 +229,45 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             self?.scheduleNavigationControlsUpdate()
         }
         .store(in: &stateObservationHandles)
-        graphStore.observe(\.selectedEntry) { [weak self] _ in
-            self?.scheduleNavigationControlsUpdate()
-            self?.handleSelectedEntryObservationEvent()
+        inspector.observe(
+            \.documentStore
+        ) { [weak self] documentStore in
+            guard let self else {
+                return
+            }
+            self.documentStoreObservationHandles.removeAll()
+            documentStore.observe(\.selectedEntry) { [weak self] _ in
+                self?.scheduleNavigationControlsUpdate()
+                self?.handleSelectedEntryObservationEvent()
+            }
+            .store(in: &self.documentStoreObservationHandles)
+            self.scheduleNavigationControlsUpdate()
+            self.handleSelectedEntryChange()
         }
         .store(in: &stateObservationHandles)
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.selectedEntry != nil
+        let hasSelection = inspector.documentStore.selectedEntry != nil
         let hasPageWebView = inspector.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
             hasSelection: hasSelection,
             hasPageWebView: hasPageWebView,
             onCopyHTML: { [weak self] in
-                self?.copySelection(.html)
+                self?.copySelectedHTML()
             },
             onCopySelectorPath: { [weak self] in
-                self?.copySelection(.selectorPath)
+                self?.copySelectedSelectorPath()
             },
             onCopyXPath: { [weak self] in
-                self?.copySelection(.xpath)
+                self?.copySelectedXPath()
             },
             onReloadInspector: { [weak self] in
-                self?.reloadInspector()
+                self?.reloadDocument()
             },
             onReloadPage: { [weak self] in
-                self?.inspector.session.reloadPage()
+                self?.inspector.requestReloadPage()
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -297,14 +308,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     private func handleSelectedEntryChange() {
         selectedEntryObservationHandles.removeAll()
-        observedSelectedEntry = inspector.selectedEntry
         selectedEntryRenderGeneration &+= 1
-        let currentSelectionID = inspector.selectedEntry?.id
-        if editingAttributeKey?.nodeID != currentSelectionID {
+        let currentSelectionIdentity = inspector.documentStore.selectedEntry.map(ObjectIdentifier.init)
+        if editingAttributeKey?.entryIdentity != currentSelectionIdentity {
             clearInlineEditingState()
         }
 
-        if currentSelectionID == nil {
+        if currentSelectionIdentity == nil {
             var configuration = UIContentUnavailableConfiguration.empty()
             configuration.text = wiLocalized("dom.element.select_prompt")
             configuration.secondaryText = wiLocalized("dom.element.hint")
@@ -317,7 +327,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             contentUnavailableConfiguration = nil
             collectionView.isHidden = false
             sections = makeSections()
-            if let selectedEntry = inspector.selectedEntry {
+            if let selectedEntry = inspector.documentStore.selectedEntry {
                 startObservingSelectedEntry(selectedEntry)
             }
         }
@@ -329,15 +339,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func handleSelectedEntryObservationEvent() {
-        let currentSelectedEntry = inspector.selectedEntry
-        switch (observedSelectedEntry, currentSelectedEntry) {
-        case (nil, nil):
-            return
-        case let (observedEntry?, currentEntry?) where observedEntry === currentEntry:
-            return
-        default:
-            handleSelectedEntryChange()
-        }
+        handleSelectedEntryChange()
     }
 
     private func startObservingSelectedEntry(_ entry: DOMEntry) {
@@ -347,7 +349,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 guard let self, let entry else {
                     return
                 }
-                guard self.inspector.selectedEntry?.id == entry.id else {
+                guard self.inspector.documentStore.selectedEntry === entry else {
                     return
                 }
                 self.scheduleStructureUpdate()
@@ -358,7 +360,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func reconcileSectionStructure(forceSnapshotUpdate: Bool = false) {
-        guard inspector.selectedEntry != nil else {
+        guard inspector.documentStore.selectedEntry != nil else {
             handleSelectedEntryChange()
             return
         }
@@ -399,7 +401,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeSections() -> [DetailSection] {
-        guard let selected = inspector.selectedEntry else {
+        guard let selected = inspector.documentStore.selectedEntry else {
             return []
         }
 
@@ -449,8 +451,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         if selected.attributes.isEmpty {
             attributeRows = [.emptyAttribute]
         } else {
+            let entryIdentity = ObjectIdentifier(selected)
             attributeRows = selected.attributes.map { attribute in
-                .attribute(nodeID: selected.id, name: attribute.name)
+                .attribute(entryIdentity: entryIdentity, name: attribute.name)
             }
         }
 
@@ -698,15 +701,15 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             )
         case let .styleMeta(kind):
             return ItemStableID(key: .styleMeta(kind: kind), cellKind: .list)
-        case let .attribute(nodeID, name):
-            return ItemStableID(key: .attribute(nodeID: nodeID, name: name), cellKind: .attributeEditor)
+        case let .attribute(entryIdentity, name):
+            return ItemStableID(key: .attribute(entryIdentity: entryIdentity, name: name), cellKind: .attributeEditor)
         case .emptyAttribute:
             return ItemStableID(key: .emptyAttribute, cellKind: .list)
         }
     }
 
     private func payload(for stableID: ItemStableID) -> ItemPayload? {
-        guard let selectedEntry = inspector.selectedEntry else {
+        guard let selectedEntry = inspector.documentStore.selectedEntry else {
             return nil
         }
 
@@ -726,12 +729,12 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             )
         case let .styleMeta(kind):
             return styleMetaPayload(for: kind, in: selectedEntry)
-        case let .attribute(nodeID, name):
-            let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+        case let .attribute(entryIdentity, name):
+            let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
             guard let value = attributeValue(for: key, in: selectedEntry) else {
                 return nil
             }
-            return .attribute(nodeID: nodeID, name: name, value: value)
+            return .attribute(entryIdentity: entryIdentity, name: name, value: value)
         case .emptyAttribute:
             return .emptyAttribute
         }
@@ -745,7 +748,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         cell.configure(
             stableID: item.stableID,
-            entry: inspector.selectedEntry,
+            entry: inspector.documentStore.selectedEntry,
             payloadProvider: { [weak self] stableID in
                 self?.payload(for: stableID)
             }
@@ -758,17 +761,17 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return
         }
         guard
-            case let .attribute(nodeID, name) = item.stableID.key
+            case let .attribute(entryIdentity, name) = item.stableID.key
         else {
             return
         }
-        let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+        let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
         cell.delegate = self
         cell.configure(
             key: key,
             name: name,
             value: attributeValue(for: key) ?? "",
-            entry: inspector.selectedEntry,
+            entry: inspector.documentStore.selectedEntry,
             activateEditor: isInlineEditingActive && editingAttributeKey == key
         )
     }
@@ -787,7 +790,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
 
         let action = UIContextualAction(style: .destructive, title: nil) { [weak self] _, _, completion in
-            let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
+            let key = ElementAttributeEditingKey(entryIdentity: attributeRow.entryIdentity, name: attributeRow.name)
             self?.deleteAttribute(for: key)
             completion(true)
         }
@@ -812,26 +815,26 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 image: UIImage(systemName: "trash"),
                 attributes: [.destructive]
             ) { _ in
-                let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
+                let key = ElementAttributeEditingKey(entryIdentity: attributeRow.entryIdentity, name: attributeRow.name)
                 self?.deleteAttribute(for: key)
             }
             return UIMenu(children: [deleteAction])
         }
     }
 
-    private func attributeRow(at indexPath: IndexPath) -> (nodeID: DOMEntryID?, name: String, value: String)? {
+    private func attributeRow(at indexPath: IndexPath) -> (entryIdentity: ObjectIdentifier?, name: String, value: String)? {
         guard
             let item = dataSource.itemIdentifier(for: indexPath),
-            case let .attribute(nodeID, name) = item.stableID.key
+            case let .attribute(entryIdentity, name) = item.stableID.key
         else {
             return nil
         }
 
-        let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+        let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
         guard let value = attributeValue(for: key) else {
             return nil
         }
-        return (nodeID: nodeID, name: name, value: value)
+        return (entryIdentity: entryIdentity, name: name, value: value)
     }
 
     private func deleteAttribute(for key: ElementAttributeEditingKey) {
@@ -843,10 +846,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         if editingAttributeKey == key {
             clearInlineEditingState()
         }
-        let inspector = inspector
-        Task.immediateIfAvailable {
-            await inspector.removeAttribute(name: key.name)
-        }
+        inspector.requestRemoveAttribute(name: key.name)
     }
 
     private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
@@ -874,26 +874,50 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     @objc
-    private func reloadInspector() {
-        Task {
-            await inspector.reloadInspector()
-        }
+    private func reloadDocument() {
+        inspector.requestReloadDocument()
     }
 
     @objc
     private func deleteNode() {
-        let inspector = inspector
-        let undoManager = undoManager
-        Task.immediateIfAvailable {
-            await inspector.deleteSelectedNode(undoManager: undoManager)
-        }
+        inspector.requestDeleteSelection(undoManager: undoManager)
     }
 
-    private func copySelection(_ kind: DOMSelectionCopyKind) {
+    private func copySelectedHTML() {
         let inspector = inspector
         Task.immediateIfAvailable {
             do {
-                let text = try await inspector.copySelection(kind)
+                let text = try await inspector.copySelectedHTML()
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func copySelectedSelectorPath() {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelectedSelectorPath()
+                guard !text.isEmpty else {
+                    return
+                }
+                UIPasteboard.general.string = text
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func copySelectedXPath() {
+        let inspector = inspector
+        Task.immediateIfAvailable {
+            do {
+                let text = try await inspector.copySelectedXPath()
                 guard !text.isEmpty else {
                     return
                 }
@@ -933,10 +957,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
     ) {
         editingAttributeKey = key
         editingDraftValue = value
-        let inspector = inspector
-        Task.immediateIfAvailable {
-            await inspector.updateAttributeValue(name: key.name, value: value)
-        }
+        inspector.requestUpdateAttributeValue(name: key.name, value: value)
     }
 
     fileprivate func elementAttributeEditorCellDidEndEditing(
@@ -960,7 +981,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
 
 private extension WIDOMDetailViewController {
     func attributeValue(for key: ElementAttributeEditingKey, in entry: DOMEntry? = nil) -> String? {
-        guard let entry = entry ?? inspector.selectedEntry else {
+        guard let entry = entry ?? inspector.documentStore.selectedEntry else {
             return nil
         }
         guard let attribute = entry.attributes.first(where: { $0.name == key.name }) else {
@@ -1281,7 +1302,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         entry.observe(
             \.attributes,
             onChange: { [weak self, weak entry] attributes in
-                guard let self, let entry, self.editingKey?.nodeID == entry.id else {
+                guard let self, let entry, self.editingKey?.entryIdentity == ObjectIdentifier(entry) else {
                     return
                 }
                 self.syncValueFromAttributes(attributes)

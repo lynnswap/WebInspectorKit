@@ -1,15 +1,16 @@
 import WebKit
 
 @MainActor
-public final class DOMSession {
-    public typealias AttachmentResult = (shouldReload: Bool, preserveState: Bool)
+package final class DOMSession {
+    package typealias AttachmentResult = (shouldReload: Bool, shouldPreserveInspectorState: Bool)
 
-    public private(set) var configuration: DOMConfiguration
-    public let graphStore: DOMGraphStore
+    package private(set) var configuration: DOMConfiguration
 
-    public private(set) weak var lastPageWebView: WKWebView?
+    package private(set) weak var lastPageWebView: WKWebView?
     private let pageAgent: DOMPageAgent
     private var autoSnapshotEnabled = false
+    private var preparedPageEpoch = 0
+    private var preparedDocumentScopeID: DOMDocumentScopeID = 0
 
     var isAutoSnapshotEnabled: Bool {
         autoSnapshotEnabled
@@ -19,19 +20,18 @@ public final class DOMSession {
         pageAgent.currentBridgeMode
     }
 
-    public weak var bundleSink: (any DOMBundleSink)? {
+    package weak var bundleSink: (any DOMBundleSink)? {
         didSet {
             pageAgent.sink = bundleSink
         }
     }
 
-    public init(configuration: DOMConfiguration = .init()) {
+    package init(configuration: DOMConfiguration = .init()) {
         self.configuration = configuration
-        graphStore = DOMGraphStore()
         pageAgent = DOMPageAgent(configuration: configuration)
     }
 
-    public func updateConfiguration(_ configuration: DOMConfiguration) async {
+    package func updateConfiguration(_ configuration: DOMConfiguration) async {
         self.configuration = configuration
         pageAgent.updateConfiguration(configuration)
         if autoSnapshotEnabled {
@@ -39,16 +39,16 @@ public final class DOMSession {
         }
     }
 
-    public var pageWebView: WKWebView? {
+    package var pageWebView: WKWebView? {
         pageAgent.webView
     }
 
-    public var hasPageWebView: Bool {
+    package var hasPageWebView: Bool {
         pageAgent.webView != nil
     }
 
     @discardableResult
-    public func attach(to webView: WKWebView) async -> AttachmentResult {
+    package func attach(to webView: WKWebView) async -> AttachmentResult {
         if pageAgent.webView === webView {
             lastPageWebView = webView
             return (false, false)
@@ -58,13 +58,15 @@ public final class DOMSession {
             await pageAgent.detachPageWebViewAndWaitForCleanup()
         }
 
-        graphStore.resetForDocumentUpdate()
-
         let previousWebView = lastPageWebView
         let shouldPreserveState = pageAgent.webView == nil && previousWebView === webView
         let shouldReload = shouldPreserveState || previousWebView !== webView
         pageAgent.attachPageWebView(webView)
-        await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
+        await pageAgent.ensureDOMAgentScriptInstalled(
+            on: webView,
+            pageEpoch: preparedPageEpoch,
+            documentScopeID: preparedDocumentScopeID
+        )
         lastPageWebView = webView
 
         if autoSnapshotEnabled {
@@ -74,21 +76,30 @@ public final class DOMSession {
         return (shouldReload, shouldPreserveState)
     }
 
-    public func suspend() async {
+    package func suspend() async {
         await pageAgent.detachPageWebViewAndWaitForCleanup()
     }
 
-    public func detach() async {
+    package func detach() async {
         await suspend()
-        graphStore.resetForDocumentUpdate()
         lastPageWebView = nil
     }
 
-    public func reloadPage() {
-        pageAgent.webView?.reload()
+    package func reloadPage() {
+        pageAgent.reloadPage()
     }
 
-    public func setAutoSnapshot(enabled: Bool) async {
+    package func reloadPageAndWaitForPreparedPageEpochSync() async {
+        await pageAgent.reloadPageAndWaitForPreparedPageEpochSync(
+            preparedPageEpoch,
+            documentScopeID: preparedDocumentScopeID
+        )
+        if autoSnapshotEnabled, pageAgent.webView != nil {
+            await pageAgent.setAutoSnapshot(enabled: true)
+        }
+    }
+
+    package func setAutoSnapshot(enabled: Bool) async {
         autoSnapshotEnabled = enabled
         guard pageAgent.webView != nil else {
             return
@@ -96,9 +107,28 @@ public final class DOMSession {
         await pageAgent.setAutoSnapshot(enabled: enabled)
     }
 
+    package func preparePageEpoch(_ epoch: Int) {
+        preparedPageEpoch = epoch
+    }
+
+    package func prepareDocumentScopeID(_ scopeID: DOMDocumentScopeID) {
+        preparedDocumentScopeID = scopeID
+    }
+
+    package func syncCurrentDocumentScopeIDIfNeeded(_ scopeID: DOMDocumentScopeID) async {
+        preparedDocumentScopeID = scopeID
+        guard let webView = pageAgent.webView else {
+            return
+        }
+        await pageAgent.ensureDOMAgentScriptInstalled(
+            on: webView,
+            pageEpoch: nil,
+            documentScopeID: scopeID
+        )
+    }
+
     package func tearDownForDeinit() {
         pageAgent.tearDownForDeinit()
-        graphStore.resetForDocumentUpdate()
         lastPageWebView = nil
         autoSnapshotEnabled = false
     }
@@ -106,16 +136,16 @@ public final class DOMSession {
 
 // MARK: - Snapshot API (for DOMTreeView)
 
-public extension DOMSession {
-    func captureSnapshot(maxDepth: Int) async throws -> String {
+extension DOMSession {
+    package func captureSnapshot(maxDepth: Int) async throws -> String {
         try await pageAgent.captureSnapshot(maxDepth: maxDepth)
     }
 
-    func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
+    package func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
         try await pageAgent.captureSubtree(nodeId: nodeId, maxDepth: maxDepth)
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
+    package func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
         try await pageAgent.matchedStyles(nodeId: nodeId, maxRules: maxRules)
     }
 }
@@ -134,60 +164,60 @@ extension DOMSession {
 
 // MARK: - Selection / Highlight
 
-public extension DOMSession {
-    func beginSelectionMode() async throws -> DOMPageAgent.SelectionModeResult {
+extension DOMSession {
+    package func beginSelectionMode() async throws -> DOMPageAgent.SelectionModeResult {
         try await pageAgent.beginSelectionMode()
     }
 
-    func cancelSelectionMode() async {
+    package func cancelSelectionMode() async {
         await pageAgent.cancelSelectionMode()
     }
 
-    func highlight(nodeId: Int) async {
+    package func highlight(nodeId: Int) async {
         await pageAgent.highlight(nodeId: nodeId)
     }
 
-    func hideHighlight() async {
+    package func hideHighlight() async {
         await pageAgent.hideHighlight()
     }
 }
 
 // MARK: - DOM Mutations
 
-public extension DOMSession {
-    func removeNode(nodeId: Int) async {
+extension DOMSession {
+    package func removeNode(nodeId: Int) async {
         await pageAgent.removeNode(nodeId: nodeId)
     }
 
-    func removeNodeWithUndo(nodeId: Int) async -> Int? {
+    package func removeNodeWithUndo(nodeId: Int) async -> Int? {
         await pageAgent.removeNodeWithUndo(nodeId: nodeId)
     }
 
-    func undoRemoveNode(undoToken: Int) async -> Bool {
+    package func undoRemoveNode(undoToken: Int) async -> Bool {
         await pageAgent.undoRemoveNode(undoToken: undoToken)
     }
 
-    func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
+    package func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
         await pageAgent.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
     }
 
-    func setAttribute(nodeId: Int, name: String, value: String) async {
+    package func setAttribute(nodeId: Int, name: String, value: String) async {
         await pageAgent.setAttribute(nodeId: nodeId, name: name, value: value)
     }
 
-    func removeAttribute(nodeId: Int, name: String) async {
+    package func removeAttribute(nodeId: Int, name: String) async {
         await pageAgent.removeAttribute(nodeId: nodeId, name: name)
     }
 }
 
 // MARK: - Copy Helpers
 
-public extension DOMSession {
-    func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
+extension DOMSession {
+    package func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         try await pageAgent.selectionCopyText(nodeId: nodeId, kind: kind)
     }
 
-    func selectorPath(nodeId: Int) async throws -> String {
+    package func selectorPath(nodeId: Int) async throws -> String {
         try await selectionCopyText(nodeId: nodeId, kind: .selectorPath)
     }
 }

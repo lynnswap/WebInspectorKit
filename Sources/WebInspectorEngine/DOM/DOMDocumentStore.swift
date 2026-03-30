@@ -3,75 +3,42 @@ import Observation
 
 @MainActor
 @Observable
-public final class DOMGraphStore {
-    public private(set) var entriesByID: [DOMEntryID: DOMEntry] = [:]
-    public private(set) var rootID: DOMEntryID?
+public final class DOMDocumentStore {
+    public private(set) var rootEntry: DOMEntry?
     public private(set) weak var selectedEntry: DOMEntry?
-    public private(set) var documentGeneration: UInt64
+    public private(set) var errorMessage: String?
 
-    public init(documentGeneration: UInt64 = 1) {
-        self.documentGeneration = max(1, documentGeneration)
+    private var entriesByLocalID: [UInt64: DOMEntry] = [:]
+    private var localIDsByObjectID: [ObjectIdentifier: UInt64] = [:]
+
+    public init() {}
+
+    package func setErrorMessage(_ message: String?) {
+        errorMessage = message
     }
 
-    public func entry(for id: DOMEntryID) -> DOMEntry? {
-        entriesByID[id]
-    }
-
-    public func entry(forLocalID localID: UInt64) -> DOMEntry? {
-        entriesByID[makeID(localID: localID)]
-    }
-
-    public func select(_ id: DOMEntryID?) {
-        guard let id else {
-            selectedEntry = nil
-            return
-        }
-        selectedEntry = entriesByID[id]
-    }
-
-    public func select(localID: UInt64?) {
-        guard let localID else {
-            selectedEntry = nil
-            return
-        }
-        select(makeID(localID: localID))
-    }
-
-    public func resetForDocumentUpdate() {
-        documentGeneration &+= 1
-        if documentGeneration == 0 {
-            documentGeneration = 1
-        }
-
-        entriesByID.removeAll(keepingCapacity: true)
-        rootID = nil
+    package func clearSelection() {
         selectedEntry = nil
     }
 
-    public func applySnapshot(_ snapshot: DOMGraphSnapshot) {
-        let previousSelectedLocalID = selectedEntry?.id.localID
-
-        entriesByID.removeAll(keepingCapacity: true)
-        let root = buildSubtree(from: snapshot.root, parent: nil)
-        rootID = root.id
-
-        if let selectedLocalID = snapshot.selectedLocalID {
-            selectedEntry = entry(forLocalID: selectedLocalID)
-        } else if let previousSelectedLocalID {
-            selectedEntry = entry(forLocalID: previousSelectedLocalID)
-        } else {
-            selectedEntry = nil
-        }
-
-        reconcileSelectedEntry()
+    package func clearDocument() {
+        replaceContents(selectedLocalID: nil) {}
     }
 
-    public func applyMutationBundle(_ bundle: DOMGraphMutationBundle) {
+    package func replaceDocument(with snapshot: DOMGraphSnapshot) {
+        let previousSelectedLocalID = selectedLocalID
+        let nextSelectedLocalID = snapshot.selectedLocalID ?? previousSelectedLocalID
+        replaceContents(selectedLocalID: nextSelectedLocalID) {
+            rootEntry = buildSubtree(from: snapshot.root, parent: nil)
+        }
+    }
+
+    package func applyMutationBundle(_ bundle: DOMGraphMutationBundle) {
         guard !bundle.events.isEmpty else {
             return
         }
 
-        let previousSelectedID = selectedEntry?.id
+        let previousSelectedLocalID = selectedLocalID
         for event in bundle.events {
             switch event {
             case let .childNodeInserted(parentLocalID, previousLocalID, node):
@@ -112,60 +79,62 @@ public final class DOMGraphStore {
             case let .replaceSubtree(root):
                 applyReplaceSubtree(root)
             case .documentUpdated:
-                resetForDocumentUpdate()
+                return
             }
         }
 
         reconcileSelectedEntry()
-        if selectedEntry == nil,
-           let previousSelectedID,
-           let previousSelectedEntry = entriesByID[previousSelectedID] {
-            selectedEntry = previousSelectedEntry
+        if selectedEntry == nil, let previousSelectedLocalID {
+            selectedEntry = entry(forLocalID: previousSelectedLocalID)
         }
     }
 
-    public func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
-        let previousSelectedID = selectedEntry?.id
+    package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
+        if let previousSelectedEntry = selectedEntry, payload?.localID == nil {
+            previousSelectedEntry.clearMatchedStyles()
+        }
+
         guard let payload, let localID = payload.localID else {
-            if let previousSelectedID, let previousSelected = entriesByID[previousSelectedID] {
-                previousSelected.clearMatchedStyles()
-                entriesByID[previousSelectedID] = previousSelected
-            }
             selectedEntry = nil
             return
         }
 
-        let entryID = makeID(localID: localID)
-        let entry = entriesByID[entryID] ?? makePlaceholderEntry(localID: localID)
+        let entry = entry(forLocalID: localID) ?? makePlaceholderEntry(localID: localID)
         entry.preview = payload.preview
         entry.path = payload.path
-        entry.selectorPath = payload.selectorPath
+        if let selectorPath = payload.selectorPath {
+            entry.selectorPath = selectorPath
+        }
         entry.styleRevision = payload.styleRevision
         entry.attributes = normalizeAttributes(payload.attributes, backendNodeID: entry.backendNodeID)
-
-        entriesByID[entryID] = entry
         selectedEntry = entry
     }
 
-    public func applySelectorPath(_ payload: DOMSelectorPathPayload) {
-        guard let localID = payload.localID else {
-            return
-        }
-
-        let entryID = makeID(localID: localID)
-        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
+    package func applySelectorPath(_ payload: DOMSelectorPathPayload) {
+        guard
+            let localID = payload.localID,
+            let entry = entry(forLocalID: localID),
+            selectedEntry === entry
+        else {
             return
         }
 
         if entry.selectorPath != payload.selectorPath {
             entry.selectorPath = payload.selectorPath
-            entriesByID[entryID] = entry
         }
     }
 
-    public func beginMatchedStylesLoading(for localID: UInt64) {
-        let entryID = makeID(localID: localID)
-        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
+    package func applySelectorPath(_ selectorPath: String, for entry: DOMEntry) {
+        guard selectedEntry === entry, contains(entry) else {
+            return
+        }
+        if entry.selectorPath != selectorPath {
+            entry.selectorPath = selectorPath
+        }
+    }
+
+    package func beginMatchedStylesLoading(for entry: DOMEntry) {
+        guard selectedEntry === entry, contains(entry) else {
             return
         }
 
@@ -173,12 +142,10 @@ public final class DOMGraphStore {
         entry.matchedStyles = []
         entry.matchedStylesTruncated = false
         entry.blockedStylesheetCount = 0
-        entriesByID[entryID] = entry
     }
 
-    public func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for localID: UInt64) {
-        let entryID = makeID(localID: localID)
-        guard selectedEntry?.id == entryID, let entry = entriesByID[entryID] else {
+    package func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for entry: DOMEntry) {
+        guard selectedEntry === entry, contains(entry) else {
             return
         }
 
@@ -190,27 +157,18 @@ public final class DOMGraphStore {
         entry.matchedStylesTruncated = payload.truncated
         entry.blockedStylesheetCount = payload.blockedStylesheetCount
         entry.isLoadingMatchedStyles = false
-        entriesByID[entryID] = entry
     }
 
-    public func clearMatchedStyles(for localID: UInt64?) {
-        let resolvedID: DOMEntryID?
-        if let localID {
-            resolvedID = makeID(localID: localID)
-        } else {
-            resolvedID = selectedEntry?.id
-        }
-
-        guard let resolvedID, let entry = entriesByID[resolvedID] else {
+    package func clearMatchedStyles(for entry: DOMEntry? = nil) {
+        let resolvedEntry = entry ?? selectedEntry
+        guard let resolvedEntry, contains(resolvedEntry) else {
             return
         }
-
-        entry.clearMatchedStyles()
-        entriesByID[resolvedID] = entry
+        resolvedEntry.clearMatchedStyles()
     }
 
-    public func updateSelectedAttribute(name: String, value: String) {
-        guard let selectedEntryID = selectedEntry?.id, let entry = entriesByID[selectedEntryID] else {
+    package func updateSelectedAttribute(name: String, value: String) {
+        guard let entry = selectedEntry, contains(entry) else {
             return
         }
 
@@ -221,23 +179,65 @@ public final class DOMGraphStore {
                 DOMAttribute(nodeId: entry.backendNodeID, name: name, value: value)
             )
         }
-
-        entriesByID[selectedEntryID] = entry
     }
 
-    public func removeSelectedAttribute(name: String) {
-        guard let selectedEntryID = selectedEntry?.id, let entry = entriesByID[selectedEntryID] else {
+    package func removeSelectedAttribute(name: String) {
+        guard let entry = selectedEntry, contains(entry) else {
             return
         }
-
         entry.attributes.removeAll { $0.name == name }
-        entriesByID[selectedEntryID] = entry
     }
 }
 
-private extension DOMGraphStore {
-    func makeID(localID: UInt64) -> DOMEntryID {
-        DOMEntryID(documentGeneration: documentGeneration, localID: localID)
+private extension DOMDocumentStore {
+    var selectedLocalID: UInt64? {
+        guard let selectedEntry else {
+            return nil
+        }
+        return localID(for: selectedEntry)
+    }
+
+    func replaceContents(
+        selectedLocalID: UInt64?,
+        build: () -> Void
+    ) {
+        entriesByLocalID.removeAll(keepingCapacity: true)
+        localIDsByObjectID.removeAll(keepingCapacity: true)
+        rootEntry = nil
+        selectedEntry = nil
+        errorMessage = nil
+        build()
+        if let selectedLocalID {
+            selectedEntry = entry(forLocalID: selectedLocalID)
+        }
+        reconcileSelectedEntry()
+    }
+
+    private func localID(for entry: DOMEntry) -> UInt64? {
+        localIDsByObjectID[ObjectIdentifier(entry)]
+    }
+
+    func entry(forLocalID localID: UInt64) -> DOMEntry? {
+        entriesByLocalID[localID]
+    }
+
+    func contains(_ entry: DOMEntry) -> Bool {
+        guard let localID = localID(for: entry) else {
+            return false
+        }
+        return entriesByLocalID[localID] === entry
+    }
+
+    private func insert(_ entry: DOMEntry, for localID: UInt64) {
+        entriesByLocalID[localID] = entry
+        localIDsByObjectID[ObjectIdentifier(entry)] = localID
+    }
+
+    func removeEntry(_ entry: DOMEntry) {
+        let objectID = ObjectIdentifier(entry)
+        if let localID = localIDsByObjectID.removeValue(forKey: objectID) {
+            entriesByLocalID.removeValue(forKey: localID)
+        }
     }
 
     func normalizeAttributes(_ attributes: [DOMAttribute], backendNodeID: Int?) -> [DOMAttribute] {
@@ -251,7 +251,6 @@ private extension DOMGraphStore {
     }
 
     func makePlaceholderEntry(localID: UInt64) -> DOMEntry {
-        let entryID = makeID(localID: localID)
         let backendNodeID: Int?
         if localID <= UInt64(Int.max) {
             backendNodeID = Int(localID)
@@ -259,8 +258,7 @@ private extension DOMGraphStore {
             backendNodeID = nil
         }
 
-        return DOMEntry(
-            id: entryID,
+        let entry = DOMEntry(
             backendNodeID: backendNodeID,
             nodeType: 1,
             nodeName: "",
@@ -269,17 +267,17 @@ private extension DOMGraphStore {
             attributes: [],
             childCount: 0
         )
+        insert(entry, for: localID)
+        return entry
     }
 
     @discardableResult
     func buildSubtree(from descriptor: DOMGraphNodeDescriptor, parent: DOMEntry?) -> DOMEntry {
-        let entryID = makeID(localID: descriptor.localID)
-        if let existing = entriesByID[entryID] {
+        if let existing = entry(forLocalID: descriptor.localID) {
             removeSubtree(existing, removeFromParent: true)
         }
 
         let entry = DOMEntry(
-            id: entryID,
             backendNodeID: descriptor.backendNodeID,
             nodeType: descriptor.nodeType,
             nodeName: descriptor.nodeName,
@@ -291,7 +289,7 @@ private extension DOMGraphStore {
             isRendered: descriptor.isRendered
         )
         entry.parent = parent
-        entriesByID[entryID] = entry
+        insert(entry, for: descriptor.localID)
 
         var children: [DOMEntry] = []
         children.reserveCapacity(descriptor.children.count)
@@ -318,16 +316,17 @@ private extension DOMGraphStore {
             return
         }
 
-        let inserted = buildSubtree(from: node, parent: parent)
-        let wasLoadedChild = parent.children.contains { $0.id == inserted.id }
+        let hadLoadedChild = parent.children.contains { localID(for: $0) == node.localID }
         let previousChildCount = max(parent.childCount, parent.children.count)
-        parent.children.removeAll { $0.id == inserted.id }
+        let inserted = buildSubtree(from: node, parent: parent)
+        parent.children.removeAll { localID(for: $0) == node.localID }
 
         let insertionIndex: Int
         if previousLocalID == 0 {
             insertionIndex = 0
-        } else if let previousLocalID, let previousEntry = entry(forLocalID: previousLocalID),
-           let previousIndex = parent.children.firstIndex(where: { $0.id == previousEntry.id }) {
+        } else if let previousLocalID,
+                  let previousEntry = entry(forLocalID: previousLocalID),
+                  let previousIndex = parent.children.firstIndex(where: { $0 === previousEntry }) {
             insertionIndex = previousIndex + 1
         } else {
             insertionIndex = parent.children.count
@@ -335,13 +334,12 @@ private extension DOMGraphStore {
 
         let boundedIndex = min(max(0, insertionIndex), parent.children.count)
         parent.children.insert(inserted, at: boundedIndex)
-        if wasLoadedChild {
+        if hadLoadedChild {
             parent.childCount = max(previousChildCount, parent.children.count)
         } else {
             parent.childCount = max(previousChildCount + 1, parent.children.count)
         }
         relinkChildren(of: parent)
-        entriesByID[parent.id] = parent
     }
 
     func applyChildNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64) {
@@ -349,17 +347,15 @@ private extension DOMGraphStore {
             return
         }
 
-        let nodeID = makeID(localID: nodeLocalID)
-        if let index = parent.children.firstIndex(where: { $0.id == nodeID }) {
+        if let index = parent.children.firstIndex(where: { localID(for: $0) == nodeLocalID }) {
             let removed = parent.children.remove(at: index)
             parent.childCount = max(parent.children.count, parent.childCount - 1)
             relinkChildren(of: parent)
-            entriesByID[parent.id] = parent
             removeSubtree(removed, removeFromParent: false)
             return
         }
 
-        if let entry = entriesByID[nodeID] {
+        if let entry = entry(forLocalID: nodeLocalID) {
             removeSubtree(entry, removeFromParent: true)
         }
     }
@@ -382,7 +378,6 @@ private extension DOMGraphStore {
         }
 
         applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
-        entriesByID[entry.id] = entry
     }
 
     func applyAttributeRemoved(
@@ -397,7 +392,6 @@ private extension DOMGraphStore {
 
         entry.attributes.removeAll { $0.name == name }
         applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
-        entriesByID[entry.id] = entry
     }
 
     func applyCharacterDataModified(
@@ -412,7 +406,6 @@ private extension DOMGraphStore {
 
         entry.nodeValue = value
         applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
-        entriesByID[entry.id] = entry
     }
 
     func applyChildNodeCountUpdated(
@@ -427,11 +420,17 @@ private extension DOMGraphStore {
 
         entry.childCount = max(0, childCount)
         applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
-        entriesByID[entry.id] = entry
     }
 
     func applySetChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor]) {
-        guard let parent = entry(forLocalID: parentLocalID) else {
+        let parent: DOMEntry
+        if let existingParent = entry(forLocalID: parentLocalID) {
+            parent = existingParent
+        } else if rootEntry == nil {
+            let placeholderRoot = makePlaceholderEntry(localID: parentLocalID)
+            rootEntry = placeholderRoot
+            parent = placeholderRoot
+        } else {
             return
         }
 
@@ -443,25 +442,27 @@ private extension DOMGraphStore {
             nextChildren.append(buildSubtree(from: node, parent: parent))
         }
 
-        let retainedIDs = Set(nextChildren.map(\.id))
-        for previous in previousChildren where !retainedIDs.contains(previous.id) {
+        let retainedObjectIDs = Set(nextChildren.map(ObjectIdentifier.init))
+        for previous in previousChildren where !retainedObjectIDs.contains(ObjectIdentifier(previous)) {
             removeSubtree(previous, removeFromParent: false)
         }
 
         parent.children = nextChildren
         parent.childCount = max(parent.childCount, nextChildren.count)
         relinkChildren(of: parent)
-        entriesByID[parent.id] = parent
     }
 
     func applyReplaceSubtree(_ root: DOMGraphNodeDescriptor) {
-        let rootID = makeID(localID: root.localID)
+        if rootEntry == nil {
+            rootEntry = buildSubtree(from: root, parent: nil)
+            return
+        }
 
-        if let existing = entriesByID[rootID] {
+        if let existing = entry(forLocalID: root.localID) {
             let parent = existing.parent
-            let previousIndex = parent?.children.firstIndex(where: { $0.id == existing.id })
+            let previousIndex = parent?.children.firstIndex(where: { $0 === existing })
             let previousParentChildCount = parent.map { max($0.childCount, $0.children.count) }
-            let isReplacingRoot = self.rootID == existing.id
+            let isReplacingRoot = rootEntry === existing
             removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
 
             let replacement = buildSubtree(from: root, parent: parent)
@@ -474,14 +475,12 @@ private extension DOMGraphStore {
                     parent.childCount = max(parent.childCount, parent.children.count)
                 }
                 relinkChildren(of: parent)
-                entriesByID[parent.id] = parent
             } else if isReplacingRoot {
-                self.rootID = replacement.id
+                rootEntry = replacement
             }
             return
         }
 
-        // requestChildNodes may return after the target disappeared; ignore stale subtree updates.
         return
     }
 
@@ -497,7 +496,7 @@ private extension DOMGraphStore {
     func removeSubtree(_ root: DOMEntry, removeFromParent: Bool, decrementParentChildCount: Bool = true) {
         if removeFromParent, let parent = root.parent {
             let previousLoadedChildCount = parent.children.count
-            parent.children.removeAll { $0.id == root.id }
+            parent.children.removeAll { $0 === root }
             let removedLoadedChild = parent.children.count < previousLoadedChildCount
             if decrementParentChildCount, removedLoadedChild {
                 parent.childCount = max(parent.children.count, parent.childCount - 1)
@@ -505,32 +504,31 @@ private extension DOMGraphStore {
                 parent.childCount = max(parent.childCount, parent.children.count)
             }
             relinkChildren(of: parent)
-            entriesByID[parent.id] = parent
         }
 
         for child in root.children {
             removeSubtree(child, removeFromParent: false)
         }
 
-        if selectedEntry?.id == root.id {
+        if selectedEntry === root {
             selectedEntry = nil
         }
-        if self.rootID == root.id {
-            self.rootID = nil
+        if rootEntry === root {
+            rootEntry = nil
         }
 
         root.children = []
         root.parent = nil
         root.previousSibling = nil
         root.nextSibling = nil
-        entriesByID.removeValue(forKey: root.id)
+        removeEntry(root)
     }
 
     func reconcileSelectedEntry() {
         guard let currentSelection = selectedEntry else {
             return
         }
-        guard let resolvedEntry = entriesByID[currentSelection.id] else {
+        guard let localID = localID(for: currentSelection), let resolvedEntry = entriesByLocalID[localID] else {
             selectedEntry = nil
             return
         }

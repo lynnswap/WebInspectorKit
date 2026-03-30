@@ -96,42 +96,27 @@ export interface DOMSnapshot {
 // Protocol Types
 // =============================================================================
 
-/** Pending protocol request entry */
-export interface PendingRequest {
-    resolve: (value: unknown) => void;
-    reject: (reason: unknown) => void;
-    method: string;
-}
-
 /** Protocol state for managing requests and events */
 export interface ProtocolState {
-    lastId: number;
-    pending: Map<number, PendingRequest>;
-    eventHandlers: Map<string, Set<ProtocolEventHandler>>;
     snapshotDepth: number;
     subtreeDepth: number;
-}
-
-/** Protocol event handler function */
-export type ProtocolEventHandler = (
-    params: Record<string, unknown>,
-    method: string,
-    rawMessage: unknown
-) => void;
-
-/** Protocol message from backend */
-export interface ProtocolMessage {
-    id?: number;
-    method?: string;
-    params?: Record<string, unknown>;
-    result?: unknown;
-    error?: unknown;
+    pageEpoch: number;
+    documentScopeID: number;
 }
 
 /** Protocol configuration options */
 export interface ProtocolConfig {
     snapshotDepth?: number;
     subtreeDepth?: number;
+    autoUpdateDebounce?: number;
+    pageEpoch?: number;
+    documentScopeID?: number;
+}
+
+export interface DOMFrontendBootstrapState {
+    config?: ProtocolConfig;
+    preferredDepth?: number;
+    pendingDocumentRequest?: RequestDocumentOptions | null;
 }
 
 // =============================================================================
@@ -280,11 +265,13 @@ export interface WebKitMessageHandler {
 
 /** WebKit message handlers collection */
 export interface WebKitMessageHandlers {
-    webInspectorProtocol?: WebKitMessageHandler;
+    webInspectorDomRequestDocument?: WebKitMessageHandler;
+    webInspectorDomRequestChildren?: WebKitMessageHandler;
+    webInspectorDomHighlight?: WebKitMessageHandler;
+    webInspectorDomHideHighlight?: WebKitMessageHandler;
     webInspectorLog?: WebKitMessageHandler;
     webInspectorReady?: WebKitMessageHandler;
     webInspectorDomSelection?: WebKitMessageHandler;
-    webInspectorDomSelector?: WebKitMessageHandler;
 }
 
 /** WebKit bridge interface */
@@ -299,35 +286,25 @@ export interface WebKitBridge {
 // Public API Types
 // =============================================================================
 
-/** Selection notification payload */
-export interface SelectionPayload {
-    id: number | null;
-    preview: string;
-    attributes: NodeAttribute[];
-    path: string[];
-    styleRevision: number;
-}
-
-/** Selector path response */
-export interface SelectorPathResponse {
-    id: number | null;
-    selectorPath: string;
-}
-
 /** Mutation bundle for applying updates */
 export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
     snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
-    events?: ProtocolMessage[];
+    events?: DOMEventEntry[];
     bundle?: string | MutationBundle;
-    preserveState?: boolean;
+    mode?: RequestDocumentMode;
+    pageEpoch?: number;
+    documentScopeID?: number;
 }
+
+export type RequestDocumentMode = "fresh" | "preserve-ui-state";
 
 /** Request document options */
 export interface RequestDocumentOptions {
     depth?: number;
-    preserveState?: boolean;
+    mode?: RequestDocumentMode;
+    pageEpoch?: number;
 }
 
 // =============================================================================
@@ -354,13 +331,25 @@ export const REFRESH_RETRY_WINDOW = 2000;
 
 /** Public frontend API */
 export interface WebInspectorDOMFrontend {
-    dispatchMessageFromBackend(message: string | ProtocolMessage): void;
+    applyFullSnapshot(
+        snapshot: unknown,
+        mode?: RequestDocumentMode,
+        pageEpoch?: number,
+        documentScopeID?: number
+    ): void;
+    applySubtreePayload(payload: unknown, pageEpoch?: number, documentScopeID?: number): void;
+    completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
+    rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
+    retryQueuedChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
+    resetChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
+    resetDocumentRequestState(pageEpoch?: number, documentScopeID?: number): void;
+    rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
+    completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
     applyMutationBundle(bundle: string | MutationBundle): void;
-    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[]): void;
-    applyMutationBuffer(bufferName: string): boolean;
-    requestDocument(options?: RequestDocumentOptions): Promise<void>;
+    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], pageEpoch?: number): void;
+    applyMutationBuffer(bufferName: string, pageEpoch?: number): boolean;
     setSearchTerm(value: string): void;
-    setPreferredDepth(depth: number): void;
+    setPreferredDepth(depth: number, pageEpoch?: number): void;
     updateConfig(partial: ProtocolConfig): void;
     __installed?: boolean;
 }

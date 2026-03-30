@@ -16,9 +16,7 @@ extension WIDOMModel {
     }
 
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        withFrontendStore { frontendStore in
-            frontendStore.setDOMContextMenuProvider(provider)
-        }
+        frontendStore.setDOMContextMenuProvider(provider)
     }
 
     func copyToSystemPasteboard(_ text: String) {

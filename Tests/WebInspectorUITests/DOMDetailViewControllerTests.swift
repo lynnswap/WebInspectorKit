@@ -27,7 +27,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.selectedEntry?.preview = "<div class=\"after\">"
+        inspector.documentStore.selectedEntry?.preview = "<div class=\"after\">"
 
         let previewUpdated = await waitUntil {
             self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 0)) == "<div class=\"after\">"
@@ -55,7 +55,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.selectedEntry?.selectorPath = "#after"
+        inspector.documentStore.selectedEntry?.selectorPath = "#after"
 
         let selectorUpdated = await waitUntil {
             self.visibleListCellText(in: collectionView, at: IndexPath(item: 0, section: 1)) == "#after"
@@ -84,7 +84,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.session.graphStore.applyMutationBundle(
+        inspector.documentStore.applyMutationBundle(
             .init(
                 events: [
                     .attributeModified(
@@ -124,7 +124,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.session.graphStore.updateSelectedAttribute(name: "class", value: "after")
+        inspector.documentStore.updateSelectedAttribute(name: "class", value: "after")
 
         let valueUpdated = await waitUntil {
             self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "after"
@@ -152,7 +152,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.session.graphStore.updateSelectedAttribute(name: "id", value: "target")
+        inspector.documentStore.updateSelectedAttribute(name: "id", value: "target")
 
         let structureUpdated = await waitUntil {
             collectionView.numberOfItems(inSection: 3) == 2
@@ -170,7 +170,7 @@ struct DOMDetailViewControllerTests {
             attributes: [DOMAttribute(nodeId: 42, name: "class", value: "before")],
             extraTreeChildren: [makeNode(localID: 99)]
         )
-        let originalSelection = inspector.selectedEntry
+        let originalSelection = inspector.documentStore.selectedEntry
         let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
 
@@ -182,7 +182,7 @@ struct DOMDetailViewControllerTests {
         #expect(initialReady)
 
         let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
-        inspector.session.graphStore.applyMutationBundle(
+        inspector.documentStore.applyMutationBundle(
             .init(
                 events: [
                     .setChildNodes(
@@ -197,7 +197,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let replacementTracked = await waitUntil {
-            inspector.selectedEntry !== originalSelection
+            inspector.documentStore.selectedEntry !== originalSelection
                 && collectionView.numberOfItems(inSection: 3) == 1
                 && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "replaced"
                 && viewController.snapshotApplyCountForTesting > initialSnapshotCount
@@ -254,8 +254,8 @@ struct DOMDetailViewControllerTests {
         let controller = WIInspectorController()
         let inspector = controller.dom
 
-        inspector.session.graphStore.applySnapshot(
-            .init(
+        inspector.documentStore.replaceDocument(
+            with: .init(
                 root: makeNode(
                     localID: 1,
                     children: [
@@ -264,7 +264,7 @@ struct DOMDetailViewControllerTests {
                 )
             )
         )
-        inspector.session.graphStore.applySelectionSnapshot(
+        inspector.documentStore.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
                 preview: preview,

@@ -207,7 +207,7 @@ struct ControllerActivationTests {
         let webView = makeTestWebView()
 
         await controller.connect(to: webView)
-        controller.dom.session.graphStore.applySelectionSnapshot(
+        controller.dom.documentStore.applySelectionSnapshot(
             .init(
                 localID: 42,
                 preview: "<div id='selected'>",
@@ -221,8 +221,8 @@ struct ControllerActivationTests {
         controller.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
         await controller.reapplyCurrentHostState()
 
-        #expect(controller.dom.selectedEntry?.id.localID == 42)
-        #expect(controller.dom.selectedEntry?.preview == "<div id='selected'>")
+        #expect(controller.dom.documentStore.selectedEntry?.backendNodeID == 42)
+        #expect(controller.dom.documentStore.selectedEntry?.preview == "<div id='selected'>")
     }
 
     @Test

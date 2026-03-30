@@ -10,6 +10,7 @@ private let domAgentPresenceProbeScript: String = """
 """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
+private let pageEpochApplyRetryDelayNanoseconds: UInt64 = 50_000_000
 private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
 private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKContentWorld) async throws -> Void
 
@@ -48,6 +49,8 @@ public final class DOMPageAgent: NSObject, PageAgent {
     public weak var sink: (any DOMBundleSink)?
     weak var webView: WKWebView?
     private var configuration: DOMConfiguration
+    private var pageEpoch = 0
+    private var documentScopeID: DOMDocumentScopeID = 0
 
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
@@ -56,12 +59,14 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private let handleCache = WIJSHandleCache(capacity: 128)
     private var bridgeMode: WIBridgeMode
     private var bridgeModeLocked = false
+    private var pageEpochApplyGeneration: UInt64 = 0
+    private var pageEpochSyncTask: Task<Void, Never>?
 
     package var currentBridgeMode: WIBridgeMode {
         bridgeMode
     }
 
-    public convenience init(configuration: DOMConfiguration) {
+    package convenience init(configuration: DOMConfiguration) {
         self.init(
             configuration: configuration,
             controllerStateRegistry: .shared,
@@ -121,20 +126,38 @@ extension DOMPageAgent: WKScriptMessageHandler {
         else {
             return
         }
+        let payloadPageEpoch = (payload["pageEpoch"] as? NSNumber)?.intValue
+            ?? (payload["pageEpoch"] as? Int)
+            ?? pageEpoch
+        let payloadDocumentScopeID = (payload["documentScopeID"] as? NSNumber)?.uint64Value
+            ?? (payload["documentScopeID"] as? UInt64)
+            ?? documentScopeID
 
         if let rawJSON = bundle as? String, !rawJSON.isEmpty {
-            sink?.domDidEmit(bundle: DOMBundle(rawJSON: rawJSON))
+            sink?.domDidEmit(
+                bundle: DOMBundle(
+                    rawJSON: rawJSON,
+                    pageEpoch: payloadPageEpoch,
+                    documentScopeID: payloadDocumentScopeID
+                )
+            )
             return
         }
 
-        sink?.domDidEmit(bundle: DOMBundle(objectEnvelope: bundle))
+        sink?.domDidEmit(
+            bundle: DOMBundle(
+                objectEnvelope: bundle,
+                pageEpoch: payloadPageEpoch,
+                documentScopeID: payloadDocumentScopeID
+            )
+        )
     }
 }
 
 // MARK: - Selection / Highlight
 
-public extension DOMPageAgent {
-    func beginSelectionMode() async throws -> SelectionModeResult {
+extension DOMPageAgent {
+    package func beginSelectionMode() async throws -> SelectionModeResult {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
@@ -148,7 +171,7 @@ public extension DOMPageAgent {
         return try JSONDecoder().decode(SelectionModeResult.self, from: data)
     }
 
-    func cancelSelectionMode() async {
+    package func cancelSelectionMode() async {
         guard let webView else {
             return
         }
@@ -158,26 +181,30 @@ public extension DOMPageAgent {
         )
     }
 
-    func highlight(nodeId: Int) async {
+    package func highlight(nodeId: Int) async {
         guard let webView else {
             return
         }
-        if await runHandleCommand(.highlight, nodeId: nodeId, on: webView) {
+        if await runHandleCommand(.highlight, nodeId: nodeId, on: webView, expectedPageEpoch: pageEpoch) {
             return
         }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorDOM.highlightNode(identifier)",
-            arguments: ["identifier": nodeId],
+            "window.webInspectorDOM.highlightNode(identifier, expectedPageEpoch)",
+            arguments: [
+                "identifier": nodeId,
+                "expectedPageEpoch": pageEpoch,
+            ],
             contentWorld: bridgeWorld
         )
     }
 
-    func hideHighlight() async {
+    package func hideHighlight() async {
         guard let webView else {
             return
         }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorDOM && window.webInspectorDOM.clearHighlight();",
+            "window.webInspectorDOM && window.webInspectorDOM.clearHighlight(expectedPageEpoch);",
+            arguments: ["expectedPageEpoch": pageEpoch],
             contentWorld: bridgeWorld
         )
     }
@@ -185,13 +212,13 @@ public extension DOMPageAgent {
 
 // MARK: - DOM Snapshot
 
-public extension DOMPageAgent {
-    func captureSnapshot(maxDepth: Int) async throws -> String {
+extension DOMPageAgent {
+    package func captureSnapshot(maxDepth: Int) async throws -> String {
         let payload = try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: false)
         return try jsonString(from: payload)
     }
 
-    func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
+    package func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
         let payload = try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: false)
         let json = try jsonString(from: payload)
         guard !json.isEmpty else {
@@ -200,7 +227,7 @@ public extension DOMPageAgent {
         return json
     }
 
-    func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
+    package func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
@@ -217,19 +244,19 @@ public extension DOMPageAgent {
         return try JSONDecoder().decode(DOMMatchedStylesPayload.self, from: data)
     }
 
-    func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
+    package func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
         try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
     }
 
-    func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any {
+    package func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any {
         try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
     }
 }
 
 // MARK: - DOM Mutations
 
-public extension DOMPageAgent {
-    func removeNode(nodeId: Int) async {
+extension DOMPageAgent {
+    package func removeNode(nodeId: Int) async {
         guard let webView else {
             return
         }
@@ -249,7 +276,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func removeNodeWithUndo(nodeId: Int) async -> Int? {
+    package func removeNodeWithUndo(nodeId: Int) async -> Int? {
         guard let webView else {
             return nil
         }
@@ -279,7 +306,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func undoRemoveNode(undoToken: Int) async -> Bool {
+    package func undoRemoveNode(undoToken: Int) async -> Bool {
         guard let webView else {
             return false
         }
@@ -303,7 +330,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
+    package func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
         guard let webView else {
             return false
         }
@@ -325,7 +352,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func setAttribute(nodeId: Int, name: String, value: String) async {
+    package func setAttribute(nodeId: Int, name: String, value: String) async {
         guard let webView else {
             return
         }
@@ -347,7 +374,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func removeAttribute(nodeId: Int, name: String) async {
+    package func removeAttribute(nodeId: Int, name: String) async {
         guard let webView else {
             return
         }
@@ -368,7 +395,7 @@ public extension DOMPageAgent {
         }
     }
 
-    func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
+    package func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         try await evaluateStringScript(
             """
             return window.webInspectorDOM?.\(kind.jsFunction)(identifier) ?? ""
@@ -380,8 +407,8 @@ public extension DOMPageAgent {
 
 // MARK: - Auto Snapshot
 
-public extension DOMPageAgent {
-    func setAutoSnapshot(enabled: Bool) async {
+extension DOMPageAgent {
+    package func setAutoSnapshot(enabled: Bool) async {
         guard let webView else {
             return
         }
@@ -405,8 +432,58 @@ public extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
+    func reloadPage() {
+        webView?.reload()
+    }
+
+    func reloadPageAndWaitForPreparedPageEpochSync(
+        _ preparedPageEpoch: Int?,
+        documentScopeID: DOMDocumentScopeID? = nil
+    ) async {
+        guard let webView else {
+            return
+        }
+        let generation = beginPageEpochApplyGeneration()
+        reloadPage()
+        guard let preparedPageEpoch else {
+            return
+        }
+        await waitForReloadToSettle(on: webView, generation: generation)
+        await syncPreparedPageContext(
+            pageEpoch: preparedPageEpoch,
+            documentScopeID: documentScopeID,
+            on: webView,
+            generation: generation
+        )
+    }
+
     func ensureDOMAgentScriptInstalled(on webView: WKWebView) async {
+        await ensureDOMAgentScriptInstalled(on: webView, pageEpoch: nil, documentScopeID: nil)
+    }
+
+    package func ensureDOMAgentScriptInstalled(
+        on webView: WKWebView,
+        pageEpoch: Int?,
+        documentScopeID: DOMDocumentScopeID? = nil
+    ) async {
         await installDOMAgentScriptIfNeeded(on: webView)
+        if pageEpoch != nil || documentScopeID != nil {
+            let generation = beginPageEpochApplyGeneration()
+            let didApply = await applyPreparedPageContext(
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID,
+                on: webView,
+                generation: generation
+            )
+            if didApply == false {
+                schedulePreparedPageContextSync(
+                    pageEpoch: pageEpoch,
+                    documentScopeID: documentScopeID,
+                    on: webView,
+                    generation: generation
+                )
+            }
+        }
     }
 
     func detachPageWebViewAndWaitForCleanup() async {
@@ -428,6 +505,7 @@ extension DOMPageAgent {
     }
 
     func didClearPageWebView() {
+        _ = beginPageEpochApplyGeneration()
         handleCache.clear()
     }
 }
@@ -435,6 +513,136 @@ extension DOMPageAgent {
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func beginPageEpochApplyGeneration() -> UInt64 {
+        pageEpochSyncTask?.cancel()
+        pageEpochSyncTask = nil
+        pageEpochApplyGeneration += 1
+        return pageEpochApplyGeneration
+    }
+
+    func schedulePreparedPageContextSync(
+        pageEpoch: Int?,
+        documentScopeID: DOMDocumentScopeID?,
+        on webView: WKWebView,
+        generation: UInt64
+    ) {
+        pageEpochSyncTask = Task.immediateIfAvailable { [weak self, weak webView] in
+            guard let self, let webView else {
+                return
+            }
+            await self.syncPreparedPageContext(
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID,
+                on: webView,
+                generation: generation
+            )
+        }
+    }
+
+    func waitForReloadToSettle(on webView: WKWebView, generation: UInt64) async {
+        var sawLoading = webView.isLoading
+        var idlePollCount = sawLoading ? 0 : 1
+        while self.webView === webView, self.pageEpochApplyGeneration == generation {
+            if webView.isLoading {
+                sawLoading = true
+                idlePollCount = 0
+            } else if sawLoading || idlePollCount >= 2 {
+                return
+            } else {
+                idlePollCount += 1
+            }
+            try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+        }
+    }
+
+    func syncPreparedPageContext(
+        pageEpoch: Int?,
+        documentScopeID: DOMDocumentScopeID?,
+        on webView: WKWebView,
+        generation: UInt64
+    ) async {
+        while Task.isCancelled == false {
+            let didApply = await self.applyPreparedPageContext(
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID,
+                on: webView,
+                generation: generation
+            )
+            if didApply {
+                return
+            }
+            try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+        }
+    }
+
+    @discardableResult
+    func applyPreparedPageContext(
+        pageEpoch epoch: Int?,
+        documentScopeID: DOMDocumentScopeID?,
+        on webView: WKWebView,
+        generation: UInt64
+    ) async -> Bool {
+        guard self.webView === webView, self.pageEpochApplyGeneration == generation else {
+            return true
+        }
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                return (function(epoch, documentScopeID) {
+                    if (!window.webInspectorDOM) {
+                        return null;
+                    }
+                    if (typeof epoch === "number" && typeof window.webInspectorDOM.setPageEpoch === "function") {
+                        window.webInspectorDOM.setPageEpoch(epoch);
+                    }
+                    if (typeof documentScopeID === "number" && typeof window.webInspectorDOM.setDocumentScopeID === "function") {
+                        window.webInspectorDOM.setDocumentScopeID(documentScopeID);
+                    }
+                    if (typeof window.webInspectorDOM.debugStatus !== "function") {
+                        return null;
+                    }
+                    const status = window.webInspectorDOM.debugStatus();
+                    if (!status || typeof status !== "object") {
+                        return null;
+                    }
+                    return {
+                        pageEpoch: typeof status.pageEpoch === "number" ? status.pageEpoch : null,
+                        documentScopeID: typeof status.documentScopeID === "number" ? status.documentScopeID : null
+                    };
+                })(epoch, documentScopeID);
+                """,
+                arguments: [
+                    "epoch": epoch as Any,
+                    "documentScopeID": documentScopeID as Any,
+                ],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
+            let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
+            let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
+            if appliedEpoch != nil || appliedDocumentScopeID != nil {
+                guard self.webView === webView, self.pageEpochApplyGeneration == generation else {
+                    return true
+                }
+                if let appliedEpoch, self.pageEpoch != appliedEpoch {
+                    handleCache.clear()
+                    self.pageEpoch = appliedEpoch
+                }
+                if let appliedDocumentScopeID, self.documentScopeID != appliedDocumentScopeID {
+                    handleCache.clear()
+                    self.documentScopeID = appliedDocumentScopeID
+                }
+                pageEpochSyncTask = nil
+                return true
+            }
+            return false
+        } catch {
+            domLogger.debug("set page context skipped: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
     func performDetachCleanup(on webView: WKWebView) async {
         do {
             try await webView.callAsyncVoidJavaScript(
@@ -694,7 +902,12 @@ private extension DOMPageAgent {
         return unwrapOptionalPayload(child.value)
     }
 
-    private func runHandleCommand(_ command: HandleCommand, nodeId: Int, on webView: WKWebView) async -> Bool {
+    private func runHandleCommand(
+        _ command: HandleCommand,
+        nodeId: Int,
+        on webView: WKWebView,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
         guard bridgeMode != .legacyJSON else {
             return false
         }
@@ -703,7 +916,11 @@ private extension DOMPageAgent {
         }
 
         do {
-            let invocation = makeHandleInvocation(command: command, handle: handle)
+            let invocation = makeHandleInvocation(
+                command: command,
+                handle: handle,
+                expectedPageEpoch: expectedPageEpoch
+            )
             let rawResult = try await webView.callAsyncJavaScript(
                 invocation.script,
                 arguments: invocation.arguments,
@@ -775,11 +992,18 @@ private extension DOMPageAgent {
         }
     }
 
-    private func makeHandleInvocation(command: HandleCommand, handle: AnyObject) -> (script: String, arguments: [String: Any]) {
+    private func makeHandleInvocation(
+        command: HandleCommand,
+        handle: AnyObject,
+        expectedPageEpoch: Int?
+    ) -> (script: String, arguments: [String: Any]) {
         var arguments: [String: Any] = [
             "handle": handle,
             "unavailable": unavailableBridgeSentinel,
         ]
+        if let expectedPageEpoch {
+            arguments["expectedPageEpoch"] = expectedPageEpoch
+        }
 
         let script: String
         switch command {
@@ -788,7 +1012,7 @@ private extension DOMPageAgent {
             if (!window.webInspectorDOM || typeof window.webInspectorDOM.highlightNodeHandle !== "function") {
                 return unavailable;
             }
-            return window.webInspectorDOM.highlightNodeHandle(handle);
+            return window.webInspectorDOM.highlightNodeHandle(handle, expectedPageEpoch);
             """
 
         case .removeNode:

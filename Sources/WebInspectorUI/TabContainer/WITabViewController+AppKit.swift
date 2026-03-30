@@ -17,6 +17,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     private var requestedPageWebView: WKWebView?
     private let synthesizedAppKitDOMTab = WITab.dom()
     private var needsHostStateSyncAfterSwap = false
+    private var pendingInspectorController: WIInspectorController?
 
     private var networkQueryModel: WINetworkQueryModel
     private weak var appKitToolbar: NSToolbar?
@@ -91,6 +92,10 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     public override func viewWillAppear() {
         super.viewWillAppear()
+    }
+
+    public override func viewDidAppear() {
+        super.viewDidAppear()
         syncRegisteredHostState()
         installToolbarIfNeeded()
         startObservingToolbarStateIfNeeded()
@@ -112,53 +117,29 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
     }
 
     public func setInspectorController(_ inspectorController: WIInspectorController) {
-        guard self.inspectorController !== inspectorController || controllerSwapTask != nil else {
+        if self.inspectorController === inspectorController {
+            guard pendingInspectorController !== inspectorController else {
+                return
+            }
+            guard pendingInspectorController == nil, controllerSwapTask == nil else {
+                pendingInspectorController = inspectorController
+                return
+            }
             syncRegisteredHostState()
             return
         }
-
-        invalidatePresentationStateForControllerSwap()
-
-        let previousSwapTask = controllerSwapTask
-        controllerSwapTask = Task { [weak self] in
-            await previousSwapTask?.value
-            guard let self else {
-                return
-            }
-            guard self.inspectorController !== inspectorController else {
-                self.controllerSwapTask = nil
-                self.replayDeferredHostStateSyncAfterSwapIfNeeded()
-                return
-            }
-
-            let previousController = self.inspectorController
-            let previousHostID = self.hostID
-            let preferredRole = previousController.preferredRole(for: previousHostID)
-
-            await previousController.waitForRuntimeApplyForTesting()
-            let currentSelectedTab = previousController.selectedTab
-            previousController.unregisterHost(previousHostID)
-            previousController.finalizeForControllerSwap()
-            await previousController.waitForRuntimeApplyForTesting()
-
-            self.inspectorController = inspectorController
-            self.hostID = inspectorController.registerHost(preferredRole: preferredRole)
-            self.networkQueryModel = WINetworkQueryModel(inspector: inspectorController.network)
-            inspectorController.setTabsFromUI(self.requestedTabs)
-            if let currentSelectedTab {
-                _ = inspectorController.projectSelectedTabFromUI(currentSelectedTab)
-            }
-            self.syncRegisteredHostState(allowDuringSwap: true)
-
-            self.invalidatePresentationStateForControllerSwap()
-            if self.isViewLoaded {
-                self.bindSessionTabs()
-                self.startObservingToolbarStateIfNeeded()
-                self.render()
-            }
-            self.controllerSwapTask = nil
-            self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+        guard pendingInspectorController !== inspectorController else {
+            return
         }
+        invalidatePresentationStateForControllerSwap()
+        pendingInspectorController = inspectorController
+        startControllerSwapIfNeeded()
+    }
+
+    private func takePendingInspectorController() -> WIInspectorController? {
+        let pending = pendingInspectorController
+        pendingInspectorController = nil
+        return pending
     }
 
     private func invalidatePresentationStateForControllerSwap() {
@@ -221,6 +202,76 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
             return
         }
         syncRegisteredHostState()
+    }
+
+    private func restoreCurrentControllerPresentationAfterNoOpSwapIfNeeded() {
+        guard isViewLoaded else {
+            return
+        }
+        bindSessionTabs()
+        startObservingToolbarStateIfNeeded()
+        render()
+    }
+
+    private func startControllerSwapIfNeeded() {
+        guard controllerSwapTask == nil else {
+            return
+        }
+        controllerSwapTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.controllerSwapTask = nil
+                let shouldRestartSwap = self.pendingInspectorController != nil
+                if shouldRestartSwap {
+                    self.startControllerSwapIfNeeded()
+                } else {
+                    self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+                }
+            }
+
+            while let requestedInspectorController = self.takePendingInspectorController() {
+                guard self.inspectorController !== requestedInspectorController else {
+                    self.syncRegisteredHostState(allowDuringSwap: true)
+                    self.restoreCurrentControllerPresentationAfterNoOpSwapIfNeeded()
+                    continue
+                }
+
+                let previousController = self.inspectorController
+                let previousHostID = self.hostID
+                let preferredRole = previousController.preferredRole(for: previousHostID)
+                await previousController.waitForRuntimeApplyForTesting()
+                let currentSelectedTab = previousController.selectedTab
+                if let pendingInspectorController,
+                   pendingInspectorController !== requestedInspectorController {
+                    continue
+                }
+
+                previousController.unregisterHost(previousHostID)
+                previousController.finalizeForControllerSwap()
+                await previousController.waitForRuntimeApplyForTesting()
+                guard Task.isCancelled == false else {
+                    return
+                }
+
+                self.inspectorController = requestedInspectorController
+                self.hostID = requestedInspectorController.registerHost(preferredRole: preferredRole)
+                self.networkQueryModel = WINetworkQueryModel(inspector: requestedInspectorController.network)
+                requestedInspectorController.setTabsFromUI(self.requestedTabs)
+                if let currentSelectedTab {
+                    _ = requestedInspectorController.projectSelectedTabFromUI(currentSelectedTab)
+                }
+                self.syncRegisteredHostState(allowDuringSwap: true)
+
+                self.invalidatePresentationStateForControllerSwap()
+                if self.isViewLoaded {
+                    self.bindSessionTabs()
+                    self.startObservingToolbarStateIfNeeded()
+                    self.render()
+                }
+            }
+        }
     }
 
     private func bindSessionTabs() {
@@ -708,9 +759,7 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
 
     @objc
     private func handleDOMReloadToolbarAction(_ sender: Any?) {
-        Task {
-            await inspectorController.dom.reloadInspector()
-        }
+        inspectorController.dom.requestReloadDocument()
     }
 
     @objc
@@ -931,7 +980,9 @@ import SwiftUI
 
 extension WITabViewController {
     func waitForRuntimeStateSyncForTesting() async {
-        await controllerSwapTask?.value
+        while let controllerSwapTask {
+            await controllerSwapTask.value
+        }
         await inspectorController.waitForRuntimeApplyForTesting()
     }
 }

@@ -11,6 +11,7 @@ public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMModel
     private var contextMenuNodeID: Int?
     private var observationHandles: Set<ObservationHandle> = []
+    private var documentStoreObservationHandles: Set<ObservationHandle> = []
 
     private let errorLabel = NSTextField(labelWithString: "")
 
@@ -60,15 +61,25 @@ public final class WIDOMTreeViewController: NSViewController {
         ])
 
         observeState()
-        updateErrorLabel(errorMessage: inspector.errorMessage)
+        updateErrorLabel(errorMessage: inspector.documentStore.errorMessage)
     }
 
     private func observeState() {
         inspector.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] newErrorMessage in
-            self?.updateErrorLabel(errorMessage: newErrorMessage)
+            \.documentStore
+        ) { [weak self] documentStore in
+            guard let self else {
+                return
+            }
+            self.documentStoreObservationHandles.removeAll()
+            documentStore.observe(
+                \.errorMessage,
+                options: [.removeDuplicates]
+            ) { [weak self] newErrorMessage in
+                self?.updateErrorLabel(errorMessage: newErrorMessage)
+            }
+            .store(in: &self.documentStoreObservationHandles)
+            self.updateErrorLabel(errorMessage: documentStore.errorMessage)
         }
         .store(in: &observationHandles)
     }
@@ -145,11 +156,7 @@ public final class WIDOMTreeViewController: NSViewController {
         guard let nodeID else {
             return
         }
-        let inspector = inspector
-        let undoManager = undoManager
-        Task.immediateIfAvailable {
-            await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
-        }
+        inspector.requestDeleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {
@@ -164,7 +171,7 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         Task {
             do {
-                let text = try await inspector.session.selectionCopyText(nodeId: nodeID, kind: kind)
+                let text = try await inspector.copyNode(nodeId: nodeID, kind: kind)
                 guard !text.isEmpty else {
                     return
                 }

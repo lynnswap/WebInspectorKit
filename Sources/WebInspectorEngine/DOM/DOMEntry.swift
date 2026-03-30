@@ -1,29 +1,22 @@
 import Foundation
 import Observation
 
-public struct DOMEntryID: Hashable, Codable, Sendable {
-    public var documentGeneration: UInt64
-    public var localID: UInt64
-
-    public init(documentGeneration: UInt64, localID: UInt64) {
-        self.documentGeneration = documentGeneration
-        self.localID = localID
-    }
-}
-
 public struct DOMAttribute: Hashable, Identifiable, Sendable {
     public var id: String {
-        if let nodeId {
-            return "\(nodeId)#\(name)"
-        }
-        return "nil#\(name)"
+        name
     }
 
-    public var nodeId: Int?
+    package var nodeId: Int?
     public var name: String
     public var value: String
 
-    public init(nodeId: Int? = nil, name: String, value: String) {
+    public init(name: String, value: String) {
+        self.nodeId = nil
+        self.name = name
+        self.value = value
+    }
+
+    package init(nodeId: Int? = nil, name: String, value: String) {
         self.nodeId = nodeId
         self.name = name
         self.value = value
@@ -32,9 +25,8 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
 
 @MainActor
 @Observable
-public final class DOMEntry: Identifiable, Equatable, Hashable {
-    public nonisolated let id: DOMEntryID
-    public var backendNodeID: Int?
+public final class DOMEntry: Equatable, Hashable {
+    package var backendNodeID: Int?
     public var nodeType: Int
     public var nodeName: String
     public var localName: String
@@ -58,28 +50,7 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
     public var matchedStylesTruncated: Bool
     public var blockedStylesheetCount: Int
 
-    public var parentID: DOMEntryID? {
-        parent?.id
-    }
-
-    public var previousSiblingID: DOMEntryID? {
-        previousSibling?.id
-    }
-
-    public var nextSiblingID: DOMEntryID? {
-        nextSibling?.id
-    }
-
-    public var firstChildID: DOMEntryID? {
-        children.first?.id
-    }
-
-    public var lastChildID: DOMEntryID? {
-        children.last?.id
-    }
-
-    public init(
-        id: DOMEntryID,
+    package init(
         backendNodeID: Int? = nil,
         nodeType: Int,
         nodeName: String,
@@ -99,7 +70,6 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
         matchedStylesTruncated: Bool = false,
         blockedStylesheetCount: Int = 0
     ) {
-        self.id = id
         self.backendNodeID = backendNodeID
         self.nodeType = nodeType
         self.nodeName = nodeName
@@ -121,11 +91,11 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
     }
 
     public nonisolated static func == (lhs: DOMEntry, rhs: DOMEntry) -> Bool {
-        lhs.id == rhs.id
+        lhs === rhs
     }
 
     public nonisolated func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
+        hasher.combine(ObjectIdentifier(self))
     }
 
     func clearMatchedStyles() {
@@ -136,20 +106,20 @@ public final class DOMEntry: Identifiable, Equatable, Hashable {
     }
 }
 
-public struct DOMGraphNodeDescriptor: Sendable {
-    public var localID: UInt64
-    public var backendNodeID: Int?
-    public var nodeType: Int
-    public var nodeName: String
-    public var localName: String
-    public var nodeValue: String
-    public var attributes: [DOMAttribute]
-    public var childCount: Int
-    public var layoutFlags: [String]
-    public var isRendered: Bool
-    public var children: [DOMGraphNodeDescriptor]
+package struct DOMGraphNodeDescriptor: Sendable {
+    package var localID: UInt64
+    package var backendNodeID: Int?
+    package var nodeType: Int
+    package var nodeName: String
+    package var localName: String
+    package var nodeValue: String
+    package var attributes: [DOMAttribute]
+    package var childCount: Int
+    package var layoutFlags: [String]
+    package var isRendered: Bool
+    package var children: [DOMGraphNodeDescriptor]
 
-    public init(
+    package init(
         localID: UInt64,
         backendNodeID: Int?,
         nodeType: Int,
@@ -176,30 +146,30 @@ public struct DOMGraphNodeDescriptor: Sendable {
     }
 }
 
-public struct DOMGraphSnapshot: Sendable {
-    public var root: DOMGraphNodeDescriptor
-    public var selectedLocalID: UInt64?
+package struct DOMGraphSnapshot: Sendable {
+    package var root: DOMGraphNodeDescriptor
+    package var selectedLocalID: UInt64?
 
-    public init(root: DOMGraphNodeDescriptor, selectedLocalID: UInt64? = nil) {
+    package init(root: DOMGraphNodeDescriptor, selectedLocalID: UInt64? = nil) {
         self.root = root
         self.selectedLocalID = selectedLocalID
     }
 }
 
-public struct DOMSelectionSnapshotPayload: Sendable {
-    public var localID: UInt64?
-    public var preview: String
-    public var attributes: [DOMAttribute]
-    public var path: [String]
-    public var selectorPath: String
-    public var styleRevision: Int
+package struct DOMSelectionSnapshotPayload: Sendable {
+    package var localID: UInt64?
+    package var preview: String
+    package var attributes: [DOMAttribute]
+    package var path: [String]
+    package var selectorPath: String?
+    package var styleRevision: Int
 
-    public init(
+    package init(
         localID: UInt64?,
         preview: String,
         attributes: [DOMAttribute],
         path: [String],
-        selectorPath: String,
+        selectorPath: String?,
         styleRevision: Int
     ) {
         self.localID = localID
@@ -211,25 +181,25 @@ public struct DOMSelectionSnapshotPayload: Sendable {
     }
 }
 
-public struct DOMSelectorPathPayload: Sendable {
-    public var localID: UInt64?
-    public var selectorPath: String
+package struct DOMSelectorPathPayload: Sendable {
+    package var localID: UInt64?
+    package var selectorPath: String
 
-    public init(localID: UInt64?, selectorPath: String) {
+    package init(localID: UInt64?, selectorPath: String) {
         self.localID = localID
         self.selectorPath = selectorPath
     }
 }
 
-public struct DOMGraphMutationBundle: Sendable {
-    public var events: [DOMGraphMutationEvent]
+package struct DOMGraphMutationBundle: Sendable {
+    package var events: [DOMGraphMutationEvent]
 
-    public init(events: [DOMGraphMutationEvent]) {
+    package init(events: [DOMGraphMutationEvent]) {
         self.events = events
     }
 }
 
-public enum DOMGraphMutationEvent: Sendable {
+package enum DOMGraphMutationEvent: Sendable {
     case childNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node: DOMGraphNodeDescriptor)
     case childNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
     case attributeModified(nodeLocalID: UInt64, name: String, value: String, layoutFlags: [String]?, isRendered: Bool?)

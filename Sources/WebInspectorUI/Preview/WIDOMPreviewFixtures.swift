@@ -20,7 +20,7 @@ enum WIDOMPreviewFixtures {
     }
 
     static func applySampleSelection(to inspector: WIDOMModel, mode: Mode) {
-        let graphStore = inspector.session.graphStore
+        let graphStore = inspector.documentStore
         graphStore.applySelectionSnapshot(nil)
 
         switch mode {
@@ -54,10 +54,12 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:120"
                 )
             ]
-            graphStore.applyMatchedStyles(
-                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                for: localID
-            )
+            if let selectedEntry = graphStore.selectedEntry {
+                graphStore.applyMatchedStyles(
+                    .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
+                    for: selectedEntry
+                )
+            }
         case .selectedEditableAttributes:
             let localID: UInt64 = 101
             let attributes = [
@@ -101,10 +103,12 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:188"
                 )
             ]
-            graphStore.applyMatchedStyles(
-                .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                for: localID
-            )
+            if let selectedEntry = graphStore.selectedEntry {
+                graphStore.applyMatchedStyles(
+                    .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
+                    for: selectedEntry
+                )
+            }
         }
     }
 
@@ -129,7 +133,7 @@ enum WIDOMPreviewFixtures {
         else {
             return
         }
-        inspector.enqueueMutationBundle(bundle, preserveState: true)
+        inspector.enqueueMutationBundle(bundle, preservingInspectorState: true)
     }
 
     private static var pageLoaderByInspector: [ObjectIdentifier: WIDOMPreviewPageLoader] = [:]
@@ -252,7 +256,7 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
             guard let inspector else {
                 return
             }
-            await inspector.reloadInspector(preserveState: true)
+            await inspector.reloadDocumentPreservingInspectorState()
         }
     }
 

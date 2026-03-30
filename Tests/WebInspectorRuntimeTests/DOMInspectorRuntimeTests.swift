@@ -6,6 +6,7 @@ import Testing
 
 actor BootstrapHarness {
     private var started = false
+    private var resumed = false
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var resumeContinuation: CheckedContinuation<Void, Never>?
 
@@ -22,12 +23,23 @@ actor BootstrapHarness {
         started = true
         startContinuation?.resume()
         startContinuation = nil
+        if resumed {
+            return
+        }
         await withCheckedContinuation { continuation in
+            if resumed {
+                continuation.resume()
+                return
+            }
             resumeContinuation = continuation
         }
     }
 
     func resume() {
+        guard !resumed else {
+            return
+        }
+        resumed = true
         resumeContinuation?.resume()
         resumeContinuation = nil
     }
@@ -122,7 +134,7 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
-    func payloadNormalizerResetsFallbackLocalIDBeforeProtocolGetDocumentNormalization() {
+    func payloadNormalizerResetsFallbackLocalIDBeforeFreshDocumentNormalization() {
         let normalizer = DOMPayloadNormalizer()
         let snapshotPayload: [String: Any] = [
             "version": 1,
@@ -140,12 +152,12 @@ struct DOMInspectorRuntimeTests {
                 "root": anonymousNodePayload(),
             ],
         ]
-        guard case let .snapshot(snapshot, resetDocument)? = normalizer.normalizeProtocolResponse(
+        guard case let .snapshot(snapshot, resetDocument)? = normalizer.normalizeBackendResponse(
             method: "DOM.getDocument",
             responseObject: responseObject,
             resetDocument: true
         ) else {
-            Issue.record("Failed to normalize protocol DOM.getDocument response")
+            Issue.record("Failed to normalize backend DOM.getDocument response")
             return
         }
         guard let firstID else {
@@ -305,7 +317,7 @@ struct DOMInspectorRuntimeTests {
                     "selectedNodeId": 321,
                 ],
             ],
-            "preserveState": true,
+            "mode": "preserve-ui-state",
         ]]
 
         let jsonSafePayloads = try #require(DOMMutationPipeline.makeBufferTransportPayload(payloads))
@@ -332,7 +344,7 @@ struct DOMInspectorRuntimeTests {
                     "fallback": NSObject(),
                 ],
             ],
-            "preserveState": true,
+            "mode": "preserve-ui-state",
         ]]
 
         #expect(DOMMutationPipeline.makeBufferTransportPayload(payloads) == nil)
@@ -362,7 +374,7 @@ struct DOMInspectorRuntimeTests {
                     "selectedNodeId": 888,
                 ],
             ],
-            "preserveState": true,
+            "mode": "preserve-ui-state",
         ]]
         let normalizer = DOMPayloadNormalizer()
 
@@ -379,7 +391,7 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
-    func payloadNormalizerParsesStringResultForRequestChildNodesResponse() {
+    func payloadNormalizerParsesStringResultForChildNodeResponse() {
         let normalizer = DOMPayloadNormalizer()
         let resultJSON = """
         {
@@ -396,12 +408,12 @@ struct DOMInspectorRuntimeTests {
             "result": resultJSON,
         ]
 
-        guard case let .replaceSubtree(node) = normalizer.normalizeProtocolResponse(
+        guard case let .replaceSubtree(node) = normalizer.normalizeBackendResponse(
             method: "DOM.requestChildNodes",
             responseObject: responseObject,
             resetDocument: false
         ) else {
-            Issue.record("Failed to normalize string result for DOM.requestChildNodes")
+            Issue.record("Failed to normalize string result for backend child-node response")
             return
         }
 
@@ -459,7 +471,7 @@ struct DOMInspectorRuntimeTests {
     func bootstrapWorkQueuedBeforeReadyReplaysWhenFrontendBecomesReady() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         var events: [ReconcileEvent] = []
-        var documentRequests: [(depth: Int, mode: String)] = []
+        var documentRequests: [(depth: Int, mode: DOMDocumentReloadMode)] = []
 
         store.testConfigurationApplyOverride = { configuration in
             events.append(.configuration(summary(for: configuration)))
@@ -479,7 +491,7 @@ struct DOMInspectorRuntimeTests {
 
         await store.updateConfiguration(configuration)
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: "fresh")
+        await store.requestDocument(depth: 9, mode: .fresh)
 
         #expect(events.isEmpty)
         #expect(documentRequests.isEmpty)
@@ -495,7 +507,7 @@ struct DOMInspectorRuntimeTests {
         )
         #expect(documentRequests.count == 1)
         #expect(documentRequests.first?.depth == 9)
-        #expect(documentRequests.first?.mode == "fresh")
+        #expect(documentRequests.first?.mode == .fresh)
     }
 
     @Test
@@ -534,9 +546,79 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func rejectedDocumentRequestDuringTransitionRejectsFrontendRequestWithoutDroppingPendingReload() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        var dispatchedKinds: [String] = []
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if let kind = body["kind"] as? String {
+                dispatchedKinds.append(kind)
+            }
+            return true
+        }
+
+        let transitionTask = Task {
+            await store.performPageTransition(resumeBootstrap: false) { _ in
+                await harness.blockUntilResumed()
+            }
+        }
+
+        await harness.waitUntilStarted()
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomRequestDocument",
+            body: ["pageEpoch": store.currentPageEpoch, "depth": 4, "mode": "fresh"]
+        )
+
+        let didReject = await waitForCondition {
+            dispatchedKinds.contains("rejectDocumentRequest")
+        }
+        #expect(didReject == true)
+
+        await harness.resume()
+        await transitionTask.value
+    }
+
+    @Test
+    func rejectedChildNodeRequestDuringTransitionRejectsFrontendRequestWithoutCompletingQueue() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        var completionPayloads: [[String: Any]] = []
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if body["kind"] as? String == "rejectChildNodeRequest" {
+                completionPayloads.append(body)
+            }
+            return true
+        }
+
+        let transitionTask = Task {
+            await store.performPageTransition(resumeBootstrap: false) { _ in
+                await harness.blockUntilResumed()
+            }
+        }
+
+        await harness.waitUntilStarted()
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomRequestChildren",
+            body: ["pageEpoch": store.currentPageEpoch, "nodeId": 11, "depth": 2]
+        )
+
+        let didReject = await waitForCondition {
+            completionPayloads.contains {
+                ($0["nodeId"] as? Int) == 11
+            }
+        }
+        #expect(didReject == true)
+
+        await harness.resume()
+        await transitionTask.value
+    }
+
+    @Test
     func pageTransitionQueuesBootstrapWorkUntilOperationCompletes() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
-        var documentRequests: [(depth: Int, mode: String)] = []
+        var documentRequests: [(depth: Int, mode: DOMDocumentReloadMode)] = []
         store.testSetReady(true)
         store.testConfigurationApplyOverride = { _ in }
         store.testPreferredDepthApplyOverride = { _ in }
@@ -545,14 +627,14 @@ struct DOMInspectorRuntimeTests {
         }
 
         await store.performPageTransition { nextPageEpoch in
-            await store.requestDocument(depth: 9, mode: "preserve-ui-state", expectedPageEpoch: nextPageEpoch)
+            await store.requestDocument(depth: 9, mode: .preserveUIState, expectedPageEpoch: nextPageEpoch)
             #expect(documentRequests.isEmpty)
         }
         await store.testWaitForBootstrapForTesting()
 
         #expect(documentRequests.count == 1)
         #expect(documentRequests.first?.depth == 9)
-        #expect(documentRequests.first?.mode == "preserve-ui-state")
+        #expect(documentRequests.first?.mode == .preserveUIState)
     }
 
     @Test
@@ -560,7 +642,7 @@ struct DOMInspectorRuntimeTests {
         let store = makeStore(autoUpdateDebounce: 0.4)
 
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: "fresh")
+        await store.requestDocument(depth: 9, mode: .fresh)
 
         let payload = store.currentBootstrapPayload
         #expect(payload["preferredDepth"] as? Int == 9)
@@ -590,12 +672,242 @@ struct DOMInspectorRuntimeTests {
         }
 
         await harness.waitUntilStarted()
-        #expect(store.acceptsFrontendMessage(pageEpoch: store.currentPageEpoch) == false)
-        #expect(store.acceptsProtocolMessage(pageEpoch: store.currentPageEpoch) == true)
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == false
+        )
 
         await harness.resume()
         await bootstrapTask.value
         await store.testWaitForBootstrapForTesting()
+    }
+
+    @Test
+    func domBundlesReplayAfterBootstrapPhaseCompletes() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+
+        store.currentDocumentStore.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
+        store.testSetReady(true)
+        store.testConfigurationApplyOverride = { _ in
+            await harness.blockUntilResumed()
+        }
+
+        let bootstrapTask = Task {
+            await store.updateConfiguration(
+                .init(snapshotDepth: 8, subtreeDepth: 6, autoUpdateDebounce: 0.4)
+            )
+        }
+
+        await harness.waitUntilStarted()
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.childNodeInserted",
+                            "params": [
+                                "parentNodeId": 1,
+                                "previousNodeId": 0,
+                                "node": [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "SPAN",
+                                    "localName": "span",
+                                    "attributes": [],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+
+        #expect(store.currentDocumentStore.rootEntry?.children.first == nil)
+
+        await harness.resume()
+        await bootstrapTask.value
+        await store.testWaitForBootstrapForTesting()
+
+        #expect(store.currentDocumentStore.rootEntry?.children.first?.backendNodeID == 2)
+    }
+
+    @Test
+    func domBundlesQueuedDuringDocumentBootstrapApplyAfterSnapshotReplacement() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+
+        store.currentDocumentStore.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [.init(nodeId: 1, name: "class", value: "before")],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
+        store.testSetReady(true)
+        store.testConfigurationApplyOverride = { _ in }
+        store.testDocumentRequestApplyOverride = { _, _ in
+            await harness.blockUntilResumed()
+            store.currentDocumentStore.replaceDocument(
+                with: .init(
+                    root: DOMGraphNodeDescriptor(
+                        localID: 1,
+                        backendNodeID: 1,
+                        nodeType: 1,
+                        nodeName: "DIV",
+                        localName: "div",
+                        nodeValue: "",
+                        attributes: [.init(nodeId: 1, name: "class", value: "snapshot")],
+                        childCount: 0,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: []
+                    )
+                )
+            )
+        }
+
+        let requestTask = Task {
+            await store.requestDocument(depth: 4, mode: .preserveUIState)
+        }
+
+        await harness.waitUntilStarted()
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.attributeModified",
+                            "params": [
+                                "nodeId": 1,
+                                "name": "class",
+                                "value": "mutation",
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+
+        #expect(store.currentDocumentStore.rootEntry?.attributes.first?.value == "before")
+
+        await harness.resume()
+        await requestTask.value
+        await store.testWaitForBootstrapForTesting()
+
+        #expect(store.currentDocumentStore.rootEntry?.attributes.first?.value == "mutation")
+    }
+
+    @Test
+    func deferredBootstrapReplayContinuesAfterDocumentUpdatedBoundary() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+
+        store.currentDocumentStore.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [.init(nodeId: 1, name: "class", value: "before")],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
+        store.testSetReady(true)
+        store.testConfigurationApplyOverride = { _ in
+            await harness.blockUntilResumed()
+        }
+
+        let bootstrapTask = Task {
+            await store.updateConfiguration(
+                .init(snapshotDepth: 8, subtreeDepth: 6, autoUpdateDebounce: 0.4)
+            )
+        }
+
+        await harness.waitUntilStarted()
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.documentUpdated",
+                            "params": [:],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 7,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": ["class", "after"],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+
+        await harness.resume()
+        await bootstrapTask.value
+        await store.testWaitForBootstrapForTesting()
+
+        #expect(store.currentDocumentStore.rootEntry?.backendNodeID == 7)
+        #expect(store.currentDocumentStore.rootEntry?.attributes.first?.value == "after")
     }
 
     @Test
@@ -622,8 +934,111 @@ struct DOMInspectorRuntimeTests {
         )
 
         #expect(store.pendingMutationBundleCount == 1)
-        #expect(store.currentDocumentStore.rootID?.localID == 1)
+        #expect(store.currentDocumentStore.rootEntry?.backendNodeID == 1)
         #expect(store.currentDocumentStore.selectedEntry == nil)
+    }
+
+    @Test
+    func resetMarkedSnapshotClearsPreviousProjectionBeforeApply() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+        store.currentDocumentStore.setErrorMessage("stale")
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+
+        #expect(store.currentDocumentStore.rootEntry?.backendNodeID == 1)
+        #expect(store.currentDocumentStore.selectedEntry == nil)
+        #expect(store.currentDocumentStore.errorMessage == nil)
+    }
+
+    @Test
+    func resetMarkedSnapshotInvalidatesInFlightMatchedStylesForReusedSelectionID() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = MatchedStylesFetcherHarness()
+        store.testMatchedStylesFetcher = { nodeID in
+            try await harness.fetch(nodeID: nodeID)
+        }
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
+        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
+        guard let firstRequestID = initialRequestIDs.first else {
+            Issue.record("Expected first matched styles request to be pending")
+            return
+        }
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 42,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
+
+        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
+        guard restartedRequestIDs.count >= 2 else {
+            Issue.record("Expected restarted matched styles request to be pending")
+            return
+        }
+        let secondRequestID = restartedRequestIDs[1]
+
+        #expect(harness.resolve(firstRequestID, selectorText: ".stale") == true)
+
+        let staleDidNotApply = await waitForCondition {
+            store.currentDocumentStore.selectedEntry?.matchedStyles.isEmpty == true
+                && store.currentDocumentStore.selectedEntry?.isLoadingMatchedStyles == true
+        }
+        #expect(staleDidNotApply == true)
+
+        #expect(harness.resolve(secondRequestID, selectorText: ".fresh") == true)
+
+        let appliedFresh = await waitForCondition {
+            store.currentDocumentStore.selectedEntry?.matchedStyles == [matchedStylesRule(selectorText: ".fresh")]
+                && store.currentDocumentStore.selectedEntry?.isLoadingMatchedStyles == false
+        }
+        #expect(appliedFresh == true)
     }
 
     @Test
@@ -643,7 +1058,50 @@ struct DOMInspectorRuntimeTests {
             isLoading: false
         )
 
-        await store.requestDocument(depth: 4, mode: "fresh")
+        await store.requestDocument(depth: 4, mode: .fresh)
+
+        #expect(store.currentDocumentStore.selectedEntry == nil)
+    }
+
+    @Test
+    func freshRequestDocumentWaitsForInFlightMutationFlushBeforeClearingProjection() async {
+        let store = makeStore(autoUpdateDebounce: 0.01)
+        let harness = BootstrapHarness()
+        store.testConfigurationApplyOverride = { _ in }
+        store.testSetReady(true)
+        await store.testWaitForBootstrapForTesting()
+        store.testBeforeMutationDispatchOverride = {
+            await harness.blockUntilResumed()
+        }
+        store.testMutationFlushOverride = { _ in }
+
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+
+        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
+        let flushDidStart = await waitForCondition {
+            store.testHasActiveBundleFlushTask
+        }
+        #expect(flushDidStart == true)
+
+        let requestTask = Task {
+            await store.requestDocument(depth: 4, mode: .fresh)
+        }
+
+        await harness.waitUntilStarted()
+        #expect(store.currentDocumentStore.selectedEntry != nil)
+
+        await harness.resume()
+        await requestTask.value
 
         #expect(store.currentDocumentStore.selectedEntry == nil)
     }
@@ -652,7 +1110,7 @@ struct DOMInspectorRuntimeTests {
     func pageTransitionClearsProjectionAndPendingMutationBundles() async {
         let store = makeStore(autoUpdateDebounce: 0.01)
         store.testSetReady(true)
-        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preserveState: true)
+        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
         seedSelection(
             store,
             localID: 42,
@@ -683,7 +1141,7 @@ struct DOMInspectorRuntimeTests {
         )
         var didBlockInitialConfigurationPass = false
         var preferredDepths: [Int] = []
-        var documentRequests: [(depth: Int, mode: String)] = []
+        var documentRequests: [(depth: Int, mode: DOMDocumentReloadMode)] = []
 
         store.testSetReady(true)
         store.testConfigurationApplyOverride = { _ in
@@ -703,7 +1161,7 @@ struct DOMInspectorRuntimeTests {
             let expectedPageEpoch = store.currentPageEpoch
             await store.updateConfiguration(configuration, expectedPageEpoch: expectedPageEpoch)
             await store.setPreferredDepth(9, expectedPageEpoch: expectedPageEpoch)
-            await store.requestDocument(depth: 9, mode: "fresh", expectedPageEpoch: expectedPageEpoch)
+            await store.requestDocument(depth: 9, mode: .fresh, expectedPageEpoch: expectedPageEpoch)
         }
 
         await harness.waitUntilStarted()
@@ -720,7 +1178,7 @@ struct DOMInspectorRuntimeTests {
     func enqueueMutationBundleWhileNotReadyDoesNotScheduleFlush() {
         let store = makeStore(autoUpdateDebounce: 0.4)
 
-        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preserveState: true)
+        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
 
         #expect(store.pendingMutationBundleCount == 1)
         #expect(store.testHasPendingBundleFlushTask == false)
@@ -733,7 +1191,7 @@ struct DOMInspectorRuntimeTests {
         store.testSetReady(true)
         await store.testWaitForBootstrapForTesting()
 
-        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preserveState: true)
+        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
         #expect(store.pendingMutationBundleCount == 1)
         #expect(store.testHasPendingBundleFlushTask == true)
 
@@ -759,7 +1217,7 @@ struct DOMInspectorRuntimeTests {
             isLoading: false
         )
 
-        await store.requestDocument(depth: 4, mode: "fresh")
+        await store.requestDocument(depth: 4, mode: .fresh)
 
         #expect(store.currentDocumentStore.selectedEntry == nil)
     }
@@ -767,23 +1225,100 @@ struct DOMInspectorRuntimeTests {
     @Test
     func requestDocumentWithoutPreserveStateDropsQueuedMutationBundles() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
-        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preserveState: true)
+        store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
 
-        await store.requestDocument(depth: 4, mode: "fresh")
+        await store.requestDocument(depth: 4, mode: .fresh)
 
         #expect(store.pendingMutationBundleCount == 0)
     }
 
     @Test
+    func freshRequestDocumentResetsFrontendChildNodeRequests() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var resetPayloads: [[String: Any]] = []
+        let currentDocumentScopeID = store.currentDocumentScopeID
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if body["kind"] as? String == "resetChildNodeRequests" {
+                resetPayloads.append(body)
+            }
+            return true
+        }
+
+        await store.requestDocument(depth: 4, mode: .fresh)
+
+        #expect(resetPayloads.count == 1)
+        #expect(resetPayloads.first?["documentScopeID"] as? UInt64 == currentDocumentScopeID)
+    }
+
+    @Test
+    func freshRequestDocumentAbortsWhenFrontendChildNodeResetFails() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var dispatchedKinds: [String] = []
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if let kind = body["kind"] as? String {
+                dispatchedKinds.append(kind)
+                if kind == "resetChildNodeRequests" {
+                    return false
+                }
+            }
+            return true
+        }
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+
+        await store.requestDocument(depth: 4, mode: .fresh)
+
+        #expect(dispatchedKinds == ["resetChildNodeRequests"])
+        #expect(store.currentDocumentStore.selectedEntry?.backendNodeID == 42)
+    }
+
+    @Test
+    func childNodeRequestFailureCompletesFrontendRequest() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var completionPayloads: [[String: Any]] = []
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if body["kind"] as? String == "completeChildNodeRequest" {
+                completionPayloads.append(body)
+            }
+            return true
+        }
+
+        store.handleChildNodeRequestMessage([
+            "nodeId": 11,
+            "depth": 2,
+        ])
+
+        let didComplete = await waitForCondition {
+            completionPayloads.contains {
+                ($0["kind"] as? String) == "completeChildNodeRequest"
+                    && ($0["nodeId"] as? Int) == 11
+            }
+        }
+        #expect(didComplete == true)
+    }
+
+    @Test
     func resetInspectorStateClearsPendingBootstrapWork() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
-        var documentRequests: [(depth: Int, mode: String)] = []
+        var documentRequests: [(depth: Int, mode: DOMDocumentReloadMode)] = []
         store.testDocumentRequestApplyOverride = { depth, mode in
             documentRequests.append((depth, mode))
         }
 
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: "fresh")
+        await store.requestDocument(depth: 9, mode: .fresh)
         store.testResetInspectorStateForTesting()
         store.testSetReady(true)
         await store.testWaitForBootstrapForTesting()
@@ -831,6 +1366,44 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func structuralMutationRestartsSelectorPathFetchForCurrentSelection() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+
+        let tokenBefore = store.testSelectorPathRequestToken
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.childNodeRemoved",
+                            "params": [
+                                "parentNodeId": 1,
+                                "nodeId": 2,
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch
+            )
+        )
+
+        #expect(store.testSelectorPathRequestToken > tokenBefore)
+    }
+
+    @Test
     func selectionUpdateAcceptsNSNumberAndDictionaryPayloads() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let tokenBefore = store.testMatchedStylesRequestToken
@@ -873,6 +1446,61 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentStore.selectedEntry?.backendNodeID == 78)
         #expect(store.currentDocumentStore.selectedEntry?.selectorPath == "div#swift-target")
         #expect(store.currentDocumentStore.selectedEntry?.styleRevision == 3)
+    }
+
+    @Test
+    func selectionUpdateWithoutSelectorPathPreservesExistingSelectorPath() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+
+        store.testHandleDOMSelectionMessage([
+            "id": 42,
+            "preview": "<div id=\"target\">",
+            "attributes": [["name": "id", "value": "target"]],
+            "path": ["html", "body", "div"],
+            "styleRevision": 1,
+        ])
+
+        #expect(store.currentDocumentStore.selectedEntry?.selectorPath == "div#target")
+    }
+
+    @Test
+    func selectorPathLookupFailureClearsExistingSelectorPath() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "div#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+
+        store.testHandleDOMSelectionMessage([
+            "id": 42,
+            "preview": "<div id=\"target\">",
+            "attributes": [["name": "id", "value": "target"]],
+            "path": ["html", "body", "div"],
+            "styleRevision": 2,
+        ])
+
+        let didClear = await waitForCondition {
+            store.currentDocumentStore.selectedEntry?.selectorPath == ""
+        }
+        #expect(didClear == true)
     }
 
     @Test
@@ -1078,6 +1706,49 @@ struct DOMInspectorRuntimeTests {
         #expect(appliedLatest == true)
     }
 
+    @Test
+    func matchedStylesLookupAppliesToRebuiltSelectedEntryWithSameBackendNodeID() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = MatchedStylesFetcherHarness()
+        store.testMatchedStylesFetcher = { nodeID in
+            try await harness.fetch(nodeID: nodeID)
+        }
+
+        replaceDocument(
+            in: store,
+            root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
+            selectedLocalID: 42
+        )
+
+        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
+        let requestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
+        guard let requestID = requestIDs.first else {
+            Issue.record("Expected matched styles request to be pending")
+            return
+        }
+
+        let originalSelection = store.currentDocumentStore.selectedEntry
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                children: [
+                    makeNode(localID: 42, attributes: [.init(name: "id", value: "target")]),
+                ]
+            ),
+            selectedLocalID: 42
+        )
+
+        #expect(store.currentDocumentStore.selectedEntry !== originalSelection)
+        #expect(harness.resolve(requestID, selectorText: ".rebuilt") == true)
+
+        let appliedToRebuiltSelection = await waitForCondition {
+            store.currentDocumentStore.selectedEntry?.matchedStyles == [matchedStylesRule(selectorText: ".rebuilt")]
+                && store.currentDocumentStore.selectedEntry !== originalSelection
+        }
+        #expect(appliedToRebuiltSelection == true)
+    }
+
     private func makeStore(autoUpdateDebounce: TimeInterval) -> DOMInspectorRuntime {
         let session = DOMSession(
             configuration: .init(
@@ -1126,6 +1797,43 @@ struct DOMInspectorRuntimeTests {
         )
     }
 
+    private func replaceDocument(
+        in store: DOMInspectorRuntime,
+        root: DOMGraphNodeDescriptor,
+        selectedLocalID: UInt64? = nil
+    ) {
+        store.currentDocumentStore.replaceDocument(
+            with: .init(root: root, selectedLocalID: selectedLocalID)
+        )
+    }
+
+    private func makeNode(
+        localID: UInt64,
+        nodeType: Int = 1,
+        nodeName: String = "DIV",
+        localName: String = "div",
+        nodeValue: String = "",
+        attributes: [DOMAttribute] = [],
+        childCount: Int? = nil,
+        layoutFlags: [String] = [],
+        isRendered: Bool = true,
+        children: [DOMGraphNodeDescriptor] = []
+    ) -> DOMGraphNodeDescriptor {
+        DOMGraphNodeDescriptor(
+            localID: localID,
+            backendNodeID: localID <= UInt64(Int.max) ? Int(localID) : nil,
+            nodeType: nodeType,
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            childCount: childCount ?? children.count,
+            layoutFlags: layoutFlags,
+            isRendered: isRendered,
+            children: children
+        )
+    }
+
     private func seedSelection(
         _ store: DOMInspectorRuntime,
         localID: UInt64,
@@ -1148,18 +1856,22 @@ struct DOMInspectorRuntimeTests {
             )
         )
         if !matchedStyles.isEmpty {
-            store.currentDocumentStore.applyMatchedStyles(
-                .init(
-                    nodeId: Int(localID),
-                    rules: matchedStyles,
-                    truncated: false,
-                    blockedStylesheetCount: 0
-                ),
-                for: localID
-            )
+            if let selectedEntry = store.currentDocumentStore.selectedEntry {
+                store.currentDocumentStore.applyMatchedStyles(
+                    .init(
+                        nodeId: Int(localID),
+                        rules: matchedStyles,
+                        truncated: false,
+                        blockedStylesheetCount: 0
+                    ),
+                    for: selectedEntry
+                )
+            }
         }
         if isLoading {
-            store.currentDocumentStore.beginMatchedStylesLoading(for: localID)
+            if let selectedEntry = store.currentDocumentStore.selectedEntry {
+                store.currentDocumentStore.beginMatchedStylesLoading(for: selectedEntry)
+            }
         }
     }
 

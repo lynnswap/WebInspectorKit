@@ -8,6 +8,7 @@ import WebKit
 import AppKit
 
 @MainActor
+@Suite(.serialized)
 struct TabViewControllerAppKitTabTests {
     private let tabPickerIdentifierRaw = "WIContainerToolbar.TabPicker"
     private let domPickIdentifierRaw = "WIContainerToolbar.DOMPick"
@@ -176,8 +177,16 @@ struct TabViewControllerAppKitTabTests {
         await container.waitForRuntimeStateSyncForTesting()
         await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
 
+        selectTabViaPicker(index: 0, in: window)
+
+        #expect(waitUntil(cycles: 200) {
+            container.selectedTabIdentifierForTesting == WITab.domTabID
+        })
+
         guard domPickToolbarItem(in: window) != nil else {
-            Issue.record("Expected DOM pick toolbar item")
+            Issue.record(
+                "Expected DOM pick toolbar item, selectedTab=\(container.selectedTabIdentifierForTesting ?? "nil"), toolbar=\(toolbarIdentifierRawValues(in: window))"
+            )
             return
         }
 
@@ -656,6 +665,45 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func setInspectorControllerWithCurrentControllerOverridesPendingSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .active)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setInspectorController(firstController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .active),
+                (secondController, .disconnected)
+            ]
+        )
+
+        #expect(container.inspectorController === firstController)
+        #expect(firstController.lifecycle == .active)
+        #expect(secondController.lifecycle == .disconnected)
+    }
+
+    @Test
     func appKitProgrammaticSelectionReappliesRuntimeState() async {
         let controller = WIInspectorController()
         let container = WITabViewController(
@@ -770,6 +818,7 @@ struct TabViewControllerAppKitTabTests {
         container.loadViewIfNeeded()
         container.viewWillAppear()
         window.makeKeyAndOrderFront(nil)
+        container.viewDidAppear()
         drainMainQueue()
         return window
     }
@@ -798,8 +847,16 @@ struct TabViewControllerAppKitTabTests {
         return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == tabPickerIdentifierRaw })
     }
 
-    private func domPickToolbarItem(in window: NSWindow) -> NSToolbarItem? {
-        waitForToolbarItemsIfNeeded(in: window)
+    private func domPickToolbarItem(in window: NSWindow, cycles: Int = 200) -> NSToolbarItem? {
+        waitForToolbarItemsIfNeeded(in: window, cycles: cycles)
+        for _ in 0..<cycles {
+            if let item = window.toolbar?.items.first(where: {
+                $0.itemIdentifier.rawValue == domPickIdentifierRaw
+            }) {
+                return item
+            }
+            drainMainQueue()
+        }
         return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == domPickIdentifierRaw })
     }
 

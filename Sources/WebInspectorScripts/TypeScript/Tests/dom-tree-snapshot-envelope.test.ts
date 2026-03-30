@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
+import { applySubtree, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
 import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 import type { SerializedNodeEnvelope } from "../UI/DOMTree/dom-tree-types";
 
@@ -72,7 +72,7 @@ describe("dom-tree-snapshot envelope conversion", () => {
             }
         };
 
-        setSnapshot(envelope, { preserveState: false });
+        setSnapshot(envelope, { mode: "fresh" });
 
         const root = treeState.snapshot?.root;
         expect(root).not.toBeNull();
@@ -118,7 +118,7 @@ describe("dom-tree-snapshot envelope conversion", () => {
             }
         };
 
-        setSnapshot(envelope, { preserveState: false });
+        setSnapshot(envelope, { mode: "fresh" });
 
         const root = treeState.snapshot?.root;
         expect(root).not.toBeNull();
@@ -162,7 +162,7 @@ describe("dom-tree-snapshot envelope conversion", () => {
             }
         };
 
-        setSnapshot(envelope, { preserveState: false });
+        setSnapshot(envelope, { mode: "fresh" });
 
         expect(treeState.selectedNodeId).toBe(302);
 
@@ -194,11 +194,55 @@ describe("dom-tree-snapshot envelope conversion", () => {
             }
         };
 
-        setSnapshot(envelope, { preserveState: false });
+        setSnapshot(envelope, { mode: "fresh" });
 
         const root = treeState.snapshot?.root;
         expect(root).not.toBeNull();
         expect(root?.id).toBe(401);
         expect(treeState.selectedNodeId).toBe(401);
+    });
+
+    it("bumps style revision when a subtree refresh reselects the current node", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: [],
+                children: [{
+                    nodeId: 2,
+                    nodeType: 1,
+                    nodeName: "SPAN",
+                    localName: "span",
+                    attributes: [],
+                    childNodeCount: 0,
+                    children: []
+                }]
+            },
+            selectedNodeId: 2,
+        }, { mode: "fresh" });
+
+        applySubtree({
+            nodeId: 1,
+            nodeType: 1,
+            nodeName: "DIV",
+            localName: "div",
+            attributes: [],
+            children: [{
+                nodeId: 2,
+                nodeType: 1,
+                nodeName: "SPAN",
+                localName: "span",
+                attributes: [],
+                childNodeCount: 0,
+                children: []
+            }]
+        });
+
+        const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
+            | { styleRevision?: number }
+            | undefined;
+        expect(messagePayload?.styleRevision).toBe(1);
     });
 });

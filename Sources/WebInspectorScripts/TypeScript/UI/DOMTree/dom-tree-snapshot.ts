@@ -28,10 +28,13 @@ import {
 } from "./dom-tree-state";
 import { safeParseJSON } from "./dom-tree-utilities";
 import {
-    onProtocolEvent,
+    isExpectedStaleProtocolResponseError,
+    markChildNodesRequestCompleted,
+    onChildNodeRequestCompleted,
+    onPageEpochDidChange,
+    resetChildNodeRequests,
     reportInspectorError,
-    sendCommand,
-    setRequestChildNodesHandler,
+    requestDocumentFromBackend,
 } from "./dom-tree-protocol";
 import {
     domTreeUpdater,
@@ -276,6 +279,24 @@ function resolveNodeDescriptor(payload: unknown): RawNodeDescriptor | null {
     return payload as RawNodeDescriptor;
 }
 
+function resolveSubtreeTargetId(payload: unknown): number | null {
+    const parsed =
+        typeof payload === "string"
+            ? safeParseJSON<unknown>(payload)
+            : payload;
+    if (!parsed || typeof parsed !== "object") {
+        return null;
+    }
+    const candidate = parsed as { nodeId?: unknown; id?: unknown };
+    if (typeof candidate.nodeId === "number") {
+        return candidate.nodeId;
+    }
+    if (typeof candidate.id === "number") {
+        return candidate.id;
+    }
+    return null;
+}
+
 function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
     const parsed = safeParseJSON<unknown>(payload);
     if (!parsed || typeof parsed !== "object") {
@@ -311,21 +332,172 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
 // Document Request
 // =============================================================================
 
-/** Request the document from the backend */
-export async function requestDocument(options: RequestDocumentOptions = {}): Promise<void> {
-    const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
-    protocolState.snapshotDepth = depth;
-    const preserveState = !!options.preserveState;
+let pendingDocumentRequest: Required<RequestDocumentOptions> | null = null;
+let documentRequestInFlightEpoch: number | null = null;
+let documentRequestInFlight: Required<RequestDocumentOptions> | null = null;
 
-    try {
-        const result = await sendCommand<unknown>("DOM.getDocument", { depth });
-        if (result != null) {
-            setSnapshot(result as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string, { preserveState });
-        }
-    } catch (error) {
-        reportInspectorError("DOM.getDocument", error);
+function resetDocumentRequestState(): void {
+    pendingDocumentRequest = null;
+    documentRequestInFlightEpoch = null;
+    documentRequestInFlight = null;
+}
+
+export function resetDocumentRequestStateForPageEpoch(pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    resetDocumentRequestState();
+}
+
+export function completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    markDocumentRequestCompleted();
+    drainQueuedDocumentRequestIfPossible();
+}
+
+export function rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    const currentPageEpoch = protocolState.pageEpoch;
+    if (documentRequestInFlightEpoch === currentPageEpoch) {
+        documentRequestInFlightEpoch = null;
+    }
+    if (documentRequestInFlight?.pageEpoch === currentPageEpoch) {
+        documentRequestInFlight = null;
     }
 }
+
+function markDocumentRequestCompleted(): void {
+    const currentPageEpoch = protocolState.pageEpoch;
+    if (documentRequestInFlightEpoch === currentPageEpoch) {
+        documentRequestInFlightEpoch = null;
+    }
+    if (documentRequestInFlight?.pageEpoch === currentPageEpoch) {
+        documentRequestInFlight = null;
+    }
+}
+
+function drainQueuedDocumentRequestIfPossible(): void {
+    const currentPageEpoch = protocolState.pageEpoch;
+    if (pendingDocumentRequest?.pageEpoch === currentPageEpoch && documentRequestInFlightEpoch == null) {
+        const nextRequest = pendingDocumentRequest;
+        pendingDocumentRequest = null;
+        documentRequestInFlightEpoch = currentPageEpoch;
+        documentRequestInFlight = nextRequest;
+        performDocumentRequest(nextRequest);
+    }
+}
+
+function queueDocumentRequest(
+    normalizedOptions: Required<RequestDocumentOptions>,
+    allowIdenticalInFlightRequeue = false
+): void {
+    const requestPageEpoch = normalizedOptions.pageEpoch;
+    if (documentRequestMatches(documentRequestInFlight, normalizedOptions)) {
+        if (!allowIdenticalInFlightRequeue) {
+            return;
+        }
+        pendingDocumentRequest = normalizedOptions;
+        return;
+    }
+    if (documentRequestMatches(pendingDocumentRequest, normalizedOptions)) {
+        return;
+    }
+    pendingDocumentRequest = normalizedOptions;
+    if (documentRequestInFlightEpoch === requestPageEpoch) {
+        return;
+    }
+
+    documentRequestInFlightEpoch = requestPageEpoch;
+    const request = pendingDocumentRequest;
+    pendingDocumentRequest = null;
+    documentRequestInFlight = request;
+    performDocumentRequest(request);
+}
+
+function handleDocumentUpdated(): void {
+    resetChildNodeRequests(protocolState.pageEpoch, protocolState.documentScopeID);
+    treeState.pendingRefreshRequests.clear();
+    treeState.refreshAttempts.clear();
+    const normalizedFreshRequest = normalizeDocumentRequestOptions({ mode: "fresh" });
+    if (!normalizedFreshRequest) {
+        return;
+    }
+    queueDocumentRequest(normalizedFreshRequest, true);
+}
+
+function requestDocumentSafely(options: RequestDocumentOptions): void {
+    void requestDocument(options).catch((error) => {
+        console.warn("[WebInspectorKit] requestDocument:", error);
+    });
+}
+
+function documentRequestMatches(
+    lhs: Required<RequestDocumentOptions> | null | undefined,
+    rhs: Required<RequestDocumentOptions> | null | undefined
+): boolean {
+    return !!lhs
+        && !!rhs
+        && lhs.depth === rhs.depth
+        && lhs.mode === rhs.mode
+        && lhs.pageEpoch === rhs.pageEpoch;
+}
+
+function normalizeDocumentRequestOptions(options: RequestDocumentOptions = {}): Required<RequestDocumentOptions> | null {
+    const requestPageEpoch =
+        typeof options.pageEpoch === "number" && Number.isFinite(options.pageEpoch)
+            ? options.pageEpoch
+            : protocolState.pageEpoch;
+    if (requestPageEpoch !== protocolState.pageEpoch) {
+        return null;
+    }
+    const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
+    return {
+        depth,
+        mode: options.mode === "preserve-ui-state" ? "preserve-ui-state" : "fresh",
+        pageEpoch: requestPageEpoch,
+    };
+}
+
+function performDocumentRequest(options: Required<RequestDocumentOptions>): void {
+    protocolState.snapshotDepth = options.depth;
+    requestDocumentFromBackend(options);
+}
+
+/** Request the document from the backend */
+export async function requestDocument(options: RequestDocumentOptions = {}): Promise<void> {
+    const normalizedOptions = normalizeDocumentRequestOptions(options);
+    if (!normalizedOptions) {
+        return;
+    }
+    try {
+        queueDocumentRequest(normalizedOptions);
+    } catch (error) {
+        resetDocumentRequestState();
+        throw error;
+    }
+}
+
+onPageEpochDidChange(() => {
+    resetDocumentRequestState();
+    treeState.pendingRefreshRequests.clear();
+    treeState.refreshAttempts.clear();
+});
+onChildNodeRequestCompleted((nodeId) => {
+    treeState.pendingRefreshRequests.delete(nodeId);
+});
 
 // =============================================================================
 // Mutation Bundles
@@ -337,11 +509,11 @@ export function applyMutationBundle(bundle: string | MutationBundle | null | und
         return;
     }
 
-    let preserveState = true;
+    let mode: "fresh" | "preserve-ui-state" = "preserve-ui-state";
     let payload: string | MutationBundle = bundle;
 
     if (typeof bundle === "object" && bundle.bundle !== undefined) {
-        preserveState = bundle.preserveState !== false;
+        mode = bundle.mode === "fresh" ? "fresh" : "preserve-ui-state";
         payload = bundle.bundle;
     }
 
@@ -349,31 +521,58 @@ export function applyMutationBundle(bundle: string | MutationBundle | null | und
     if (!parsed || typeof parsed !== "object") {
         return;
     }
+    if (typeof parsed.pageEpoch === "number" && parsed.pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof parsed.documentScopeID === "number" && parsed.documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
 
     if (typeof parsed.version === "number" && parsed.version !== 1) {
         return;
     }
 
-    if (parsed.kind === "snapshot") {
-        if (parsed.snapshot) {
-            setSnapshot(parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string, { preserveState });
+        if (parsed.kind === "snapshot") {
+            if (parsed.snapshot) {
+                setSnapshot(
+                    parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string,
+                    { mode }
+                );
+            }
+            return;
         }
-        return;
-    }
 
     if (parsed.kind === "mutation") {
         const events = Array.isArray(parsed.events) ? parsed.events : [];
         if (events.length) {
-            domTreeUpdater.enqueueEvents(events as DOMEventEntry[]);
+            let bufferedEvents: DOMEventEntry[] = [];
+            for (const event of events as DOMEventEntry[]) {
+                if (event?.method === "DOM.documentUpdated") {
+                    if (bufferedEvents.length) {
+                        domTreeUpdater.enqueueEvents(bufferedEvents);
+                        bufferedEvents = [];
+                    }
+                    handleDocumentUpdated();
+                    continue;
+                }
+                bufferedEvents.push(event);
+            }
+            if (bufferedEvents.length) {
+                domTreeUpdater.enqueueEvents(bufferedEvents);
+            }
         }
     }
 }
 
 /** Apply multiple mutation bundles */
 export function applyMutationBundles(
-    bundles: string | MutationBundle | MutationBundle[] | null | undefined
+    bundles: string | MutationBundle | MutationBundle[] | null | undefined,
+    pageEpoch?: number
 ): void {
     if (!bundles) {
+        return;
+    }
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
         return;
     }
     if (!Array.isArray(bundles)) {
@@ -386,12 +585,15 @@ export function applyMutationBundles(
 }
 
 /** Apply mutation bundles from a WebKit shared buffer */
-export function applyMutationBuffer(bufferName: string): boolean {
+export function applyMutationBuffer(bufferName: string, pageEpoch?: number): boolean {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return false;
+    }
     const bundles = applyMutationBundlesFromBuffer(bufferName);
     if (!bundles || !bundles.length) {
         return false;
     }
-    applyMutationBundles(bundles);
+    applyMutationBundles(bundles, pageEpoch);
     return true;
 }
 
@@ -402,14 +604,14 @@ export function applyMutationBuffer(bufferName: string): boolean {
 /** Set the document snapshot */
 export function setSnapshot(
     payload: { root?: RawNodeDescriptor } | string | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null | undefined,
-    options: { preserveState?: boolean } = {}
+    options: { mode?: "fresh" | "preserve-ui-state" } = {}
 ): void {
     try {
         ensureDomElements();
         ensureTreeEventHandlers();
         const snapshot = resolveSnapshotPayload(payload);
 
-        const preserveState = !!options.preserveState && !!treeState.snapshot;
+        const preserveState = options.mode === "preserve-ui-state" && !!treeState.snapshot;
         const previousSelectionId = treeState.selectedNodeId;
         const previousFilter = treeState.filter;
         const preservedOpenState = preserveState ? new Map(treeState.openState) : new Map();
@@ -519,6 +721,8 @@ export function setSnapshot(
     } catch (error) {
         reportInspectorError("setSnapshot", error);
         throw error;
+    } finally {
+        markDocumentRequestCompleted();
     }
 }
 
@@ -536,19 +740,14 @@ export function applySubtree(
             return;
         }
 
+        const targetId = resolveSubtreeTargetId(payload);
         const subtree = resolveNodeDescriptor(payload);
         if (!subtree) {
+            if (typeof targetId === "number") {
+                markChildNodesRequestCompleted(targetId);
+            }
             return;
         }
-
-        const targetId =
-            subtree && typeof subtree === "object"
-                ? typeof subtree.nodeId === "number"
-                    ? subtree.nodeId
-                    : typeof subtree.id === "number"
-                      ? subtree.id
-                      : null
-                : null;
 
         const parentRendered = ((): boolean => {
             if (typeof targetId !== "number") {
@@ -564,11 +763,15 @@ export function applySubtree(
 
         const normalized = normalizeNodeDescriptor(subtree, parentRendered);
         if (!normalized) {
+            if (typeof targetId === "number") {
+                markChildNodesRequestCompleted(targetId);
+            }
             return;
         }
 
         const target = treeState.nodes.get(normalized.id);
         if (!target) {
+            markChildNodesRequestCompleted(normalized.id);
             return;
         }
 
@@ -590,6 +793,7 @@ export function applySubtree(
         setNodeExpanded(target.id, true);
 
         if (previousSelectionId) {
+            treeState.styleRevision += 1;
             if (!selectNode(previousSelectionId, { shouldHighlight: false })) {
                 treeState.selectedNodeId = null;
                 updateDetails(null);
@@ -601,6 +805,7 @@ export function applySubtree(
         if (treeState.filter) {
             applyFilter();
         }
+        markChildNodesRequestCompleted(normalized.id);
     } catch (error) {
         reportInspectorError("applySubtree", error);
         throw error;
@@ -632,6 +837,7 @@ function applySetChildNodes(params: {
         treeState.pendingRefreshRequests.delete(parentId);
     }
     treeState.refreshAttempts.delete(parentId);
+    markChildNodesRequestCompleted(parentId);
 
     const normalizedChildren: DOMNode[] = [];
     const parentRendered = parent.isRendered !== false;
@@ -663,6 +869,7 @@ function applySetChildNodes(params: {
     setNodeExpanded(parent.id, true);
 
     if (previousSelectionId) {
+        treeState.styleRevision += 1;
         if (!selectNode(previousSelectionId, { shouldHighlight: false })) {
             treeState.selectedNodeId = null;
             updateDetails(null);
@@ -684,7 +891,7 @@ function applySetChildNodes(params: {
 export function requestSnapshotReload(reason?: string): void {
     const reloadReason = reason || "dom-sync";
     console.debug("[WebInspectorKit] request reload:", reloadReason);
-    void requestDocument({ preserveState: true });
+    requestDocumentSafely({ mode: "preserve-ui-state" });
 }
 
 // =============================================================================
@@ -692,36 +899,20 @@ export function requestSnapshotReload(reason?: string): void {
 // =============================================================================
 
 /** Set preferred snapshot depth */
-export function setPreferredDepth(depth: number): void {
+export function setPreferredDepth(depth: number, pageEpoch?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
     if (typeof depth === "number") {
         protocolState.snapshotDepth = depth;
     }
 }
 
 // =============================================================================
-// Protocol Registration
+// Tree Event Wiring
 // =============================================================================
 
-/** Register protocol event handlers */
-export function registerProtocolHandlers(): void {
-    domUpdateEvents.forEach((method) => {
-        onProtocolEvent(method, (params) => domTreeUpdater.enqueueEvents([{ method, params }]));
-    });
-
-    onProtocolEvent("DOM.setChildNodes", (params) =>
-        applySetChildNodes(params as { parentId?: number; parentNodeId?: number; nodes?: RawNodeDescriptor[] })
-    );
-
-    onProtocolEvent("DOM.documentUpdated", () => requestDocument({ preserveState: false }));
-
-    onProtocolEvent("DOM.inspect", (params) => {
-        if (params && typeof (params as { nodeId?: number }).nodeId === "number") {
-            selectNode((params as { nodeId: number }).nodeId, { shouldHighlight: false });
-        }
-    });
-
-    setRequestChildNodesHandler((result: unknown) => applySubtree(result as string | RawNodeDescriptor | null));
+/** Register tree-side reload handlers */
+export function registerTreeHandlers(): void {
+    setReloadHandler(requestSnapshotReload);
 }
-
-// Initialize reload handler
-setReloadHandler(requestSnapshotReload);

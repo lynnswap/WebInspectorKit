@@ -591,6 +591,46 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func setInspectorControllerWithCurrentControllerOverridesPendingSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .active)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setInspectorController(firstController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .active),
+                (secondController, .disconnected)
+            ]
+        )
+
+        #expect(container.inspectorController === firstController)
+        #expect(firstController.lifecycle == .active)
+        #expect(secondController.lifecycle == .disconnected)
+    }
+
+    @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
         let requestedTabs: [WITab] = [
@@ -800,7 +840,7 @@ struct TabViewControllerUITabTests {
         #expect(selectedDeleteAction?.attributes.contains(.disabled) == false)
         #expect(selectedHTMLAction?.attributes.contains(.disabled) == false)
 
-        inspector.session.graphStore.applySelectionSnapshot(nil)
+        inspector.documentStore.applySelectionSnapshot(nil)
 
         let unselectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
         let unselectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
@@ -1077,8 +1117,8 @@ struct TabViewControllerUITabTests {
         let selectedLocalID: UInt64 = 42
         let attributes = [DOMAttribute(nodeId: Int(selectedLocalID), name: "id", value: "selected")]
 
-        inspector.session.graphStore.applySnapshot(
-            .init(
+        inspector.documentStore.replaceDocument(
+            with: .init(
                 root: DOMGraphNodeDescriptor(
                     localID: 1,
                     backendNodeID: 1,
@@ -1108,7 +1148,7 @@ struct TabViewControllerUITabTests {
                 )
             )
         )
-        inspector.session.graphStore.applySelectionSnapshot(
+        inspector.documentStore.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
                 preview: "<div id=\"selected\"></div>",

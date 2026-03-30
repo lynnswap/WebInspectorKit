@@ -3,6 +3,8 @@ public protocol DOMBundleSink: AnyObject {
     func domDidEmit(bundle: DOMBundle)
 }
 
+public typealias DOMDocumentScopeID = UInt64
+
 public struct DOMBundle {
     public enum Payload {
         case jsonString(String)
@@ -10,12 +12,18 @@ public struct DOMBundle {
     }
 
     public let payload: Payload
+    public let pageEpoch: Int?
+    public let documentScopeID: DOMDocumentScopeID?
 
-    public init(rawJSON: String) {
+    public init(rawJSON: String, pageEpoch: Int? = nil, documentScopeID: DOMDocumentScopeID? = nil) {
+        self.pageEpoch = pageEpoch
+        self.documentScopeID = documentScopeID
         payload = .jsonString(rawJSON)
     }
 
-    public init(objectEnvelope: Any) {
+    public init(objectEnvelope: Any, pageEpoch: Int? = nil, documentScopeID: DOMDocumentScopeID? = nil) {
+        self.pageEpoch = pageEpoch
+        self.documentScopeID = documentScopeID
         payload = .objectEnvelope(objectEnvelope)
     }
 

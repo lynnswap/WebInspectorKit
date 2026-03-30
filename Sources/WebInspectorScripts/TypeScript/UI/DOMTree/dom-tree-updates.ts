@@ -29,7 +29,11 @@ import {
     REFRESH_RETRY_WINDOW,
 } from "./dom-tree-state";
 import { applyLayoutEntry, resolveRenderedState, timeNow } from "./dom-tree-utilities";
-import { reportInspectorError, sendCommand } from "./dom-tree-protocol";
+import {
+    isExpectedStaleProtocolResponseError,
+    reportInspectorError,
+    requestChildNodes,
+} from "./dom-tree-protocol";
 import {
     findInsertionIndex,
     indexNode,
@@ -382,11 +386,13 @@ export async function requestNodeRefresh(
     treeState.pendingRefreshRequests.add(targetNodeId);
 
     try {
-        await sendCommand("DOM.requestChildNodes", { nodeId: targetNodeId, depth: childRequestDepth() });
+        await requestChildNodes(targetNodeId, childRequestDepth());
     } catch (error) {
-        reportInspectorError("requestChildNodes", error);
-    } finally {
         treeState.pendingRefreshRequests.delete(targetNodeId);
+        if (isExpectedStaleProtocolResponseError(error)) {
+            return;
+        }
+        reportInspectorError("requestChildNodes", error);
     }
 }
 

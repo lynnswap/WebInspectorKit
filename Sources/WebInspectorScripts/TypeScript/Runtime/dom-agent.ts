@@ -13,6 +13,7 @@ import {
     enableAutoSnapshotIfSupported,
     triggerSnapshotUpdate
 } from "./DOMAgent/dom-agent-snapshot";
+import { inspector } from "./DOMAgent/dom-agent-state";
 import {
     debugStatus,
     outerHTMLForNode,
@@ -36,6 +37,28 @@ function detachInspector() {
     disableAutoSnapshot();
 }
 
+function setPageEpoch(epoch: number): boolean {
+    if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
+        return false;
+    }
+    if (epoch < inspector.pageEpoch) {
+        return false;
+    }
+    inspector.pageEpoch = epoch;
+    return true;
+}
+
+function setDocumentScopeID(documentScopeID: number): boolean {
+    if (typeof documentScopeID !== "number" || !Number.isFinite(documentScopeID)) {
+        return false;
+    }
+    if (documentScopeID < inspector.documentScopeID) {
+        return false;
+    }
+    inspector.documentScopeID = documentScopeID;
+    return true;
+}
+
 if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
     var webInspectorDOM = {
         captureSnapshot: captureDOM,
@@ -49,6 +72,8 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         clearHighlight: clearHighlight,
         configureAutoSnapshot: configureAutoSnapshot,
         disableAutoSnapshot: disableAutoSnapshot,
+        setPageEpoch: setPageEpoch,
+        setDocumentScopeID: setDocumentScopeID,
         detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,
         outerHTMLForNode: outerHTMLForNode,

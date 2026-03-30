@@ -103,6 +103,7 @@ public final class WIDOMModel {
             }
             await self.frontendStore.performPageTransition { nextPageEpoch in
                 self.session.preparePageEpoch(nextPageEpoch)
+                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
                 await self.session.reloadPageAndWaitForPreparedPageEpochSync()
             }
         }
@@ -119,12 +120,15 @@ public final class WIDOMModel {
         if needsPageEpochAdvance {
             outcome = await frontendStore.performPageTransition { nextPageEpoch in
                 self.session.preparePageEpoch(nextPageEpoch)
+                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
                 await self.session.suspend()
                 self.session.preparePageEpoch(nextPageEpoch)
+                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
                 return await self.session.attach(to: webView)
             }
         } else {
             session.preparePageEpoch(frontendStore.currentPageEpoch)
+            session.prepareDocumentScopeID(frontendStore.currentDocumentScopeID)
             outcome = await session.attach(to: webView)
         }
         if outcome.shouldReload {

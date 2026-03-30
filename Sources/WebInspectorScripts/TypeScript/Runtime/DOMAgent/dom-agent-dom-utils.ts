@@ -573,7 +573,9 @@ export function debugStatus() {
         pendingMutations: Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.length : 0,
         overlayActive: !!inspector.overlayTarget,
         selectionActive: !!inspector.selectionState,
-        documentURL: inspector.documentURL || document.URL || ""
+        documentURL: inspector.documentURL || document.URL || "",
+        pageEpoch: inspector.pageEpoch,
+        documentScopeID: inspector.documentScopeID
     };
     console.log("[webInspectorDOM] status:", status);
     return status;

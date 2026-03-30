@@ -47,13 +47,13 @@ public final class WIDOMDetailViewController: NSViewController {
 @MainActor
 private struct ElementDetailsMacRootView: View {
     private struct AttributeEditorState: Identifiable {
-        let nodeID: DOMEntryID?
+        let entryIdentity: ObjectIdentifier?
         let name: String
         let initialValue: String
 
         var id: String {
-            let localID = nodeID?.localID ?? 0
-            return "\(localID):\(name)"
+            let identity = entryIdentity.map { String(describing: $0) } ?? "nil"
+            return "\(identity):\(name)"
         }
     }
 
@@ -62,7 +62,7 @@ private struct ElementDetailsMacRootView: View {
     @State private var attributeEditorDraft = ""
 
     private var selectedEntry: DOMEntry? {
-        inspector.selectedEntry
+        inspector.documentStore.selectedEntry
     }
 
     private var hasSelection: Bool {
@@ -72,7 +72,7 @@ private struct ElementDetailsMacRootView: View {
     var body: some View {
         if hasSelection {
             List {
-                if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
+                if let errorMessage = inspector.documentStore.errorMessage, !errorMessage.isEmpty {
                     Section {
                         infoRow(message: errorMessage, color: .orange)
                     }
@@ -112,9 +112,7 @@ private struct ElementDetailsMacRootView: View {
                             attributeEditorState = nil
                         }
                         Button(wiLocalized("save", default: "Save")) {
-                            Task.immediateIfAvailable { [inspector] in
-                                await inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
-                            }
+                            inspector.requestUpdateAttributeValue(name: state.name, value: attributeEditorDraft)
                             attributeEditorState = nil
                         }
                         .keyboardShortcut(.defaultAction)
@@ -210,16 +208,14 @@ private struct ElementDetailsMacRootView: View {
                 .contextMenu {
                     Button(wiLocalized("dom.element.attributes.edit", default: "Edit Attribute")) {
                         attributeEditorState = AttributeEditorState(
-                            nodeID: selectedEntry?.id,
+                            entryIdentity: selectedEntry.map(ObjectIdentifier.init),
                             name: attribute.name,
                             initialValue: attribute.value
                         )
                         attributeEditorDraft = attribute.value
                     }
                     Button(wiLocalized("dom.element.attributes.delete", default: "Delete Attribute"), role: .destructive) {
-                        Task.immediateIfAvailable { [inspector] in
-                            await inspector.removeAttribute(name: attribute.name)
-                        }
+                        inspector.requestRemoveAttribute(name: attribute.name)
                     }
                 }
             }

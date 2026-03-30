@@ -12,8 +12,8 @@ struct DOMInspectorTests {
     func exposesSelectedItemFromSessionGraphStore() {
         let controller = WIInspectorController()
         let inspector = controller.dom
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.selectedEntry == nil)
+        #expect(inspector.documentStore.selectedEntry == nil)
+        #expect(inspector.documentStore.selectedEntry == nil)
     }
 
     @Test
@@ -30,7 +30,7 @@ struct DOMInspectorTests {
         await inspector.detach()
         #expect(inspector.hasPageWebView == false)
         #expect(inspector.session.lastPageWebView == nil)
-        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.documentStore.selectedEntry == nil)
     }
 
     @Test
@@ -69,7 +69,7 @@ struct DOMInspectorTests {
         let secondWebView = makeTestWebView()
 
         await inspector.attach(to: firstWebView)
-        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
+        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preservingInspectorState: true)
         #expect(inspector.pendingMutationBundleCount == 1)
 
         await inspector.attach(to: secondWebView)
@@ -79,14 +79,177 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func suspendAndReattachSameWebViewAdvancesPageEpoch() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reattach</div></body></html>", in: webView)
+        let initialPageEpoch = inspector.frontendStore.currentPageEpoch
+
+        await inspector.suspend()
+        await inspector.attach(to: webView)
+
+        #expect(inspector.frontendStore.currentPageEpoch > initialPageEpoch)
+        let expectedPageEpoch = inspector.frontendStore.currentPageEpoch
+        let pageEpochApplied = await waitForCondition {
+            await self.domAgentPageEpoch(in: webView) == expectedPageEpoch
+        }
+        #expect(pageEpochApplied == true)
+    }
+
+    @Test
+    func requestReloadPageAdvancesPageEpochAndClearsQueuedMutations() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preservingInspectorState: true)
+        let initialPageEpoch = inspector.frontendStore.currentPageEpoch
+
+        inspector.requestReloadPage()
+
+        let epochAdvanced = await waitForCondition {
+            inspector.frontendStore.currentPageEpoch == initialPageEpoch + 1
+        }
+        #expect(epochAdvanced == true)
+        let mutationBundlesCleared = await waitForCondition {
+            inspector.pendingMutationBundleCount == 0
+        }
+        #expect(mutationBundlesCleared == true)
+        let pageEpochApplied = await waitForCondition {
+            await self.domAgentPageEpoch(in: webView) == initialPageEpoch + 1
+        }
+        #expect(pageEpochApplied == true)
+    }
+
+    @Test
+    func requestReloadPageReappliesAutoSnapshotToFreshJSContext() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+        await inspector.session.setAutoSnapshot(enabled: true)
+
+        let initialAutoSnapshotEnabled = await waitForCondition {
+            await self.autoSnapshotEnabled(in: webView)
+        }
+        #expect(initialAutoSnapshotEnabled == true)
+
+        inspector.requestReloadPage()
+
+        let pageEpochAdvanced = await waitForCondition {
+            let currentPageEpoch = inspector.frontendStore.currentPageEpoch
+            guard currentPageEpoch > 0 else {
+                return false
+            }
+            let appliedPageEpoch = await self.domAgentPageEpoch(in: webView)
+            return appliedPageEpoch == currentPageEpoch
+        }
+        #expect(pageEpochAdvanced == true)
+
+        let autoSnapshotReapplied = await waitForCondition {
+            await self.autoSnapshotEnabled(in: webView)
+        }
+        #expect(autoSnapshotReapplied == true)
+    }
+
+    @Test
+    func requestReloadPageResetsSelectionInteractionState() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+
+        inspector.requestSelectionModeToggle()
+        let selectionStarted = await waitForCondition {
+            await self.selectionIsActive(in: webView)
+        }
+        #expect(selectionStarted == true)
+        #expect(inspector.isSelectingElement == true)
+
+        inspector.requestReloadPage()
+
+        let selectionReset = await waitForCondition {
+            guard inspector.isSelectingElement == false else {
+                return false
+            }
+            return await self.selectionIsActive(in: webView) == false
+        }
+        #expect(selectionReset == true)
+    }
+
+    @Test
+    func consecutiveReloadRequestsKeepLatestPageEpochApplied() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+
+        inspector.requestReloadPage()
+        inspector.requestReloadPage()
+
+        let pageEpochAdvanced = await waitForCondition {
+            inspector.frontendStore.currentPageEpoch >= 2
+        }
+        #expect(pageEpochAdvanced == true)
+        let expectedPageEpoch = inspector.frontendStore.currentPageEpoch
+        let pageEpochApplied = await waitForCondition {
+            await self.domAgentPageEpoch(in: webView) == expectedPageEpoch
+        }
+        #expect(pageEpochApplied == true)
+    }
+
+    @Test
+    func requestReloadPageWhileSuspendedDoesNotAdvancePageEpoch() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+        await inspector.suspend()
+        let suspendedPageEpoch = inspector.frontendStore.currentPageEpoch
+
+        inspector.requestReloadPage()
+
+        #expect(inspector.frontendStore.currentPageEpoch == suspendedPageEpoch)
+    }
+
+    @Test
+    func repeatedSuspendDoesNotAdvancePageEpochAgain() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Suspend</div></body></html>", in: webView)
+        await inspector.suspend()
+        let suspendedPageEpoch = inspector.frontendStore.currentPageEpoch
+
+        await inspector.suspend()
+
+        #expect(inspector.frontendStore.currentPageEpoch == suspendedPageEpoch)
+    }
+
+    @Test
     func reloadInspectorWithoutPageSetsErrorMessage() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
-        #expect(inspector.errorMessage == nil)
+        #expect(inspector.documentStore.errorMessage == nil)
 
-        await inspector.reloadInspector()
+        await inspector.reloadDocument()
 
-        #expect(inspector.errorMessage == "Web view unavailable.")
+        #expect(inspector.documentStore.errorMessage == "Web view unavailable.")
     }
 
     @Test
@@ -104,7 +267,7 @@ struct DOMInspectorTests {
     func updateAndRemoveAttributeMutateSelectionState() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
-        inspector.session.graphStore.applySelectionSnapshot(
+        inspector.documentStore.applySelectionSnapshot(
             .init(
                 localID: 7,
                 preview: "<div id=\"foo\">",
@@ -118,30 +281,96 @@ struct DOMInspectorTests {
             )
         )
 
-        await inspector.updateAttributeValue(name: "class", value: "new")
-        #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
+        await inspector.updateSelectedAttribute(name: "class", value: "new")
+        #expect(inspector.documentStore.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
 
-        await inspector.removeAttribute(name: "id")
-        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
+        await inspector.removeSelectedAttribute(name: "id")
+        #expect(inspector.documentStore.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
+    }
+
+    @Test
+    func updateAndRemoveAttributeSurviveSelectedNodeReprojection() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        inspector.documentStore.replaceDocument(
+            with: .init(
+                root: .init(
+                    localID: 7,
+                    backendNodeID: 7,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [
+                        .init(nodeId: 7, name: "class", value: "old"),
+                        .init(nodeId: 7, name: "id", value: "foo"),
+                    ],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                ),
+                selectedLocalID: 7
+            )
+        )
+
+        guard let originalEntry = inspector.documentStore.selectedEntry else {
+            Issue.record("Expected initial selection")
+            return
+        }
+
+        inspector.documentStore.replaceDocument(
+            with: .init(
+                root: .init(
+                    localID: 7,
+                    backendNodeID: 7,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [
+                        .init(nodeId: 7, name: "class", value: "old"),
+                        .init(nodeId: 7, name: "id", value: "foo"),
+                    ],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                ),
+                selectedLocalID: 7
+            )
+        )
+
+        guard let reprojectedEntry = inspector.documentStore.selectedEntry else {
+            Issue.record("Expected reprojected selection")
+            return
+        }
+        #expect(reprojectedEntry !== originalEntry)
+
+        await inspector.updateSelectedAttribute(name: "class", value: "new")
+        #expect(reprojectedEntry.attributes.first(where: { $0.name == "class" })?.value == "new")
+
+        await inspector.removeSelectedAttribute(name: "id")
+        #expect(reprojectedEntry.attributes.contains(where: { $0.name == "id" }) == false)
     }
 
     @Test
     func detachClearsErrorMessage() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
-        await inspector.reloadInspector()
-        #expect(inspector.errorMessage != nil)
+        await inspector.reloadDocument()
+        #expect(inspector.documentStore.errorMessage != nil)
 
         await inspector.detach()
 
-        #expect(inspector.errorMessage == nil)
+        #expect(inspector.documentStore.errorMessage == nil)
     }
 
     @Test
     func detachClearsMatchedStylesState() async {
         let controller = WIInspectorController()
         let inspector = controller.dom
-        inspector.session.graphStore.applySelectionSnapshot(
+        inspector.documentStore.applySelectionSnapshot(
             .init(
                 localID: 11,
                 preview: "<div class=\"target\">",
@@ -151,7 +380,11 @@ struct DOMInspectorTests {
                 styleRevision: 0
             )
         )
-        inspector.session.graphStore.applyMatchedStyles(
+        guard let selectedEntry = inspector.documentStore.selectedEntry else {
+            Issue.record("Expected selection placeholder before detach")
+            return
+        }
+        inspector.documentStore.applyMatchedStyles(
             .init(
                 nodeId: 11,
                 rules: [
@@ -165,14 +398,14 @@ struct DOMInspectorTests {
                 truncated: true,
                 blockedStylesheetCount: 3
             ),
-            for: 11
+            for: selectedEntry
         )
-        inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
+        inspector.documentStore.beginMatchedStylesLoading(for: selectedEntry)
 
         await inspector.detach()
 
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.entriesByID.isEmpty)
+        #expect(inspector.documentStore.selectedEntry == nil)
+        #expect(inspector.documentStore.rootEntry == nil)
     }
 
     @Test
@@ -270,6 +503,32 @@ struct DOMInspectorTests {
     private func selectionIsActive(in webView: WKWebView) async -> Bool {
         let rawValue = try? await webView.callAsyncJavaScript(
             "return window.webInspectorDOM.debugStatus().selectionActive;",
+            arguments: [:],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
+    }
+
+    private func domAgentPageEpoch(in webView: WKWebView) async -> Int? {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return window.webInspectorDOM?.debugStatus?.().pageEpoch ?? null;",
+            arguments: [:],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        if let value = rawValue as? Int {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.intValue
+        }
+        return nil
+    }
+
+    private func autoSnapshotEnabled(in webView: WKWebView) async -> Bool {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return Boolean(window.webInspectorDOM?.debugStatus?.().snapshotAutoUpdateEnabled);",
             arguments: [:],
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()

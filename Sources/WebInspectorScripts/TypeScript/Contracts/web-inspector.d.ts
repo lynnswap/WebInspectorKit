@@ -3,9 +3,7 @@ export {};
 import type {
     WebInspectorDOMFrontend,
     ProtocolConfig,
-    ProtocolMessage,
     MutationBundle,
-    RequestDocumentOptions,
 } from "../UI/DOMTree/dom-tree-types";
 
 declare global {
@@ -15,11 +13,13 @@ declare global {
 
     interface WebInspectorMessageHandlers {
         [key: string]: WebInspectorMessageHandler | undefined;
-        webInspectorProtocol?: WebInspectorMessageHandler;
+        webInspectorDomRequestDocument?: WebInspectorMessageHandler;
+        webInspectorDomRequestChildren?: WebInspectorMessageHandler;
+        webInspectorDomHighlight?: WebInspectorMessageHandler;
+        webInspectorDomHideHighlight?: WebInspectorMessageHandler;
         webInspectorLog?: WebInspectorMessageHandler;
         webInspectorReady?: WebInspectorMessageHandler;
         webInspectorDomSelection?: WebInspectorMessageHandler;
-        webInspectorDomSelector?: WebInspectorMessageHandler;
         webInspectorWSUpdate?: WebInspectorMessageHandler;
     }
 

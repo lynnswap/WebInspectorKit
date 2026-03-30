@@ -6,40 +6,15 @@ import WebKit
 @MainActor
 struct DOMSessionTests {
     @Test
-    func detachClearsSelection() async {
+    func detachClearsLastPageWebView() async {
         let session = DOMSession(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
-        session.graphStore.applySelectionSnapshot(
-            .init(
-                localID: 42,
-                preview: "<div>",
-                attributes: [DOMAttribute(nodeId: 42, name: "class", value: "title")],
-                path: ["html", "body", "div"],
-                selectorPath: "#title",
-                styleRevision: 1
-            )
-        )
-        session.graphStore.applyMatchedStyles(
-            .init(
-                nodeId: 42,
-                rules: [
-                    DOMMatchedStyleRule(
-                        origin: .author,
-                        selectorText: ".title",
-                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                        sourceLabel: "inline"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 2
-            ),
-            for: 42
-        )
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
 
         await session.detach()
 
-        #expect(session.graphStore.selectedEntry == nil)
-        #expect(session.graphStore.entriesByID.isEmpty)
-        #expect(session.graphStore.rootID == nil)
+        #expect(session.lastPageWebView == nil)
+        #expect(session.pageWebView == nil)
     }
 
     @Test
@@ -63,22 +38,6 @@ struct DOMSessionTests {
         let session = DOMSession(configuration: .init(snapshotDepth: 2))
         do {
             _ = try await session.captureSnapshot(maxDepth: 2)
-            #expect(Bool(false))
-        } catch let error as WebInspectorCoreError {
-            guard case .scriptUnavailable = error else {
-                #expect(Bool(false))
-                return
-            }
-        } catch {
-            #expect(Bool(false))
-        }
-    }
-
-    @Test
-    func selectionCopyTextWithoutWebViewThrows() async {
-        let session = DOMSession(configuration: .init())
-        do {
-            _ = try await session.selectionCopyText(nodeId: 1, kind: .html)
             #expect(Bool(false))
         } catch let error as WebInspectorCoreError {
             guard case .scriptUnavailable = error else {
@@ -123,24 +82,18 @@ struct DOMSessionTests {
     }
 
     @Test
-    func reattachingSameWebViewKeepsSelectionAndDoesNotRequestReload() async {
+    func reattachingSameWebViewDoesNotRequestReload() async {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
         let firstAttach = await session.attach(to: webView)
         #expect(firstAttach.shouldReload == true)
-        #expect(firstAttach.preserveState == false)
-
-        session.graphStore.applySelectionSnapshot(
-            .init(localID: 42, preview: "<div id=\"selected\">", attributes: [], path: [], selectorPath: "", styleRevision: 0)
-        )
+        #expect(firstAttach.shouldPreserveInspectorState == false)
 
         let secondAttach = await session.attach(to: webView)
 
         #expect(secondAttach.shouldReload == false)
-        #expect(secondAttach.preserveState == false)
-        #expect(session.graphStore.selectedEntry?.id.localID == 42)
-        #expect(session.graphStore.selectedEntry?.preview == "<div id=\"selected\">")
+        #expect(secondAttach.shouldPreserveInspectorState == false)
     }
 
     @Test
@@ -201,6 +154,64 @@ struct DOMSessionTests {
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+    }
+
+    @Test
+    func pageEpochSyncClearsCachedHandles() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: 1)
+        #expect(handleCache.handle(for: 1) != nil)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1)
+
+        for _ in 0..<20 where handleCache.handle(for: 1) != nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(handleCache.handle(for: 1) == nil)
+    }
+
+    @Test
+    func stalePageEpochSyncDoesNotRegressNativeEpoch() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1)
+        let firstSyncApplied = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            return jsEpoch == 1 && extractPageEpoch(from: agent) == 1
+        }
+        #expect(firstSyncApplied == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+        let staleSyncDidNotRegress = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            return jsEpoch == 1 && extractPageEpoch(from: agent) == 1
+        }
+        #expect(staleSyncDidNotRegress == true)
     }
 
     @Test
@@ -603,6 +614,48 @@ struct DOMSessionTests {
         )
         return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
+}
+
+private func extractHandleCache(from agent: DOMPageAgent) -> WIJSHandleCache? {
+    Mirror(reflecting: agent).descendant("handleCache") as? WIJSHandleCache
+}
+
+private func extractPageEpoch(from agent: DOMPageAgent) -> Int? {
+    Mirror(reflecting: agent).descendant("pageEpoch") as? Int
+}
+
+@MainActor
+private func currentDOMAgentPageEpoch(in webView: WKWebView) async throws -> Int? {
+    let rawValue = try await webView.evaluateJavaScript(
+        "(() => window.webInspectorDOM?.debugStatus?.().pageEpoch ?? null)();",
+        in: nil,
+        contentWorld: WISPIContentWorldProvider.bridgeWorld()
+    )
+    if rawValue is NSNull {
+        return nil
+    }
+    if let value = rawValue as? Int {
+        return value
+    }
+    if let value = rawValue as? NSNumber {
+        return value.intValue
+    }
+    return nil
+}
+
+@MainActor
+private func waitForCondition(
+    attempts: Int = 20,
+    intervalNanoseconds: UInt64 = 10_000_000,
+    condition: @escaping @MainActor () async -> Bool
+) async -> Bool {
+    for _ in 0..<attempts {
+        if await condition() {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: intervalNanoseconds)
+    }
+    return await condition()
 }
 
 private final class RecordingUserContentController: WKUserContentController {

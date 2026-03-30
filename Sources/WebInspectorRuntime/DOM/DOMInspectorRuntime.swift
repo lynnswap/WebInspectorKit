@@ -15,7 +15,7 @@ enum DOMDocumentReloadMode: String, Equatable {
 final class DOMInspectorRuntime: NSObject {
     private final class RequestScope {}
     private struct DocumentScope {
-        let documentToken: UInt64
+        let documentScopeID: UInt64
         let requestScope: RequestScope
     }
     private struct DeferredDOMBundle {
@@ -96,8 +96,8 @@ final class DOMInspectorRuntime: NSObject {
     private let bridgeRuntime = WISPIRuntime.shared
     private var nextTransitionGeneration: UInt64 = 0
     var onRecoverableError: (@MainActor (String?) -> Void)?
-    private var nextDocumentToken: UInt64 = 0
-    private var currentDocumentScope = DocumentScope(documentToken: 0, requestScope: RequestScope())
+    private var nextDocumentScopeID: UInt64 = 0
+    private var currentDocumentScope = DocumentScope(documentScopeID: 0, requestScope: RequestScope())
     private var deferredDOMBundlesDuringBootstrap: [DeferredDOMBundle] = []
     private var needsFrontendDocumentRequestDrain = false
     private var needsFrontendChildNodeRetryDrain = false
@@ -170,7 +170,7 @@ final class DOMInspectorRuntime: NSObject {
             preservingInspectorState: preservingInspectorState,
             generation: enqueuedMutationGeneration,
             pageEpoch: pageEpoch,
-            documentToken: currentDocumentScope.documentToken
+            documentScopeID: currentDocumentScope.documentScopeID
         )
     }
 
@@ -231,7 +231,7 @@ final class DOMInspectorRuntime: NSObject {
             let nextDocumentScope = makeNextDocumentScope()
             let didResetChildRequests = await dispatchResetChildNodeRequestsToFrontend(
                 pageEpoch: transition.epoch,
-                documentToken: currentDocumentScope.documentToken
+                documentScopeID: currentDocumentScope.documentScopeID
             )
             guard didResetChildRequests else {
                 completeTransition(transition)
@@ -281,8 +281,8 @@ final class DOMInspectorRuntime: NSObject {
         pageEpoch
     }
 
-    var currentDocumentToken: UInt64 {
-        currentDocumentScope.documentToken
+    var currentDocumentScopeID: UInt64 {
+        currentDocumentScope.documentScopeID
     }
 
     var currentBootstrapPayload: [String: Any] {
@@ -312,6 +312,13 @@ final class DOMInspectorRuntime: NSObject {
 }
 
 extension DOMInspectorRuntime {
+    private func syncCurrentDocumentScopeIDIfNeeded() {
+        let documentScopeID = currentDocumentScope.documentScopeID
+        Task.immediateIfAvailable { [weak self] in
+            await self?.session.syncCurrentDocumentScopeIDIfNeeded(documentScopeID)
+        }
+    }
+
     private func replaceBoundDocumentStore(with store: DOMDocumentStore) {
         if currentDocumentStoreOverride != nil {
             currentDocumentStoreOverride = store
@@ -322,8 +329,8 @@ extension DOMInspectorRuntime {
     }
 
     private func makeNextDocumentScope() -> DocumentScope {
-        nextDocumentToken &+= 1
-        return .init(documentToken: nextDocumentToken, requestScope: RequestScope())
+        nextDocumentScopeID &+= 1
+        return .init(documentScopeID: nextDocumentScopeID, requestScope: RequestScope())
     }
 
     private func replaceCurrentDocumentStore() {
@@ -331,7 +338,8 @@ extension DOMInspectorRuntime {
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         currentDocumentScope = nextScope
-        replaceBoundDocumentStore(with: DOMDocumentStore(documentToken: nextScope.documentToken))
+        replaceBoundDocumentStore(with: DOMDocumentStore())
+        syncCurrentDocumentScopeIDIfNeeded()
     }
 
     private func commitCurrentDocumentScope(
@@ -343,9 +351,10 @@ extension DOMInspectorRuntime {
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         if clearCurrentContents {
-            currentDocumentStore.clearDocument(documentToken: nextScope.documentToken)
+            currentDocumentStore.clearDocument()
         }
         bridge.refreshBootstrapPayloadIfPossible()
+        syncCurrentDocumentScopeIDIfNeeded()
     }
 
     private func advanceCurrentDocumentScope(clearCurrentContents: Bool) {
@@ -452,7 +461,7 @@ extension DOMInspectorRuntime {
             "subtreeDepth": configuration.subtreeDepth,
             "autoUpdateDebounce": configuration.autoUpdateDebounce,
             "pageEpoch": pageEpoch,
-            "documentToken": currentDocumentScope.documentToken,
+            "documentScopeID": currentDocumentScope.documentScopeID,
         ]
     }
 
@@ -714,14 +723,14 @@ extension DOMInspectorRuntime {
         }
 #endif
         let requestScope = currentRequestScope
-        let requestDocumentToken = currentDocumentScope.documentToken
+        let requestDocumentScopeID = currentDocumentScope.documentScopeID
         do {
             let payload = try await session.captureSnapshotPayload(maxDepth: depth)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
                 needsFrontendDocumentRequestDrain = true
                 _ = await dispatchRejectDocumentRequestToFrontend(
                     pageEpoch: expectedPageEpoch,
-                    documentToken: requestDocumentToken
+                    documentScopeID: requestDocumentScopeID
                 )
                 return true
             }
@@ -729,7 +738,7 @@ extension DOMInspectorRuntime {
                 payload,
                 mode: mode.rawValue,
                 pageEpoch: expectedPageEpoch,
-                documentToken: requestDocumentToken,
+                documentScopeID: requestDocumentScopeID,
                 requestScope: requestScope
             ) else {
                 return false
@@ -738,10 +747,7 @@ extension DOMInspectorRuntime {
                 return true
             }
             if let snapshot = payloadNormalizer.normalizeSnapshot(payload) {
-                currentDocumentStore.replaceDocument(
-                    with: snapshot,
-                    documentToken: requestDocumentToken
-                )
+                currentDocumentStore.replaceDocument(with: snapshot)
             }
             return true
         } catch {
@@ -756,7 +762,7 @@ extension DOMInspectorRuntime {
         matchedStylesRequestCount += 1
         let requestGeneration = matchedStylesRequestCount
         let requestScope = currentRequestScope
-        let selectionDocumentToken = currentDocumentScope.documentToken
+        let selectionDocumentScopeID = currentDocumentScope.documentScopeID
         currentDocumentStore.beginMatchedStylesLoading(for: selectionEntry)
 
         matchedStylesTask = Task { [weak self] in
@@ -769,7 +775,7 @@ extension DOMInspectorRuntime {
                 guard self.isCurrentMatchedStylesRequest(
                     generation: requestGeneration,
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ),
                 self.currentRequestScope === requestScope
                 else {
@@ -777,7 +783,7 @@ extension DOMInspectorRuntime {
                 }
                 guard let currentSelection = self.currentSelectedEntry(
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
                 }
@@ -791,7 +797,7 @@ extension DOMInspectorRuntime {
                 guard self.isCurrentMatchedStylesRequest(
                     generation: requestGeneration,
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ),
                 self.currentRequestScope === requestScope
                 else {
@@ -799,7 +805,7 @@ extension DOMInspectorRuntime {
                 }
                 guard let currentSelection = self.currentSelectedEntry(
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
                 }
@@ -818,9 +824,9 @@ extension DOMInspectorRuntime {
         return try await session.matchedStyles(nodeId: nodeID)
     }
 
-    func isCurrentMatchedStylesRequest(generation: Int, nodeID: Int, documentToken: UInt64) -> Bool {
+    func isCurrentMatchedStylesRequest(generation: Int, nodeID: Int, documentScopeID: UInt64) -> Bool {
         matchedStylesRequestCount == generation
-            && currentSelectedEntry(nodeID: nodeID, documentToken: documentToken) != nil
+            && currentSelectedEntry(nodeID: nodeID, documentScopeID: documentScopeID) != nil
     }
 
     func cancelMatchedStylesRequest() {
@@ -833,7 +839,7 @@ extension DOMInspectorRuntime {
         selectorPathRequestCount += 1
         let requestGeneration = selectorPathRequestCount
         let requestScope = currentRequestScope
-        let selectionDocumentToken = currentDocumentScope.documentToken
+        let selectionDocumentScopeID = currentDocumentScope.documentScopeID
 
         selectorPathTask = Task { [weak self] in
             guard let self else {
@@ -846,13 +852,13 @@ extension DOMInspectorRuntime {
                 }
                 guard self.selectorPathRequestCount == requestGeneration,
                       self.currentRequestScope === requestScope,
-                      self.currentSelectedEntry(nodeID: nodeID, documentToken: selectionDocumentToken) != nil
+                      self.currentSelectedEntry(nodeID: nodeID, documentScopeID: selectionDocumentScopeID) != nil
                 else {
                     return
                 }
                 guard let currentSelection = self.currentSelectedEntry(
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
                 }
@@ -860,13 +866,13 @@ extension DOMInspectorRuntime {
             } catch {
                 guard self.selectorPathRequestCount == requestGeneration,
                       self.currentRequestScope === requestScope,
-                      self.currentSelectedEntry(nodeID: nodeID, documentToken: selectionDocumentToken) != nil
+                      self.currentSelectedEntry(nodeID: nodeID, documentScopeID: selectionDocumentScopeID) != nil
                 else {
                     return
                 }
                 guard let currentSelection = self.currentSelectedEntry(
                     nodeID: nodeID,
-                    documentToken: selectionDocumentToken
+                    documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
                 }
@@ -905,8 +911,8 @@ extension DOMInspectorRuntime {
         return nil
     }
 
-    func currentSelectedEntry(nodeID: Int, documentToken: UInt64) -> DOMEntry? {
-        guard currentDocumentScope.documentToken == documentToken,
+    func currentSelectedEntry(nodeID: Int, documentScopeID: UInt64) -> DOMEntry? {
+        guard currentDocumentScope.documentScopeID == documentScopeID,
               let selectedEntry = currentDocumentStore.selectedEntry,
               selectedEntry.backendNodeID == nodeID
         else {
@@ -919,11 +925,11 @@ extension DOMInspectorRuntime {
 extension DOMInspectorRuntime {
     private func canDispatchFrontendPayload(
         pageEpoch: Int,
-        documentToken: UInt64,
+        documentScopeID: UInt64,
         requestScope: RequestScope
     ) -> Bool {
         self.pageEpoch == pageEpoch
-            && currentDocumentScope.documentToken == documentToken
+            && currentDocumentScope.documentScopeID == documentScopeID
             && currentRequestScope === requestScope
     }
 
@@ -932,12 +938,12 @@ extension DOMInspectorRuntime {
         _ payload: Any,
         mode: String,
         pageEpoch: Int,
-        documentToken: UInt64,
+        documentScopeID: UInt64,
         requestScope: RequestScope
     ) async -> Bool {
         guard canDispatchFrontendPayload(
             pageEpoch: pageEpoch,
-            documentToken: documentToken,
+            documentScopeID: documentScopeID,
             requestScope: requestScope
         ) else {
             return true
@@ -949,7 +955,7 @@ extension DOMInspectorRuntime {
                 "payload": payload,
                 "mode": mode,
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -958,12 +964,12 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, mode, pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, mode, pageEpoch, documentScopeID)",
                 arguments: [
                     "payload": payload,
                     "mode": mode,
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -978,12 +984,12 @@ extension DOMInspectorRuntime {
     private func dispatchSubtreePayloadToFrontend(
         _ payload: Any,
         pageEpoch: Int,
-        documentToken: UInt64,
+        documentScopeID: UInt64,
         requestScope: RequestScope
     ) async -> Bool {
         guard canDispatchFrontendPayload(
             pageEpoch: pageEpoch,
-            documentToken: documentToken,
+            documentScopeID: documentScopeID,
             requestScope: requestScope
         ) else {
             return true
@@ -994,7 +1000,7 @@ extension DOMInspectorRuntime {
                 "kind": "subtree",
                 "payload": payload,
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1003,11 +1009,11 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, pageEpoch, documentScopeID)",
                 arguments: [
                     "payload": payload,
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1022,7 +1028,7 @@ extension DOMInspectorRuntime {
     private func dispatchCompleteChildNodeRequestToFrontend(
         nodeID: Int,
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
@@ -1030,7 +1036,7 @@ extension DOMInspectorRuntime {
                 "kind": "completeChildNodeRequest",
                 "nodeId": nodeID,
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1039,11 +1045,11 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.completeChildNodeRequest?.(nodeId, pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.completeChildNodeRequest?.(nodeId, pageEpoch, documentScopeID)",
                 arguments: [
                     "nodeId": nodeID,
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1058,7 +1064,7 @@ extension DOMInspectorRuntime {
     private func dispatchRejectChildNodeRequestToFrontend(
         nodeID: Int,
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
@@ -1066,7 +1072,7 @@ extension DOMInspectorRuntime {
                 "kind": "rejectChildNodeRequest",
                 "nodeId": nodeID,
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1075,11 +1081,11 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.rejectChildNodeRequest?.(nodeId, pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.rejectChildNodeRequest?.(nodeId, pageEpoch, documentScopeID)",
                 arguments: [
                     "nodeId": nodeID,
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1093,14 +1099,14 @@ extension DOMInspectorRuntime {
     @discardableResult
     private func dispatchRetryQueuedChildNodeRequestsToFrontend(
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
             return await testFrontendDispatchOverride([
                 "kind": "retryQueuedChildNodeRequests",
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1109,10 +1115,10 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.retryQueuedChildNodeRequests?.(pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.retryQueuedChildNodeRequests?.(pageEpoch, documentScopeID)",
                 arguments: [
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1126,14 +1132,14 @@ extension DOMInspectorRuntime {
     @discardableResult
     private func dispatchResetChildNodeRequestsToFrontend(
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
             return await testFrontendDispatchOverride([
                 "kind": "resetChildNodeRequests",
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1142,10 +1148,10 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.resetChildNodeRequests?.(pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.resetChildNodeRequests?.(pageEpoch, documentScopeID)",
                 arguments: [
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1159,14 +1165,14 @@ extension DOMInspectorRuntime {
     @discardableResult
     private func dispatchCompleteDocumentRequestToFrontend(
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
             return await testFrontendDispatchOverride([
                 "kind": "completeDocumentRequest",
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1175,10 +1181,10 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.completeDocumentRequest?.(pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.completeDocumentRequest?.(pageEpoch, documentScopeID)",
                 arguments: [
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1192,14 +1198,14 @@ extension DOMInspectorRuntime {
     @discardableResult
     private func dispatchRejectDocumentRequestToFrontend(
         pageEpoch: Int,
-        documentToken: UInt64
+        documentScopeID: UInt64
     ) async -> Bool {
 #if DEBUG
         if let testFrontendDispatchOverride {
             return await testFrontendDispatchOverride([
                 "kind": "rejectDocumentRequest",
                 "pageEpoch": pageEpoch,
-                "documentToken": documentToken,
+                "documentScopeID": documentScopeID,
             ])
         }
 #endif
@@ -1208,10 +1214,10 @@ extension DOMInspectorRuntime {
         }
         do {
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.rejectDocumentRequest?.(pageEpoch, documentToken)",
+                "window.webInspectorDOMFrontend?.rejectDocumentRequest?.(pageEpoch, documentScopeID)",
                 arguments: [
                     "pageEpoch": pageEpoch,
-                    "documentToken": documentToken,
+                    "documentScopeID": documentScopeID,
                 ],
                 contentWorld: .page
             )
@@ -1252,7 +1258,7 @@ extension DOMInspectorRuntime {
         }
         let expectedPageEpoch = pageEpoch
         let requestScope = currentRequestScope
-        let requestDocumentToken = currentDocumentScope.documentToken
+        let requestDocumentScopeID = currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             guard let self else {
                 return
@@ -1264,21 +1270,21 @@ extension DOMInspectorRuntime {
                     _ = await self.dispatchRejectChildNodeRequestToFrontend(
                         nodeID: nodeID,
                         pageEpoch: expectedPageEpoch,
-                        documentToken: requestDocumentToken
+                        documentScopeID: requestDocumentScopeID
                     )
                     return
                 }
                 let didDispatch = await self.dispatchSubtreePayloadToFrontend(
                     payload,
                     pageEpoch: expectedPageEpoch,
-                    documentToken: requestDocumentToken,
+                    documentScopeID: requestDocumentScopeID,
                     requestScope: requestScope
                 )
                 if !didDispatch {
                     _ = await self.dispatchCompleteChildNodeRequestToFrontend(
                         nodeID: nodeID,
                         pageEpoch: expectedPageEpoch,
-                        documentToken: requestDocumentToken
+                        documentScopeID: requestDocumentScopeID
                     )
                     return
                 }
@@ -1300,7 +1306,7 @@ extension DOMInspectorRuntime {
                 _ = await self.dispatchCompleteChildNodeRequestToFrontend(
                     nodeID: nodeID,
                     pageEpoch: expectedPageEpoch,
-                    documentToken: requestDocumentToken
+                    documentScopeID: requestDocumentScopeID
                 )
             }
         }
@@ -1326,31 +1332,31 @@ extension DOMInspectorRuntime {
         }
     }
 
-    func handleRejectedDocumentRequestMessage(pageEpoch: Int?, documentToken: UInt64?) {
+    func handleRejectedDocumentRequestMessage(pageEpoch: Int?, documentScopeID: UInt64?) {
         guard let pageEpoch, pageEpoch == self.pageEpoch else {
             return
         }
         needsFrontendDocumentRequestDrain = true
-        let responseDocumentToken = documentToken ?? currentDocumentScope.documentToken
+        let responseDocumentScopeID = documentScopeID ?? currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchRejectDocumentRequestToFrontend(
                 pageEpoch: pageEpoch,
-                documentToken: responseDocumentToken
+                documentScopeID: responseDocumentScopeID
             )
         }
     }
 
-    func handleRejectedChildNodeRequestMessage(nodeID: Int?, pageEpoch: Int?, documentToken: UInt64?) {
+    func handleRejectedChildNodeRequestMessage(nodeID: Int?, pageEpoch: Int?, documentScopeID: UInt64?) {
         guard let nodeID, nodeID > 0, let pageEpoch, pageEpoch == self.pageEpoch else {
             return
         }
         needsFrontendChildNodeRetryDrain = true
-        let responseDocumentToken = documentToken ?? currentDocumentScope.documentToken
+        let responseDocumentScopeID = documentScopeID ?? currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchRejectChildNodeRequestToFrontend(
                 nodeID: nodeID,
                 pageEpoch: pageEpoch,
-                documentToken: responseDocumentToken
+                documentScopeID: responseDocumentScopeID
             )
         }
     }
@@ -1363,10 +1369,7 @@ extension DOMInspectorRuntime {
         case let .snapshot(snapshot, shouldResetDocument):
             payloadNormalizer.resetForDocumentUpdate()
             advanceCurrentDocumentScope(clearCurrentContents: shouldResetDocument)
-            currentDocumentStore.replaceDocument(
-                with: snapshot,
-                documentToken: currentDocumentScope.documentToken
-            )
+            currentDocumentStore.replaceDocument(with: snapshot)
         case let .mutations(bundle):
             applyMutationBundleAcrossDocumentUpdates(bundle)
             if bundle.events.contains(where: Self.isStructuralMutationEvent),
@@ -1392,7 +1395,7 @@ extension DOMInspectorRuntime {
     }
 
     func handleDOMBundle(_ bundle: DOMBundle) {
-        guard acceptsDOMBundle(pageEpoch: bundle.pageEpoch) else {
+        guard acceptsDOMBundle(documentScopeID: bundle.documentScopeID) else {
             return
         }
         if bootstrapTask != nil {
@@ -1416,7 +1419,7 @@ extension DOMInspectorRuntime {
         // Transition/reset clears this queue, so the remaining entries all belong to the
         // current bootstrap session and must replay in-order even if one bundle replaces the document.
         for entry in bundles {
-            guard acceptsDOMBundle(pageEpoch: entry.bundle.pageEpoch) else {
+            guard acceptsDOMBundle(documentScopeID: entry.bundle.documentScopeID) else {
                 continue
             }
             applyDOMBundleToCurrentDocumentStore(entry.bundle)
@@ -1442,10 +1445,10 @@ extension DOMInspectorRuntime {
         }
     }
 
-    func acceptsFrontendMessage(pageEpoch: Int?, documentToken: UInt64?) -> Bool {
+    func acceptsFrontendMessage(pageEpoch: Int?, documentScopeID: UInt64?) -> Bool {
         phase.allowsFrontendTraffic
             && (pageEpoch ?? 0) == self.pageEpoch
-            && (documentToken == nil || documentToken == currentDocumentScope.documentToken)
+            && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
     }
 
     private static func isStructuralMutationEvent(_ event: DOMGraphMutationEvent) -> Bool {
@@ -1470,11 +1473,11 @@ extension DOMInspectorRuntime {
         }
         needsFrontendDocumentRequestDrain = false
         let pageEpoch = self.pageEpoch
-        let documentToken = currentDocumentScope.documentToken
+        let documentScopeID = currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchCompleteDocumentRequestToFrontend(
                 pageEpoch: pageEpoch,
-                documentToken: documentToken
+                documentScopeID: documentScopeID
             )
         }
     }
@@ -1485,22 +1488,23 @@ extension DOMInspectorRuntime {
         }
         needsFrontendChildNodeRetryDrain = false
         let pageEpoch = self.pageEpoch
-        let documentToken = currentDocumentScope.documentToken
+        let documentScopeID = currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchRetryQueuedChildNodeRequestsToFrontend(
                 pageEpoch: pageEpoch,
-                documentToken: documentToken
+                documentScopeID: documentScopeID
             )
         }
     }
 
-    func acceptsDOMBundle(pageEpoch: Int?) -> Bool {
-        !phase.isTransitioning && (pageEpoch ?? 0) == self.pageEpoch
+    func acceptsDOMBundle(documentScopeID: DOMDocumentScopeID?) -> Bool {
+        !phase.isTransitioning
+            && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
     }
 
-    func acceptsReadyMessage(pageEpoch: Int?, documentToken: UInt64?) -> Bool {
+    func acceptsReadyMessage(pageEpoch: Int?, documentScopeID: UInt64?) -> Bool {
         (pageEpoch ?? 0) == self.pageEpoch
-            && (documentToken == nil || documentToken == currentDocumentScope.documentToken)
+            && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
     }
 
     func handleReadyMessage() {
