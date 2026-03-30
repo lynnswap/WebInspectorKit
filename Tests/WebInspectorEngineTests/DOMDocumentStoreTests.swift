@@ -2,10 +2,10 @@ import Testing
 @testable import WebInspectorEngine
 
 @MainActor
-struct DOMGraphStoreTests {
+struct DOMDocumentStoreTests {
     @Test
     func selectionIsPreservedWhenSelectedNodeIsRebuiltWithSameID() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2)])
@@ -32,7 +32,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func selectionClearsWhenSelectedNodeIsRemoved() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2)])
@@ -52,21 +52,13 @@ struct DOMGraphStoreTests {
     }
 
     @Test
-    func documentUpdatedInMutationBundleResetsGenerationAndSelection() {
-        let store = DOMGraphStore()
-        let initialGeneration = store.documentGeneration
+    func resetContentsForFreshReloadClearsEntriesAndSelection() {
+        let store = DOMDocumentStore()
         store.applySnapshot(.init(root: makeNode(localID: 1)))
         store.select(localID: 1)
 
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .documentUpdated,
-                ]
-            )
-        )
+        store.resetContentsForFreshReload()
 
-        #expect(store.documentGeneration == initialGeneration + 1)
         #expect(store.entriesByID.isEmpty)
         #expect(store.rootID == nil)
         #expect(store.selectedEntry == nil)
@@ -74,7 +66,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func clearingSelectionAlsoClearsMatchedStylesOnPreviouslySelectedEntry() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySelectionSnapshot(
             .init(
                 localID: 42,
@@ -113,7 +105,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func replaceSubtreeForUnknownNodeDoesNotRewriteRoot() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2)])
@@ -135,7 +127,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func replaceSubtreeForRootKeepsRootIDAndReplacesChildren() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2)])
@@ -158,7 +150,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func childNodeInsertedWithUnknownPreviousSiblingAppendsToEnd() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
@@ -183,7 +175,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func childNodeInsertedIncrementsChildCountForPartiallyLoadedParent() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(
@@ -212,7 +204,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func childNodeInsertedWithZeroPreviousSiblingPrependsToStart() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
@@ -237,7 +229,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func replaceSubtreeForDetachedPlaceholderDoesNotPromotePlaceholderToRoot() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(localID: 1, children: [makeNode(localID: 2)])
@@ -270,7 +262,7 @@ struct DOMGraphStoreTests {
 
     @Test
     func replaceSubtreeUnderPartiallyLoadedParentKeepsChildCount() {
-        let store = DOMGraphStore()
+        let store = DOMDocumentStore()
         store.applySnapshot(
             .init(
                 root: makeNode(

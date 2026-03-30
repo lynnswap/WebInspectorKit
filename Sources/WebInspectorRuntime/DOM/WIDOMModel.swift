@@ -16,13 +16,26 @@ public typealias DOMSelectionResult = DOMPageAgent.SelectionModeResult
 @Observable
 public final class WIDOMModel {
     private final class SelectionRequest {}
+    private enum DocumentReloadMode {
+        case fresh
+        case preservingInspectorState
 
-    public let session: DOMSession
-    private let frontendStore: DOMFrontendStore
+        var runtimeMode: DOMDocumentReloadMode {
+            switch self {
+            case .fresh:
+                .fresh
+            case .preservingInspectorState:
+                .preserveUIState
+            }
+        }
+    }
 
-    public private(set) var errorMessage: String?
+    let session: DOMSession
+    let frontendStore: DOMInspectorRuntime
+    public private(set) var documentStore: DOMDocumentStore
     public private(set) var isSelectingElement = false
 
+    @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
     @ObservationIgnored private var activeSelectionRequest: SelectionRequest?
     @ObservationIgnored private var selectionInteractionTask: Task<Void, Never>?
     @ObservationIgnored private var selectionInteractionGeneration: UInt64 = 0
@@ -34,11 +47,18 @@ public final class WIDOMModel {
 
     package init(
         session: DOMSession,
-        onRecoverableError: (@MainActor (String) -> Void)? = nil
+        onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
         self.session = session
-        self.frontendStore = DOMFrontendStore(session: session)
-        self.frontendStore.onRecoverableError = onRecoverableError
+        self.documentStore = DOMDocumentStore()
+        self.frontendStore = DOMInspectorRuntime(session: session)
+        self.externalRecoverableErrorHandler = onRecoverableError
+        self.frontendStore.onRecoverableError = { [weak self] message in
+            self?.applyRecoverableError(message)
+        }
+        self.frontendStore.bindDocumentStore(self.documentStore) { [weak self] store in
+            self?.documentStore = store
+        }
     }
 
     isolated deinit {
@@ -53,51 +73,90 @@ public final class WIDOMModel {
         session.hasPageWebView
     }
 
-    public var selectedEntry: DOMEntry? {
-        session.graphStore.selectedEntry
-    }
-
-    package func setRecoverableErrorHandler(_ handler: (@MainActor (String) -> Void)?) {
-        frontendStore.onRecoverableError = handler
+    package func setRecoverableErrorHandler(_ handler: (@MainActor (String?) -> Void)?) {
+        externalRecoverableErrorHandler = handler
     }
 
     package func makeInspectorWebView() -> WKWebView {
         frontendStore.makeInspectorWebView()
     }
 
-    package func enqueueMutationBundle(_ bundle: Any, preserveState: Bool) {
-        frontendStore.enqueueMutationBundle(bundle, preserveState: preserveState)
+    package func enqueueMutationBundle(_ bundle: Any, preservingInspectorState: Bool) {
+        frontendStore.enqueueMutationBundle(bundle, preservingInspectorState: preservingInspectorState)
+    }
+
+    package func requestReloadPage() {
+        guard session.pageWebView != nil else {
+            return
+        }
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else {
+                return
+            }
+            await self.resetInteractionState()
+            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else {
+                return
+            }
+            await self.frontendStore.performPageTransition { nextPageEpoch in
+                self.session.preparePageEpoch(nextPageEpoch)
+                await self.session.reloadPageAndWaitForPreparedPageEpochSync()
+            }
+        }
     }
 
     package var pendingMutationBundleCount: Int {
         frontendStore.pendingMutationBundleCount
     }
 
-    func withFrontendStore(_ body: (DOMFrontendStore) -> Void) {
-        body(frontendStore)
-    }
-
     func attach(to webView: WKWebView) async {
         await resetInteractionState()
-        if let previousPageWebView = session.lastPageWebView, previousPageWebView !== webView {
-            frontendStore.clearPendingMutationBundles()
+        let needsPageEpochAdvance = session.lastPageWebView != nil && session.pageWebView !== webView
+        let outcome: DOMSession.AttachmentResult
+        if needsPageEpochAdvance {
+            outcome = await frontendStore.performPageTransition { nextPageEpoch in
+                self.session.preparePageEpoch(nextPageEpoch)
+                await self.session.suspend()
+                self.session.preparePageEpoch(nextPageEpoch)
+                return await self.session.attach(to: webView)
+            }
+        } else {
+            session.preparePageEpoch(frontendStore.currentPageEpoch)
+            outcome = await session.attach(to: webView)
         }
-        let outcome = await session.attach(to: webView)
         if outcome.shouldReload {
-            await reloadInspectorImpl(preserveState: outcome.preserveState)
+            await reloadDocumentImpl(
+                outcome.shouldPreserveInspectorState ? .preservingInspectorState : .fresh
+            )
         }
     }
 
     func suspend() async {
         await resetInteractionState()
-        await session.suspend()
+        if session.hasPageWebView {
+            await frontendStore.performPageTransition(resumeBootstrap: false) { _ in
+                await self.session.suspend()
+            }
+        } else {
+            await session.suspend()
+        }
     }
 
     func detach() async {
         await resetInteractionState()
-        await session.detach()
+        if session.hasPageWebView {
+            await frontendStore.performPageTransition(resumeBootstrap: false) { _ in
+                await self.session.detach()
+            }
+        } else {
+            await session.detach()
+            frontendStore.resetDocumentStoreForDetachment()
+        }
         frontendStore.detachInspectorWebView()
-        errorMessage = nil
+        documentStore.setErrorMessage(nil)
     }
 
     func setAutoSnapshotEnabled(_ enabled: Bool) async {
@@ -107,8 +166,12 @@ public final class WIDOMModel {
         await session.setAutoSnapshot(enabled: enabled)
     }
 
-    public func reloadInspector(preserveState: Bool = false) async {
-        await reloadInspectorImpl(preserveState: preserveState)
+    public func reloadDocument() async {
+        await reloadDocumentImpl(.fresh)
+    }
+
+    public func reloadDocumentPreservingInspectorState() async {
+        await reloadDocumentImpl(.preservingInspectorState)
     }
 
     public func updateSnapshotDepth(_ depth: Int) async {
@@ -131,6 +194,79 @@ public final class WIDOMModel {
         }
     }
 
+    package func requestReloadDocument() {
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.reloadDocumentImpl(.fresh, expectedPageEpoch: expectedPageEpoch)
+        }
+    }
+
+    package func requestReloadDocumentPreservingInspectorState() {
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.reloadDocumentImpl(.preservingInspectorState, expectedPageEpoch: expectedPageEpoch)
+        }
+    }
+
+    package func requestDeleteSelection(undoManager: UndoManager?) {
+        requestDeleteNode(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
+    }
+
+    package func requestDeleteNode(nodeId: Int?, undoManager: UndoManager?) {
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.deleteNodeImpl(
+                nodeId: nodeId,
+                undoManager: undoManager,
+                expectedPageEpoch: expectedPageEpoch
+            )
+        }
+    }
+
+    package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
+        try await session.selectionCopyText(nodeId: nodeId, kind: kind)
+    }
+
+    package func requestUpdateAttributeValue(name: String, value: String) {
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        let nodeId = selectedEntry?.backendNodeID
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.updateAttributeValueImpl(
+                nodeId: nodeId,
+                name: name,
+                value: value,
+                expectedPageEpoch: expectedPageEpoch
+            )
+        }
+    }
+
+    package func requestRemoveAttribute(name: String) {
+        let expectedPageEpoch = frontendStore.currentPageEpoch
+        let nodeId = selectedEntry?.backendNodeID
+        Task.immediateIfAvailable { [weak self] in
+            guard let self else {
+                return
+            }
+            await self.removeAttributeImpl(
+                nodeId: nodeId,
+                name: name,
+                expectedPageEpoch: expectedPageEpoch
+            )
+        }
+    }
+
     func tearDownForDeinit() {
         invalidateSelectionInteractionTask()
         activeSelectionRequest = nil
@@ -138,7 +274,7 @@ public final class WIDOMModel {
         pendingDeleteTask = nil
         frontendStore.detachInspectorWebView()
         session.tearDownForDeinit()
-        errorMessage = nil
+        documentStore.setErrorMessage(nil)
         isSelectingElement = false
         clearDeleteUndoHistory()
 #if canImport(UIKit)
@@ -146,45 +282,78 @@ public final class WIDOMModel {
 #endif
     }
 
-    public func copySelection(_ kind: DOMSelectionCopyKind) async throws -> String {
-        try await copySelectionImpl(kind)
+    public func copySelectedHTML() async throws -> String {
+        try await copySelectionImpl(.html)
     }
 
-    public func deleteSelectedNode() async {
-        await deleteSelectedNode(undoManager: nil)
+    public func copySelectedSelectorPath() async throws -> String {
+        try await copySelectionImpl(.selectorPath)
     }
 
-    public func deleteSelectedNode(undoManager: UndoManager?) async {
-        await deleteNodeImpl(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
+    public func copySelectedXPath() async throws -> String {
+        try await copySelectionImpl(.xpath)
     }
 
-    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async {
+    public func deleteSelection() async {
+        await deleteSelection(undoManager: nil)
+    }
+
+    public func deleteSelection(undoManager: UndoManager?) async {
+        await deleteNodeImpl(
+            nodeId: selectedEntry?.backendNodeID,
+            undoManager: undoManager
+        )
+    }
+
+    package func deleteNode(nodeId: Int?, undoManager: UndoManager?) async {
         await deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
     }
 
-    public func updateAttributeValue(name: String, value: String) async {
-        await updateAttributeValueImpl(name: name, value: value)
+    public func updateSelectedAttribute(name: String, value: String) async {
+        await updateAttributeValueImpl(
+            nodeId: selectedEntry?.backendNodeID,
+            name: name,
+            value: value
+        )
     }
 
-    public func removeAttribute(name: String) async {
-        await removeAttributeImpl(name: name)
+    public func removeSelectedAttribute(name: String) async {
+        await removeAttributeImpl(
+            nodeId: selectedEntry?.backendNodeID,
+            name: name
+        )
     }
 }
 
 private extension WIDOMModel {
-    func reloadInspectorImpl(preserveState: Bool) async {
+    var selectedEntry: DOMEntry? {
+        documentStore.selectedEntry
+    }
+
+    private func reloadDocumentImpl(
+        _ mode: DocumentReloadMode,
+        expectedPageEpoch: Int? = nil
+    ) async {
         guard session.hasPageWebView else {
-            errorMessage = "Web view unavailable."
+            applyRecoverableError("Web view unavailable.")
             return
-        }
-        if errorMessage != nil {
-            errorMessage = nil
         }
 
         let depth = session.configuration.snapshotDepth
-        await frontendStore.updateConfiguration(session.configuration)
-        await frontendStore.setPreferredDepth(depth)
-        await frontendStore.requestDocument(depth: depth, preserveState: preserveState)
+        let resolvedPageEpoch = expectedPageEpoch ?? frontendStore.currentPageEpoch
+        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
+            return
+        }
+        if documentStore.errorMessage != nil {
+            applyRecoverableError(nil)
+        }
+        await frontendStore.updateConfiguration(session.configuration, expectedPageEpoch: resolvedPageEpoch)
+        await frontendStore.setPreferredDepth(depth, expectedPageEpoch: resolvedPageEpoch)
+        await frontendStore.requestDocument(
+            depth: depth,
+            mode: mode.runtimeMode,
+            expectedPageEpoch: resolvedPageEpoch
+        )
     }
 
     func updateSnapshotDepthImpl(_ depth: Int) async {
@@ -210,20 +379,42 @@ private extension WIDOMModel {
         return try await session.selectionCopyText(nodeId: nodeId, kind: kind)
     }
 
-    func deleteNodeImpl(nodeId: Int?, undoManager: UndoManager?) async {
+    func deleteNodeImpl(
+        nodeId: Int?,
+        undoManager: UndoManager?,
+        expectedPageEpoch: Int? = nil
+    ) async {
         guard let nodeId else { return }
-        await enqueueDelete(nodeId: nodeId, undoManager: undoManager)
+        guard matchesCurrentPageEpoch(expectedPageEpoch) else {
+            return
+        }
+        await enqueueDelete(nodeId: nodeId, undoManager: undoManager, expectedPageEpoch: expectedPageEpoch)
     }
 
-    func updateAttributeValueImpl(name: String, value: String) async {
-        guard let nodeId = selectedEntry?.backendNodeID else { return }
-        session.graphStore.updateSelectedAttribute(name: name, value: value)
+    func updateAttributeValueImpl(
+        nodeId: Int?,
+        name: String,
+        value: String,
+        expectedPageEpoch: Int? = nil
+    ) async {
+        guard matchesCurrentPageEpoch(expectedPageEpoch),
+              let nodeId,
+              selectedEntry?.backendNodeID == nodeId
+        else { return }
+        documentStore.updateSelectedAttribute(name: name, value: value)
         await session.setAttribute(nodeId: nodeId, name: name, value: value)
     }
 
-    func removeAttributeImpl(name: String) async {
-        guard let nodeId = selectedEntry?.backendNodeID else { return }
-        session.graphStore.removeSelectedAttribute(name: name)
+    func removeAttributeImpl(
+        nodeId: Int?,
+        name: String,
+        expectedPageEpoch: Int? = nil
+    ) async {
+        guard matchesCurrentPageEpoch(expectedPageEpoch),
+              let nodeId,
+              selectedEntry?.backendNodeID == nodeId
+        else { return }
+        documentStore.removeSelectedAttribute(name: name)
         await session.removeAttribute(nodeId: nodeId, name: name)
     }
 
@@ -247,7 +438,11 @@ private extension WIDOMModel {
 #endif
     }
 
-    func enqueueDelete(nodeId: Int, undoManager: UndoManager?) async {
+    func enqueueDelete(
+        nodeId: Int,
+        undoManager: UndoManager?,
+        expectedPageEpoch: Int?
+    ) async {
         let previousTask = pendingDeleteTask
         let task = Task { [weak self] in
             guard let self else { return }
@@ -255,6 +450,7 @@ private extension WIDOMModel {
                 await previousTask.value
             }
             guard !Task.isCancelled else { return }
+            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else { return }
 
             guard let undoManager else {
                 await session.removeNode(nodeId: nodeId)
@@ -273,6 +469,13 @@ private extension WIDOMModel {
         }
         pendingDeleteTask = task
         await task.value
+    }
+
+    func matchesCurrentPageEpoch(_ expectedPageEpoch: Int?) -> Bool {
+        guard let expectedPageEpoch else {
+            return true
+        }
+        return frontendStore.currentPageEpoch == expectedPageEpoch
     }
 
     func copyToPasteboard(_ text: String) {
@@ -305,7 +508,7 @@ private extension WIDOMModel {
                 return
             }
             if let localID = UInt64(exactly: nodeId) {
-                session.graphStore.applySelectionSnapshot(
+                documentStore.applySelectionSnapshot(
                     .init(
                         localID: localID,
                         preview: "",
@@ -316,7 +519,7 @@ private extension WIDOMModel {
                     )
                 )
             }
-            await reloadInspector(preserveState: true)
+            await reloadDocumentPreservingInspectorState()
         }
     }
 
@@ -346,7 +549,7 @@ private extension WIDOMModel {
                 return
             }
             if selectedEntry?.backendNodeID == nodeId {
-                session.graphStore.select((nil as DOMEntryID?))
+                documentStore.clearSelection()
             }
         }
     }
@@ -442,7 +645,7 @@ private extension WIDOMModel {
 
     private func performSelectionRequest(_ request: SelectionRequest) async throws -> DOMSelectionResult {
         await session.hideHighlight()
-        errorMessage = nil
+        applyRecoverableError(nil)
         defer {
             finishSelectionRequest(request)
         }
@@ -460,7 +663,7 @@ private extension WIDOMModel {
             throw CancellationError()
         } catch {
             domViewLogger.error("selection mode failed: \(error.localizedDescription, privacy: .public)")
-            errorMessage = error.localizedDescription
+            applyRecoverableError(error.localizedDescription)
             throw error
         }
 
@@ -474,8 +677,13 @@ private extension WIDOMModel {
         await updateSnapshotDepthImpl(requestedDepth)
         try Task.checkCancellation()
         try ensureSelectionRequestIsCurrent(request)
-        await reloadInspectorImpl(preserveState: true)
+        await reloadDocumentImpl(.preservingInspectorState)
         return result
+    }
+
+    func applyRecoverableError(_ message: String?) {
+        documentStore.setErrorMessage(message)
+        externalRecoverableErrorHandler?(message)
     }
 
     func clearDeleteUndoHistory(using undoManager: UndoManager? = nil) {
