@@ -192,6 +192,38 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func uiKitChromeMetricsProviderIgnoresTabBarThatDoesNotReachBottomEdge() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        hostViewController.view.addSubview(webView)
+
+        let tabBarController = UITabBarController()
+        tabBarController.setViewControllers([hostViewController], animated: false)
+        let window = makeWindow(rootViewController: tabBarController)
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        hostViewController.view.frame = tabBarController.view.bounds
+        hostViewController.view.layoutIfNeeded()
+        tabBarController.view.layoutIfNeeded()
+
+        var tabBarFrame = tabBarController.tabBar.frame
+        tabBarFrame.origin.y = hostViewController.view.bounds.minY
+        tabBarController.tabBar.frame = tabBarFrame
+
+        let metrics = UIKitChromeViewportMetricsProvider().makeViewportMetrics(
+            in: hostViewController,
+            webView: webView,
+            keyboardOverlapHeight: 0,
+            inputAccessoryOverlapHeight: 0
+        )
+
+        #expect(metrics.bottomObscuredHeight == 0)
+    }
+
+    @Test
     func uiKitChromeMetricsProviderIgnoresAdditionalSafeAreaInsets() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -821,7 +853,10 @@ private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIVie
 
     let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
     let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-    guard hostFrameInWindow.intersects(chromeFrameInWindow) || chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+    guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+        return 0
+    }
+    guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
         return 0
     }
 

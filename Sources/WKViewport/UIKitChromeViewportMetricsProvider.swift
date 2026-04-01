@@ -111,7 +111,10 @@ public final class UIKitChromeViewportMetricsProvider: ViewportMetricsProvider {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard hostFrameInWindow.intersects(chromeFrameInWindow) || chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+        guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
+            return 0
+        }
+        guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
             return 0
         }
 
