@@ -120,28 +120,6 @@ public protocol ViewportMetricsProvider {
 }
 
 @MainActor
-public final class NavigationControllerViewportMetricsProvider: ViewportMetricsProvider {
-    public init() {}
-
-    public func makeViewportMetrics(
-        in hostViewController: UIViewController,
-        webView: WKWebView,
-        keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat
-    ) -> ViewportMetrics {
-        let safeAreaInsets = hostViewController.viewIfLoaded?.safeAreaInsets ?? .zero
-        return ViewportMetrics(
-            safeAreaInsets: safeAreaInsets,
-            topObscuredHeight: safeAreaInsets.top,
-            bottomObscuredHeight: safeAreaInsets.bottom,
-            keyboardOverlapHeight: keyboardOverlapHeight,
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
-            bottomChromeMode: .normal
-        )
-    }
-}
-
-@MainActor
 public final class ViewportCoordinator: NSObject {
     public weak var hostViewController: UIViewController? {
         didSet {
@@ -201,7 +179,7 @@ public final class ViewportCoordinator: NSObject {
         hostViewController: UIViewController? = nil,
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider()
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
@@ -216,7 +194,7 @@ public final class ViewportCoordinator: NSObject {
     public convenience init(
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider()
     ) {
         self.init(
             hostViewController: nil,

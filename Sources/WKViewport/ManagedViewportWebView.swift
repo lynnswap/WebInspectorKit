@@ -16,7 +16,7 @@ public final class ManagedViewportWebView: WKWebView {
         }
     }
 
-    public var viewportMetricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider() {
+    public var viewportMetricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider() {
         didSet {
             viewportCoordinator?.metricsProvider = viewportMetricsProvider
         }

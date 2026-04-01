@@ -139,6 +139,24 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testRegularNavigationBarContributesFullTopViewportInset() throws {
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+        drainMainQueue()
+
+        let adjustedTopInset = rootViewController.store.webView.scrollView.adjustedContentInset.top
+        let pageSafeAreaTop = pageViewController.view.safeAreaInsets.top
+        let windowSafeAreaTop = fixture.window.safeAreaInsets.top
+
+        XCTAssertEqual(adjustedTopInset, pageSafeAreaTop, accuracy: 0.5)
+        XCTAssertGreaterThan(adjustedTopInset, windowSafeAreaTop)
+    }
+
+    @MainActor
     func testCompactInspectorShowsElementTab() throws {
         let fixture = try makeHostedRootViewController()
         let rootViewController = fixture.rootViewController
