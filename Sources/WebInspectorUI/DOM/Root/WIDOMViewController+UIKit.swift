@@ -11,7 +11,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         case secondaryWithInspector
     }
 
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private let compactRootViewController: WIDOMTreeViewController
     private let compactNavigationController: UINavigationController
     private let domTreeViewController: WIDOMTreeViewController
@@ -105,7 +105,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return item
     }()
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspector) {
         self.inspector = inspector
 
         let compactRootViewController = WIDOMTreeViewController(
@@ -355,7 +355,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     private func makeDOMSecondaryMenu() -> UIMenu {
         DOMSecondaryMenuBuilder.makeMenu(
-            hasSelection: inspector.documentStore.selectedEntry != nil,
+            hasSelection: inspector.document.selectedNode != nil,
             hasPageWebView: inspector.hasPageWebView,
             onCopyHTML: { [weak self] in
                 self?.copySelectedHTML()
@@ -367,10 +367,12 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
                 self?.copySelectedXPath()
             },
             onReloadInspector: { [weak self] in
-                self?.inspector.requestReloadDocument()
+                guard let self else { return }
+                Task { _ = await self.inspector.reloadDocument() }
             },
             onReloadPage: { [weak self] in
-                self?.inspector.requestReloadPage()
+                guard let self else { return }
+                Task { _ = await self.inspector.reloadPage() }
             },
             onDeleteNode: { [weak self] in
                 self?.deleteSelection()
@@ -385,7 +387,16 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     private func deleteSelection() {
-        inspector.requestDeleteSelection(undoManager: undoManager)
+        let inspector = inspector
+        let undoManager = undoManager
+        let selectedNodeID = inspector.document.selectedNode?.id
+        Task {
+            _ = await inspector.deleteNode(nodeID: selectedNodeID, undoManager: undoManager)
+        }
+    }
+
+    func invokeDeleteSelectionForTesting() {
+        deleteSelection()
     }
 
     private func copySelectedHTML() {

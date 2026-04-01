@@ -7,11 +7,11 @@ import UIKit
 
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private var observationHandles: Set<ObservationHandle> = []
     private var documentStoreObservationHandles: Set<ObservationHandle> = []
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspector) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -37,25 +37,25 @@ public final class WIDOMTreeViewController: UIViewController {
         ])
 
         observeState()
-        updateErrorPresentation(errorMessage: inspector.documentStore.errorMessage)
+        updateErrorPresentation(errorMessage: inspector.document.errorMessage)
     }
 
     private func observeState() {
         inspector.observe(
-            \.documentStore
-        ) { [weak self] documentStore in
+            \.document
+        ) { [weak self] document in
             guard let self else {
                 return
             }
             self.documentStoreObservationHandles.removeAll()
-            documentStore.observe(
+            document.observe(
                 \.errorMessage,
                 options: [.removeDuplicates]
             ) { [weak self] newErrorMessage in
                 self?.updateErrorPresentation(errorMessage: newErrorMessage)
             }
             .store(in: &self.documentStoreObservationHandles)
-            self.updateErrorPresentation(errorMessage: documentStore.errorMessage)
+            self.updateErrorPresentation(errorMessage: document.errorMessage)
         }
         .store(in: &observationHandles)
     }

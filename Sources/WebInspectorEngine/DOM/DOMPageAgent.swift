@@ -28,20 +28,11 @@ public final class DOMPageAgent: NSObject, PageAgent {
 
     private enum HandleCommand {
         case highlight
-        case removeNode
-        case setAttribute(name: String, value: String)
-        case removeAttribute(name: String)
 
         var functionName: String {
             switch self {
             case .highlight:
                 return "highlightNodeHandle"
-            case .removeNode:
-                return "removeNodeHandle"
-            case .setAttribute:
-                return "setAttributeForHandle"
-            case .removeAttribute:
-                return "removeAttributeForHandle"
             }
         }
     }
@@ -61,6 +52,17 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private var bridgeModeLocked = false
     private var pageEpochApplyGeneration: UInt64 = 0
     private var pageEpochSyncTask: Task<Void, Never>?
+    private var pageEpochSyncTaskGeneration: UInt64?
+#if DEBUG
+    package var testSetAttributeInterposer: (@MainActor (
+        Int,
+        String,
+        String,
+        Int?,
+        DOMDocumentScopeID?,
+        @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
+    ) async -> DOMMutationExecutionResult<Void>)?
+#endif
 
     package var currentBridgeMode: WIBridgeMode {
         bridgeMode
@@ -256,142 +258,205 @@ extension DOMPageAgent {
 // MARK: - DOM Mutations
 
 extension DOMPageAgent {
-    package func removeNode(nodeId: Int) async {
+    package func removeNode(
+        nodeId: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
         guard let webView else {
-            return
+            return .failed
         }
+        await waitForPreparedPageContextSyncIfNeeded()
         do {
-            if await runHandleCommand(.removeNode, nodeId: nodeId, on: webView) {
-                handleCache.removeHandle(for: nodeId)
-                return
-            }
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM.removeNode(identifier)",
-                arguments: ["identifier": nodeId],
+            let rawResult = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOM.removeNode(identifier, expectedPageEpoch, expectedDocumentScopeID)",
+                arguments: [
+                    "identifier": nodeId,
+                    "expectedPageEpoch": expectedPageEpoch as Any,
+                    "expectedDocumentScopeID": expectedDocumentScopeID as Any,
+                ],
+                in: nil,
                 contentWorld: bridgeWorld
             )
-            handleCache.removeHandle(for: nodeId)
+            let result = parseMutationExecutionResult(rawResult)
+            if case .applied = result {
+                handleCache.removeHandle(for: nodeId)
+            }
+            return result
         } catch {
             domLogger.error("remove node failed: \(error.localizedDescription, privacy: .public)")
+            return .failed
         }
     }
 
-    package func removeNodeWithUndo(nodeId: Int) async -> Int? {
+    package func removeNodeWithUndo(
+        nodeId: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Int> {
         guard let webView else {
-            return nil
+            return .failed
         }
+        await waitForPreparedPageContextSyncIfNeeded()
         do {
             let rawValue = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOM.removeNodeWithUndo(identifier)",
-                arguments: ["identifier": nodeId],
+                "return window.webInspectorDOM.removeNodeWithUndo(identifier, expectedPageEpoch, expectedDocumentScopeID)",
+                arguments: [
+                    "identifier": nodeId,
+                    "expectedPageEpoch": expectedPageEpoch as Any,
+                    "expectedDocumentScopeID": expectedDocumentScopeID as Any,
+                ],
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            if let number = rawValue as? NSNumber {
-                let token = number.intValue
-                if token > 0 {
-                    handleCache.removeHandle(for: nodeId)
-                    return token
-                }
-                return nil
-            }
-            if let token = rawValue as? Int, token > 0 {
+            let result = parseUndoMutationExecutionResult(rawValue)
+            if case .applied = result {
                 handleCache.removeHandle(for: nodeId)
-                return token
             }
-            return nil
+            return result
         } catch {
             domLogger.error("remove node with undo failed: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .failed
         }
     }
 
-    package func undoRemoveNode(undoToken: Int) async -> Bool {
+    package func undoRemoveNode(
+        undoToken: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
         guard let webView else {
-            return false
+            return .failed
         }
+        await waitForPreparedPageContextSyncIfNeeded()
         do {
             let rawValue = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOM.undoRemoveNode(token)",
-                arguments: ["token": undoToken],
+                "return window.webInspectorDOM.undoRemoveNode(token, expectedPageEpoch, expectedDocumentScopeID)",
+                arguments: [
+                    "token": undoToken,
+                    "expectedPageEpoch": expectedPageEpoch as Any,
+                    "expectedDocumentScopeID": expectedDocumentScopeID as Any,
+                ],
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            if let boolValue = rawValue as? Bool {
-                return boolValue
-            }
-            if let number = rawValue as? NSNumber {
-                return number.boolValue
-            }
-            return false
+            return parseMutationExecutionResult(rawValue)
         } catch {
             domLogger.error("undo remove node failed: \(error.localizedDescription, privacy: .public)")
-            return false
+            return .failed
         }
     }
 
-    package func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
+    package func redoRemoveNode(
+        undoToken: Int,
+        nodeId: Int? = nil,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
         guard let webView else {
-            return false
+            return .failed
         }
+        await waitForPreparedPageContextSyncIfNeeded()
         do {
             let rawValue = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOM.redoRemoveNode(token)",
-                arguments: ["token": undoToken],
+                "return window.webInspectorDOM.redoRemoveNode(token, expectedPageEpoch, expectedDocumentScopeID)",
+                arguments: [
+                    "token": undoToken,
+                    "expectedPageEpoch": expectedPageEpoch as Any,
+                    "expectedDocumentScopeID": expectedDocumentScopeID as Any,
+                ],
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            let succeeded = (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
-            if succeeded, let nodeId {
+            let result = parseMutationExecutionResult(rawValue)
+            if case .applied = result, let nodeId {
                 handleCache.removeHandle(for: nodeId)
             }
-            return succeeded
+            return result
         } catch {
             domLogger.error("redo remove node failed: \(error.localizedDescription, privacy: .public)")
-            return false
+            return .failed
         }
     }
 
-    package func setAttribute(nodeId: Int, name: String, value: String) async {
-        guard let webView else {
-            return
-        }
-        do {
-            if await runHandleCommand(.setAttribute(name: name, value: value), nodeId: nodeId, on: webView) {
-                return
+    package func setAttribute(
+        nodeId: Int,
+        name: String,
+        value: String,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+        let performMutation = { @MainActor @Sendable [weak self] () async -> DOMMutationExecutionResult<Void> in
+            guard Task.isCancelled == false else {
+                return .ignoredStaleContext
             }
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM.setAttributeForNode(identifier, name, value)",
-                arguments: [
-                    "identifier": nodeId,
-                    "name": name,
-                    "value": value,
-                ],
-                contentWorld: bridgeWorld
-            )
-        } catch {
-            domLogger.error("set attribute failed: \(error.localizedDescription, privacy: .public)")
+            guard let self, let webView = self.webView else {
+                return .failed
+            }
+            await self.waitForPreparedPageContextSyncIfNeeded()
+            guard Task.isCancelled == false else {
+                return .ignoredStaleContext
+            }
+            do {
+                let rawValue = try await webView.callAsyncJavaScript(
+                    "return window.webInspectorDOM.setAttributeForNode(identifier, name, value, expectedPageEpoch, expectedDocumentScopeID)",
+                    arguments: [
+                        "identifier": nodeId,
+                        "name": name,
+                        "value": value,
+                        "expectedPageEpoch": expectedPageEpoch as Any,
+                        "expectedDocumentScopeID": expectedDocumentScopeID as Any,
+                    ],
+                    in: nil,
+                    contentWorld: self.bridgeWorld
+                )
+                return self.parseMutationExecutionResult(rawValue)
+            } catch {
+                domLogger.error("set attribute failed: \(error.localizedDescription, privacy: .public)")
+                return .failed
+            }
         }
+#if DEBUG
+        if let testSetAttributeInterposer {
+            return await testSetAttributeInterposer(
+                nodeId,
+                name,
+                value,
+                expectedPageEpoch,
+                expectedDocumentScopeID,
+                performMutation
+            )
+        }
+#endif
+        return await performMutation()
     }
 
-    package func removeAttribute(nodeId: Int, name: String) async {
+    package func removeAttribute(
+        nodeId: Int,
+        name: String,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
         guard let webView else {
-            return
+            return .failed
         }
+        await waitForPreparedPageContextSyncIfNeeded()
         do {
-            if await runHandleCommand(.removeAttribute(name: name), nodeId: nodeId, on: webView) {
-                return
-            }
-            try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOM.removeAttributeForNode(identifier, name)",
+            let rawValue = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOM.removeAttributeForNode(identifier, name, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "identifier": nodeId,
                     "name": name,
+                    "expectedPageEpoch": expectedPageEpoch as Any,
+                    "expectedDocumentScopeID": expectedDocumentScopeID as Any,
                 ],
+                in: nil,
                 contentWorld: bridgeWorld
             )
+            return parseMutationExecutionResult(rawValue)
         } catch {
             domLogger.error("remove attribute failed: \(error.localizedDescription, privacy: .public)")
+            return .failed
         }
     }
 
@@ -432,6 +497,71 @@ extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
+    package func waitForPreparedPageContextSyncIfNeeded() async {
+        while let pageEpochSyncTask {
+            let generation = pageEpochSyncTaskGeneration
+            if let generation, generation != pageEpochApplyGeneration {
+                clearPreparedPageContextSyncTaskIfCurrent(generation: generation)
+                continue
+            }
+            await pageEpochSyncTask.value
+            if let generation {
+                clearPreparedPageContextSyncTaskIfCurrent(generation: generation)
+            } else {
+                self.pageEpochSyncTask = nil
+                self.pageEpochSyncTaskGeneration = nil
+            }
+        }
+    }
+
+    package func syncDocumentScopeIDIfNeeded(
+        _ documentScopeID: DOMDocumentScopeID,
+        on webView: WKWebView,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
+        while Task.isCancelled == false {
+            guard self.webView === webView else {
+                return false
+            }
+            if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
+                return false
+            }
+            if self.documentScopeID >= documentScopeID {
+                let didRefreshContext = await refreshCachedPageContextFromPageIfPossible(on: webView)
+                guard self.webView === webView else {
+                    return false
+                }
+                if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
+                    return false
+                }
+                if didRefreshContext {
+                    if self.documentScopeID >= documentScopeID {
+                        return true
+                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+                    continue
+                }
+            }
+            let didApply = await applyDocumentScopeID(documentScopeID, on: webView)
+            if didApply || self.documentScopeID >= documentScopeID {
+                return true
+            }
+            let didRefreshContext = await refreshCachedPageContextFromPageIfPossible(on: webView)
+            guard self.webView === webView else {
+                return false
+            }
+            if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
+                return false
+            }
+            if didRefreshContext, self.documentScopeID >= documentScopeID {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+        }
+        return false
+    }
+
     func reloadPage() {
         webView?.reload()
     }
@@ -467,6 +597,7 @@ extension DOMPageAgent {
         documentScopeID: DOMDocumentScopeID? = nil
     ) async {
         await installDOMAgentScriptIfNeeded(on: webView)
+        await refreshCachedPageContextFromPageIfPossible(on: webView)
         if pageEpoch != nil || documentScopeID != nil {
             let generation = beginPageEpochApplyGeneration()
             let didApply = await applyPreparedPageContext(
@@ -516,8 +647,17 @@ private extension DOMPageAgent {
     func beginPageEpochApplyGeneration() -> UInt64 {
         pageEpochSyncTask?.cancel()
         pageEpochSyncTask = nil
+        pageEpochSyncTaskGeneration = nil
         pageEpochApplyGeneration += 1
         return pageEpochApplyGeneration
+    }
+
+    func clearPreparedPageContextSyncTaskIfCurrent(generation: UInt64) {
+        guard pageEpochSyncTaskGeneration == generation else {
+            return
+        }
+        pageEpochSyncTask = nil
+        pageEpochSyncTaskGeneration = nil
     }
 
     func schedulePreparedPageContextSync(
@@ -526,7 +666,11 @@ private extension DOMPageAgent {
         on webView: WKWebView,
         generation: UInt64
     ) {
-        pageEpochSyncTask = Task.immediateIfAvailable { [weak self, weak webView] in
+        pageEpochSyncTaskGeneration = generation
+        pageEpochSyncTask = Task { @MainActor [weak self, weak webView] in
+            defer {
+                self?.clearPreparedPageContextSyncTaskIfCurrent(generation: generation)
+            }
             guard let self, let webView else {
                 return
             }
@@ -576,6 +720,97 @@ private extension DOMPageAgent {
     }
 
     @discardableResult
+    func refreshCachedPageContextFromPageIfPossible(on webView: WKWebView) async -> Bool {
+        guard self.webView === webView else {
+            return false
+        }
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                return (function() {
+                    if (!window.webInspectorDOM || typeof window.webInspectorDOM.debugStatus !== "function") {
+                        return null;
+                    }
+                    const status = window.webInspectorDOM.debugStatus();
+                    if (!status || typeof status !== "object") {
+                        return null;
+                    }
+                    return {
+                        pageEpoch: typeof status.pageEpoch === "number" ? status.pageEpoch : null,
+                        documentScopeID: typeof status.documentScopeID === "number" ? status.documentScopeID : null
+                    };
+                })();
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
+            let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
+            let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
+            guard appliedEpoch != nil || appliedDocumentScopeID != nil else {
+                return false
+            }
+            if let appliedEpoch, self.pageEpoch != appliedEpoch {
+                handleCache.clear()
+                self.pageEpoch = appliedEpoch
+            }
+            if let appliedDocumentScopeID, self.documentScopeID != appliedDocumentScopeID {
+                handleCache.clear()
+                self.documentScopeID = appliedDocumentScopeID
+            }
+            return true
+        } catch {
+            domLogger.debug("refresh cached page context skipped: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @discardableResult
+    func applyDocumentScopeID(
+        _ documentScopeID: DOMDocumentScopeID,
+        on webView: WKWebView
+    ) async -> Bool {
+        guard self.webView === webView else {
+            return true
+        }
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                """
+                return (function(documentScopeID) {
+                    if (!window.webInspectorDOM || typeof window.webInspectorDOM.setDocumentScopeID !== "function") {
+                        return null;
+                    }
+                    window.webInspectorDOM.setDocumentScopeID(documentScopeID);
+                    if (typeof window.webInspectorDOM.debugStatus !== "function") {
+                        return null;
+                    }
+                    const status = window.webInspectorDOM.debugStatus();
+                    return status && typeof status.documentScopeID === "number"
+                        ? status.documentScopeID
+                        : null;
+                })(documentScopeID);
+                """,
+                arguments: ["documentScopeID": documentScopeID as Any],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+            let appliedDocumentScopeID = (rawResult as? UInt64) ?? (rawResult as? NSNumber)?.uint64Value
+            guard let appliedDocumentScopeID, appliedDocumentScopeID == documentScopeID else {
+                return false
+            }
+            if self.documentScopeID != appliedDocumentScopeID {
+                handleCache.clear()
+                self.documentScopeID = appliedDocumentScopeID
+            }
+            return true
+        } catch {
+            domLogger.debug("set document scope skipped: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @discardableResult
     func applyPreparedPageContext(
         pageEpoch epoch: Int?,
         documentScopeID: DOMDocumentScopeID?,
@@ -621,22 +856,24 @@ private extension DOMPageAgent {
             let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
             let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
             let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
-            if appliedEpoch != nil || appliedDocumentScopeID != nil {
-                guard self.webView === webView, self.pageEpochApplyGeneration == generation else {
-                    return true
-                }
-                if let appliedEpoch, self.pageEpoch != appliedEpoch {
-                    handleCache.clear()
-                    self.pageEpoch = appliedEpoch
-                }
-                if let appliedDocumentScopeID, self.documentScopeID != appliedDocumentScopeID {
-                    handleCache.clear()
-                    self.documentScopeID = appliedDocumentScopeID
-                }
-                pageEpochSyncTask = nil
+            let pageEpochMatches = epoch == nil || appliedEpoch == epoch
+            let documentScopeMatches = documentScopeID == nil || appliedDocumentScopeID == documentScopeID
+            guard (appliedEpoch != nil || appliedDocumentScopeID != nil), pageEpochMatches, documentScopeMatches else {
+                return false
+            }
+            guard self.webView === webView, self.pageEpochApplyGeneration == generation else {
                 return true
             }
-            return false
+            if let appliedEpoch, self.pageEpoch != appliedEpoch {
+                handleCache.clear()
+                self.pageEpoch = appliedEpoch
+            }
+            if let appliedDocumentScopeID, self.documentScopeID != appliedDocumentScopeID {
+                handleCache.clear()
+                self.documentScopeID = appliedDocumentScopeID
+            }
+            clearPreparedPageContextSyncTaskIfCurrent(generation: generation)
+            return true
         } catch {
             domLogger.debug("set page context skipped: \(error.localizedDescription, privacy: .public)")
             return false
@@ -935,13 +1172,7 @@ private extension DOMPageAgent {
 
             let succeeded = (rawResult as? Bool) ?? (rawResult as? NSNumber)?.boolValue ?? false
             if !succeeded {
-                if case .removeNode = command {
-                    handleCache.removeHandle(for: nodeId)
-                }
                 return false
-            }
-            if case .removeNode = command {
-                handleCache.removeHandle(for: nodeId)
             }
             return true
         } catch {
@@ -1014,35 +1245,59 @@ private extension DOMPageAgent {
             }
             return window.webInspectorDOM.highlightNodeHandle(handle, expectedPageEpoch);
             """
-
-        case .removeNode:
-            script = """
-            if (!window.webInspectorDOM || typeof window.webInspectorDOM.removeNodeHandle !== "function") {
-                return unavailable;
-            }
-            return window.webInspectorDOM.removeNodeHandle(handle);
-            """
-
-        case let .setAttribute(name, value):
-            arguments["name"] = name
-            arguments["value"] = value
-            script = """
-            if (!window.webInspectorDOM || typeof window.webInspectorDOM.setAttributeForHandle !== "function") {
-                return unavailable;
-            }
-            return window.webInspectorDOM.setAttributeForHandle(handle, name, value);
-            """
-
-        case let .removeAttribute(name):
-            arguments["name"] = name
-            script = """
-            if (!window.webInspectorDOM || typeof window.webInspectorDOM.removeAttributeForHandle !== "function") {
-                return unavailable;
-            }
-            return window.webInspectorDOM.removeAttributeForHandle(handle, name);
-            """
         }
 
         return (script: script, arguments: arguments)
     }
+
+    func parseMutationExecutionResult(_ rawResult: Any) -> DOMMutationExecutionResult<Void> {
+        let payload = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
+        let status = payload?["status"] as? String
+        switch status {
+        case "applied":
+            return .applied(())
+        case "ignoredStaleContext":
+            return .ignoredStaleContext
+        default:
+            return .failed
+        }
+    }
+
+    func parseUndoMutationExecutionResult(_ rawResult: Any) -> DOMMutationExecutionResult<Int> {
+        let payload = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
+        let status = payload?["status"] as? String
+        switch status {
+        case "applied":
+            if let undoToken = (payload?["undoToken"] as? Int) ?? (payload?["undoToken"] as? NSNumber)?.intValue {
+                return .applied(undoToken)
+            }
+            return .failed
+        case "ignoredStaleContext":
+            return .ignoredStaleContext
+        default:
+            return .failed
+        }
+    }
 }
+
+#if DEBUG
+extension DOMPageAgent {
+    func testSetCachedDocumentScopeID(_ documentScopeID: DOMDocumentScopeID) {
+        self.documentScopeID = documentScopeID
+    }
+
+    func testInstallCompletedPreparedPageContextSyncTask(generation: UInt64) {
+        pageEpochApplyGeneration = generation
+        pageEpochSyncTaskGeneration = generation
+        pageEpochSyncTask = Task.detached {}
+    }
+
+    func testAdvancePageEpochApplyGenerationWithoutClearingTask() {
+        pageEpochApplyGeneration += 1
+    }
+
+    var testHasPreparedPageContextSyncTask: Bool {
+        pageEpochSyncTask != nil
+    }
+}
+#endif

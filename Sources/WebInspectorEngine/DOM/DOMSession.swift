@@ -1,5 +1,11 @@
 import WebKit
 
+package enum DOMMutationExecutionResult<Payload: Sendable>: Sendable {
+    case applied(Payload)
+    case ignoredStaleContext
+    case failed
+}
+
 @MainActor
 package final class DOMSession {
     package typealias AttachmentResult = (shouldReload: Bool, shouldPreserveInspectorState: Bool)
@@ -11,6 +17,27 @@ package final class DOMSession {
     private var autoSnapshotEnabled = false
     private var preparedPageEpoch = 0
     private var preparedDocumentScopeID: DOMDocumentScopeID = 0
+
+#if DEBUG
+    package var testRemoveNodeOverride: (@MainActor (
+        _ nodeId: Int,
+        _ expectedPageEpoch: Int?,
+        _ expectedDocumentScopeID: DOMDocumentScopeID?
+    ) async -> DOMMutationExecutionResult<Void>)?
+    package var testUndoRemoveNodeInterposer: (@MainActor (
+        _ undoToken: Int,
+        _ expectedPageEpoch: Int?,
+        _ expectedDocumentScopeID: DOMDocumentScopeID?,
+        _ perform: @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
+    ) async -> DOMMutationExecutionResult<Void>)?
+    package var testRedoRemoveNodeInterposer: (@MainActor (
+        _ undoToken: Int,
+        _ nodeId: Int?,
+        _ expectedPageEpoch: Int?,
+        _ expectedDocumentScopeID: DOMDocumentScopeID?,
+        _ perform: @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
+    ) async -> DOMMutationExecutionResult<Void>)?
+#endif
 
     var isAutoSnapshotEnabled: Bool {
         autoSnapshotEnabled
@@ -115,15 +142,19 @@ package final class DOMSession {
         preparedDocumentScopeID = scopeID
     }
 
-    package func syncCurrentDocumentScopeIDIfNeeded(_ scopeID: DOMDocumentScopeID) async {
+    package func syncCurrentDocumentScopeIDIfNeeded(
+        _ scopeID: DOMDocumentScopeID,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
         preparedDocumentScopeID = scopeID
         guard let webView = pageAgent.webView else {
-            return
+            return false
         }
-        await pageAgent.ensureDOMAgentScriptInstalled(
+        await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
+        return await pageAgent.syncDocumentScopeIDIfNeeded(
+            scopeID,
             on: webView,
-            pageEpoch: nil,
-            documentScopeID: scopeID
+            expectedPageEpoch: expectedPageEpoch
         )
     }
 
@@ -185,30 +216,134 @@ extension DOMSession {
 // MARK: - DOM Mutations
 
 extension DOMSession {
-    package func removeNode(nodeId: Int) async {
-        await pageAgent.removeNode(nodeId: nodeId)
+    package func removeNode(
+        nodeId: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+#if DEBUG
+        if let testRemoveNodeOverride {
+            return await testRemoveNodeOverride(nodeId, expectedPageEpoch, expectedDocumentScopeID)
+        }
+#endif
+        return await pageAgent.removeNode(
+            nodeId: nodeId,
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
+        )
     }
 
-    package func removeNodeWithUndo(nodeId: Int) async -> Int? {
-        await pageAgent.removeNodeWithUndo(nodeId: nodeId)
+    package func removeNodeWithUndo(
+        nodeId: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Int> {
+        await pageAgent.removeNodeWithUndo(
+            nodeId: nodeId,
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
+        )
     }
 
-    package func undoRemoveNode(undoToken: Int) async -> Bool {
-        await pageAgent.undoRemoveNode(undoToken: undoToken)
+    package func undoRemoveNode(
+        undoToken: Int,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+        let perform = { @MainActor @Sendable [pageAgent] in
+            await pageAgent.undoRemoveNode(
+                undoToken: undoToken,
+                expectedPageEpoch: expectedPageEpoch,
+                expectedDocumentScopeID: expectedDocumentScopeID
+            )
+        }
+#if DEBUG
+        if let testUndoRemoveNodeInterposer {
+            return await testUndoRemoveNodeInterposer(
+                undoToken,
+                expectedPageEpoch,
+                expectedDocumentScopeID,
+                perform
+            )
+        }
+#endif
+        return await perform()
     }
 
-    package func redoRemoveNode(undoToken: Int, nodeId: Int? = nil) async -> Bool {
-        await pageAgent.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
+    package func redoRemoveNode(
+        undoToken: Int,
+        nodeId: Int? = nil,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+        let perform = { @MainActor @Sendable [pageAgent] in
+            await pageAgent.redoRemoveNode(
+                undoToken: undoToken,
+                nodeId: nodeId,
+                expectedPageEpoch: expectedPageEpoch,
+                expectedDocumentScopeID: expectedDocumentScopeID
+            )
+        }
+#if DEBUG
+        if let testRedoRemoveNodeInterposer {
+            return await testRedoRemoveNodeInterposer(
+                undoToken,
+                nodeId,
+                expectedPageEpoch,
+                expectedDocumentScopeID,
+                perform
+            )
+        }
+#endif
+        return await perform()
     }
 
-    package func setAttribute(nodeId: Int, name: String, value: String) async {
-        await pageAgent.setAttribute(nodeId: nodeId, name: name, value: value)
+    package func setAttribute(
+        nodeId: Int,
+        name: String,
+        value: String,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+        await pageAgent.setAttribute(
+            nodeId: nodeId,
+            name: name,
+            value: value,
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
+        )
     }
 
-    package func removeAttribute(nodeId: Int, name: String) async {
-        await pageAgent.removeAttribute(nodeId: nodeId, name: name)
+    package func removeAttribute(
+        nodeId: Int,
+        name: String,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: DOMDocumentScopeID? = nil
+    ) async -> DOMMutationExecutionResult<Void> {
+        await pageAgent.removeAttribute(
+            nodeId: nodeId,
+            name: name,
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
+        )
     }
 }
+
+#if DEBUG
+extension DOMSession {
+    package var testSetAttributeInterposer: (@MainActor (
+        Int,
+        String,
+        String,
+        Int?,
+        DOMDocumentScopeID?,
+        @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
+    ) async -> DOMMutationExecutionResult<Void>)? {
+        get { pageAgent.testSetAttributeInterposer }
+        set { pageAgent.testSetAttributeInterposer = newValue }
+    }
+}
+#endif
 
 // MARK: - Copy Helpers
 

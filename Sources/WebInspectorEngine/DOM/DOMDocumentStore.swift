@@ -1,35 +1,51 @@
 import Foundation
 import Observation
 
+@available(*, deprecated, renamed: "DOMDocumentModel", message: "Use DOMDocumentModel.")
+public typealias DOMDocumentStore = DOMDocumentModel
+
 @MainActor
 @Observable
-public final class DOMDocumentStore {
-    public private(set) var rootEntry: DOMEntry?
-    public private(set) weak var selectedEntry: DOMEntry?
+public final class DOMDocumentModel {
+    public private(set) var rootNode: DOMNodeModel?
+    public private(set) var selectedNode: DOMNodeModel?
     public private(set) var errorMessage: String?
 
-    private var entriesByLocalID: [UInt64: DOMEntry] = [:]
-    private var localIDsByObjectID: [ObjectIdentifier: UInt64] = [:]
+    package private(set) var documentIdentity = UUID()
+
+    private var nodesByLocalID: [UInt64: DOMNodeModel] = [:]
 
     public init() {}
 
     package func setErrorMessage(_ message: String?) {
+        guard errorMessage != message else {
+            return
+        }
         errorMessage = message
     }
 
     package func clearSelection() {
-        selectedEntry = nil
+        selectedNode = nil
     }
 
-    package func clearDocument() {
-        replaceContents(selectedLocalID: nil) {}
+    package func clearDocument(isFreshDocument: Bool = true) {
+        if isFreshDocument {
+            documentIdentity = UUID()
+        }
+        clearContents()
     }
 
-    package func replaceDocument(with snapshot: DOMGraphSnapshot) {
+    package func replaceDocument(
+        with snapshot: DOMGraphSnapshot,
+        isFreshDocument: Bool = true
+    ) {
+        if isFreshDocument {
+            documentIdentity = UUID()
+        }
         let previousSelectedLocalID = selectedLocalID
         let nextSelectedLocalID = snapshot.selectedLocalID ?? previousSelectedLocalID
         replaceContents(selectedLocalID: nextSelectedLocalID) {
-            rootEntry = buildSubtree(from: snapshot.root, parent: nil)
+            rootNode = buildSubtree(from: snapshot.root, parent: nil)
         }
     }
 
@@ -83,161 +99,219 @@ public final class DOMDocumentStore {
             }
         }
 
-        reconcileSelectedEntry()
-        if selectedEntry == nil, let previousSelectedLocalID {
-            selectedEntry = entry(forLocalID: previousSelectedLocalID)
+        reconcileSelectedNode()
+        if selectedNode == nil, let previousSelectedLocalID {
+            selectedNode = node(forLocalID: previousSelectedLocalID)
         }
     }
 
     package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
-        if let previousSelectedEntry = selectedEntry, payload?.localID == nil {
-            previousSelectedEntry.clearMatchedStyles()
+        if let previousSelectedNode = selectedNode, payload?.localID == nil {
+            previousSelectedNode.clearMatchedStyles()
         }
 
         guard let payload, let localID = payload.localID else {
-            selectedEntry = nil
+            selectedNode = nil
             return
         }
 
-        let entry = entry(forLocalID: localID) ?? makePlaceholderEntry(localID: localID)
-        entry.preview = payload.preview
-        entry.path = payload.path
+        let node = node(forLocalID: localID) ?? makePlaceholderNode(localID: localID)
+        node.preview = payload.preview
+        node.path = payload.path
         if let selectorPath = payload.selectorPath {
-            entry.selectorPath = selectorPath
+            node.selectorPath = selectorPath
         }
-        entry.styleRevision = payload.styleRevision
-        entry.attributes = normalizeAttributes(payload.attributes, backendNodeID: entry.backendNodeID)
-        selectedEntry = entry
+        node.styleRevision = payload.styleRevision
+        replaceAttributes(
+            on: node,
+            with: normalizeAttributes(payload.attributes, backendNodeID: node.backendNodeID)
+        )
+        selectedNode = node
     }
 
     package func applySelectorPath(_ payload: DOMSelectorPathPayload) {
         guard
             let localID = payload.localID,
-            let entry = entry(forLocalID: localID),
-            selectedEntry === entry
+            let node = node(forLocalID: localID),
+            selectedNode === node
         else {
             return
         }
 
-        if entry.selectorPath != payload.selectorPath {
-            entry.selectorPath = payload.selectorPath
+        if node.selectorPath != payload.selectorPath {
+            node.selectorPath = payload.selectorPath
         }
     }
 
-    package func applySelectorPath(_ selectorPath: String, for entry: DOMEntry) {
-        guard selectedEntry === entry, contains(entry) else {
+    package func applySelectorPath(_ selectorPath: String, for node: DOMNodeModel) {
+        guard selectedNode === node, contains(node) else {
             return
         }
-        if entry.selectorPath != selectorPath {
-            entry.selectorPath = selectorPath
+        if node.selectorPath != selectorPath {
+            node.selectorPath = selectorPath
         }
     }
 
-    package func beginMatchedStylesLoading(for entry: DOMEntry) {
-        guard selectedEntry === entry, contains(entry) else {
+    package func beginMatchedStylesLoading(for node: DOMNodeModel) {
+        guard selectedNode === node, contains(node) else {
             return
         }
 
-        entry.isLoadingMatchedStyles = true
-        entry.matchedStyles = []
-        entry.matchedStylesTruncated = false
-        entry.blockedStylesheetCount = 0
+        node.isLoadingMatchedStyles = true
+        node.matchedStyles = []
+        node.matchedStylesTruncated = false
+        node.blockedStylesheetCount = 0
     }
 
-    package func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for entry: DOMEntry) {
-        guard selectedEntry === entry, contains(entry) else {
+    package func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for node: DOMNodeModel) {
+        guard selectedNode === node, contains(node) else {
             return
         }
 
-        if let backendNodeID = entry.backendNodeID, backendNodeID != payload.nodeId {
+        if let backendNodeID = node.backendNodeID, backendNodeID != payload.nodeId {
             return
         }
 
-        entry.matchedStyles = payload.rules
-        entry.matchedStylesTruncated = payload.truncated
-        entry.blockedStylesheetCount = payload.blockedStylesheetCount
-        entry.isLoadingMatchedStyles = false
+        node.matchedStyles = payload.rules
+        node.matchedStylesTruncated = payload.truncated
+        node.blockedStylesheetCount = payload.blockedStylesheetCount
+        node.isLoadingMatchedStyles = false
     }
 
-    package func clearMatchedStyles(for entry: DOMEntry? = nil) {
-        let resolvedEntry = entry ?? selectedEntry
-        guard let resolvedEntry, contains(resolvedEntry) else {
+    package func clearMatchedStyles(for node: DOMNodeModel? = nil) {
+        let resolvedNode = node ?? selectedNode
+        guard let resolvedNode, contains(resolvedNode) else {
             return
         }
-        resolvedEntry.clearMatchedStyles()
+        resolvedNode.clearMatchedStyles()
     }
 
     package func updateSelectedAttribute(name: String, value: String) {
-        guard let entry = selectedEntry, contains(entry) else {
+        guard let node = selectedNode, contains(node) else {
             return
         }
-
-        if let index = entry.attributes.firstIndex(where: { $0.name == name }) {
-            entry.attributes[index].value = value
-        } else {
-            entry.attributes.append(
-                DOMAttribute(nodeId: entry.backendNodeID, name: name, value: value)
-            )
-        }
+        _ = setAttributeValue(on: node, name: name, value: value)
     }
 
     package func removeSelectedAttribute(name: String) {
-        guard let entry = selectedEntry, contains(entry) else {
+        guard let node = selectedNode, contains(node) else {
             return
         }
-        entry.attributes.removeAll { $0.name == name }
+        _ = removeAttributeValue(on: node, name: name)
+    }
+
+    package func containsEntry(localID: UInt64, backendNodeID: Int?) -> Bool {
+        guard let node = node(forLocalID: localID) else {
+            return false
+        }
+        return backendNodeID == nil || node.backendNodeID == backendNodeID
+    }
+
+    package func node(id: DOMNodeModel.ID) -> DOMNodeModel? {
+        guard id.documentIdentity == documentIdentity else {
+            return nil
+        }
+        return node(forLocalID: id.localID)
+    }
+
+    package func node(backendNodeID: Int) -> DOMNodeModel? {
+        nodesByLocalID.values.first(where: { $0.backendNodeID == backendNodeID })
+    }
+
+    package func contains(_ node: DOMNodeModel) -> Bool {
+        nodesByLocalID[node.localID] === node
+    }
+
+    package func attributeValue(
+        name: String,
+        localID: UInt64,
+        backendNodeID: Int?
+    ) -> String? {
+        guard let node = node(forLocalID: localID) else {
+            return nil
+        }
+        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+            return nil
+        }
+        return node.attributes.first(where: { $0.name == name })?.value
+    }
+
+    @discardableResult
+    package func updateAttribute(
+        name: String,
+        value: String,
+        localID: UInt64,
+        backendNodeID: Int?
+    ) -> Bool {
+        guard let node = node(forLocalID: localID) else {
+            return false
+        }
+        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+            return false
+        }
+        return setAttributeValue(on: node, name: name, value: value)
+    }
+
+    @discardableResult
+    package func removeAttribute(
+        name: String,
+        localID: UInt64,
+        backendNodeID: Int?
+    ) -> Bool {
+        guard let node = node(forLocalID: localID) else {
+            return false
+        }
+        guard backendNodeID == nil || node.backendNodeID == backendNodeID else {
+            return false
+        }
+        return removeAttributeValue(on: node, name: name)
+    }
+
+    package var selectedLocalID: UInt64? {
+        selectedNode?.localID
+    }
+
+    package func removeNode(id: DOMNodeModel.ID) {
+        guard let node = node(id: id) else {
+            return
+        }
+        removeSubtree(node, removeFromParent: true)
     }
 }
 
-private extension DOMDocumentStore {
-    var selectedLocalID: UInt64? {
-        guard let selectedEntry else {
-            return nil
-        }
-        return localID(for: selectedEntry)
-    }
-
+private extension DOMDocumentModel {
     func replaceContents(
         selectedLocalID: UInt64?,
         build: () -> Void
     ) {
-        entriesByLocalID.removeAll(keepingCapacity: true)
-        localIDsByObjectID.removeAll(keepingCapacity: true)
-        rootEntry = nil
-        selectedEntry = nil
-        errorMessage = nil
+        clearContents()
         build()
         if let selectedLocalID {
-            selectedEntry = entry(forLocalID: selectedLocalID)
+            selectedNode = node(forLocalID: selectedLocalID)
         }
-        reconcileSelectedEntry()
+        reconcileSelectedNode()
     }
 
-    private func localID(for entry: DOMEntry) -> UInt64? {
-        localIDsByObjectID[ObjectIdentifier(entry)]
+    func clearContents() {
+        nodesByLocalID.removeAll(keepingCapacity: true)
+        rootNode = nil
+        selectedNode = nil
+        errorMessage = nil
     }
 
-    func entry(forLocalID localID: UInt64) -> DOMEntry? {
-        entriesByLocalID[localID]
+    func node(forLocalID localID: UInt64) -> DOMNodeModel? {
+        nodesByLocalID[localID]
     }
 
-    func contains(_ entry: DOMEntry) -> Bool {
-        guard let localID = localID(for: entry) else {
-            return false
+    func insert(_ node: DOMNodeModel, for localID: UInt64) {
+        nodesByLocalID[localID] = node
+    }
+
+    func removeNode(_ node: DOMNodeModel) {
+        guard nodesByLocalID[node.localID] === node else {
+            return
         }
-        return entriesByLocalID[localID] === entry
-    }
-
-    private func insert(_ entry: DOMEntry, for localID: UInt64) {
-        entriesByLocalID[localID] = entry
-        localIDsByObjectID[ObjectIdentifier(entry)] = localID
-    }
-
-    func removeEntry(_ entry: DOMEntry) {
-        let objectID = ObjectIdentifier(entry)
-        if let localID = localIDsByObjectID.removeValue(forKey: objectID) {
-            entriesByLocalID.removeValue(forKey: localID)
-        }
+        nodesByLocalID.removeValue(forKey: node.localID)
     }
 
     func normalizeAttributes(_ attributes: [DOMAttribute], backendNodeID: Int?) -> [DOMAttribute] {
@@ -250,7 +324,46 @@ private extension DOMDocumentStore {
         }
     }
 
-    func makePlaceholderEntry(localID: UInt64) -> DOMEntry {
+    @discardableResult
+    func setAttributeValue(
+        on node: DOMNodeModel,
+        name: String,
+        value: String
+    ) -> Bool {
+        if let index = node.attributes.firstIndex(where: { $0.name == name }) {
+            guard node.attributes[index].value != value else {
+                return true
+            }
+            node.attributes[index].value = value
+            return true
+        }
+        node.attributes.append(DOMAttribute(nodeId: node.backendNodeID, name: name, value: value))
+        return true
+    }
+
+    @discardableResult
+    func removeAttributeValue(
+        on node: DOMNodeModel,
+        name: String
+    ) -> Bool {
+        guard node.attributes.contains(where: { $0.name == name }) else {
+            return false
+        }
+        node.attributes.removeAll { $0.name == name }
+        return true
+    }
+
+    func replaceAttributes(
+        on node: DOMNodeModel,
+        with newAttributes: [DOMAttribute]
+    ) {
+        guard node.attributes != newAttributes else {
+            return
+        }
+        node.attributes = newAttributes
+    }
+
+    func makePlaceholderNode(localID: UInt64) -> DOMNodeModel {
         let backendNodeID: Int?
         if localID <= UInt64(Int.max) {
             backendNodeID = Int(localID)
@@ -258,7 +371,8 @@ private extension DOMDocumentStore {
             backendNodeID = nil
         }
 
-        let entry = DOMEntry(
+        let node = DOMNodeModel(
+            id: .init(documentIdentity: documentIdentity, localID: localID),
             backendNodeID: backendNodeID,
             nodeType: 1,
             nodeName: "",
@@ -267,17 +381,18 @@ private extension DOMDocumentStore {
             attributes: [],
             childCount: 0
         )
-        insert(entry, for: localID)
-        return entry
+        insert(node, for: localID)
+        return node
     }
 
     @discardableResult
-    func buildSubtree(from descriptor: DOMGraphNodeDescriptor, parent: DOMEntry?) -> DOMEntry {
-        if let existing = entry(forLocalID: descriptor.localID) {
+    func buildSubtree(from descriptor: DOMGraphNodeDescriptor, parent: DOMNodeModel?) -> DOMNodeModel {
+        if let existing = node(forLocalID: descriptor.localID) {
             removeSubtree(existing, removeFromParent: true)
         }
 
-        let entry = DOMEntry(
+        let node = DOMNodeModel(
+            id: .init(documentIdentity: documentIdentity, localID: descriptor.localID),
             backendNodeID: descriptor.backendNodeID,
             nodeType: descriptor.nodeType,
             nodeName: descriptor.nodeName,
@@ -288,22 +403,22 @@ private extension DOMDocumentStore {
             layoutFlags: descriptor.layoutFlags,
             isRendered: descriptor.isRendered
         )
-        entry.parent = parent
-        insert(entry, for: descriptor.localID)
+        node.parent = parent
+        insert(node, for: descriptor.localID)
 
-        var children: [DOMEntry] = []
+        var children: [DOMNodeModel] = []
         children.reserveCapacity(descriptor.children.count)
         for childDescriptor in descriptor.children {
-            let child = buildSubtree(from: childDescriptor, parent: entry)
+            let child = buildSubtree(from: childDescriptor, parent: node)
             children.append(child)
         }
-        entry.children = children
-        relinkChildren(of: entry)
+        node.children = children
+        relinkChildren(of: node)
 
-        return entry
+        return node
     }
 
-    func relinkChildren(of parent: DOMEntry) {
+    func relinkChildren(of parent: DOMNodeModel) {
         for (index, child) in parent.children.enumerated() {
             child.parent = parent
             child.previousSibling = index > 0 ? parent.children[index - 1] : nil
@@ -311,22 +426,22 @@ private extension DOMDocumentStore {
         }
     }
 
-    func applyChildNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node: DOMGraphNodeDescriptor) {
-        guard let parent = entry(forLocalID: parentLocalID) else {
+    func applyChildNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node descriptor: DOMGraphNodeDescriptor) {
+        guard let parent = node(forLocalID: parentLocalID) else {
             return
         }
 
-        let hadLoadedChild = parent.children.contains { localID(for: $0) == node.localID }
+        let hadLoadedChild = parent.children.contains { $0.localID == descriptor.localID }
         let previousChildCount = max(parent.childCount, parent.children.count)
-        let inserted = buildSubtree(from: node, parent: parent)
-        parent.children.removeAll { localID(for: $0) == node.localID }
+        let inserted = buildSubtree(from: descriptor, parent: parent)
+        parent.children.removeAll { $0.localID == descriptor.localID }
 
         let insertionIndex: Int
         if previousLocalID == 0 {
             insertionIndex = 0
         } else if let previousLocalID,
-                  let previousEntry = entry(forLocalID: previousLocalID),
-                  let previousIndex = parent.children.firstIndex(where: { $0 === previousEntry }) {
+                  let previousNode = node(forLocalID: previousLocalID),
+                  let previousIndex = parent.children.firstIndex(where: { $0 === previousNode }) {
             insertionIndex = previousIndex + 1
         } else {
             insertionIndex = parent.children.count
@@ -343,11 +458,11 @@ private extension DOMDocumentStore {
     }
 
     func applyChildNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64) {
-        guard let parent = entry(forLocalID: parentLocalID) else {
+        guard let parent = node(forLocalID: parentLocalID) else {
             return
         }
 
-        if let index = parent.children.firstIndex(where: { localID(for: $0) == nodeLocalID }) {
+        if let index = parent.children.firstIndex(where: { $0.localID == nodeLocalID }) {
             let removed = parent.children.remove(at: index)
             parent.childCount = max(parent.children.count, parent.childCount - 1)
             relinkChildren(of: parent)
@@ -355,8 +470,8 @@ private extension DOMDocumentStore {
             return
         }
 
-        if let entry = entry(forLocalID: nodeLocalID) {
-            removeSubtree(entry, removeFromParent: true)
+        if let node = node(forLocalID: nodeLocalID) {
+            removeSubtree(node, removeFromParent: true)
         }
     }
 
@@ -367,17 +482,12 @@ private extension DOMDocumentStore {
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let entry = entry(forLocalID: nodeLocalID) else {
+        guard let node = node(forLocalID: nodeLocalID) else {
             return
         }
 
-        if let index = entry.attributes.firstIndex(where: { $0.name == name }) {
-            entry.attributes[index].value = value
-        } else {
-            entry.attributes.append(DOMAttribute(nodeId: entry.backendNodeID, name: name, value: value))
-        }
-
-        applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
+        _ = setAttributeValue(on: node, name: name, value: value)
+        applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
     func applyAttributeRemoved(
@@ -386,12 +496,12 @@ private extension DOMDocumentStore {
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let entry = entry(forLocalID: nodeLocalID) else {
+        guard let node = node(forLocalID: nodeLocalID) else {
             return
         }
 
-        entry.attributes.removeAll { $0.name == name }
-        applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
+        _ = removeAttributeValue(on: node, name: name)
+        applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
     func applyCharacterDataModified(
@@ -400,12 +510,12 @@ private extension DOMDocumentStore {
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let entry = entry(forLocalID: nodeLocalID) else {
+        guard let node = node(forLocalID: nodeLocalID) else {
             return
         }
 
-        entry.nodeValue = value
-        applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
+        node.nodeValue = value
+        applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
     func applyChildNodeCountUpdated(
@@ -414,28 +524,28 @@ private extension DOMDocumentStore {
         layoutFlags: [String]?,
         isRendered: Bool?
     ) {
-        guard let entry = entry(forLocalID: nodeLocalID) else {
+        guard let node = node(forLocalID: nodeLocalID) else {
             return
         }
 
-        entry.childCount = max(0, childCount)
-        applyLayout(into: entry, layoutFlags: layoutFlags, isRendered: isRendered)
+        node.childCount = max(0, childCount)
+        applyLayout(into: node, layoutFlags: layoutFlags, isRendered: isRendered)
     }
 
     func applySetChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor]) {
-        let parent: DOMEntry
-        if let existingParent = entry(forLocalID: parentLocalID) {
+        let parent: DOMNodeModel
+        if let existingParent = node(forLocalID: parentLocalID) {
             parent = existingParent
-        } else if rootEntry == nil {
-            let placeholderRoot = makePlaceholderEntry(localID: parentLocalID)
-            rootEntry = placeholderRoot
+        } else if rootNode == nil {
+            let placeholderRoot = makePlaceholderNode(localID: parentLocalID)
+            rootNode = placeholderRoot
             parent = placeholderRoot
         } else {
             return
         }
 
         let previousChildren = parent.children
-        var nextChildren: [DOMEntry] = []
+        var nextChildren: [DOMNodeModel] = []
         nextChildren.reserveCapacity(nodes.count)
 
         for node in nodes {
@@ -453,16 +563,16 @@ private extension DOMDocumentStore {
     }
 
     func applyReplaceSubtree(_ root: DOMGraphNodeDescriptor) {
-        if rootEntry == nil {
-            rootEntry = buildSubtree(from: root, parent: nil)
+        if rootNode == nil {
+            rootNode = buildSubtree(from: root, parent: nil)
             return
         }
 
-        if let existing = entry(forLocalID: root.localID) {
+        if let existing = node(forLocalID: root.localID) {
             let parent = existing.parent
             let previousIndex = parent?.children.firstIndex(where: { $0 === existing })
             let previousParentChildCount = parent.map { max($0.childCount, $0.children.count) }
-            let isReplacingRoot = rootEntry === existing
+            let isReplacingRoot = rootNode === existing
             removeSubtree(existing, removeFromParent: true, decrementParentChildCount: false)
 
             let replacement = buildSubtree(from: root, parent: parent)
@@ -476,24 +586,21 @@ private extension DOMDocumentStore {
                 }
                 relinkChildren(of: parent)
             } else if isReplacingRoot {
-                rootEntry = replacement
+                rootNode = replacement
             }
-            return
         }
-
-        return
     }
 
-    func applyLayout(into entry: DOMEntry, layoutFlags: [String]?, isRendered: Bool?) {
+    func applyLayout(into node: DOMNodeModel, layoutFlags: [String]?, isRendered: Bool?) {
         if let layoutFlags {
-            entry.layoutFlags = layoutFlags
+            node.layoutFlags = layoutFlags
         }
         if let isRendered {
-            entry.isRendered = isRendered
+            node.isRendered = isRendered
         }
     }
 
-    func removeSubtree(_ root: DOMEntry, removeFromParent: Bool, decrementParentChildCount: Bool = true) {
+    func removeSubtree(_ root: DOMNodeModel, removeFromParent: Bool, decrementParentChildCount: Bool = true) {
         if removeFromParent, let parent = root.parent {
             let previousLoadedChildCount = parent.children.count
             parent.children.removeAll { $0 === root }
@@ -510,30 +617,30 @@ private extension DOMDocumentStore {
             removeSubtree(child, removeFromParent: false)
         }
 
-        if selectedEntry === root {
-            selectedEntry = nil
+        if selectedNode === root {
+            selectedNode = nil
         }
-        if rootEntry === root {
-            rootEntry = nil
+        if rootNode === root {
+            rootNode = nil
         }
 
         root.children = []
         root.parent = nil
         root.previousSibling = nil
         root.nextSibling = nil
-        removeEntry(root)
+        removeNode(root)
     }
 
-    func reconcileSelectedEntry() {
-        guard let currentSelection = selectedEntry else {
+    func reconcileSelectedNode() {
+        guard let currentSelection = selectedNode else {
             return
         }
-        guard let localID = localID(for: currentSelection), let resolvedEntry = entriesByLocalID[localID] else {
-            selectedEntry = nil
+        guard let resolvedNode = nodesByLocalID[currentSelection.localID] else {
+            selectedNode = nil
             return
         }
-        if resolvedEntry !== currentSelection {
-            selectedEntry = resolvedEntry
+        if resolvedNode !== currentSelection {
+            selectedNode = resolvedNode
         }
     }
 }
