@@ -125,6 +125,7 @@ package final class DOMInspectorRuntime: NSObject {
     var testPreferredDepthApplyOverride: (@MainActor (Int) async -> Void)?
     var testDocumentRequestApplyOverride: (@MainActor (_ depth: Int, _ mode: DOMDocumentReloadMode) async -> Void)?
     var testFrontendDispatchOverride: (@MainActor (Any) async -> Bool)?
+    var testSkipFreshRequestDocumentScopeSyncStub = false
     var testDocumentScopeSyncOverride: (@MainActor (UInt64) async -> Void)?
     var testDocumentScopeSyncResultOverride: Bool?
     var testDocumentScopeResyncRetryAttemptsOverride: Int?
@@ -349,12 +350,14 @@ package final class DOMInspectorRuntime: NSObject {
             return allowsMissingPage
         }
 #if DEBUG
-        if let testDocumentScopeSyncOverride {
+        if testSkipFreshRequestDocumentScopeSyncStub == false,
+           let testDocumentScopeSyncOverride {
             await testDocumentScopeSyncOverride(documentScopeID)
             return testDocumentScopeSyncResultOverride ?? true
         }
 #endif
-        while Task.isCancelled == false {
+        var remainingAttempts = documentScopeResyncRetryAttemptsValue
+        while remainingAttempts > 0, Task.isCancelled == false {
             let didSync = await performDocumentScopeSync(
                 documentScopeID,
                 expectedPageEpoch: expectedPageEpoch
@@ -368,9 +371,12 @@ package final class DOMInspectorRuntime: NSObject {
             if expectedPageEpoch != nil, acceptsExpectedPageEpoch(expectedPageEpoch) == false {
                 return false
             }
-            try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
-            guard Task.isCancelled == false else {
-                return false
+            remainingAttempts -= 1
+            if remainingAttempts > 0 {
+                try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
+                guard Task.isCancelled == false else {
+                    return false
+                }
             }
         }
         return false

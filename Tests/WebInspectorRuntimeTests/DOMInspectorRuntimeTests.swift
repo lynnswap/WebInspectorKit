@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import WebInspectorUI
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
@@ -1635,6 +1636,30 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentScopeID == initialScopeID)
         #expect(store.currentDocumentModel.documentIdentity == initialDocumentIdentity)
         #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 42)
+    }
+
+    @Test
+    func freshRequestDocumentBoundsScopeSyncRetriesWhenPageIsAttached() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let webView = WKWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration()
+        )
+        _ = await store.session.attach(to: webView)
+        store.testSkipFreshRequestDocumentScopeSyncStub = true
+        store.testFrontendDispatchOverride = { _ in true }
+        store.testDocumentScopeSyncResultOverride = false
+        store.testDocumentScopeResyncRetryAttemptsOverride = 3
+        store.testDocumentScopeResyncRetryDelayNanosecondsOverride = 0
+        var syncInvocationCount = 0
+        store.testDocumentScopeSyncOverride = { _ in
+            syncInvocationCount += 1
+        }
+
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
+
+        #expect(didRequestDocument == false)
+        #expect(syncInvocationCount == 3)
     }
 
     @Test
