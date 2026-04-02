@@ -1428,7 +1428,10 @@ extension DOMInspectorRuntime {
                 }
                 return true
             }
-            currentDocumentModel.replaceDocument(with: snapshot, isFreshDocument: false)
+            currentDocumentModel.replaceDocument(
+                with: snapshot,
+                isFreshDocument: clearsReplacementFence
+            )
             if appliedSelectionOverride {
                 pendingSelectionOverrideLocalID = nil
             }
@@ -2239,7 +2242,10 @@ extension DOMInspectorRuntime {
         }
         let clearsReplacementFence = hasReplacementFenceForCurrentContext
         payloadNormalizer.resetForDocumentUpdate()
-        currentDocumentModel.replaceDocument(with: replacementSnapshot, isFreshDocument: false)
+        currentDocumentModel.replaceDocument(
+            with: replacementSnapshot,
+            isFreshDocument: clearsReplacementFence
+        )
         if appliedSelectionOverride {
             pendingSelectionOverrideLocalID = nil
         }

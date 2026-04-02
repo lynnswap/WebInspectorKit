@@ -2120,6 +2120,52 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func replacementSnapshotAfterContextAdoptionInvalidatesPriorNodeIdentity() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(in: store, root: makeNode(localID: 42), selectedLocalID: 42)
+        let initialSelectedNodeID = try! #require(store.currentDocumentModel.selectedNode?.id)
+        let initialDocumentIdentity = store.currentDocumentModel.documentIdentity
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+
+        #expect(didAdopt == true)
+        #expect(store.currentDocumentModel.documentIdentity == initialDocumentIdentity)
+        #expect(store.currentDocumentModel.node(id: initialSelectedNodeID) != nil)
+
+        let didApplyReplacement = store.applyReplacementDOMBundleAfterContextAdoption(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "documentUpdated",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 42,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                        "selectedNodeId": 42,
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        #expect(didApplyReplacement == true)
+        #expect(store.currentDocumentModel.documentIdentity != initialDocumentIdentity)
+        #expect(store.currentDocumentModel.node(id: initialSelectedNodeID) == nil)
+        #expect(store.currentDocumentModel.selectedNode?.id.localID == 42)
+        #expect(store.currentDocumentModel.selectedNode?.id != initialSelectedNodeID)
+    }
+
+    @Test
     func freshRequestDocumentDoesNotCommitProjectedScopeWhenDocumentScopeSyncFails() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.testFrontendDispatchOverride = { _ in true }
