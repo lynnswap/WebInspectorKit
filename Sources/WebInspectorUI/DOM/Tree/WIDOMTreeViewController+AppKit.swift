@@ -157,18 +157,45 @@ public final class WIDOMTreeViewController: NSViewController {
         let nodeIdentity = contextActionNodeIdentity
         contextMenuNodeID = nil
         contextMenuNodeIdentity = nil
-        guard let nodeID else {
+        guard nodeID != nil || nodeIdentity != nil else {
             return
         }
-        let inspector = inspector
         let undoManager = undoManager
         Task {
-            if let resolvedIdentity = inspector.document.node(backendNodeID: nodeID)?.id ?? nodeIdentity {
-                _ = await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
-            } else {
-                _ = await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
-            }
+            _ = await deleteContextMenuNode(
+                nodeID: nodeID,
+                nodeIdentity: nodeIdentity,
+                undoManager: undoManager
+            )
         }
+    }
+
+    func invokeContextMenuDeleteForTesting(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        undoManager: UndoManager? = nil
+    ) async -> DOMMutationResult {
+        await deleteContextMenuNode(
+            nodeID: nodeID,
+            nodeIdentity: nodeIdentity,
+            undoManager: undoManager
+        )
+    }
+
+    private func deleteContextMenuNode(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        undoManager: UndoManager?
+    ) async -> DOMMutationResult {
+        if let nodeIdentity {
+            return await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+        }
+        if let nodeID,
+           let resolvedIdentity = inspector.document.node(backendNodeID: nodeID)?.id
+        {
+            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+        }
+        return await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {
