@@ -597,6 +597,8 @@ extension DOMPageAgent {
                     if !consumeRetry(progressedForward: false) {
                         return false
                     }
+                    try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+                    continue
                 }
             }
             let didApply = await applyDocumentScopeID(documentScopeID, on: webView)

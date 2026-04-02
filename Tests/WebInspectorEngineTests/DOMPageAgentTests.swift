@@ -381,6 +381,51 @@ struct DOMSessionTests {
     }
 
     @Test
+    func syncDocumentScopeDoesNotWriteOlderScopeWhenRefreshIsUnavailable() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        await agent.syncDocumentScopeIDIfNeeded(3, on: webView)
+        agent.testSetDocumentScopeSyncRetryLimitOverride(2)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.__domPageAgentTestsOriginalConsoleLog = console.log;
+            console.log = function() {
+                throw new Error("debugStatus unavailable");
+            };
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            if (window.__domPageAgentTestsOriginalConsoleLog) {
+                console.log = window.__domPageAgentTestsOriginalConsoleLog;
+            }
+            delete window.__domPageAgentTestsOriginalConsoleLog;
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        #expect(didSync == false)
+        #expect(extractDocumentScopeID(from: agent) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 3)
+    }
+
+    @Test
     func syncDocumentScopeRefreshesStaleCachedScopeAfterRejectedApply() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()
