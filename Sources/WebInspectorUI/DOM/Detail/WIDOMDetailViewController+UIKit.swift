@@ -9,7 +9,7 @@ import SwiftUI
 private protocol DiffableStableID: Hashable, Sendable {}
 
 private struct ElementAttributeEditingKey: Hashable {
-    let entryIdentity: ObjectIdentifier?
+    let nodeID: DOMNodeModel.ID
     let name: String
 }
 
@@ -74,7 +74,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector
         case styleRule(signature: StyleRuleSignature, ordinal: Int)
         case styleMeta(kind: StyleMetaKind)
-        case attribute(entryIdentity: ObjectIdentifier?, name: String)
+        case attribute(nodeID: DOMNodeModel.ID, name: String)
         case emptyAttribute
     }
 
@@ -99,7 +99,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector
         case styleRule(signature: StyleRuleSignature)
         case styleMeta(kind: StyleMetaKind)
-        case attribute(entryIdentity: ObjectIdentifier?, name: String)
+        case attribute(nodeID: DOMNodeModel.ID, name: String)
         case emptyAttribute
     }
 
@@ -108,7 +108,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case selector(path: String)
         case styleRule(selector: String, detail: String)
         case styleMeta(message: String)
-        case attribute(entryIdentity: ObjectIdentifier?, name: String, value: String)
+        case attribute(nodeID: DOMNodeModel.ID, name: String, value: String)
         case emptyAttribute
     }
 
@@ -117,7 +117,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         let stableIDs: [ItemStableID]
     }
 
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private let showsNavigationControls: Bool
     private var hasStartedObservingState = false
     private var stateObservationHandles: Set<ObservationHandle> = []
@@ -128,9 +128,13 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     // Keep coalescing because structure snapshots can burst under DOM updates.
     private let structureUpdateCoalescer = UIUpdateCoalescer()
     private var sections: [DetailSection] = []
+    private var attributeDraftSession: WIDOMAttributeDraftSession?
     private var editingAttributeKey: ElementAttributeEditingKey?
-    private var editingDraftValue: String?
+    private var suppressedInlineCommitKey: ElementAttributeEditingKey?
     private var isInlineEditingActive = false
+    private var pendingInlineSelectionClearTask: Task<Void, Never>?
+    private var pendingInlineEditingRefreshTask: Task<Void, Never>?
+    private var pendingForcedProjectionRefresh = false
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
@@ -152,7 +156,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         )
     }()
 
-    public init(inspector: WIDOMModel, showsNavigationControls: Bool = true) {
+    public init(inspector: WIDOMInspector, showsNavigationControls: Bool = true) {
         self.inspector = inspector
         self.showsNavigationControls = showsNavigationControls
         super.init(collectionViewLayout: UICollectionViewLayout())
@@ -165,6 +169,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     isolated deinit {
         pendingReloadDataTask?.cancel()
+        pendingInlineEditingRefreshTask?.cancel()
         stateObservationHandles.removeAll()
         documentStoreObservationHandles.removeAll()
         selectedEntryObservationHandles.removeAll()
@@ -184,7 +189,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         startObservingStateIfNeeded()
 
         updateNavigationControls()
-        handleSelectedEntryChange()
+        handleSelectedNodeChange()
     }
 
     private var pickSymbolName: String {
@@ -230,25 +235,28 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         .store(in: &stateObservationHandles)
         inspector.observe(
-            \.documentStore
-        ) { [weak self] documentStore in
+            \.document
+        ) { [weak self] document in
             guard let self else {
                 return
             }
             self.documentStoreObservationHandles.removeAll()
-            documentStore.observe(\.selectedEntry) { [weak self] _ in
+            document.observe(
+                \.selectedNode,
+                options: [.removeDuplicates]
+            ) { [weak self] _ in
                 self?.scheduleNavigationControlsUpdate()
-                self?.handleSelectedEntryObservationEvent()
+                self?.handleSelectedNodeChange()
             }
             .store(in: &self.documentStoreObservationHandles)
             self.scheduleNavigationControlsUpdate()
-            self.handleSelectedEntryChange()
+            self.handleSelectedNodeChange()
         }
         .store(in: &stateObservationHandles)
     }
 
     private func makeSecondaryMenu() -> UIMenu {
-        let hasSelection = inspector.documentStore.selectedEntry != nil
+        let hasSelection = inspector.document.selectedNode != nil
         let hasPageWebView = inspector.hasPageWebView
 
         return DOMSecondaryMenuBuilder.makeMenu(
@@ -267,7 +275,8 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 self?.reloadDocument()
             },
             onReloadPage: { [weak self] in
-                self?.inspector.requestReloadPage()
+                guard let self else { return }
+                Task { _ = await self.inspector.reloadPage() }
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -306,12 +315,45 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
     }
 
-    private func handleSelectedEntryChange() {
+    private func handleSelectedNodeChange() {
+        handleSelectedNodeChange(forceProjectionRefresh: false, allowTransientDeselection: true)
+    }
+
+    private func handleSelectedNodeChange(
+        forceProjectionRefresh: Bool,
+        allowTransientDeselection: Bool
+    ) {
+        pendingInlineSelectionClearTask?.cancel()
+        pendingInlineSelectionClearTask = nil
         selectedEntryObservationHandles.removeAll()
+        let currentSelectionIdentity = inspector.document.selectedNode?.id
+        reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: allowTransientDeselection)
+        if allowTransientDeselection,
+           currentSelectionIdentity == nil,
+           (editingAttributeKey != nil || !sections.isEmpty) {
+            pendingInlineSelectionClearTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard
+                    let self,
+                    !Task.isCancelled
+                else {
+                    return
+                }
+                self.pendingInlineSelectionClearTask = nil
+                self.handleSelectedNodeChange(
+                    forceProjectionRefresh: false,
+                    allowTransientDeselection: false
+                )
+            }
+            return
+        }
         selectedEntryRenderGeneration &+= 1
-        let currentSelectionIdentity = inspector.documentStore.selectedEntry.map(ObjectIdentifier.init)
-        if editingAttributeKey?.entryIdentity != currentSelectionIdentity {
-            clearInlineEditingState()
+        if let editingAttributeKey,
+           (
+            editingAttributeKey.nodeID != currentSelectionIdentity
+                || !isAttributeDraftDirty(for: editingAttributeKey)
+           ) {
+            discardInlineEditingState()
         }
 
         if currentSelectionIdentity == nil {
@@ -321,37 +363,52 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             configuration.image = UIImage(systemName: "cursorarrow.rays")
             contentUnavailableConfiguration = configuration
             collectionView.isHidden = true
-            clearInlineEditingState()
+            discardInlineEditingState()
             sections = []
         } else {
             contentUnavailableConfiguration = nil
             collectionView.isHidden = false
             sections = makeSections()
-            if let selectedEntry = inspector.documentStore.selectedEntry {
+            if let selectedEntry = inspector.document.selectedNode {
                 startObservingSelectedEntry(selectedEntry)
             }
         }
 
-        guard !isInlineEditingActive else {
+        if isInlineEditingActive {
+            if forceProjectionRefresh {
+                let shouldCarryProjectionRefresh: Bool
+                if let editingAttributeKey {
+                    shouldCarryProjectionRefresh = editingAttributeKey.nodeID != currentSelectionIdentity
+                        || !isAttributeDraftDirty(for: editingAttributeKey)
+                } else {
+                    shouldCarryProjectionRefresh = true
+                }
+                pendingForcedProjectionRefresh = pendingForcedProjectionRefresh || shouldCarryProjectionRefresh
+            }
             return
         }
-        requestSnapshotUpdate(animatingDifferences: true, force: true)
+        let shouldForceProjectionRefresh = forceProjectionRefresh || pendingForcedProjectionRefresh
+        pendingForcedProjectionRefresh = false
+        requestSnapshotUpdate(animatingDifferences: true, force: shouldForceProjectionRefresh)
     }
 
-    private func handleSelectedEntryObservationEvent() {
-        handleSelectedEntryChange()
+    private func handleSelectedNodeProjectionEvent() {
+        handleSelectedNodeChange(forceProjectionRefresh: true, allowTransientDeselection: true)
     }
 
-    private func startObservingSelectedEntry(_ entry: DOMEntry) {
+    private func startObservingSelectedEntry(_ entry: DOMNodeModel) {
+        // Element/selector rows observe preview-like payloads inside DOMObservingListCell.
+        // This controller-level observer only tracks fields that can change section structure.
         entry.observe(
             [\.attributes, \.matchedStyles, \.isLoadingMatchedStyles, \.matchedStylesTruncated, \.blockedStylesheetCount],
             onChange: { [weak self, weak entry] in
                 guard let self, let entry else {
                     return
                 }
-                guard self.inspector.documentStore.selectedEntry === entry else {
+                guard self.inspector.document.selectedNode === entry else {
                     return
                 }
+                self.reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: false)
                 self.scheduleStructureUpdate()
             },
             isolation: MainActor.shared
@@ -360,8 +417,8 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func reconcileSectionStructure(forceSnapshotUpdate: Bool = false) {
-        guard inspector.documentStore.selectedEntry != nil else {
-            handleSelectedEntryChange()
+        guard inspector.document.selectedNode != nil else {
+            handleSelectedNodeChange()
             return
         }
 
@@ -401,7 +458,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeSections() -> [DetailSection] {
-        guard let selected = inspector.documentStore.selectedEntry else {
+        guard let selected = inspector.document.selectedNode else {
             return []
         }
 
@@ -447,14 +504,17 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             rows: styleRows
         )
 
-        let attributeRows: [DetailRow]
-        if selected.attributes.isEmpty {
+        var attributeRows = selected.attributes.map { attribute in
+            DetailRow.attribute(nodeID: selected.id, name: attribute.name)
+        }
+        if let draftSession = attributeDraftSession,
+           draftSession.key.nodeID == selected.id,
+           draftSession.isDirty,
+           !selected.attributes.contains(where: { $0.name == draftSession.key.attributeName }) {
+            attributeRows.append(.attribute(nodeID: selected.id, name: draftSession.key.attributeName))
+        }
+        if attributeRows.isEmpty {
             attributeRows = [.emptyAttribute]
-        } else {
-            let entryIdentity = ObjectIdentifier(selected)
-            attributeRows = selected.attributes.map { attribute in
-                .attribute(entryIdentity: entryIdentity, name: attribute.name)
-            }
         }
 
         let attributeSection = DetailSection(
@@ -466,7 +526,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         return [elementSection, selectorSection, styleSection, attributeSection]
     }
 
-    private func defaultPreview(for entry: DOMEntry) -> String {
+    private func defaultPreview(for entry: DOMNodeModel) -> String {
         switch entry.nodeType {
         case 3:
             return entry.nodeValue
@@ -629,6 +689,10 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         guard force || snapshotStructureDiffers(from: dataSource.snapshot(), to: snapshot) else {
             return
         }
+        if force {
+            applySnapshotUsingReloadData(snapshot)
+            return
+        }
         applySnapshot(snapshot, animatingDifferences: animatingDifferences)
     }
 
@@ -701,15 +765,15 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             )
         case let .styleMeta(kind):
             return ItemStableID(key: .styleMeta(kind: kind), cellKind: .list)
-        case let .attribute(entryIdentity, name):
-            return ItemStableID(key: .attribute(entryIdentity: entryIdentity, name: name), cellKind: .attributeEditor)
+        case let .attribute(nodeID, name):
+            return ItemStableID(key: .attribute(nodeID: nodeID, name: name), cellKind: .attributeEditor)
         case .emptyAttribute:
             return ItemStableID(key: .emptyAttribute, cellKind: .list)
         }
     }
 
     private func payload(for stableID: ItemStableID) -> ItemPayload? {
-        guard let selectedEntry = inspector.documentStore.selectedEntry else {
+        guard let selectedEntry = inspector.document.selectedNode else {
             return nil
         }
 
@@ -729,12 +793,12 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             )
         case let .styleMeta(kind):
             return styleMetaPayload(for: kind, in: selectedEntry)
-        case let .attribute(entryIdentity, name):
-            let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
+        case let .attribute(nodeID, name):
+            let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
             guard let value = attributeValue(for: key, in: selectedEntry) else {
                 return nil
             }
-            return .attribute(entryIdentity: entryIdentity, name: name, value: value)
+            return .attribute(nodeID: nodeID, name: name, value: value)
         case .emptyAttribute:
             return .emptyAttribute
         }
@@ -748,7 +812,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         cell.configure(
             stableID: item.stableID,
-            entry: inspector.documentStore.selectedEntry,
+            entry: inspector.document.selectedNode,
             payloadProvider: { [weak self] stableID in
                 self?.payload(for: stableID)
             }
@@ -761,17 +825,17 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return
         }
         guard
-            case let .attribute(entryIdentity, name) = item.stableID.key
+            case let .attribute(nodeID, name) = item.stableID.key
         else {
             return
         }
-        let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
+        let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
         cell.delegate = self
         cell.configure(
             key: key,
             name: name,
             value: attributeValue(for: key) ?? "",
-            entry: inspector.documentStore.selectedEntry,
+            entry: inspector.document.selectedNode,
             activateEditor: isInlineEditingActive && editingAttributeKey == key
         )
     }
@@ -790,7 +854,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
 
         let action = UIContextualAction(style: .destructive, title: nil) { [weak self] _, _, completion in
-            let key = ElementAttributeEditingKey(entryIdentity: attributeRow.entryIdentity, name: attributeRow.name)
+            let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
             self?.deleteAttribute(for: key)
             completion(true)
         }
@@ -815,38 +879,54 @@ public final class WIDOMDetailViewController: UICollectionViewController {
                 image: UIImage(systemName: "trash"),
                 attributes: [.destructive]
             ) { _ in
-                let key = ElementAttributeEditingKey(entryIdentity: attributeRow.entryIdentity, name: attributeRow.name)
+                let key = ElementAttributeEditingKey(nodeID: attributeRow.nodeID, name: attributeRow.name)
                 self?.deleteAttribute(for: key)
             }
             return UIMenu(children: [deleteAction])
         }
     }
 
-    private func attributeRow(at indexPath: IndexPath) -> (entryIdentity: ObjectIdentifier?, name: String, value: String)? {
+    private func attributeRow(at indexPath: IndexPath) -> (nodeID: DOMNodeModel.ID, name: String, value: String)? {
         guard
             let item = dataSource.itemIdentifier(for: indexPath),
-            case let .attribute(entryIdentity, name) = item.stableID.key
+            case let .attribute(nodeID, name) = item.stableID.key
         else {
             return nil
         }
 
-        let key = ElementAttributeEditingKey(entryIdentity: entryIdentity, name: name)
+        let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
         guard let value = attributeValue(for: key) else {
             return nil
         }
-        return (entryIdentity: entryIdentity, name: name, value: value)
+        return (nodeID: nodeID, name: name, value: value)
     }
 
     private func deleteAttribute(for key: ElementAttributeEditingKey) {
-        if let editorCell = visibleAttributeEditorCell(for: key) {
-            editorCell.suppressNextCommitAndEndEditing()
-        } else {
-            view.endEditing(true)
-        }
+        let draftKey = WIDOMAttributeDraftKey(nodeID: key.nodeID, attributeName: key.name)
+        let preservedDraftSession = attributeDraftSession?.key == draftKey ? attributeDraftSession : nil
+        let shouldRestoreInlineEditing = editingAttributeKey == key && isInlineEditingActive
+        suppressInlineCommitAndEndEditing(for: key)
         if editingAttributeKey == key {
             clearInlineEditingState()
         }
-        inspector.requestRemoveAttribute(name: key.name)
+        if preservedDraftSession != nil {
+            attributeDraftSession = nil
+        }
+        let inspector = inspector
+        Task { @MainActor [weak self] in
+            let result = await inspector.removeAttribute(nodeID: key.nodeID, name: key.name)
+            guard let self, result != .applied, self.attributeValue(for: key) != nil else {
+                return
+            }
+            if let preservedDraftSession {
+                self.attributeDraftSession = preservedDraftSession
+            }
+            if shouldRestoreInlineEditing {
+                self.editingAttributeKey = key
+                self.isInlineEditingActive = true
+            }
+            self.reconcileSectionStructure(forceSnapshotUpdate: false)
+        }
     }
 
     private func visibleAttributeEditorCell(for key: ElementAttributeEditingKey) -> ElementAttributeEditorCell? {
@@ -862,9 +942,70 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func clearInlineEditingState() {
+        let clearedKey = editingAttributeKey
         editingAttributeKey = nil
-        editingDraftValue = nil
+        if suppressedInlineCommitKey == clearedKey {
+            suppressedInlineCommitKey = nil
+        }
         isInlineEditingActive = false
+    }
+
+    private func scheduleDeferredInlineEditingRefresh() {
+        pendingInlineEditingRefreshTask?.cancel()
+        pendingInlineEditingRefreshTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else {
+                return
+            }
+            self.pendingInlineEditingRefreshTask = nil
+            guard !self.isInlineEditingActive else {
+                return
+            }
+            let forceProjectionRefresh = self.pendingForcedProjectionRefresh
+            self.pendingForcedProjectionRefresh = false
+            self.reconcileSectionStructure(forceSnapshotUpdate: forceProjectionRefresh)
+        }
+    }
+
+    private func discardInlineEditingState() {
+        guard let editingAttributeKey else {
+            clearInlineEditingState()
+            attributeDraftSession = nil
+            return
+        }
+        pendingForcedProjectionRefresh = true
+        let hasVisibleEditor = visibleAttributeEditorCell(for: editingAttributeKey) != nil
+        let didDismissEditor = suppressInlineCommitAndEndEditing(for: editingAttributeKey)
+        guard hasVisibleEditor, didDismissEditor else {
+            clearInlineEditingState()
+            attributeDraftSession = nil
+            return
+        }
+        attributeDraftSession = nil
+    }
+
+    @discardableResult
+    private func suppressInlineCommitAndEndEditing(
+        for key: ElementAttributeEditingKey,
+        forceViewFallback: Bool = false
+    ) -> Bool {
+        if !forceViewFallback,
+           let editorCell = visibleAttributeEditorCell(for: key) {
+            let didDismissEditor = editorCell.suppressNextCommitAndEndEditing()
+            if didDismissEditor {
+                suppressedInlineCommitKey = key
+            } else if suppressedInlineCommitKey == key {
+                suppressedInlineCommitKey = nil
+            }
+            return didDismissEditor
+        }
+        let didDismissEditor = view.endEditing(true)
+        if didDismissEditor {
+            suppressedInlineCommitKey = key
+        } else if suppressedInlineCommitKey == key {
+            suppressedInlineCommitKey = nil
+        }
+        return didDismissEditor
     }
 
     @objc
@@ -875,12 +1016,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
 
     @objc
     private func reloadDocument() {
-        inspector.requestReloadDocument()
+        let inspector = inspector
+        Task {
+            _ = await inspector.reloadDocument()
+        }
     }
 
     @objc
     private func deleteNode() {
-        inspector.requestDeleteSelection(undoManager: undoManager)
+        let inspector = inspector
+        let undoManager = undoManager
+        Task {
+            _ = await inspector.deleteSelection(undoManager: undoManager)
+        }
     }
 
     private func copySelectedHTML() {
@@ -936,8 +1084,11 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         key: ElementAttributeEditingKey,
         value: String
     ) {
+        if suppressedInlineCommitKey == key {
+            suppressedInlineCommitKey = nil
+        }
         editingAttributeKey = key
-        editingDraftValue = value
+        beginAttributeDraftSessionIfNeeded(for: key, value: value)
         isInlineEditingActive = true
     }
 
@@ -947,7 +1098,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         value: String
     ) {
         editingAttributeKey = key
-        editingDraftValue = value
+        updateAttributeDraftSession(for: key, value: value)
     }
 
     fileprivate func elementAttributeEditorCellDidCommitValue(
@@ -955,9 +1106,36 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         key: ElementAttributeEditingKey,
         value: String
     ) {
+        if suppressedInlineCommitKey == key {
+            suppressedInlineCommitKey = nil
+            return
+        }
         editingAttributeKey = key
-        editingDraftValue = value
-        inspector.requestUpdateAttributeValue(name: key.name, value: value)
+        updateAttributeDraftSession(for: key, value: value)
+        guard isAttributeDraftDirty(for: key) else {
+            return
+        }
+        let inspector = inspector
+        let submittedValue = value
+        Task {
+            let result = await inspector.setAttribute(
+                nodeID: key.nodeID,
+                name: key.name,
+                value: submittedValue
+            )
+            guard result == .applied else {
+                return
+            }
+            await MainActor.run {
+                guard var draftSession = self.currentAttributeDraftSession(for: key),
+                      draftSession.draftValue == submittedValue
+                else {
+                    return
+                }
+                draftSession.markCommitted()
+                self.attributeDraftSession = draftSession
+            }
+        }
     }
 
     fileprivate func elementAttributeEditorCellDidEndEditing(
@@ -966,12 +1144,17 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         value: String
     ) {
         isInlineEditingActive = false
+        if suppressedInlineCommitKey == key {
+            suppressedInlineCommitKey = nil
+        }
         if editingAttributeKey == key {
             editingAttributeKey = nil
-            editingDraftValue = nil
+        }
+        if let draftSession = currentAttributeDraftSession(for: key), !draftSession.isDirty {
+            attributeDraftSession = nil
         }
         sections = makeSections()
-        requestSnapshotUpdate(animatingDifferences: true)
+        scheduleDeferredInlineEditingRefresh()
     }
 
     fileprivate func elementAttributeEditorCellNeedsRelayout(_ cell: ElementAttributeEditorCell) {
@@ -980,23 +1163,102 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
 }
 
 private extension WIDOMDetailViewController {
-    func attributeValue(for key: ElementAttributeEditingKey, in entry: DOMEntry? = nil) -> String? {
-        guard let entry = entry ?? inspector.documentStore.selectedEntry else {
+    var currentSelectedNodeID: DOMNodeModel.ID? {
+        inspector.document.selectedNode?.id
+    }
+
+    func currentAttributeDraftSession(
+        for key: ElementAttributeEditingKey
+    ) -> WIDOMAttributeDraftSession? {
+        guard let attributeDraftSession,
+              attributeDraftSession.key == .init(nodeID: key.nodeID, attributeName: key.name) else {
             return nil
         }
-        guard let attribute = entry.attributes.first(where: { $0.name == key.name }) else {
+        return attributeDraftSession
+    }
+
+    func isAttributeDraftDirty(for key: ElementAttributeEditingKey) -> Bool {
+        currentAttributeDraftSession(for: key)?.isDirty ?? false
+    }
+
+    func beginAttributeDraftSessionIfNeeded(for key: ElementAttributeEditingKey, value: String) {
+        let sessionKey = WIDOMAttributeDraftKey(nodeID: key.nodeID, attributeName: key.name)
+        if attributeDraftSession?.key == sessionKey {
+            return
+        }
+        attributeDraftSession = .init(key: sessionKey, value: value)
+    }
+
+    func updateAttributeDraftSession(for key: ElementAttributeEditingKey, value: String) {
+        let sessionKey = WIDOMAttributeDraftKey(nodeID: key.nodeID, attributeName: key.name)
+        if attributeDraftSession?.key != sessionKey {
+            attributeDraftSession = .init(key: sessionKey, value: value)
+            return
+        }
+        guard var attributeDraftSession else {
+            return
+        }
+        attributeDraftSession.updateDraft(value)
+        self.attributeDraftSession = attributeDraftSession
+    }
+
+    func reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: Bool) {
+        pendingInlineSelectionClearTask?.cancel()
+        pendingInlineSelectionClearTask = nil
+
+        guard var attributeDraftSession else {
+            return
+        }
+
+        guard let selectedNode = inspector.document.selectedNode else {
+            if allowTransientDeselection {
+                pendingInlineSelectionClearTask = Task { @MainActor [weak self] in
+                    await Task.yield()
+                    guard let self, !Task.isCancelled else {
+                        return
+                    }
+                    self.pendingInlineSelectionClearTask = nil
+                    self.reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: false)
+                }
+            } else {
+                self.attributeDraftSession = nil
+            }
+            return
+        }
+
+        guard selectedNode.id == attributeDraftSession.key.nodeID else {
+            self.attributeDraftSession = nil
+            return
+        }
+
+        let externalValue = selectedNode.attributes.first(where: { $0.name == attributeDraftSession.key.attributeName })?.value
+        switch attributeDraftSession.reconcile(externalValue: externalValue) {
+        case .refreshClean, .preserveDirty:
+            self.attributeDraftSession = attributeDraftSession
+        case .clear:
+            self.attributeDraftSession = nil
+        }
+    }
+
+    func attributeValue(for key: ElementAttributeEditingKey, in entry: DOMNodeModel? = nil) -> String? {
+        let entry = entry ?? inspector.document.selectedNode
+        guard let entry, entry.id == key.nodeID else {
             return nil
         }
-        if editingAttributeKey == key {
-            return editingDraftValue ?? attribute.value
+        if let attributeDraftSession = currentAttributeDraftSession(for: key) {
+            if let attribute = entry.attributes.first(where: { $0.name == key.name }) {
+                _ = attribute
+                return attributeDraftSession.draftValue
+            }
+            return attributeDraftSession.isDirty ? attributeDraftSession.draftValue : nil
         }
-        return attribute.value
+        return entry.attributes.first(where: { $0.name == key.name })?.value
     }
 
     func matchedStyleRule(
         signature: StyleRuleSignature,
         ordinal: Int,
-        in entry: DOMEntry
+        in entry: DOMNodeModel
     ) -> DOMMatchedStyleRule? {
         var currentOrdinal = 0
         for rule in entry.matchedStyles {
@@ -1027,7 +1289,7 @@ private extension WIDOMDetailViewController {
         return details
     }
 
-    func styleMetaPayload(for kind: StyleMetaKind, in entry: DOMEntry) -> ItemPayload? {
+    func styleMetaPayload(for kind: StyleMetaKind, in entry: DOMNodeModel) -> ItemPayload? {
         switch kind {
         case .loading:
             guard entry.isLoadingMatchedStyles else {
@@ -1069,7 +1331,7 @@ private final class DOMObservingListCell: UICollectionViewListCell {
 
     func configure(
         stableID: WIDOMDetailViewController.ItemStableID,
-        entry: DOMEntry?,
+        entry: DOMNodeModel?,
         payloadProvider: @escaping @MainActor (WIDOMDetailViewController.ItemStableID) -> WIDOMDetailViewController.ItemPayload?
     ) {
         observationHandles.removeAll()
@@ -1083,7 +1345,7 @@ private final class DOMObservingListCell: UICollectionViewListCell {
         startObserving(entry: entry, stableID: stableID)
     }
 
-    private func startObserving(entry: DOMEntry, stableID: WIDOMDetailViewController.ItemStableID) {
+    private func startObserving(entry: DOMNodeModel, stableID: WIDOMDetailViewController.ItemStableID) {
         switch stableID.key {
         case .element:
             entry.observe(
@@ -1222,6 +1484,24 @@ private final class DOMObservingListCell: UICollectionViewListCell {
     }
 }
 
+#if DEBUG
+extension WIDOMDetailViewController {
+    func installStaleInlineEditingStateForTesting(nodeID: DOMNodeModel.ID, name: String) {
+        editingAttributeKey = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+        isInlineEditingActive = true
+    }
+
+    func discardInlineEditingStateUsingViewFallbackForTesting() {
+        guard let editingAttributeKey else {
+            return
+        }
+        pendingForcedProjectionRefresh = true
+        suppressInlineCommitAndEndEditing(for: editingAttributeKey, forceViewFallback: true)
+        attributeDraftSession = nil
+    }
+}
+#endif
+
 private final class ElementAttributeEditorCell: UICollectionViewListCell, UITextViewDelegate {
     weak var delegate: ElementAttributeEditorCellDelegate?
 
@@ -1233,6 +1513,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
     private var editingKey: ElementAttributeEditingKey?
     private var debounceTask: Task<Void, Never>?
     private var observationHandles: Set<ObservationHandle> = []
+    private weak var observedEntry: DOMNodeModel?
     private var isApplyingValue = false
     private var suppressNextCommit = false
     private lazy var keyboardAccessoryToolbar = ElementKeyboardAccessoryToolbar(onClose: { [weak self] in
@@ -1270,6 +1551,7 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         debounceTask?.cancel()
         debounceTask = nil
         observationHandles.removeAll()
+        observedEntry = nil
         editingKey = nil
     }
 
@@ -1277,11 +1559,12 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         key: ElementAttributeEditingKey,
         name: String,
         value: String,
-        entry: DOMEntry?,
+        entry: DOMNodeModel?,
         activateEditor: Bool
     ) {
         observationHandles.removeAll()
         editingKey = key
+        observedEntry = entry
         nameLabel.text = name
 
         if valueTextView.text != value {
@@ -1302,7 +1585,12 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         entry.observe(
             \.attributes,
             onChange: { [weak self, weak entry] attributes in
-                guard let self, let entry, self.editingKey?.entryIdentity == ObjectIdentifier(entry) else {
+                guard
+                    let self,
+                    let entry,
+                    self.observedEntry === entry,
+                    self.editingKey == key
+                else {
                     return
                 }
                 self.syncValueFromAttributes(attributes)
@@ -1312,13 +1600,24 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         .store(in: &observationHandles)
     }
 
-    func suppressNextCommitAndEndEditing() {
+    @discardableResult
+    func suppressNextCommitAndEndEditing() -> Bool {
+        guard valueTextView.isFirstResponder else {
+            return false
+        }
         suppressNextCommit = true
         debounceTask?.cancel()
         debounceTask = nil
         if valueTextView.isFirstResponder {
-            valueTextView.resignFirstResponder()
+            _ = valueTextView.resignFirstResponder()
         }
+        if valueTextView.isFirstResponder {
+            _ = contentView.endEditing(true)
+        }
+        if valueTextView.isFirstResponder {
+            _ = window?.endEditing(true)
+        }
+        return true
     }
 
     override func layoutSubviews() {

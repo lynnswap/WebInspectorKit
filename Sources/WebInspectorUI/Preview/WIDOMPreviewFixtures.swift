@@ -12,15 +12,15 @@ enum WIDOMPreviewFixtures {
         case selectedEditableAttributes
     }
 
-    static func makeInspector(mode: Mode) -> WIDOMModel {
-        let inspector = WIDOMModel(session: DOMSession())
+    static func makeInspector(mode: Mode) -> WIDOMInspector {
+        let inspector = WIDOMInspector(session: DOMSession())
         applySampleTree(to: inspector)
         applySampleSelection(to: inspector, mode: mode)
         return inspector
     }
 
-    static func applySampleSelection(to inspector: WIDOMModel, mode: Mode) {
-        let graphStore = inspector.documentStore
+    static func applySampleSelection(to inspector: WIDOMInspector, mode: Mode) {
+        let graphStore = inspector.document
         graphStore.applySelectionSnapshot(nil)
 
         switch mode {
@@ -54,7 +54,7 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:120"
                 )
             ]
-            if let selectedEntry = graphStore.selectedEntry {
+            if let selectedEntry = graphStore.selectedNode {
                 graphStore.applyMatchedStyles(
                     .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
                     for: selectedEntry
@@ -103,7 +103,7 @@ enum WIDOMPreviewFixtures {
                     sourceLabel: "styles.css:188"
                 )
             ]
-            if let selectedEntry = graphStore.selectedEntry {
+            if let selectedEntry = graphStore.selectedNode {
                 graphStore.applyMatchedStyles(
                     .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
                     for: selectedEntry
@@ -113,7 +113,7 @@ enum WIDOMPreviewFixtures {
     }
 
     @discardableResult
-    static func bootstrapDOMTreeForPreview(_ inspector: WIDOMModel) -> WKWebView {
+    static func bootstrapDOMTreeForPreview(_ inspector: WIDOMInspector) -> WKWebView {
         let key = ObjectIdentifier(inspector)
         if let existingLoader = pageLoaderByInspector[key] {
             applySampleTree(to: inspector)
@@ -126,7 +126,7 @@ enum WIDOMPreviewFixtures {
         return loader.pageWebView
     }
 
-    static func applySampleTree(to inspector: WIDOMModel) {
+    static func applySampleTree(to inspector: WIDOMInspector) {
         guard
             let data = try? JSONSerialization.data(withJSONObject: sampleSnapshotBundle, options: []),
             let bundle = String(data: data, encoding: .utf8)
@@ -228,13 +228,13 @@ enum WIDOMPreviewFixtures {
 
 @MainActor
 private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private let webView: WKWebView
     var pageWebView: WKWebView {
         webView
     }
 
-    init(inspector: WIDOMModel) {
+    init(inspector: WIDOMInspector) {
         self.inspector = inspector
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -256,7 +256,7 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
             guard let inspector else {
                 return
             }
-            await inspector.reloadDocumentPreservingInspectorState()
+            _ = await inspector.reloadDocumentPreservingInspectorState()
         }
     }
 

@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 
+@available(*, deprecated, renamed: "DOMNodeModel", message: "Use DOMNodeModel.")
+public typealias DOMEntry = DOMNodeModel
+
 public struct DOMAttribute: Hashable, Identifiable, Sendable {
     public var id: String {
         name
@@ -25,7 +28,18 @@ public struct DOMAttribute: Hashable, Identifiable, Sendable {
 
 @MainActor
 @Observable
-public final class DOMEntry: Equatable, Hashable {
+public final class DOMNodeModel: Equatable, Hashable {
+    public struct ID: Hashable, Sendable {
+        public let documentIdentity: UUID
+        public let localID: UInt64
+
+        public init(documentIdentity: UUID, localID: UInt64) {
+            self.documentIdentity = documentIdentity
+            self.localID = localID
+        }
+    }
+
+    public let id: ID
     package var backendNodeID: Int?
     public var nodeType: Int
     public var nodeName: String
@@ -33,10 +47,10 @@ public final class DOMEntry: Equatable, Hashable {
     public var nodeValue: String
     public var attributes: [DOMAttribute]
 
-    public weak var parent: DOMEntry?
-    public weak var previousSibling: DOMEntry?
-    public weak var nextSibling: DOMEntry?
-    public var children: [DOMEntry]
+    public weak var parent: DOMNodeModel?
+    public weak var previousSibling: DOMNodeModel?
+    public weak var nextSibling: DOMNodeModel?
+    public var children: [DOMNodeModel]
 
     public var childCount: Int
     public var layoutFlags: [String]
@@ -51,13 +65,14 @@ public final class DOMEntry: Equatable, Hashable {
     public var blockedStylesheetCount: Int
 
     package init(
+        id: ID,
         backendNodeID: Int? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
         nodeValue: String,
         attributes: [DOMAttribute],
-        children: [DOMEntry] = [],
+        children: [DOMNodeModel] = [],
         childCount: Int,
         layoutFlags: [String] = [],
         isRendered: Bool = true,
@@ -70,6 +85,7 @@ public final class DOMEntry: Equatable, Hashable {
         matchedStylesTruncated: Bool = false,
         blockedStylesheetCount: Int = 0
     ) {
+        self.id = id
         self.backendNodeID = backendNodeID
         self.nodeType = nodeType
         self.nodeName = nodeName
@@ -90,7 +106,11 @@ public final class DOMEntry: Equatable, Hashable {
         self.blockedStylesheetCount = blockedStylesheetCount
     }
 
-    public nonisolated static func == (lhs: DOMEntry, rhs: DOMEntry) -> Bool {
+    public var localID: UInt64 {
+        id.localID
+    }
+
+    public nonisolated static func == (lhs: DOMNodeModel, rhs: DOMNodeModel) -> Bool {
         lhs === rhs
     }
 
@@ -104,109 +124,4 @@ public final class DOMEntry: Equatable, Hashable {
         blockedStylesheetCount = 0
         isLoadingMatchedStyles = false
     }
-}
-
-package struct DOMGraphNodeDescriptor: Sendable {
-    package var localID: UInt64
-    package var backendNodeID: Int?
-    package var nodeType: Int
-    package var nodeName: String
-    package var localName: String
-    package var nodeValue: String
-    package var attributes: [DOMAttribute]
-    package var childCount: Int
-    package var layoutFlags: [String]
-    package var isRendered: Bool
-    package var children: [DOMGraphNodeDescriptor]
-
-    package init(
-        localID: UInt64,
-        backendNodeID: Int?,
-        nodeType: Int,
-        nodeName: String,
-        localName: String,
-        nodeValue: String,
-        attributes: [DOMAttribute],
-        childCount: Int,
-        layoutFlags: [String],
-        isRendered: Bool,
-        children: [DOMGraphNodeDescriptor]
-    ) {
-        self.localID = localID
-        self.backendNodeID = backendNodeID
-        self.nodeType = nodeType
-        self.nodeName = nodeName
-        self.localName = localName
-        self.nodeValue = nodeValue
-        self.attributes = attributes
-        self.childCount = childCount
-        self.layoutFlags = layoutFlags
-        self.isRendered = isRendered
-        self.children = children
-    }
-}
-
-package struct DOMGraphSnapshot: Sendable {
-    package var root: DOMGraphNodeDescriptor
-    package var selectedLocalID: UInt64?
-
-    package init(root: DOMGraphNodeDescriptor, selectedLocalID: UInt64? = nil) {
-        self.root = root
-        self.selectedLocalID = selectedLocalID
-    }
-}
-
-package struct DOMSelectionSnapshotPayload: Sendable {
-    package var localID: UInt64?
-    package var preview: String
-    package var attributes: [DOMAttribute]
-    package var path: [String]
-    package var selectorPath: String?
-    package var styleRevision: Int
-
-    package init(
-        localID: UInt64?,
-        preview: String,
-        attributes: [DOMAttribute],
-        path: [String],
-        selectorPath: String?,
-        styleRevision: Int
-    ) {
-        self.localID = localID
-        self.preview = preview
-        self.attributes = attributes
-        self.path = path
-        self.selectorPath = selectorPath
-        self.styleRevision = styleRevision
-    }
-}
-
-package struct DOMSelectorPathPayload: Sendable {
-    package var localID: UInt64?
-    package var selectorPath: String
-
-    package init(localID: UInt64?, selectorPath: String) {
-        self.localID = localID
-        self.selectorPath = selectorPath
-    }
-}
-
-package struct DOMGraphMutationBundle: Sendable {
-    package var events: [DOMGraphMutationEvent]
-
-    package init(events: [DOMGraphMutationEvent]) {
-        self.events = events
-    }
-}
-
-package enum DOMGraphMutationEvent: Sendable {
-    case childNodeInserted(parentLocalID: UInt64, previousLocalID: UInt64?, node: DOMGraphNodeDescriptor)
-    case childNodeRemoved(parentLocalID: UInt64, nodeLocalID: UInt64)
-    case attributeModified(nodeLocalID: UInt64, name: String, value: String, layoutFlags: [String]?, isRendered: Bool?)
-    case attributeRemoved(nodeLocalID: UInt64, name: String, layoutFlags: [String]?, isRendered: Bool?)
-    case characterDataModified(nodeLocalID: UInt64, value: String, layoutFlags: [String]?, isRendered: Bool?)
-    case childNodeCountUpdated(nodeLocalID: UInt64, childCount: Int, layoutFlags: [String]?, isRendered: Bool?)
-    case setChildNodes(parentLocalID: UInt64, nodes: [DOMGraphNodeDescriptor])
-    case replaceSubtree(root: DOMGraphNodeDescriptor)
-    case documentUpdated
 }

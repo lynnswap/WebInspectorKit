@@ -79,7 +79,7 @@ public final class WIInspectorController {
         }
     }
 
-    public let dom: WIDOMModel
+    public let dom: WIDOMInspector
     public let network: WINetworkModel
 
     public private(set) var lastRecoverableError: String?
@@ -110,7 +110,7 @@ public final class WIInspectorController {
             backend: networkBackend
         )
 
-        dom = WIDOMModel(session: domSession)
+        dom = WIDOMInspector(session: domSession)
         network = WINetworkModel(session: networkSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in

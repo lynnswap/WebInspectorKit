@@ -840,12 +840,100 @@ struct TabViewControllerUITabTests {
         #expect(selectedDeleteAction?.attributes.contains(.disabled) == false)
         #expect(selectedHTMLAction?.attributes.contains(.disabled) == false)
 
-        inspector.documentStore.applySelectionSnapshot(nil)
+        inspector.document.applySelectionSnapshot(nil)
 
         let unselectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
         let unselectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
         #expect(unselectedDeleteAction?.attributes.contains(.disabled) == true)
         #expect(unselectedHTMLAction?.attributes.contains(.disabled) == true)
+    }
+
+    @Test
+    func domHostDeleteCapturesSelectionBeforeAsyncTaskStarts() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 2,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 42,
+                            backendNodeID: 42,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 42, name: "id", value: "first")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                        DOMGraphNodeDescriptor(
+                            localID: 43,
+                            backendNodeID: 43,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 43, name: "id", value: "second")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                    ]
+                ),
+                selectedLocalID: 42
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id=\"first\">",
+                attributes: [.init(nodeId: 42, name: "id", value: "first")],
+                path: ["html", "body", "div"],
+                selectorPath: "#first",
+                styleRevision: 0
+            )
+        )
+        let viewController = WIDOMViewController(inspector: inspector)
+        viewController.loadViewIfNeeded()
+
+        var deletedNodeIDs: [Int] = []
+        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
+            deletedNodeIDs.append(nodeId)
+            return .ignoredStaleContext
+        }
+
+        viewController.invokeDeleteSelectionForTesting()
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: 43,
+                preview: "<div id=\"second\">",
+                attributes: [.init(nodeId: 43, name: "id", value: "second")],
+                path: ["html", "body", "div"],
+                selectorPath: "#second",
+                styleRevision: 0
+            )
+        )
+
+        let didScheduleDelete = await waitForCondition {
+            deletedNodeIDs.count == 1
+        }
+
+        #expect(didScheduleDelete == true)
+        #expect(deletedNodeIDs == [42])
     }
 
     @Test
@@ -1111,13 +1199,13 @@ struct TabViewControllerUITabTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
-    private func makeDOMInspectorWithSelection() -> WIDOMModel {
+    private func makeDOMInspectorWithSelection() -> WIDOMInspector {
         let controller = WIInspectorController()
         let inspector = controller.dom
         let selectedLocalID: UInt64 = 42
         let attributes = [DOMAttribute(nodeId: Int(selectedLocalID), name: "id", value: "selected")]
 
-        inspector.documentStore.replaceDocument(
+        inspector.document.replaceDocument(
             with: .init(
                 root: DOMGraphNodeDescriptor(
                     localID: 1,
@@ -1148,7 +1236,7 @@ struct TabViewControllerUITabTests {
                 )
             )
         )
-        inspector.documentStore.applySelectionSnapshot(
+        inspector.document.applySelectionSnapshot(
             .init(
                 localID: selectedLocalID,
                 preview: "<div id=\"selected\"></div>",
@@ -1229,6 +1317,20 @@ struct TabViewControllerUITabTests {
                 return
             }
         }
+    }
+
+    private func waitForCondition(
+        attempts: Int = 50,
+        intervalNanoseconds: UInt64 = 10_000_000,
+        condition: @escaping @MainActor () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if await condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return await condition()
     }
 }
 #endif

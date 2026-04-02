@@ -12,7 +12,7 @@ enum DOMDocumentReloadMode: String, Equatable {
 }
 
 @MainActor
-final class DOMInspectorRuntime: NSObject {
+package final class DOMInspectorRuntime: NSObject {
     private final class RequestScope {}
     private struct DocumentScope {
         let documentScopeID: UInt64
@@ -20,6 +20,11 @@ final class DOMInspectorRuntime: NSObject {
     }
     private struct DeferredDOMBundle {
         let bundle: DOMBundle
+    }
+
+    struct MutationContext: Equatable {
+        let pageEpoch: Int
+        let documentScopeID: UInt64
     }
 
     private enum Phase: Equatable {
@@ -64,6 +69,7 @@ final class DOMInspectorRuntime: NSObject {
     private struct TransitionContext {
         let epoch: Int
         let generation: UInt64
+        let suspendedDeferredDOMBundles: [DeferredDOMBundle]
     }
 
     private struct PendingDocumentRequest: Equatable {
@@ -73,9 +79,7 @@ final class DOMInspectorRuntime: NSObject {
 
     let session: DOMSession
     let bridge: DOMInspectorBridge
-    private var ownedDocumentStore = DOMDocumentStore()
-    private var currentDocumentStoreOverride: DOMDocumentStore?
-    private var onDocumentStoreReplacement: (@MainActor (DOMDocumentStore) -> Void)?
+    let currentDocumentModel: DOMDocumentModel
 
     private var isReady = false
     private var phase: Phase = .idle(epoch: 0)
@@ -99,8 +103,23 @@ final class DOMInspectorRuntime: NSObject {
     private var nextDocumentScopeID: UInt64 = 0
     private var currentDocumentScope = DocumentScope(documentScopeID: 0, requestScope: RequestScope())
     private var deferredDOMBundlesDuringBootstrap: [DeferredDOMBundle] = []
-    private var needsFrontendDocumentRequestDrain = false
-    private var needsFrontendChildNodeRetryDrain = false
+    private var deferredFrontendDocumentRequestDrainScope: RequestScope?
+    private var deferredFrontendChildNodeRetryDrainScope: RequestScope?
+    private var replacementFenceContext: MutationContext?
+    private var deferredReadyMessageContexts: [MutationContext] = []
+    private var pendingSelectionOverrideLocalID: UInt64?
+    private var pendingDocumentScopeSyncTask: Task<Bool, Never>?
+    private var pendingDocumentScopeRecoveryTask: Task<Void, Never>?
+    private var pendingDocumentScopeSyncGeneration: UInt64 = 0
+    private var pendingDocumentScopeRecoveryGeneration: UInt64 = 0
+    private let documentScopeResyncRetryAttempts = 12
+    private let documentScopeResyncRetryDelayNanoseconds: UInt64 = 250_000_000
+    private let pendingDocumentScopeSyncRetryAttempts = 3
+    private let pendingDocumentScopeSyncRetryDelayNanoseconds: UInt64 = 500_000_000
+    private var pendingDocumentScopeSyncPageEpoch: Int?
+    private var pendingDocumentScopeSyncDocumentScopeID: UInt64?
+    private var pendingDocumentScopeRecoveryPageEpoch: Int?
+    private var pendingDocumentScopeRecoveryDocumentScopeID: UInt64?
 
 #if DEBUG
     private var matchedStylesFetchOverride: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)?
@@ -108,6 +127,13 @@ final class DOMInspectorRuntime: NSObject {
     var testPreferredDepthApplyOverride: (@MainActor (Int) async -> Void)?
     var testDocumentRequestApplyOverride: (@MainActor (_ depth: Int, _ mode: DOMDocumentReloadMode) async -> Void)?
     var testFrontendDispatchOverride: (@MainActor (Any) async -> Bool)?
+    var testSkipFreshRequestDocumentScopeSyncStub = false
+    var testDocumentScopeSyncOverride: (@MainActor (UInt64) async -> Void)?
+    var testDocumentScopeSyncResultOverride: Bool?
+    var testDocumentScopeResyncRetryAttemptsOverride: Int?
+    var testDocumentScopeResyncRetryDelayNanosecondsOverride: UInt64?
+    var testPendingDocumentScopeSyncRetryAttemptsOverride: Int?
+    var testPendingDocumentScopeSyncRetryDelayNanosecondsOverride: UInt64?
 #endif
 
     private var webView: InspectorWebView? {
@@ -122,12 +148,9 @@ final class DOMInspectorRuntime: NSObject {
         currentDocumentScope.requestScope
     }
 
-    var currentDocumentStore: DOMDocumentStore {
-        currentDocumentStoreOverride ?? ownedDocumentStore
-    }
-
-    init(session: DOMSession) {
+    init(session: DOMSession, documentModel: DOMDocumentModel) {
         self.session = session
+        self.currentDocumentModel = documentModel
         bridge = DOMInspectorBridge()
         configuration = session.configuration
         mutationPipeline = DOMMutationSender(
@@ -140,12 +163,8 @@ final class DOMInspectorRuntime: NSObject {
         session.bundleSink = bridge
     }
 
-    func bindDocumentStore(
-        _ documentStore: DOMDocumentStore,
-        onReplacement: @escaping @MainActor (DOMDocumentStore) -> Void
-    ) {
-        currentDocumentStoreOverride = documentStore
-        onDocumentStoreReplacement = onReplacement
+    convenience init(session: DOMSession) {
+        self.init(session: session, documentModel: DOMDocumentModel())
     }
 
     func makeInspectorWebView() -> InspectorWebView {
@@ -186,8 +205,57 @@ final class DOMInspectorRuntime: NSObject {
     }
 
     func resetDocumentStoreForDetachment() {
-        replaceCurrentDocumentStore()
+        deferredReadyMessageContexts.removeAll(keepingCapacity: true)
+        replacementFenceContext = nil
+        replaceCurrentDocumentModel()
         payloadNormalizer.resetForDocumentUpdate()
+    }
+
+    @discardableResult
+    func adoptPageContextIfNeeded(
+        _ pageContext: DOMPageContext,
+        preserveCurrentDocumentState: Bool = false
+    ) async -> Bool {
+        let adoptedPageEpoch = max(pageEpoch, pageContext.pageEpoch)
+        guard adoptedPageEpoch != pageEpoch
+            || pageContext.documentScopeID > currentDocumentScope.documentScopeID
+        else {
+            return false
+        }
+
+        let adoptedContext = MutationContext(
+            pageEpoch: adoptedPageEpoch,
+            documentScopeID: pageContext.documentScopeID
+        )
+        let hasDeferredFrontendDocumentRequestDrain = deferredFrontendDocumentRequestDrainScope != nil
+        let hasDeferredFrontendChildNodeRetryDrain = deferredFrontendChildNodeRetryDrainScope != nil
+        moveReadySignal(to: adoptedContext)
+        nextDocumentScopeID = max(nextDocumentScopeID, pageContext.documentScopeID)
+        currentDocumentScope = .init(
+            documentScopeID: pageContext.documentScopeID,
+            requestScope: RequestScope()
+        )
+        phase = .idle(epoch: adoptedPageEpoch)
+        replacementFenceContext = adoptedContext
+        cancelInFlightContextTasks()
+        await drainTransitionFlushIfNeeded()
+        deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
+        cancelMatchedStylesRequest()
+        cancelSelectorPathRequest()
+        clearPendingMutationBundles()
+        deferredFrontendDocumentRequestDrainScope = hasDeferredFrontendDocumentRequestDrain ? currentRequestScope : nil
+        deferredFrontendChildNodeRetryDrainScope = hasDeferredFrontendChildNodeRetryDrain ? currentRequestScope : nil
+        pendingDocumentRequest = nil
+        enqueuedMutationGeneration = 0
+        discardedMutationGeneration = 0
+        if !preserveCurrentDocumentState {
+            pendingSelectionOverrideLocalID = nil
+            currentDocumentModel.clearDocument(isFreshDocument: true)
+            payloadNormalizer.resetForDocumentUpdate()
+        }
+        bridge.refreshBootstrapPayloadIfPossible()
+        updateMutationPipelineReadyState()
+        return true
     }
 
     func performPageTransition<T>(
@@ -195,7 +263,7 @@ final class DOMInspectorRuntime: NSObject {
         _ operation: (_ nextPageEpoch: Int) async -> T
     ) async -> T {
         let transition = beginTransition(advancePageEpoch: true)
-        replaceCurrentDocumentStore()
+        replaceCurrentDocumentModel()
         payloadNormalizer.resetForDocumentUpdate()
         await drainTransitionFlushIfNeeded()
         let result = await operation(transition.epoch)
@@ -218,46 +286,157 @@ final class DOMInspectorRuntime: NSObject {
         await waitForCurrentBootstrapIfNeeded()
     }
 
-    func requestDocument(depth: Int, mode: DOMDocumentReloadMode, expectedPageEpoch: Int? = nil) async {
+    func requestDocument(
+        depth: Int,
+        mode: DOMDocumentReloadMode,
+        expectedPageEpoch: Int? = nil,
+        expectedDocumentScopeID: UInt64? = nil
+    ) async -> Bool {
         guard acceptsExpectedPageEpoch(expectedPageEpoch) else {
-            return
+            return false
         }
-        await waitForCurrentBootstrapIfNeeded()
-        guard acceptsExpectedPageEpoch(expectedPageEpoch) else {
-            return
+        guard acceptsExpectedDocumentScopeID(expectedDocumentScopeID) else {
+            return false
         }
         if mode == .fresh {
             let transition = beginTransition(advancePageEpoch: false)
             let nextDocumentScope = makeNextDocumentScope()
-            let didResetChildRequests = await dispatchResetChildNodeRequestsToFrontend(
-                pageEpoch: transition.epoch,
-                documentScopeID: currentDocumentScope.documentScopeID
-            )
-            guard didResetChildRequests else {
-                completeTransition(transition)
-                return
-            }
-            await drainTransitionFlushIfNeeded()
+            let currentProjectedDocumentScopeID = currentDocumentScope.documentScopeID
+            let allowsMissingPageScopeSync = session.hasPageWebView == false
             guard acceptsExpectedPageEpoch(expectedPageEpoch),
+                  acceptsExpectedDocumentScopeID(expectedDocumentScopeID),
                   pageEpoch == transition.epoch,
                   phase.generation == transition.generation
             else {
+                restoreDeferredDOMBundles(from: transition)
                 completeTransition(transition)
-                return
+                restartSelectionDependentRequestsIfNeeded()
+                return false
             }
+            let didResetChildRequests = await dispatchResetChildNodeRequestsToFrontend(
+                pageEpoch: transition.epoch,
+                documentScopeID: currentProjectedDocumentScopeID
+            )
+            guard didResetChildRequests else {
+                restoreDeferredDOMBundles(from: transition)
+                completeTransition(transition)
+                restartSelectionDependentRequestsIfNeeded()
+                return false
+            }
+            await drainTransitionFlushIfNeeded()
+            guard acceptsExpectedPageEpoch(expectedPageEpoch),
+                  acceptsExpectedDocumentScopeID(expectedDocumentScopeID),
+                  pageEpoch == transition.epoch,
+                  phase.generation == transition.generation
+            else {
+                restoreDeferredDOMBundles(from: transition)
+                completeTransition(transition)
+                restartSelectionDependentRequestsIfNeeded()
+                return false
+            }
+            let didSyncDocumentScope = await syncFreshRequestDocumentScopeID(
+                nextDocumentScope.documentScopeID,
+                allowsMissingPage: allowsMissingPageScopeSync,
+                expectedPageEpoch: transition.epoch
+            )
+            guard didSyncDocumentScope else {
+                restoreDeferredDOMBundles(from: transition)
+                completeTransition(transition)
+                restartSelectionDependentRequestsIfNeeded()
+                return false
+            }
+            guard acceptsExpectedPageEpoch(expectedPageEpoch),
+                  acceptsExpectedDocumentScopeID(expectedDocumentScopeID),
+                  pageEpoch == transition.epoch,
+                  phase.generation == transition.generation
+            else {
+                adoptSyncedDocumentScopeAfterAbortedFreshRequest(
+                    nextDocumentScope,
+                    transition: transition
+                )
+                completeTransition(transition)
+                return false
+            }
+            clearPendingMutationBundles()
+            cancelMatchedStylesRequest()
+            cancelSelectorPathRequest()
+            moveReadySignal(
+                to: .init(
+                    pageEpoch: transition.epoch,
+                    documentScopeID: nextDocumentScope.documentScopeID
+                )
+            )
+            currentDocumentScope = nextDocumentScope
+            pendingSelectionOverrideLocalID = nil
             payloadNormalizer.resetForDocumentUpdate()
-            commitCurrentDocumentScope(nextDocumentScope, clearCurrentContents: true)
+            currentDocumentModel.clearDocument(isFreshDocument: true)
             pendingDocumentRequest = .init(depth: depth, mode: mode)
             bridge.refreshBootstrapPayloadIfPossible()
             completeTransition(transition)
             await waitForCurrentBootstrapIfNeeded()
-            return
+            return true
+        }
+        await waitForCurrentBootstrapIfNeeded()
+        guard acceptsExpectedPageEpoch(expectedPageEpoch) else {
+            return false
+        }
+        guard acceptsExpectedDocumentScopeID(expectedDocumentScopeID) else {
+            return false
         }
         pendingDocumentRequest = .init(depth: depth, mode: mode)
         bridge.refreshBootstrapPayloadIfPossible()
         updateMutationPipelineReadyState()
         scheduleBootstrapIfNeeded()
         await waitForCurrentBootstrapIfNeeded()
+        return true
+    }
+
+    private func syncFreshRequestDocumentScopeID(
+        _ documentScopeID: UInt64,
+        allowsMissingPage: Bool = false,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
+        if session.hasPageWebView == false {
+            session.prepareDocumentScopeID(documentScopeID)
+#if DEBUG
+            if let testDocumentScopeSyncOverride {
+                await testDocumentScopeSyncOverride(documentScopeID)
+                return testDocumentScopeSyncResultOverride ?? allowsMissingPage
+            }
+#endif
+            return allowsMissingPage
+        }
+#if DEBUG
+        if testSkipFreshRequestDocumentScopeSyncStub == false,
+           let testDocumentScopeSyncOverride {
+            await testDocumentScopeSyncOverride(documentScopeID)
+            return testDocumentScopeSyncResultOverride ?? true
+        }
+#endif
+        var remainingAttempts = documentScopeResyncRetryAttemptsValue
+        while remainingAttempts > 0, Task.isCancelled == false {
+            let didSync = await performDocumentScopeSync(
+                documentScopeID,
+                expectedPageEpoch: expectedPageEpoch
+            )
+            if didSync {
+                return true
+            }
+            if session.hasPageWebView == false {
+                return false
+            }
+            if expectedPageEpoch != nil, acceptsExpectedPageEpoch(expectedPageEpoch) == false {
+                return false
+            }
+            remainingAttempts -= 1
+            if remainingAttempts > 0 {
+                try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
+                guard Task.isCancelled == false else {
+                    return false
+                }
+            }
+        }
+        return false
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration, expectedPageEpoch: Int? = nil) async {
@@ -285,6 +464,13 @@ final class DOMInspectorRuntime: NSObject {
         currentDocumentScope.documentScopeID
     }
 
+    var currentMutationContext: MutationContext {
+        .init(
+            pageEpoch: pageEpoch,
+            documentScopeID: currentDocumentScope.documentScopeID
+        )
+    }
+
     var currentBootstrapPayload: [String: Any] {
         var payload: [String: Any] = [
             "config": frontendConfigurationPayload()
@@ -304,6 +490,14 @@ final class DOMInspectorRuntime: NSObject {
 
     isolated deinit {
         bootstrapTask?.cancel()
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         mutationPipeline.reset()
@@ -312,20 +506,255 @@ final class DOMInspectorRuntime: NSObject {
 }
 
 extension DOMInspectorRuntime {
-    private func syncCurrentDocumentScopeIDIfNeeded() {
-        let documentScopeID = currentDocumentScope.documentScopeID
-        Task.immediateIfAvailable { [weak self] in
-            await self?.session.syncCurrentDocumentScopeIDIfNeeded(documentScopeID)
-        }
+    private var documentScopeResyncRetryAttemptsValue: Int {
+#if DEBUG
+        testDocumentScopeResyncRetryAttemptsOverride ?? documentScopeResyncRetryAttempts
+#else
+        documentScopeResyncRetryAttempts
+#endif
     }
 
-    private func replaceBoundDocumentStore(with store: DOMDocumentStore) {
-        if currentDocumentStoreOverride != nil {
-            currentDocumentStoreOverride = store
-            onDocumentStoreReplacement?(store)
-        } else {
-            ownedDocumentStore = store
+    private var documentScopeResyncRetryDelayNanosecondsValue: UInt64 {
+#if DEBUG
+        testDocumentScopeResyncRetryDelayNanosecondsOverride ?? documentScopeResyncRetryDelayNanoseconds
+#else
+        documentScopeResyncRetryDelayNanoseconds
+#endif
+    }
+
+    private var pendingDocumentScopeSyncRetryAttemptsValue: Int {
+#if DEBUG
+        testPendingDocumentScopeSyncRetryAttemptsOverride ?? pendingDocumentScopeSyncRetryAttempts
+#else
+        pendingDocumentScopeSyncRetryAttempts
+#endif
+    }
+
+    private var pendingDocumentScopeSyncRetryDelayNanosecondsValue: UInt64 {
+#if DEBUG
+        testPendingDocumentScopeSyncRetryDelayNanosecondsOverride ?? pendingDocumentScopeSyncRetryDelayNanoseconds
+#else
+        pendingDocumentScopeSyncRetryDelayNanoseconds
+#endif
+    }
+
+    func matchesCurrentMutationContext(_ context: MutationContext?) -> Bool {
+        guard let context else {
+            return true
         }
+        return pageEpoch == context.pageEpoch
+            && currentDocumentScope.documentScopeID == context.documentScopeID
+    }
+
+    private func performDocumentScopeSync(
+        _ documentScopeID: UInt64,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
+#if DEBUG
+        if let testDocumentScopeSyncOverride {
+            await testDocumentScopeSyncOverride(documentScopeID)
+            return testDocumentScopeSyncResultOverride ?? true
+        }
+#endif
+        return await session.syncCurrentDocumentScopeIDIfNeeded(
+            documentScopeID,
+            expectedPageEpoch: expectedPageEpoch
+        )
+    }
+
+    func syncMutationContextToPageIfNeeded(_ context: MutationContext) async -> Bool {
+        guard session.hasPageWebView else {
+            if matchesCurrentMutationContext(context) {
+                session.prepareDocumentScopeID(context.documentScopeID)
+            }
+            return false
+        }
+        var remainingAttempts = documentScopeResyncRetryAttemptsValue
+        while remainingAttempts > 0, Task.isCancelled == false {
+            let didSync = await performDocumentScopeSync(
+                context.documentScopeID,
+                expectedPageEpoch: context.pageEpoch
+            )
+            if didSync {
+                return true
+            }
+            if session.hasPageWebView == false {
+                return false
+            }
+            if matchesCurrentMutationContext(context) == false {
+                return false
+            }
+            remainingAttempts -= 1
+            if remainingAttempts > 0 {
+                try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
+                guard Task.isCancelled == false else {
+                    return false
+                }
+            }
+        }
+        guard matchesCurrentMutationContext(context) else {
+            return false
+        }
+        syncCurrentDocumentScopeIDIfNeeded()
+        return false
+    }
+
+    func setPendingSelectionOverride(localID: UInt64?) {
+        pendingSelectionOverrideLocalID = localID.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    private func syncCurrentDocumentScopeIDIfNeeded() {
+        let documentScopeID = currentDocumentScope.documentScopeID
+        let pageEpoch = self.pageEpoch
+        session.prepareDocumentScopeID(documentScopeID)
+        if let pendingDocumentScopeRecoveryTask,
+           pendingDocumentScopeRecoveryPageEpoch == pageEpoch,
+           pendingDocumentScopeRecoveryDocumentScopeID == documentScopeID {
+            _ = pendingDocumentScopeRecoveryTask
+            return
+        }
+
+        if pendingDocumentScopeSyncPageEpoch != pageEpoch
+            || pendingDocumentScopeSyncDocumentScopeID != documentScopeID {
+            pendingDocumentScopeSyncTask?.cancel()
+            pendingDocumentScopeSyncTask = nil
+            pendingDocumentScopeSyncGeneration &+= 1
+            pendingDocumentScopeSyncPageEpoch = nil
+            pendingDocumentScopeSyncDocumentScopeID = nil
+        }
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeRecoveryPageEpoch = pageEpoch
+        pendingDocumentScopeRecoveryDocumentScopeID = documentScopeID
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        let generation = pendingDocumentScopeRecoveryGeneration
+        let recoveryTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.finishPendingDocumentScopeRecoveryTask(
+                    generation: generation,
+                    pageEpoch: pageEpoch,
+                    documentScopeID: documentScopeID
+                )
+            }
+            var remainingRecoveryRetries = self.documentScopeResyncRetryAttemptsValue
+            while Task.isCancelled == false,
+                  remainingRecoveryRetries > 0,
+                  self.session.hasPageWebView,
+                  self.pageEpoch == pageEpoch,
+                  self.currentDocumentScope.documentScopeID == documentScopeID {
+                let didSync = await self.syncCurrentDocumentScopeIDIfNeeded(
+                    documentScopeID: documentScopeID,
+                    pageEpoch: pageEpoch
+                )
+                if didSync {
+                    return
+                }
+                remainingRecoveryRetries -= 1
+                guard self.session.hasPageWebView,
+                      self.pageEpoch == pageEpoch,
+                      self.currentDocumentScope.documentScopeID == documentScopeID,
+                      remainingRecoveryRetries > 0,
+                      Task.isCancelled == false
+                else {
+                    return
+                }
+                try? await Task.sleep(
+                    nanoseconds: self.documentScopeResyncRetryDelayNanosecondsValue
+                )
+                guard Task.isCancelled == false else {
+                    return
+                }
+            }
+        }
+        pendingDocumentScopeRecoveryTask = recoveryTask
+    }
+
+    private func syncCurrentDocumentScopeIDIfNeeded(
+        documentScopeID: UInt64,
+        pageEpoch: Int
+    ) async -> Bool {
+        if let pendingDocumentScopeSyncTask,
+           pendingDocumentScopeSyncPageEpoch == pageEpoch,
+           pendingDocumentScopeSyncDocumentScopeID == documentScopeID {
+            return await pendingDocumentScopeSyncTask.value
+        }
+
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeSyncGeneration &+= 1
+        let generation = pendingDocumentScopeSyncGeneration
+        pendingDocumentScopeSyncPageEpoch = pageEpoch
+        pendingDocumentScopeSyncDocumentScopeID = documentScopeID
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return false
+            }
+            let maxAttempts = self.pendingDocumentScopeSyncRetryAttemptsValue
+            for attempt in 0..<maxAttempts {
+                guard Task.isCancelled == false else {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return false
+                }
+                let didSync = await self.performDocumentScopeSync(
+                    documentScopeID,
+                    expectedPageEpoch: pageEpoch
+                )
+                guard self.pendingDocumentScopeSyncGeneration == generation else {
+                    return false
+                }
+                if didSync {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return true
+                }
+                guard self.session.hasPageWebView,
+                      self.pageEpoch == pageEpoch,
+                      self.currentDocumentScope.documentScopeID == documentScopeID,
+                      Task.isCancelled == false
+                else {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return false
+                }
+                if attempt + 1 < maxAttempts {
+                    try? await Task.sleep(
+                        nanoseconds: self.pendingDocumentScopeSyncRetryDelayNanosecondsValue
+                    )
+                    guard Task.isCancelled == false else {
+                        self.finishPendingDocumentScopeSync(generation: generation)
+                        return false
+                    }
+                }
+            }
+            self.finishPendingDocumentScopeSync(generation: generation)
+            return false
+        }
+        pendingDocumentScopeSyncTask = task
+        return await task.value
+    }
+
+    private func finishPendingDocumentScopeSync(generation: UInt64) {
+        guard pendingDocumentScopeSyncGeneration == generation else {
+            return
+        }
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+    }
+
+    private func finishPendingDocumentScopeRecoveryTask(
+        generation: UInt64,
+        pageEpoch: Int,
+        documentScopeID: UInt64
+    ) {
+        guard pendingDocumentScopeRecoveryGeneration == generation,
+              pendingDocumentScopeRecoveryPageEpoch == pageEpoch,
+              pendingDocumentScopeRecoveryDocumentScopeID == documentScopeID
+        else {
+            return
+        }
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
     }
 
     private func makeNextDocumentScope() -> DocumentScope {
@@ -333,12 +762,19 @@ extension DOMInspectorRuntime {
         return .init(documentScopeID: nextDocumentScopeID, requestScope: RequestScope())
     }
 
-    private func replaceCurrentDocumentStore() {
+    private func replaceCurrentDocumentModel() {
         let nextScope = makeNextDocumentScope()
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
+        moveReadySignal(
+            to: .init(
+                pageEpoch: pageEpoch,
+                documentScopeID: nextScope.documentScopeID
+            )
+        )
         currentDocumentScope = nextScope
-        replaceBoundDocumentStore(with: DOMDocumentStore())
+        pendingSelectionOverrideLocalID = nil
+        currentDocumentModel.clearDocument(isFreshDocument: true)
         syncCurrentDocumentScopeIDIfNeeded()
     }
 
@@ -347,12 +783,19 @@ extension DOMInspectorRuntime {
         clearCurrentContents: Bool
     ) {
         clearPendingMutationBundles()
+        moveReadySignal(
+            to: .init(
+                pageEpoch: pageEpoch,
+                documentScopeID: nextScope.documentScopeID
+            )
+        )
         currentDocumentScope = nextScope
+        pendingSelectionOverrideLocalID = nil
+        if clearCurrentContents {
+            currentDocumentModel.clearDocument(isFreshDocument: true)
+        }
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
-        if clearCurrentContents {
-            currentDocumentStore.clearDocument()
-        }
         bridge.refreshBootstrapPayloadIfPossible()
         syncCurrentDocumentScopeIDIfNeeded()
     }
@@ -364,11 +807,28 @@ extension DOMInspectorRuntime {
         )
     }
 
-    private func applyMutationEventsToCurrentDocumentStore(_ events: [DOMGraphMutationEvent]) {
+    private func adoptSyncedDocumentScopeAfterAbortedFreshRequest(
+        _ nextScope: DocumentScope,
+        transition: TransitionContext
+    ) {
+        guard pageEpoch == transition.epoch else {
+            return
+        }
+        guard currentDocumentScope.documentScopeID < nextScope.documentScopeID else {
+            return
+        }
+        restoreDeferredDOMBundles(
+            from: transition,
+            rebasedToDocumentScopeID: nextScope.documentScopeID
+        )
+        commitCurrentDocumentScope(nextScope, clearCurrentContents: true)
+    }
+
+    private func applyMutationEventsToCurrentDocumentModel(_ events: [DOMGraphMutationEvent]) {
         guard !events.isEmpty else {
             return
         }
-        currentDocumentStore.applyMutationBundle(.init(events: events))
+        currentDocumentModel.applyMutationBundle(.init(events: events))
     }
 
     private func applyMutationBundleAcrossDocumentUpdates(_ bundle: DOMGraphMutationBundle) {
@@ -380,7 +840,7 @@ extension DOMInspectorRuntime {
         for event in bundle.events {
             switch event {
             case .documentUpdated:
-                applyMutationEventsToCurrentDocumentStore(bufferedEvents)
+                applyMutationEventsToCurrentDocumentModel(bufferedEvents)
                 bufferedEvents.removeAll(keepingCapacity: true)
                 payloadNormalizer.resetForDocumentUpdate()
                 advanceCurrentDocumentScope(clearCurrentContents: true)
@@ -389,11 +849,59 @@ extension DOMInspectorRuntime {
             }
         }
 
-        applyMutationEventsToCurrentDocumentStore(bufferedEvents)
+            applyMutationEventsToCurrentDocumentModel(bufferedEvents)
     }
 
     func updateMutationPipelineReadyState() {
         mutationPipeline.setReady(isReady && phase.allowsFrontendTraffic && bootstrapTask == nil && !hasPendingBootstrapWork)
+    }
+
+    func clearDocumentReplacementAfterContextAdoptionRequirement() {
+        clearDocumentReplacementAfterContextAdoptionRequirement(
+            pageEpoch: pageEpoch,
+            documentScopeID: currentDocumentScope.documentScopeID
+        )
+    }
+
+    private func clearDocumentReplacementAfterContextAdoptionRequirement(
+        pageEpoch: Int,
+        documentScopeID: UInt64
+    ) {
+        guard replacementFenceContext == .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID) else {
+            return
+        }
+        replacementFenceContext = nil
+        activateDeferredReadyMessageIfMatchingCurrentContext()
+        if bootstrapTask == nil {
+            applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: pageEpoch)
+        }
+        drainDeferredFrontendDocumentRequestIfNeeded()
+        drainDeferredFrontendChildNodeRetryIfNeeded()
+    }
+
+    func retryDocumentReplacementAfterContextAdoption(depth: Int, mode: DOMDocumentReloadMode) {
+        pendingDocumentRequest = .init(depth: depth, mode: mode)
+        replacementFenceContext = currentMutationContext
+        bridge.refreshBootstrapPayloadIfPossible()
+        updateMutationPipelineReadyState()
+        scheduleBootstrapIfNeeded()
+    }
+
+    private func activateDeferredReadyMessageIfMatchingCurrentContext() {
+        let currentContext = currentMutationContext
+        pruneDeferredReadyMessages(olderThan: currentContext)
+        guard hasReplacementFenceForCurrentContext == false,
+              consumeDeferredReadyMessage(for: currentContext)
+        else {
+            return
+        }
+        applyReadyState()
+    }
+
+    private func applyReadyState() {
+        isReady = true
+        updateMutationPipelineReadyState()
+        scheduleBootstrapIfNeeded()
     }
 
     func waitForCurrentBootstrapIfNeeded() async {
@@ -448,11 +956,76 @@ extension DOMInspectorRuntime {
         configurationNeedsBootstrap || pendingPreferredDepth != nil || pendingDocumentRequest != nil
     }
 
+    private func contextPrecedes(_ lhs: MutationContext, _ rhs: MutationContext) -> Bool {
+        lhs.pageEpoch < rhs.pageEpoch
+            || (lhs.pageEpoch == rhs.pageEpoch && lhs.documentScopeID < rhs.documentScopeID)
+    }
+
+    private func enqueueDeferredReadyMessage(_ context: MutationContext) {
+        guard deferredReadyMessageContexts.contains(context) == false else {
+            return
+        }
+        deferredReadyMessageContexts.append(context)
+    }
+
+    private func pruneDeferredReadyMessages(olderThan context: MutationContext) {
+        deferredReadyMessageContexts.removeAll { queuedContext in
+            contextPrecedes(queuedContext, context)
+        }
+    }
+
+    private func hasDeferredReadyMessage(for context: MutationContext) -> Bool {
+        deferredReadyMessageContexts.contains(context)
+    }
+
+    @discardableResult
+    private func consumeDeferredReadyMessage(for context: MutationContext) -> Bool {
+        guard let index = deferredReadyMessageContexts.firstIndex(of: context) else {
+            return false
+        }
+        deferredReadyMessageContexts.remove(at: index)
+        return true
+    }
+
+    private func moveReadySignal(to context: MutationContext) {
+        let hasCurrentReadySignal = isReady || hasDeferredReadyMessage(for: currentMutationContext)
+        pruneDeferredReadyMessages(olderThan: context)
+        if hasCurrentReadySignal {
+            isReady = false
+            enqueueDeferredReadyMessage(context)
+        }
+    }
+
+    private func isReadyContextCurrentOrNewer(_ context: MutationContext) -> Bool {
+        if context.pageEpoch != pageEpoch {
+            return context.pageEpoch > pageEpoch
+        }
+        return context.documentScopeID >= currentDocumentScope.documentScopeID
+    }
+
+    private var hasReplacementFenceForCurrentContext: Bool {
+        replacementFenceContext == currentMutationContext
+    }
+
+    private var hasBootstrapReadySignalForCurrentContext: Bool {
+        if hasReplacementFenceForCurrentContext {
+            return hasDeferredReadyMessage(for: currentMutationContext)
+        }
+        return isReady || hasDeferredReadyMessage(for: currentMutationContext)
+    }
+
     func acceptsExpectedPageEpoch(_ expectedPageEpoch: Int?) -> Bool {
         guard let expectedPageEpoch else {
             return true
         }
         return expectedPageEpoch == pageEpoch
+    }
+
+    func acceptsExpectedDocumentScopeID(_ expectedDocumentScopeID: UInt64?) -> Bool {
+        guard let expectedDocumentScopeID else {
+            return true
+        }
+        return expectedDocumentScopeID == currentDocumentScope.documentScopeID
     }
 
     func frontendConfigurationPayload() -> [String: Any] {
@@ -470,7 +1043,12 @@ extension DOMInspectorRuntime {
     }
 
     func scheduleBootstrapIfNeeded() {
-        guard bootstrapTask == nil, isReady, phase.isTransitioning == false, hasBootstrapExecutionEndpoint, hasPendingBootstrapWork else {
+        guard bootstrapTask == nil,
+              hasBootstrapReadySignalForCurrentContext,
+              phase.isTransitioning == false,
+              hasBootstrapExecutionEndpoint,
+              hasPendingBootstrapWork
+        else {
             return
         }
 
@@ -497,13 +1075,16 @@ extension DOMInspectorRuntime {
                 self.updateMutationPipelineReadyState()
                 self.drainDeferredFrontendDocumentRequestIfNeeded()
                 self.drainDeferredFrontendChildNodeRetryIfNeeded()
-                if self.isReady, self.pageEpoch == expectedPageEpoch, self.hasPendingBootstrapWork {
+                if self.hasBootstrapReadySignalForCurrentContext,
+                   self.pageEpoch == expectedPageEpoch,
+                   self.hasPendingBootstrapWork
+                {
                     self.scheduleBootstrapIfNeeded()
                 }
             }
 
             while Task.isCancelled == false,
-                  self.isReady,
+                  self.hasBootstrapReadySignalForCurrentContext,
                   self.hasBootstrapExecutionEndpoint,
                   self.pageEpoch == expectedPageEpoch,
                   self.hasPendingBootstrapWork {
@@ -528,6 +1109,9 @@ extension DOMInspectorRuntime {
             guard pageEpoch == expectedPageEpoch else {
                 return true
             }
+            guard Task.isCancelled == false else {
+                return true
+            }
             configurationNeedsBootstrap = false
         }
 
@@ -536,6 +1120,9 @@ extension DOMInspectorRuntime {
                 return false
             }
             guard pageEpoch == expectedPageEpoch else {
+                return true
+            }
+            guard Task.isCancelled == false else {
                 return true
             }
             if pendingPreferredDepth == depth {
@@ -554,11 +1141,17 @@ extension DOMInspectorRuntime {
             guard pageEpoch == expectedPageEpoch else {
                 return true
             }
+            guard Task.isCancelled == false else {
+                return true
+            }
             if pendingDocumentRequest == request {
                 pendingDocumentRequest = nil
             }
         }
 
+        guard Task.isCancelled == false else {
+            return true
+        }
         applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: expectedPageEpoch)
 
         publishRecoverableError(nil)
@@ -606,8 +1199,8 @@ extension DOMInspectorRuntime {
     }
 
     private func beginTransition(advancePageEpoch: Bool) -> TransitionContext {
-        bootstrapTask?.cancel()
-        bootstrapTask = nil
+        cancelInFlightContextTasks()
+        let suspendedDeferredDOMBundles = deferredDOMBundlesDuringBootstrap
         deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
@@ -621,7 +1214,46 @@ extension DOMInspectorRuntime {
         mutationPipeline.setReady(false)
         bridge.refreshBootstrapPayloadIfPossible()
         updateMutationPipelineReadyState()
-        return .init(epoch: nextEpoch, generation: generation)
+        return .init(
+            epoch: nextEpoch,
+            generation: generation,
+            suspendedDeferredDOMBundles: suspendedDeferredDOMBundles
+        )
+    }
+
+    private func restoreDeferredDOMBundles(
+        from transition: TransitionContext,
+        rebasedToDocumentScopeID documentScopeID: UInt64? = nil
+    ) {
+        guard !transition.suspendedDeferredDOMBundles.isEmpty else {
+            return
+        }
+        let restoredBundles = transition.suspendedDeferredDOMBundles.map { entry in
+            DeferredDOMBundle(
+                bundle: rebasedDOMBundle(
+                    entry.bundle,
+                    documentScopeID: documentScopeID ?? entry.bundle.documentScopeID
+                )
+            )
+        }
+        deferredDOMBundlesDuringBootstrap = restoredBundles + deferredDOMBundlesDuringBootstrap
+    }
+
+    private func rebasedDOMBundle(_ bundle: DOMBundle, documentScopeID: UInt64?) -> DOMBundle {
+        switch bundle.payload {
+        case let .jsonString(rawJSON):
+            return .init(
+                rawJSON: rawJSON,
+                pageEpoch: bundle.pageEpoch,
+                documentScopeID: documentScopeID
+            )
+        case let .objectEnvelope(objectEnvelope):
+            return .init(
+                objectEnvelope: objectEnvelope,
+                pageEpoch: bundle.pageEpoch,
+                documentScopeID: documentScopeID
+            )
+        }
     }
 
     private func drainTransitionFlushIfNeeded(resetCompletedGeneration: Bool = true) async {
@@ -633,7 +1265,10 @@ extension DOMInspectorRuntime {
         )
     }
 
-    private func completeTransition(_ transition: TransitionContext, resumeBootstrap: Bool = true) {
+    private func completeTransition(
+        _ transition: TransitionContext,
+        resumeBootstrap: Bool = true
+    ) {
         guard pageEpoch == transition.epoch, phase.generation == transition.generation else {
             return
         }
@@ -653,9 +1288,34 @@ extension DOMInspectorRuntime {
         }
     }
 
+    private func cancelInFlightContextTasks() {
+        bootstrapTask?.cancel()
+        bootstrapTask = nil
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
+    }
+
     func resetInspectorState() {
         bootstrapTask?.cancel()
         bootstrapTask = nil
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         isReady = false
@@ -665,8 +1325,11 @@ extension DOMInspectorRuntime {
         enqueuedMutationGeneration = 0
         discardedMutationGeneration = 0
         deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
-        needsFrontendDocumentRequestDrain = false
-        needsFrontendChildNodeRetryDrain = false
+        deferredFrontendDocumentRequestDrainScope = nil
+        deferredFrontendChildNodeRetryDrainScope = nil
+        deferredReadyMessageContexts.removeAll(keepingCapacity: true)
+        replacementFenceContext = nil
+        pendingSelectionOverrideLocalID = nil
         phase = .idle(epoch: pageEpoch)
         updateMutationPipelineReadyState()
         mutationPipeline.reset()
@@ -716,18 +1379,23 @@ extension DOMInspectorRuntime {
         guard pageEpoch == expectedPageEpoch else {
             return true
         }
+        let requestScope = currentRequestScope
+        let requestDocumentScopeID = currentDocumentScope.documentScopeID
 #if DEBUG
         if let testDocumentRequestApplyOverride {
             await testDocumentRequestApplyOverride(depth, mode)
+            guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
+                return true
+            }
+            clearDocumentReplacementAfterContextAdoptionRequirement()
             return true
         }
 #endif
-        let requestScope = currentRequestScope
-        let requestDocumentScopeID = currentDocumentScope.documentScopeID
         do {
             let payload = try await session.captureSnapshotPayload(maxDepth: depth)
+            let (payloadForDispatch, appliedSelectionOverride) = payloadByApplyingPendingSelectionOverride(payload)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
-                needsFrontendDocumentRequestDrain = true
+                setDeferredFrontendDocumentRequestDrainScope(requestScope)
                 _ = await dispatchRejectDocumentRequestToFrontend(
                     pageEpoch: expectedPageEpoch,
                     documentScopeID: requestDocumentScopeID
@@ -735,7 +1403,7 @@ extension DOMInspectorRuntime {
                 return true
             }
             guard await dispatchFullSnapshotToFrontend(
-                payload,
+                payloadForDispatch,
                 mode: mode.rawValue,
                 pageEpoch: expectedPageEpoch,
                 documentScopeID: requestDocumentScopeID,
@@ -744,10 +1412,32 @@ extension DOMInspectorRuntime {
                 return false
             }
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
+                clearDocumentReplacementAfterContextAdoptionRequirement(
+                    pageEpoch: expectedPageEpoch,
+                    documentScopeID: requestDocumentScopeID
+                )
                 return true
             }
-            if let snapshot = payloadNormalizer.normalizeSnapshot(payload) {
-                currentDocumentStore.replaceDocument(with: snapshot)
+            let clearsReplacementFence = hasReplacementFenceForCurrentContext
+            guard let snapshot = payloadNormalizer.normalizeSnapshot(payloadForDispatch) else {
+                publishRecoverableError("Snapshot normalization failed")
+                inspectorLogger.error("normalize snapshot failed after frontend dispatch")
+                clearDocumentReplacementAfterContextAdoptionRequirement()
+                if clearsReplacementFence {
+                    restartSelectionDependentRequestsAfterResync()
+                }
+                return true
+            }
+            currentDocumentModel.replaceDocument(
+                with: snapshot,
+                isFreshDocument: clearsReplacementFence
+            )
+            if appliedSelectionOverride {
+                pendingSelectionOverrideLocalID = nil
+            }
+            clearDocumentReplacementAfterContextAdoptionRequirement()
+            if clearsReplacementFence {
+                restartSelectionDependentRequestsAfterResync()
             }
             return true
         } catch {
@@ -757,13 +1447,35 @@ extension DOMInspectorRuntime {
         }
     }
 
-    func startMatchedStylesRequest(nodeID: Int, selectionEntry: DOMEntry) {
+    private func payloadByApplyingPendingSelectionOverride(_ payload: Any) -> (payload: Any, applied: Bool) {
+        guard let pendingSelectionOverrideLocalID else {
+            return (payload, false)
+        }
+        if var dictionary = payload as? [String: Any] {
+            dictionary["selectedNodeId"] = pendingSelectionOverrideLocalID
+            return (dictionary, true)
+        }
+        if let dictionary = payload as? NSDictionary {
+            var copied = dictionary as? [String: Any] ?? [:]
+            copied["selectedNodeId"] = pendingSelectionOverrideLocalID
+            return (copied, true)
+        }
+        if let json = payload as? String,
+           let data = json.data(using: .utf8),
+           var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            object["selectedNodeId"] = pendingSelectionOverrideLocalID
+            return (object, true)
+        }
+        return (payload, false)
+    }
+
+    func startMatchedStylesRequest(nodeID: Int, selectionEntry: DOMNodeModel) {
         cancelMatchedStylesRequest()
         matchedStylesRequestCount += 1
         let requestGeneration = matchedStylesRequestCount
         let requestScope = currentRequestScope
         let selectionDocumentScopeID = currentDocumentScope.documentScopeID
-        currentDocumentStore.beginMatchedStylesLoading(for: selectionEntry)
+        currentDocumentModel.beginMatchedStylesLoading(for: selectionEntry)
 
         matchedStylesTask = Task { [weak self] in
             guard let self else { return }
@@ -787,7 +1499,7 @@ extension DOMInspectorRuntime {
                 ) else {
                     return
                 }
-                self.currentDocumentStore.applyMatchedStyles(payload, for: currentSelection)
+                self.currentDocumentModel.applyMatchedStyles(payload, for: currentSelection)
             } catch is CancellationError {
                 return
             } catch {
@@ -809,7 +1521,7 @@ extension DOMInspectorRuntime {
                 ) else {
                     return
                 }
-                self.currentDocumentStore.clearMatchedStyles(for: currentSelection)
+                self.currentDocumentModel.clearMatchedStyles(for: currentSelection)
                 inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -834,7 +1546,7 @@ extension DOMInspectorRuntime {
         matchedStylesTask = nil
     }
 
-    func startSelectorPathRequest(nodeID: Int, selectionEntry: DOMEntry) {
+    func startSelectorPathRequest(nodeID: Int, selectionEntry: DOMNodeModel) {
         cancelSelectorPathRequest()
         selectorPathRequestCount += 1
         let requestGeneration = selectorPathRequestCount
@@ -862,7 +1574,7 @@ extension DOMInspectorRuntime {
                 ) else {
                     return
                 }
-                self.currentDocumentStore.applySelectorPath(selectorPath, for: currentSelection)
+                self.currentDocumentModel.applySelectorPath(selectorPath, for: currentSelection)
             } catch {
                 guard self.selectorPathRequestCount == requestGeneration,
                       self.currentRequestScope === requestScope,
@@ -876,7 +1588,7 @@ extension DOMInspectorRuntime {
                 ) else {
                     return
                 }
-                self.currentDocumentStore.applySelectorPath("", for: currentSelection)
+                self.currentDocumentModel.applySelectorPath("", for: currentSelection)
                 return
             }
         }
@@ -887,12 +1599,31 @@ extension DOMInspectorRuntime {
         selectorPathTask = nil
     }
 
+    private func restartSelectionDependentRequestsIfNeeded() {
+        guard let selected = currentDocumentModel.selectedNode,
+              let nodeID = selected.backendNodeID else {
+            return
+        }
+        if selected.selectorPath.isEmpty {
+            startSelectorPathRequest(nodeID: nodeID, selectionEntry: selected)
+        }
+        if selected.isLoadingMatchedStyles || selected.matchedStyles.isEmpty {
+            startMatchedStylesRequest(nodeID: nodeID, selectionEntry: selected)
+        }
+    }
+
+    func restartSelectionDependentRequestsAfterResync() {
+        drainDeferredFrontendDocumentRequestIfNeeded()
+        drainDeferredFrontendChildNodeRetryIfNeeded()
+        restartSelectionDependentRequestsIfNeeded()
+    }
+
     func applySelectionDelta(_ delta: DOMGraphDelta) {
         switch delta {
         case let .selection(selectionPayload):
-            currentDocumentStore.applySelectionSnapshot(selectionPayload)
+            currentDocumentModel.applySelectionSnapshot(selectionPayload)
         case let .selectorPath(selectorPayload):
-            currentDocumentStore.applySelectorPath(selectorPayload)
+            currentDocumentModel.applySelectorPath(selectorPayload)
         case .snapshot, .mutations, .replaceSubtree:
             return
         }
@@ -911,9 +1642,9 @@ extension DOMInspectorRuntime {
         return nil
     }
 
-    func currentSelectedEntry(nodeID: Int, documentScopeID: UInt64) -> DOMEntry? {
+    func currentSelectedEntry(nodeID: Int, documentScopeID: UInt64) -> DOMNodeModel? {
         guard currentDocumentScope.documentScopeID == documentScopeID,
-              let selectedEntry = currentDocumentStore.selectedEntry,
+              let selectedEntry = currentDocumentModel.selectedNode,
               selectedEntry.backendNodeID == nodeID
         else {
             return nil
@@ -1235,14 +1966,28 @@ extension DOMInspectorRuntime {
         let requestedDepth = parseIntegerValue(body["depth"]) ?? configuration.snapshotDepth
         let mode = DOMDocumentReloadMode(rawValue: body["mode"] as? String ?? "") ?? .fresh
         let expectedPageEpoch = pageEpoch
+        let expectedDocumentScopeID = if let requestedDocumentScopeID = parseIntegerValue(body["documentScopeID"]),
+                                         requestedDocumentScopeID >= 0 {
+            UInt64(requestedDocumentScopeID)
+        } else {
+            currentDocumentScope.documentScopeID
+        }
         Task.immediateIfAvailable { [weak self] in
             guard let self else {
                 return
             }
-            await self.requestDocument(
+            let didRequestDocument = await self.requestDocument(
                 depth: requestedDepth,
                 mode: mode,
-                expectedPageEpoch: expectedPageEpoch
+                expectedPageEpoch: expectedPageEpoch,
+                expectedDocumentScopeID: expectedDocumentScopeID
+            )
+            guard didRequestDocument == false else {
+                return
+            }
+            _ = await self.dispatchRejectDocumentRequestToFrontend(
+                pageEpoch: expectedPageEpoch,
+                documentScopeID: expectedDocumentScopeID
             )
         }
     }
@@ -1266,7 +2011,7 @@ extension DOMInspectorRuntime {
             do {
                 let payload = try await self.session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
                 guard self.pageEpoch == expectedPageEpoch, self.currentRequestScope === requestScope else {
-                    self.needsFrontendChildNodeRetryDrain = true
+                    self.setDeferredFrontendChildNodeRetryDrainScope(requestScope)
                     _ = await self.dispatchRejectChildNodeRequestToFrontend(
                         nodeID: nodeID,
                         pageEpoch: expectedPageEpoch,
@@ -1297,7 +2042,7 @@ extension DOMInspectorRuntime {
                     resetDocument: false
                 ),
                    case let .replaceSubtree(root) = delta {
-                    self.currentDocumentStore.applyMutationBundle(
+                    self.currentDocumentModel.applyMutationBundle(
                         .init(events: [.replaceSubtree(root: root)])
                     )
                 }
@@ -1336,7 +2081,7 @@ extension DOMInspectorRuntime {
         guard let pageEpoch, pageEpoch == self.pageEpoch else {
             return
         }
-        needsFrontendDocumentRequestDrain = true
+        setDeferredFrontendDocumentRequestDrainScope(currentRequestScope)
         let responseDocumentScopeID = documentScopeID ?? currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchRejectDocumentRequestToFrontend(
@@ -1350,7 +2095,7 @@ extension DOMInspectorRuntime {
         guard let nodeID, nodeID > 0, let pageEpoch, pageEpoch == self.pageEpoch else {
             return
         }
-        needsFrontendChildNodeRetryDrain = true
+        setDeferredFrontendChildNodeRetryDrainScope(currentRequestScope)
         let responseDocumentScopeID = documentScopeID ?? currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
             _ = await self?.dispatchRejectChildNodeRequestToFrontend(
@@ -1369,24 +2114,24 @@ extension DOMInspectorRuntime {
         case let .snapshot(snapshot, shouldResetDocument):
             payloadNormalizer.resetForDocumentUpdate()
             advanceCurrentDocumentScope(clearCurrentContents: shouldResetDocument)
-            currentDocumentStore.replaceDocument(with: snapshot)
+            currentDocumentModel.replaceDocument(with: snapshot, isFreshDocument: shouldResetDocument)
         case let .mutations(bundle):
             applyMutationBundleAcrossDocumentUpdates(bundle)
             if bundle.events.contains(where: Self.isStructuralMutationEvent),
-               let selectedEntry = currentDocumentStore.selectedEntry,
+               let selectedEntry = currentDocumentModel.selectedNode,
                let nodeID = selectedEntry.backendNodeID {
                 startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
             }
         case let .replaceSubtree(root):
-            currentDocumentStore.applyMutationBundle(.init(events: [.replaceSubtree(root: root)]))
-            if let selectedEntry = currentDocumentStore.selectedEntry,
+            currentDocumentModel.applyMutationBundle(.init(events: [.replaceSubtree(root: root)]))
+            if let selectedEntry = currentDocumentModel.selectedNode,
                let nodeID = selectedEntry.backendNodeID {
                 startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
             }
         case let .selection(selection):
-            currentDocumentStore.applySelectionSnapshot(selection)
+            currentDocumentModel.applySelectionSnapshot(selection)
         case let .selectorPath(selector):
-            currentDocumentStore.applySelectorPath(selector)
+            currentDocumentModel.applySelectorPath(selector)
         }
     }
 
@@ -1395,6 +2140,13 @@ extension DOMInspectorRuntime {
     }
 
     func handleDOMBundle(_ bundle: DOMBundle) {
+        if hasReplacementFenceForCurrentContext,
+           bundle.pageEpoch == pageEpoch,
+           bundle.documentScopeID == currentDocumentScope.documentScopeID
+        {
+            deferredDOMBundlesDuringBootstrap.append(.init(bundle: bundle))
+            return
+        }
         guard acceptsDOMBundle(documentScopeID: bundle.documentScopeID) else {
             return
         }
@@ -1436,6 +2188,75 @@ extension DOMInspectorRuntime {
         }
     }
 
+    func applyReplacementDOMBundleAfterContextAdoption(_ bundle: DOMBundle) -> Bool {
+        guard bundle.pageEpoch == pageEpoch,
+              bundle.documentScopeID == currentDocumentScope.documentScopeID
+        else {
+            return false
+        }
+        let adjustedBundle: DOMBundle
+        let appliedSelectionOverride: Bool
+        switch bundle.payload {
+        case let .jsonString(rawJSON):
+            let (adjustedPayload, didApplySelectionOverride) = payloadByApplyingPendingSelectionOverride(rawJSON)
+            appliedSelectionOverride = didApplySelectionOverride
+            if let adjustedRawJSON = adjustedPayload as? String {
+                adjustedBundle = .init(
+                    rawJSON: adjustedRawJSON,
+                    pageEpoch: bundle.pageEpoch,
+                    documentScopeID: bundle.documentScopeID
+                )
+            } else {
+                adjustedBundle = .init(
+                    objectEnvelope: adjustedPayload,
+                    pageEpoch: bundle.pageEpoch,
+                    documentScopeID: bundle.documentScopeID
+                )
+            }
+        case let .objectEnvelope(objectEnvelope):
+            let (adjustedPayload, didApplySelectionOverride) = payloadByApplyingPendingSelectionOverride(objectEnvelope)
+            appliedSelectionOverride = didApplySelectionOverride
+            adjustedBundle = .init(
+                objectEnvelope: adjustedPayload,
+                pageEpoch: bundle.pageEpoch,
+                documentScopeID: bundle.documentScopeID
+            )
+        }
+        let replacementSnapshot: DOMGraphSnapshot?
+        switch adjustedBundle.payload {
+        case let .jsonString(rawJSON):
+            if case let .snapshot(snapshot, _) = payloadNormalizer.normalizeBundlePayload(rawJSON) {
+                replacementSnapshot = snapshot
+            } else {
+                replacementSnapshot = nil
+            }
+        case let .objectEnvelope(objectEnvelope):
+            if case let .snapshot(snapshot, _) = payloadNormalizer.normalizeBundlePayload(objectEnvelope) {
+                replacementSnapshot = snapshot
+            } else {
+                replacementSnapshot = nil
+            }
+        }
+        guard let replacementSnapshot else {
+            return false
+        }
+        let clearsReplacementFence = hasReplacementFenceForCurrentContext
+        payloadNormalizer.resetForDocumentUpdate()
+        currentDocumentModel.replaceDocument(
+            with: replacementSnapshot,
+            isFreshDocument: clearsReplacementFence
+        )
+        if appliedSelectionOverride {
+            pendingSelectionOverrideLocalID = nil
+        }
+        enqueueMutationPayload(adjustedBundle)
+        clearDocumentReplacementAfterContextAdoptionRequirement()
+        if clearsReplacementFence {
+            restartSelectionDependentRequestsAfterResync()
+        }
+        return true
+    }
+
     private func enqueueMutationPayload(_ bundle: DOMBundle) {
         switch bundle.payload {
         case let .jsonString(rawJSON):
@@ -1446,6 +2267,13 @@ extension DOMInspectorRuntime {
     }
 
     func acceptsFrontendMessage(pageEpoch: Int?, documentScopeID: UInt64?) -> Bool {
+        phase.allowsFrontendTraffic
+            && !hasReplacementFenceForCurrentContext
+            && (pageEpoch ?? 0) == self.pageEpoch
+            && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
+    }
+
+    func acceptsFrontendInteractionMessage(pageEpoch: Int?, documentScopeID: UInt64?) -> Bool {
         phase.allowsFrontendTraffic
             && (pageEpoch ?? 0) == self.pageEpoch
             && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
@@ -1468,10 +2296,17 @@ extension DOMInspectorRuntime {
     }
 
     private func drainDeferredFrontendDocumentRequestIfNeeded() {
-        guard needsFrontendDocumentRequestDrain, isReady, phase.allowsFrontendTraffic else {
+        guard let deferredScope = deferredFrontendDocumentRequestDrainScope,
+              isReady,
+              phase.allowsFrontendTraffic
+        else {
             return
         }
-        needsFrontendDocumentRequestDrain = false
+        guard deferredScope === currentRequestScope else {
+            deferredFrontendDocumentRequestDrainScope = nil
+            return
+        }
+        deferredFrontendDocumentRequestDrainScope = nil
         let pageEpoch = self.pageEpoch
         let documentScopeID = currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
@@ -1483,10 +2318,17 @@ extension DOMInspectorRuntime {
     }
 
     private func drainDeferredFrontendChildNodeRetryIfNeeded() {
-        guard needsFrontendChildNodeRetryDrain, isReady, phase.allowsFrontendTraffic else {
+        guard let deferredScope = deferredFrontendChildNodeRetryDrainScope,
+              isReady,
+              phase.allowsFrontendTraffic
+        else {
             return
         }
-        needsFrontendChildNodeRetryDrain = false
+        guard deferredScope === currentRequestScope else {
+            deferredFrontendChildNodeRetryDrainScope = nil
+            return
+        }
+        deferredFrontendChildNodeRetryDrainScope = nil
         let pageEpoch = self.pageEpoch
         let documentScopeID = currentDocumentScope.documentScopeID
         Task.immediateIfAvailable { [weak self] in
@@ -1497,20 +2339,63 @@ extension DOMInspectorRuntime {
         }
     }
 
+    private func setDeferredFrontendDocumentRequestDrainScope(_ scope: RequestScope) {
+        if scope === currentRequestScope {
+            deferredFrontendDocumentRequestDrainScope = currentRequestScope
+            return
+        }
+        if deferredFrontendDocumentRequestDrainScope == nil {
+            deferredFrontendDocumentRequestDrainScope = scope
+        }
+    }
+
+    private func setDeferredFrontendChildNodeRetryDrainScope(_ scope: RequestScope) {
+        if scope === currentRequestScope {
+            deferredFrontendChildNodeRetryDrainScope = currentRequestScope
+            return
+        }
+        if deferredFrontendChildNodeRetryDrainScope == nil {
+            deferredFrontendChildNodeRetryDrainScope = scope
+        }
+    }
+
     func acceptsDOMBundle(documentScopeID: DOMDocumentScopeID?) -> Bool {
         !phase.isTransitioning
+            && !hasReplacementFenceForCurrentContext
             && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
     }
 
     func acceptsReadyMessage(pageEpoch: Int?, documentScopeID: UInt64?) -> Bool {
-        (pageEpoch ?? 0) == self.pageEpoch
-            && (documentScopeID == nil || documentScopeID == currentDocumentScope.documentScopeID)
+        isReadyContextCurrentOrNewer(
+            .init(
+                pageEpoch: pageEpoch ?? self.pageEpoch,
+                documentScopeID: documentScopeID ?? currentDocumentScope.documentScopeID
+            )
+        )
     }
 
-    func handleReadyMessage() {
-        isReady = true
-        updateMutationPipelineReadyState()
-        scheduleBootstrapIfNeeded()
+    func handleReadyMessage(pageEpoch: Int?, documentScopeID: UInt64?) {
+        let readyContext = MutationContext(
+            pageEpoch: pageEpoch ?? self.pageEpoch,
+            documentScopeID: documentScopeID ?? currentDocumentScope.documentScopeID
+        )
+        guard isReadyContextCurrentOrNewer(readyContext) else {
+            return
+        }
+        guard hasReplacementFenceForCurrentContext == false else {
+            if readyContext == currentMutationContext {
+                enqueueDeferredReadyMessage(readyContext)
+                scheduleBootstrapIfNeeded()
+            } else {
+                enqueueDeferredReadyMessage(readyContext)
+            }
+            return
+        }
+        if readyContext != currentMutationContext {
+            enqueueDeferredReadyMessage(readyContext)
+            return
+        }
+        applyReadyState()
     }
 
     func handleLogMessage(_ payload: Any) {
@@ -1524,12 +2409,12 @@ extension DOMInspectorRuntime {
 
     func handleDOMSelectionMessage(_ payload: Any) {
         let previousSelectedSnapshot: (
-            entry: DOMEntry,
+            entry: DOMNodeModel,
             preview: String,
             path: [String],
             attributes: [DOMAttribute],
             styleRevision: Int
-        )? = currentDocumentStore.selectedEntry.map {
+        )? = currentDocumentModel.selectedNode.map {
             (
                 entry: $0,
                 preview: $0.preview,
@@ -1539,7 +2424,7 @@ extension DOMInspectorRuntime {
             )
         }
         applySelectionDelta(payloadNormalizer.normalizeSelectionPayload(payload))
-        guard let selected = currentDocumentStore.selectedEntry else {
+        guard let selected = currentDocumentModel.selectedNode else {
             cancelMatchedStylesRequest()
             cancelSelectorPathRequest()
             return
@@ -1571,6 +2456,14 @@ extension DOMInspectorRuntime {
 
 #if DEBUG
 extension DOMInspectorRuntime {
+    func testAdvanceCurrentDocumentScopeWithoutClearingModel() {
+        currentDocumentScope = makeNextDocumentScope()
+    }
+
+    func testSetPhaseIdleForCurrentPage() {
+        phase = .idle(epoch: pageEpoch)
+    }
+
     var testBundleFlushInterval: TimeInterval {
         mutationPipeline.currentBundleFlushInterval
     }
@@ -1617,6 +2510,10 @@ extension DOMInspectorRuntime {
         discardedMutationGeneration
     }
 
+    var testPendingSelectionOverrideLocalID: UInt64? {
+        pendingSelectionOverrideLocalID
+    }
+
     func testHandleDOMSelectionMessage(_ payload: Any) {
         handleDOMSelectionMessage(payload)
     }
@@ -1625,6 +2522,13 @@ extension DOMInspectorRuntime {
 
     func testResetInspectorStateForTesting() {
         resetInspectorState()
+    }
+
+    func testSyncCurrentDocumentScopeIDIfNeeded() async -> Bool {
+        await syncCurrentDocumentScopeIDIfNeeded(
+            documentScopeID: currentDocumentScope.documentScopeID,
+            pageEpoch: pageEpoch
+        )
     }
 
     func testWaitForBootstrapForTesting() async {

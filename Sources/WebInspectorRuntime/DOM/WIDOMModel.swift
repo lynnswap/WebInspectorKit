@@ -7,15 +7,25 @@ import WebInspectorEngine
 import UIKit
 #endif
 
-private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMModel")
+private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspector")
 private let domDeleteUndoHistoryLimit = 128
+
+@available(*, deprecated, renamed: "WIDOMInspector", message: "Use WIDOMInspector.")
+public typealias WIDOMModel = WIDOMInspector
 
 public typealias DOMSelectionResult = DOMPageAgent.SelectionModeResult
 
+public enum DOMMutationResult: Sendable, Equatable {
+    case applied
+    case ignoredStaleContext
+    case failed
+}
+
 @MainActor
 @Observable
-public final class WIDOMModel {
+public final class WIDOMInspector {
     private final class SelectionRequest {}
+
     private enum DocumentReloadMode {
         case fresh
         case preservingInspectorState
@@ -28,11 +38,26 @@ public final class WIDOMModel {
                 .preserveUIState
             }
         }
+
+        var preservesDocumentScope: Bool {
+            switch self {
+            case .fresh:
+                false
+            case .preservingInspectorState:
+                true
+            }
+        }
     }
 
-    let session: DOMSession
-    let frontendStore: DOMInspectorRuntime
-    public private(set) var documentStore: DOMDocumentStore
+    package let session: DOMSession
+    package let transport: DOMInspectorRuntime
+    public let document: DOMDocumentModel
+
+    @available(*, deprecated, renamed: "document", message: "Use document.")
+    public var documentStore: DOMDocumentModel {
+        document
+    }
+
     public private(set) var isSelectingElement = false
 
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?
@@ -50,14 +75,11 @@ public final class WIDOMModel {
         onRecoverableError: (@MainActor (String?) -> Void)? = nil
     ) {
         self.session = session
-        self.documentStore = DOMDocumentStore()
-        self.frontendStore = DOMInspectorRuntime(session: session)
+        self.document = DOMDocumentModel()
+        self.transport = DOMInspectorRuntime(session: session, documentModel: self.document)
         self.externalRecoverableErrorHandler = onRecoverableError
-        self.frontendStore.onRecoverableError = { [weak self] message in
+        self.transport.onRecoverableError = { [weak self] message in
             self?.applyRecoverableError(message)
-        }
-        self.frontendStore.bindDocumentStore(self.documentStore) { [weak self] store in
-            self?.documentStore = store
         }
     }
 
@@ -78,70 +100,97 @@ public final class WIDOMModel {
     }
 
     package func makeInspectorWebView() -> WKWebView {
-        frontendStore.makeInspectorWebView()
+        transport.makeInspectorWebView()
     }
 
     package func enqueueMutationBundle(_ bundle: Any, preservingInspectorState: Bool) {
-        frontendStore.enqueueMutationBundle(bundle, preservingInspectorState: preservingInspectorState)
-    }
-
-    package func requestReloadPage() {
-        guard session.pageWebView != nil else {
-            return
-        }
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else {
-                return
-            }
-            await self.resetInteractionState()
-            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else {
-                return
-            }
-            await self.frontendStore.performPageTransition { nextPageEpoch in
-                self.session.preparePageEpoch(nextPageEpoch)
-                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
-                await self.session.reloadPageAndWaitForPreparedPageEpochSync()
-            }
-        }
+        transport.enqueueMutationBundle(bundle, preservingInspectorState: preservingInspectorState)
     }
 
     package var pendingMutationBundleCount: Int {
-        frontendStore.pendingMutationBundleCount
+        transport.pendingMutationBundleCount
     }
 
-    func attach(to webView: WKWebView) async {
+    public func reloadPage() async -> DOMMutationResult {
+        guard session.pageWebView != nil else {
+            return .failed
+        }
+        let expectedPageEpoch = transport.currentPageEpoch
+        guard matchesCurrentPageEpoch(expectedPageEpoch) else {
+            return .ignoredStaleContext
+        }
+        await resetInteractionState()
+        guard matchesCurrentPageEpoch(expectedPageEpoch) else {
+            return .ignoredStaleContext
+        }
+        await transport.performPageTransition { nextPageEpoch in
+            self.session.preparePageEpoch(nextPageEpoch)
+            self.session.prepareDocumentScopeID(self.transport.currentDocumentScopeID)
+            await self.session.reloadPageAndWaitForPreparedPageEpochSync()
+        }
+        return .applied
+    }
+
+    package func attach(to webView: WKWebView) async {
         await resetInteractionState()
         let needsPageEpochAdvance = session.lastPageWebView != nil && session.pageWebView !== webView
         let outcome: DOMSession.AttachmentResult
         if needsPageEpochAdvance {
-            outcome = await frontendStore.performPageTransition { nextPageEpoch in
+            outcome = await transport.performPageTransition { nextPageEpoch in
                 self.session.preparePageEpoch(nextPageEpoch)
-                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
+                self.session.prepareDocumentScopeID(self.transport.currentDocumentScopeID)
                 await self.session.suspend()
                 self.session.preparePageEpoch(nextPageEpoch)
-                self.session.prepareDocumentScopeID(self.frontendStore.currentDocumentScopeID)
+                self.session.prepareDocumentScopeID(self.transport.currentDocumentScopeID)
                 return await self.session.attach(to: webView)
             }
         } else {
-            session.preparePageEpoch(frontendStore.currentPageEpoch)
-            session.prepareDocumentScopeID(frontendStore.currentDocumentScopeID)
+            session.preparePageEpoch(transport.currentPageEpoch)
+            session.prepareDocumentScopeID(transport.currentDocumentScopeID)
             outcome = await session.attach(to: webView)
         }
+        let didAdoptPageContext = if let observedPageContext = outcome.observedPageContext {
+            await transport.adoptPageContextIfNeeded(
+                observedPageContext,
+                preserveCurrentDocumentState: outcome.shouldPreserveInspectorState || outcome.shouldReload == false
+            )
+        } else {
+            false
+        }
         if outcome.shouldReload {
-            await reloadDocumentImpl(
+            let reloadResult = await reloadDocumentImpl(
                 outcome.shouldPreserveInspectorState ? .preservingInspectorState : .fresh
             )
+            if didAdoptPageContext, reloadResult != .applied {
+                let resyncResult = await resyncDocumentAfterContextAdoptionFailure()
+                if resyncResult != .applied {
+                    transport.retryDocumentReplacementAfterContextAdoption(
+                        depth: session.configuration.snapshotDepth,
+                        mode: outcome.shouldPreserveInspectorState ? .preserveUIState : .fresh
+                    )
+                }
+            }
+        } else if didAdoptPageContext {
+            let reloadResult = await reloadDocumentImpl(
+                .preservingInspectorState,
+                expectedPageEpoch: transport.currentPageEpoch
+            )
+            if reloadResult != .applied {
+                let resyncResult = await resyncDocumentAfterContextAdoptionFailure()
+                if resyncResult != .applied {
+                    transport.retryDocumentReplacementAfterContextAdoption(
+                        depth: session.configuration.snapshotDepth,
+                        mode: .preserveUIState
+                    )
+                }
+            }
         }
     }
 
-    func suspend() async {
+    package func suspend() async {
         await resetInteractionState()
         if session.hasPageWebView {
-            await frontendStore.performPageTransition(resumeBootstrap: false) { _ in
+            await transport.performPageTransition(resumeBootstrap: false) { _ in
                 await self.session.suspend()
             }
         } else {
@@ -149,32 +198,32 @@ public final class WIDOMModel {
         }
     }
 
-    func detach() async {
+    package func detach() async {
         await resetInteractionState()
         if session.hasPageWebView {
-            await frontendStore.performPageTransition(resumeBootstrap: false) { _ in
+            await transport.performPageTransition(resumeBootstrap: false) { _ in
                 await self.session.detach()
             }
         } else {
             await session.detach()
-            frontendStore.resetDocumentStoreForDetachment()
+            transport.resetDocumentStoreForDetachment()
         }
-        frontendStore.detachInspectorWebView()
-        documentStore.setErrorMessage(nil)
+        transport.detachInspectorWebView()
+        document.setErrorMessage(nil)
     }
 
-    func setAutoSnapshotEnabled(_ enabled: Bool) async {
+    package func setAutoSnapshotEnabled(_ enabled: Bool) async {
         guard session.hasPageWebView else {
             return
         }
         await session.setAutoSnapshot(enabled: enabled)
     }
 
-    public func reloadDocument() async {
+    public func reloadDocument() async -> DOMMutationResult {
         await reloadDocumentImpl(.fresh)
     }
 
-    public func reloadDocumentPreservingInspectorState() async {
+    public func reloadDocumentPreservingInspectorState() async -> DOMMutationResult {
         await reloadDocumentImpl(.preservingInspectorState)
     }
 
@@ -198,87 +247,18 @@ public final class WIDOMModel {
         }
     }
 
-    package func requestReloadDocument() {
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            await self.reloadDocumentImpl(.fresh, expectedPageEpoch: expectedPageEpoch)
-        }
-    }
-
-    package func requestReloadDocumentPreservingInspectorState() {
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            await self.reloadDocumentImpl(.preservingInspectorState, expectedPageEpoch: expectedPageEpoch)
-        }
-    }
-
-    package func requestDeleteSelection(undoManager: UndoManager?) {
-        requestDeleteNode(nodeId: selectedEntry?.backendNodeID, undoManager: undoManager)
-    }
-
-    package func requestDeleteNode(nodeId: Int?, undoManager: UndoManager?) {
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            await self.deleteNodeImpl(
-                nodeId: nodeId,
-                undoManager: undoManager,
-                expectedPageEpoch: expectedPageEpoch
-            )
-        }
-    }
-
     package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
         try await session.selectionCopyText(nodeId: nodeId, kind: kind)
     }
 
-    package func requestUpdateAttributeValue(name: String, value: String) {
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        let nodeId = selectedEntry?.backendNodeID
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            await self.updateAttributeValueImpl(
-                nodeId: nodeId,
-                name: name,
-                value: value,
-                expectedPageEpoch: expectedPageEpoch
-            )
-        }
-    }
-
-    package func requestRemoveAttribute(name: String) {
-        let expectedPageEpoch = frontendStore.currentPageEpoch
-        let nodeId = selectedEntry?.backendNodeID
-        Task.immediateIfAvailable { [weak self] in
-            guard let self else {
-                return
-            }
-            await self.removeAttributeImpl(
-                nodeId: nodeId,
-                name: name,
-                expectedPageEpoch: expectedPageEpoch
-            )
-        }
-    }
-
-    func tearDownForDeinit() {
+    package func tearDownForDeinit() {
         invalidateSelectionInteractionTask()
         activeSelectionRequest = nil
         pendingDeleteTask?.cancel()
         pendingDeleteTask = nil
-        frontendStore.detachInspectorWebView()
+        transport.detachInspectorWebView()
         session.tearDownForDeinit()
-        documentStore.setErrorMessage(nil)
+        document.setErrorMessage(nil)
         isSelectingElement = false
         clearDeleteUndoHistory()
 #if canImport(UIKit)
@@ -298,66 +278,212 @@ public final class WIDOMModel {
         try await copySelectionImpl(.xpath)
     }
 
-    public func deleteSelection() async {
+    public func deleteSelection() async -> DOMMutationResult {
         await deleteSelection(undoManager: nil)
     }
 
-    public func deleteSelection(undoManager: UndoManager?) async {
+    public func deleteSelection(undoManager: UndoManager?) async -> DOMMutationResult {
         await deleteNodeImpl(
-            nodeId: selectedEntry?.backendNodeID,
-            undoManager: undoManager
+            nodeID: document.selectedNode?.id,
+            undoManager: undoManager,
+            expectedContext: transport.currentMutationContext
         )
     }
 
-    package func deleteNode(nodeId: Int?, undoManager: UndoManager?) async {
-        await deleteNodeImpl(nodeId: nodeId, undoManager: undoManager)
+    public func deleteNode(nodeID: DOMNodeModel.ID?, undoManager: UndoManager?) async -> DOMMutationResult {
+        return await deleteNodeImpl(
+            nodeID: nodeID,
+            undoManager: undoManager,
+            expectedContext: transport.currentMutationContext
+        )
     }
 
-    public func updateSelectedAttribute(name: String, value: String) async {
+    public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async -> DOMMutationResult {
+        if let resolvedNodeID = nodeId.flatMap({ document.node(backendNodeID: $0)?.id }) {
+            return await deleteNodeImpl(
+                nodeID: resolvedNodeID,
+                undoManager: undoManager,
+                expectedContext: transport.currentMutationContext
+            )
+        }
+        return await deleteNodeImpl(
+            nodeId: nodeId,
+            undoManager: undoManager,
+            expectedContext: transport.currentMutationContext
+        )
+    }
+
+    public func setAttribute(
+        nodeID: DOMNodeModel.ID,
+        name: String,
+        value: String
+    ) async -> DOMMutationResult {
         await updateAttributeValueImpl(
-            nodeId: selectedEntry?.backendNodeID,
+            nodeID: nodeID,
             name: name,
-            value: value
+            value: value,
+            expectedContext: transport.currentMutationContext
         )
     }
 
-    public func removeSelectedAttribute(name: String) async {
+    public func removeAttribute(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) async -> DOMMutationResult {
         await removeAttributeImpl(
-            nodeId: selectedEntry?.backendNodeID,
-            name: name
+            nodeID: nodeID,
+            name: name,
+            expectedContext: transport.currentMutationContext
         )
+    }
+
+    public func updateSelectedAttribute(name: String, value: String) async -> DOMMutationResult {
+        guard let nodeID = document.selectedNode?.id else {
+            return .failed
+        }
+        return await setAttribute(nodeID: nodeID, name: name, value: value)
+    }
+
+    public func removeSelectedAttribute(name: String) async -> DOMMutationResult {
+        guard let nodeID = document.selectedNode?.id else {
+            return .failed
+        }
+        return await removeAttribute(nodeID: nodeID, name: name)
     }
 }
 
-private extension WIDOMModel {
-    var selectedEntry: DOMEntry? {
-        documentStore.selectedEntry
+private extension WIDOMInspector {
+    private func finalizeReloadResult(_ result: DOMMutationResult) -> DOMMutationResult {
+        if result != .applied {
+            transport.setPendingSelectionOverride(localID: nil)
+        }
+        return result
     }
 
     private func reloadDocumentImpl(
         _ mode: DocumentReloadMode,
-        expectedPageEpoch: Int? = nil
-    ) async {
+        expectedPageEpoch: Int? = nil,
+        pinDocumentScope: Bool = true
+    ) async -> DOMMutationResult {
         guard session.hasPageWebView else {
             applyRecoverableError("Web view unavailable.")
-            return
+            return finalizeReloadResult(.failed)
         }
 
         let depth = session.configuration.snapshotDepth
-        let resolvedPageEpoch = expectedPageEpoch ?? frontendStore.currentPageEpoch
-        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
-            return
+        let resolvedPageEpoch = expectedPageEpoch ?? transport.currentPageEpoch
+        let resolvedDocumentScopeID = pinDocumentScope ? transport.currentDocumentScopeID : nil
+        if mode == .fresh {
+            transport.setPendingSelectionOverride(localID: nil)
         }
-        if documentStore.errorMessage != nil {
+        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if let resolvedDocumentScopeID,
+           transport.currentDocumentScopeID != resolvedDocumentScopeID
+        {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if document.errorMessage != nil {
             applyRecoverableError(nil)
         }
-        await frontendStore.updateConfiguration(session.configuration, expectedPageEpoch: resolvedPageEpoch)
-        await frontendStore.setPreferredDepth(depth, expectedPageEpoch: resolvedPageEpoch)
-        await frontendStore.requestDocument(
+        await transport.updateConfiguration(session.configuration, expectedPageEpoch: resolvedPageEpoch)
+        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if let resolvedDocumentScopeID,
+           transport.currentDocumentScopeID != resolvedDocumentScopeID
+        {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        await transport.setPreferredDepth(depth, expectedPageEpoch: resolvedPageEpoch)
+        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if let resolvedDocumentScopeID,
+           transport.currentDocumentScopeID != resolvedDocumentScopeID
+        {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        let didRequestDocument = await transport.requestDocument(
             depth: depth,
             mode: mode.runtimeMode,
-            expectedPageEpoch: resolvedPageEpoch
+            expectedPageEpoch: resolvedPageEpoch,
+            expectedDocumentScopeID: resolvedDocumentScopeID
         )
+        guard matchesCurrentPageEpoch(resolvedPageEpoch) else {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if mode.preservesDocumentScope,
+           let resolvedDocumentScopeID,
+           transport.currentDocumentScopeID != resolvedDocumentScopeID
+        {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        if didRequestDocument {
+            return finalizeReloadResult(.applied)
+        }
+        if let resolvedDocumentScopeID,
+           transport.currentDocumentScopeID != resolvedDocumentScopeID
+        {
+            return finalizeReloadResult(.ignoredStaleContext)
+        }
+        return finalizeReloadResult(.failed)
+    }
+
+    private func resyncDocumentAfterContextLoss() async -> DOMMutationResult {
+        guard session.hasPageWebView else {
+            return .failed
+        }
+        do {
+            let payload = try await session.captureSnapshotPayload(maxDepth: session.configuration.snapshotDepth)
+            transport.handleDOMBundle(
+                .init(
+                    objectEnvelope: [
+                        "version": 1,
+                        "kind": "snapshot",
+                        "reason": "documentUpdated",
+                        "snapshot": payload,
+                    ],
+                    pageEpoch: transport.currentPageEpoch,
+                    documentScopeID: transport.currentDocumentScopeID
+                )
+            )
+            applyRecoverableError(nil)
+            return .applied
+        } catch {
+            applyRecoverableError(error.localizedDescription)
+            return .failed
+        }
+    }
+
+    private func resyncDocumentAfterContextAdoptionFailure() async -> DOMMutationResult {
+        guard session.hasPageWebView else {
+            return .failed
+        }
+        do {
+            let payload = try await session.captureSnapshotPayload(maxDepth: session.configuration.snapshotDepth)
+            let didApplyReplacement = transport.applyReplacementDOMBundleAfterContextAdoption(
+                .init(
+                    objectEnvelope: [
+                        "version": 1,
+                        "kind": "snapshot",
+                        "reason": "documentUpdated",
+                        "snapshot": payload,
+                    ],
+                    pageEpoch: transport.currentPageEpoch,
+                    documentScopeID: transport.currentDocumentScopeID
+                )
+            )
+            guard didApplyReplacement else {
+                return .failed
+            }
+            applyRecoverableError(nil)
+            return .applied
+        } catch {
+            applyRecoverableError(error.localizedDescription)
+            return .failed
+        }
     }
 
     func updateSnapshotDepthImpl(_ depth: Int) async {
@@ -365,61 +491,168 @@ private extension WIDOMModel {
         var configuration = session.configuration
         configuration.snapshotDepth = clamped
         await session.updateConfiguration(configuration)
-        await frontendStore.updateConfiguration(configuration)
-        await frontendStore.setPreferredDepth(clamped)
+        await transport.updateConfiguration(configuration)
+        await transport.setPreferredDepth(clamped)
     }
 
     func cancelSelectionModeImpl() async {
-        guard isSelectingElement else { return }
+        guard isSelectingElement else {
+            return
+        }
         invalidateSelectionInteractionTask()
         clearSelectionRequestState()
         await session.cancelSelectionMode()
     }
 
     func copySelectionImpl(_ kind: DOMSelectionCopyKind) async throws -> String {
-        guard let nodeId = selectedEntry?.backendNodeID else {
+        guard let nodeId = document.selectedNode?.backendNodeID else {
             return ""
         }
         return try await session.selectionCopyText(nodeId: nodeId, kind: kind)
     }
 
-    func deleteNodeImpl(
+    private func deleteNodeImpl(
         nodeId: Int?,
         undoManager: UndoManager?,
-        expectedPageEpoch: Int? = nil
-    ) async {
-        guard let nodeId else { return }
-        guard matchesCurrentPageEpoch(expectedPageEpoch) else {
-            return
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMMutationResult {
+        guard let nodeId else {
+            return .failed
         }
-        await enqueueDelete(nodeId: nodeId, undoManager: undoManager, expectedPageEpoch: expectedPageEpoch)
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+        return await enqueueDelete(
+            nodeId: nodeId,
+            undoManager: undoManager,
+            expectedContext: expectedContext
+        )
     }
 
-    func updateAttributeValueImpl(
-        nodeId: Int?,
+    private func deleteNodeImpl(
+        nodeID: DOMNodeModel.ID?,
+        undoManager: UndoManager?,
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMMutationResult {
+        guard let nodeID else {
+            return .failed
+        }
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+        guard let node = document.node(id: nodeID) else {
+            return .ignoredStaleContext
+        }
+        return await deleteNodeImpl(
+            nodeId: node.backendNodeID,
+            undoManager: undoManager,
+            expectedContext: expectedContext
+        )
+    }
+
+    private func updateAttributeValueImpl(
+        nodeID: DOMNodeModel.ID,
         name: String,
         value: String,
-        expectedPageEpoch: Int? = nil
-    ) async {
-        guard matchesCurrentPageEpoch(expectedPageEpoch),
-              let nodeId,
-              selectedEntry?.backendNodeID == nodeId
-        else { return }
-        documentStore.updateSelectedAttribute(name: name, value: value)
-        await session.setAttribute(nodeId: nodeId, name: name, value: value)
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMMutationResult {
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+        guard let node = document.node(id: nodeID) else {
+            return .ignoredStaleContext
+        }
+        guard let backendNodeID = node.backendNodeID else {
+            return .failed
+        }
+
+        let didSyncMutationContext = await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        guard didSyncMutationContext || session.hasPageWebView == false else {
+            return .ignoredStaleContext
+        }
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+
+        let didUpdateAttribute = await session.setAttribute(
+            nodeId: backendNodeID,
+            name: name,
+            value: value,
+            expectedPageEpoch: expectedContext.pageEpoch,
+            expectedDocumentScopeID: expectedContext.documentScopeID
+        )
+        switch didUpdateAttribute {
+        case .applied:
+            if transport.matchesCurrentMutationContext(expectedContext) {
+                _ = document.updateAttribute(
+                    name: name,
+                    value: value,
+                    localID: node.localID,
+                    backendNodeID: backendNodeID
+                )
+            } else if session.hasPageWebView {
+                let reloadResult = await reloadDocumentPreservingInspectorState()
+                if reloadResult == .ignoredStaleContext {
+                    _ = await resyncDocumentAfterContextLoss()
+                }
+            }
+            return .applied
+        case .ignoredStaleContext:
+            return .ignoredStaleContext
+        case .failed:
+            return .failed
+        }
     }
 
-    func removeAttributeImpl(
-        nodeId: Int?,
+    private func removeAttributeImpl(
+        nodeID: DOMNodeModel.ID,
         name: String,
-        expectedPageEpoch: Int? = nil
-    ) async {
-        guard matchesCurrentPageEpoch(expectedPageEpoch),
-              let nodeId,
-              selectedEntry?.backendNodeID == nodeId
-        else { return }
-        documentStore.removeSelectedAttribute(name: name)
-        await session.removeAttribute(nodeId: nodeId, name: name)
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMMutationResult {
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+        guard let node = document.node(id: nodeID) else {
+            return .ignoredStaleContext
+        }
+        guard let backendNodeID = node.backendNodeID else {
+            return .failed
+        }
+
+        let didSyncMutationContext = await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        guard didSyncMutationContext || session.hasPageWebView == false else {
+            return .ignoredStaleContext
+        }
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return .ignoredStaleContext
+        }
+
+        let didRemoveAttribute = await session.removeAttribute(
+            nodeId: backendNodeID,
+            name: name,
+            expectedPageEpoch: expectedContext.pageEpoch,
+            expectedDocumentScopeID: expectedContext.documentScopeID
+        )
+        switch didRemoveAttribute {
+        case .applied:
+            if transport.matchesCurrentMutationContext(expectedContext) {
+                _ = document.removeAttribute(
+                    name: name,
+                    localID: node.localID,
+                    backendNodeID: backendNodeID
+                )
+            } else if session.hasPageWebView {
+                let reloadResult = await reloadDocumentPreservingInspectorState()
+                if reloadResult == .ignoredStaleContext {
+                    _ = await resyncDocumentAfterContextLoss()
+                }
+            }
+            return .applied
+        case .ignoredStaleContext:
+            return .ignoredStaleContext
+        case .failed:
+            return .failed
+        }
     }
 
     func beginSelectionModeImpl() async throws -> DOMSelectionResult {
@@ -442,120 +675,317 @@ private extension WIDOMModel {
 #endif
     }
 
-    func enqueueDelete(
+    private func enqueueDelete(
         nodeId: Int,
         undoManager: UndoManager?,
-        expectedPageEpoch: Int?
-    ) async {
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMMutationResult {
         let previousTask = pendingDeleteTask
+        var mutationResult: DOMMutationResult = .failed
         let task = Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                return
+            }
             if let previousTask {
                 await previousTask.value
             }
-            guard !Task.isCancelled else { return }
-            guard self.matchesCurrentPageEpoch(expectedPageEpoch) else { return }
+            guard !Task.isCancelled else {
+                return
+            }
+            guard self.transport.matchesCurrentMutationContext(expectedContext) else {
+                mutationResult = .ignoredStaleContext
+                return
+            }
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(expectedContext)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                mutationResult = .ignoredStaleContext
+                return
+            }
+            guard self.transport.matchesCurrentMutationContext(expectedContext) else {
+                mutationResult = .ignoredStaleContext
+                return
+            }
 
             guard let undoManager else {
-                await session.removeNode(nodeId: nodeId)
+                mutationResult = self.publicMutationResult(
+                    await self.session.removeNode(
+                        nodeId: nodeId,
+                        expectedPageEpoch: expectedContext.pageEpoch,
+                        expectedDocumentScopeID: expectedContext.documentScopeID
+                    )
+                )
+                if mutationResult == .applied {
+                    await self.applyDeletedNodeMutationResult(
+                        nodeId: nodeId,
+                        expectedContext: expectedContext
+                    )
+                }
                 return
             }
-            rememberDeleteUndoManager(undoManager)
-            guard let undoToken = await session.removeNodeWithUndo(nodeId: nodeId) else {
-                await session.removeNode(nodeId: nodeId)
-                return
-            }
-            registerUndoDelete(
-                undoToken: undoToken,
+
+            self.rememberDeleteUndoManager(undoManager)
+            let restoreSelectionPayload = self.selectionRestorePayload(for: nodeId)
+            let removeWithUndoResult = await self.session.removeNodeWithUndo(
                 nodeId: nodeId,
-                undoManager: undoManager
+                expectedPageEpoch: expectedContext.pageEpoch,
+                expectedDocumentScopeID: expectedContext.documentScopeID
             )
+            switch removeWithUndoResult {
+            case let .applied(undoToken):
+                let matchesCurrentContext = self.transport.matchesCurrentMutationContext(expectedContext)
+                if !matchesCurrentContext {
+                    self.clearDeleteUndoHistory(using: undoManager)
+                }
+                await self.applyDeletedNodeMutationResult(
+                    nodeId: nodeId,
+                    expectedContext: expectedContext
+                )
+                if matchesCurrentContext {
+                    self.registerUndoDelete(
+                        undoToken: undoToken,
+                        nodeId: nodeId,
+                        context: expectedContext,
+                        undoManager: undoManager,
+                        restoreSelectionPayload: restoreSelectionPayload
+                    )
+                    mutationResult = .applied
+                } else {
+                    mutationResult = .ignoredStaleContext
+                }
+            case .ignoredStaleContext:
+                self.clearDeleteUndoHistory(using: undoManager)
+                mutationResult = .ignoredStaleContext
+            case .failed:
+                mutationResult = self.publicMutationResult(
+                    await self.session.removeNode(
+                        nodeId: nodeId,
+                        expectedPageEpoch: expectedContext.pageEpoch,
+                        expectedDocumentScopeID: expectedContext.documentScopeID
+                    )
+                )
+                if mutationResult == .applied {
+                    await self.applyDeletedNodeMutationResult(
+                        nodeId: nodeId,
+                        expectedContext: expectedContext
+                    )
+                } else {
+                    self.clearDeleteUndoHistory(using: undoManager)
+                }
+            }
         }
         pendingDeleteTask = task
         await task.value
+        return mutationResult
     }
 
     func matchesCurrentPageEpoch(_ expectedPageEpoch: Int?) -> Bool {
         guard let expectedPageEpoch else {
             return true
         }
-        return frontendStore.currentPageEpoch == expectedPageEpoch
+        return transport.currentPageEpoch == expectedPageEpoch
     }
 
-    func copyToPasteboard(_ text: String) {
-        copyToSystemPasteboard(text)
+    private func publicMutationResult<Payload>(_ result: DOMMutationExecutionResult<Payload>) -> DOMMutationResult {
+        switch result {
+        case .applied:
+            return .applied
+        case .ignoredStaleContext:
+            return .ignoredStaleContext
+        case .failed:
+            return .failed
+        }
     }
 
-    func registerUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+    private func registerUndoDelete(
+        undoToken: Int,
+        nodeId: Int,
+        context: DOMInspectorRuntime.MutationContext,
+        undoManager: UndoManager,
+        restoreSelectionPayload: DOMSelectionSnapshotPayload?
+    ) {
         rememberDeleteUndoManager(undoManager)
         undoManager.registerUndo(withTarget: self) { target in
             target.performUndoDelete(
                 undoToken: undoToken,
                 nodeId: nodeId,
-                undoManager: undoManager
+                context: context,
+                undoManager: undoManager,
+                restoreSelectionPayload: restoreSelectionPayload
             )
         }
         undoManager.setActionName("Delete Node")
     }
 
-    func performUndoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+    private func performUndoDelete(
+        undoToken: Int,
+        nodeId: Int,
+        context: DOMInspectorRuntime.MutationContext,
+        undoManager: UndoManager,
+        restoreSelectionPayload: DOMSelectionSnapshotPayload?
+    ) {
+        guard transport.matchesCurrentMutationContext(context) else {
+            clearDeleteUndoHistory(using: undoManager)
+            return
+        }
         registerRedoDelete(
             undoToken: undoToken,
             nodeId: nodeId,
-            undoManager: undoManager
+            context: context,
+            undoManager: undoManager,
+            restoreSelectionPayload: restoreSelectionPayload
         )
         Task.immediateIfAvailable { [weak self] in
-            guard let self else { return }
-            let restored = await session.undoRemoveNode(undoToken: undoToken)
-            guard restored else {
-                clearDeleteUndoHistory(using: undoManager)
+            guard let self else {
                 return
             }
-            if let localID = UInt64(exactly: nodeId) {
-                documentStore.applySelectionSnapshot(
-                    .init(
-                        localID: localID,
-                        preview: "",
-                        attributes: [],
-                        path: [],
-                        selectorPath: "",
-                        styleRevision: 0
-                    )
-                )
+            guard self.transport.matchesCurrentMutationContext(context) else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
             }
-            await reloadDocumentPreservingInspectorState()
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(context)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            guard self.transport.matchesCurrentMutationContext(context) else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            let restored = await self.session.undoRemoveNode(
+                undoToken: undoToken,
+                expectedPageEpoch: context.pageEpoch,
+                expectedDocumentScopeID: context.documentScopeID
+            )
+            guard case .applied = restored else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            let matchesCurrentContext = self.transport.matchesCurrentMutationContext(context)
+            if !matchesCurrentContext {
+                self.clearDeleteUndoHistory(using: undoManager)
+            }
+            if matchesCurrentContext, let restoreSelectionPayload {
+                self.document.applySelectionSnapshot(restoreSelectionPayload)
+            }
+            let restoreSelectionLocalID = restoreSelectionPayload?.localID
+            if matchesCurrentContext {
+                self.transport.setPendingSelectionOverride(localID: restoreSelectionLocalID)
+            }
+            let reloadResult: DOMMutationResult
+            if matchesCurrentContext {
+                reloadResult = await self.reloadDocumentPreservingInspectorState()
+                if reloadResult == .ignoredStaleContext {
+                    _ = await self.resyncDocumentAfterContextLoss()
+                }
+            } else {
+                reloadResult = await self.resyncDocumentAfterContextLoss()
+            }
+            if matchesCurrentContext, reloadResult != .applied {
+                self.transport.setPendingSelectionOverride(localID: nil)
+            }
         }
     }
 
-    func registerRedoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+    private func registerRedoDelete(
+        undoToken: Int,
+        nodeId: Int,
+        context: DOMInspectorRuntime.MutationContext,
+        undoManager: UndoManager,
+        restoreSelectionPayload: DOMSelectionSnapshotPayload?
+    ) {
         rememberDeleteUndoManager(undoManager)
         undoManager.registerUndo(withTarget: self) { target in
             target.performRedoDelete(
                 undoToken: undoToken,
                 nodeId: nodeId,
-                undoManager: undoManager
+                context: context,
+                undoManager: undoManager,
+                restoreSelectionPayload: restoreSelectionPayload
             )
         }
         undoManager.setActionName("Delete Node")
     }
 
-    func performRedoDelete(undoToken: Int, nodeId: Int, undoManager: UndoManager) {
+    private func performRedoDelete(
+        undoToken: Int,
+        nodeId: Int,
+        context: DOMInspectorRuntime.MutationContext,
+        undoManager: UndoManager,
+        restoreSelectionPayload: DOMSelectionSnapshotPayload?
+    ) {
+        guard transport.matchesCurrentMutationContext(context) else {
+            clearDeleteUndoHistory(using: undoManager)
+            return
+        }
         registerUndoDelete(
             undoToken: undoToken,
             nodeId: nodeId,
-            undoManager: undoManager
+            context: context,
+            undoManager: undoManager,
+            restoreSelectionPayload: restoreSelectionPayload
         )
         Task.immediateIfAvailable { [weak self] in
-            guard let self else { return }
-            let removed = await session.redoRemoveNode(undoToken: undoToken, nodeId: nodeId)
-            guard removed else {
-                clearDeleteUndoHistory(using: undoManager)
+            guard let self else {
                 return
             }
-            if selectedEntry?.backendNodeID == nodeId {
-                documentStore.clearSelection()
+            guard self.transport.matchesCurrentMutationContext(context) else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
             }
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(context)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            guard self.transport.matchesCurrentMutationContext(context) else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            let removed = await self.session.redoRemoveNode(
+                undoToken: undoToken,
+                nodeId: nodeId,
+                expectedPageEpoch: context.pageEpoch,
+                expectedDocumentScopeID: context.documentScopeID
+            )
+            guard case .applied = removed else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
+            if !self.transport.matchesCurrentMutationContext(context) {
+                self.clearDeleteUndoHistory(using: undoManager)
+            }
+            await self.applyDeletedNodeMutationResult(
+                nodeId: nodeId,
+                expectedContext: context
+            )
         }
+    }
+
+    private func applyDeletedNodeMutationResult(
+        nodeId: Int,
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async {
+        if transport.matchesCurrentMutationContext(expectedContext) {
+            if let node = document.node(backendNodeID: nodeId) {
+                document.removeNode(id: node.id)
+            }
+        } else if session.hasPageWebView {
+            _ = await resyncDocumentAfterContextLoss()
+        }
+    }
+
+    private func selectionRestorePayload(for nodeId: Int) -> DOMSelectionSnapshotPayload? {
+        guard let selectedNode = document.selectedNode, selectedNode.backendNodeID == nodeId else {
+            return nil
+        }
+        return .init(
+            localID: selectedNode.localID,
+            preview: selectedNode.preview,
+            attributes: selectedNode.attributes,
+            path: selectedNode.path,
+            selectorPath: selectedNode.selectorPath,
+            styleRevision: selectedNode.styleRevision
+        )
     }
 
     func rememberDeleteUndoManager(_ undoManager: UndoManager) {
@@ -681,12 +1111,12 @@ private extension WIDOMModel {
         await updateSnapshotDepthImpl(requestedDepth)
         try Task.checkCancellation()
         try ensureSelectionRequestIsCurrent(request)
-        await reloadDocumentImpl(.preservingInspectorState)
+        _ = await reloadDocumentImpl(.preservingInspectorState)
         return result
     }
 
     func applyRecoverableError(_ message: String?) {
-        documentStore.setErrorMessage(message)
+        document.setErrorMessage(message)
         externalRecoverableErrorHandler?(message)
     }
 
@@ -704,7 +1134,9 @@ private extension WIDOMModel {
     }
 
     func disablePageScrollingForSelection() {
-        guard let scrollView = session.pageWebView?.scrollView else { return }
+        guard let scrollView = session.pageWebView?.scrollView else {
+            return
+        }
         if scrollBackup == nil {
             scrollBackup = (scrollView.isScrollEnabled, scrollView.panGestureRecognizer.isEnabled)
         }
@@ -725,3 +1157,11 @@ private extension WIDOMModel {
     }
 #endif
 }
+
+#if DEBUG
+extension WIDOMInspector {
+    func testSelectionRestorePayload(for nodeId: Int) -> DOMSelectionSnapshotPayload? {
+        selectionRestorePayload(for: nodeId)
+    }
+}
+#endif

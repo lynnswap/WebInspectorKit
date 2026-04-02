@@ -277,7 +277,7 @@ private extension DOMInspectorBridge {
             guard runtime?.acceptsReadyMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
                 return
             }
-            runtime?.handleReadyMessage()
+            runtime?.handleReadyMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID)
         case .log:
             runtime?.handleLogMessage(body)
         case .domSelection:

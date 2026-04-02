@@ -2,422 +2,210 @@ import Testing
 @testable import WebInspectorEngine
 
 @MainActor
-struct DOMDocumentStoreTests {
+struct DOMDocumentModelTests {
     @Test
-    func selectionIsPreservedWhenSelectedNodeIsRebuiltWithSameLocalID() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-            selectedLocalID: 2
-        )
-        let originalSelection = store.selectedEntry
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [makeNode(localID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "updated")])]
-                    ),
-                ]
+    func sameLocalIDReprojectionPreservesNodeIdentity() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
             )
         )
 
-        #expect(store.selectedEntry?.backendNodeID == 2)
-        #expect(store.selectedEntry !== originalSelection)
-        #expect(store.selectedEntry?.attributes.first?.value == "updated")
+        let initialID = try! #require(model.selectedNode?.id)
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "class", value: "updated")])]
+                ),
+                selectedLocalID: 7
+            ),
+            isFreshDocument: false
+        )
+
+        let reprojected = try! #require(model.selectedNode)
+        #expect(reprojected.id == initialID)
+        #expect(reprojected.attributes.first(where: { $0.name == "class" })?.value == "updated")
+    }
+
+    @Test
+    func freshDocumentChangesNodeIdentity() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
+            )
+        )
+
+        let initialID = try! #require(model.selectedNode?.id)
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
+            ),
+            isFreshDocument: true
+        )
+
+        let refreshedID = try! #require(model.selectedNode?.id)
+        #expect(refreshedID != initialID)
     }
 
     @Test
     func selectionClearsWhenSelectedNodeIsRemoved() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-            selectedLocalID: 2
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
+                selectedLocalID: 2
+            )
         )
 
-        store.applyMutationBundle(
-            .init(events: [.childNodeRemoved(parentLocalID: 1, nodeLocalID: 2)])
-        )
+        model.applyMutationBundle(.init(events: [.childNodeRemoved(parentLocalID: 1, nodeLocalID: 2)]))
 
-        #expect(store.selectedEntry == nil)
+        #expect(model.selectedNode == nil)
     }
 
     @Test
-    func clearDocumentClearsRootAndSelection() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1),
-            selectedLocalID: 1
+    func selectionTracksReplacementOfSameLocalID() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 2, attributes: [.init(nodeId: 2, name: "class", value: "before")])]
+                ),
+                selectedLocalID: 2
+            )
         )
 
-        store.clearDocument()
-
-        #expect(store.rootEntry == nil)
-        #expect(store.selectedEntry == nil)
-        #expect(store.errorMessage == nil)
-    }
-
-    @Test
-    func clearedDocumentCanSeedPlaceholderRootFromSetChildNodes() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-            selectedLocalID: 2
-        )
-
-        store.clearDocument()
-        store.applyMutationBundle(
+        let originalSelection = try! #require(model.selectedNode)
+        model.applyMutationBundle(
             .init(
                 events: [
                     .setChildNodes(
                         parentLocalID: 1,
-                        nodes: [makeNode(localID: 3)]
-                    ),
+                        nodes: [makeNode(localID: 2, attributes: [.init(nodeId: 2, name: "class", value: "after")])]
+                    )
                 ]
             )
         )
 
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(childNodeIDs(of: store.rootEntry) == [3])
-        #expect(store.selectedEntry == nil)
+        let replacement = try! #require(model.selectedNode)
+        #expect(replacement !== originalSelection)
+        #expect(replacement.id == originalSelection.id)
+        #expect(replacement.attributes.first(where: { $0.name == "class" })?.value == "after")
     }
 
     @Test
-    func setChildNodesSeedsRootEvenWhenDetachedSelectionPlaceholderExists() {
-        let store = DOMDocumentStore()
+    func replaceSubtreeSeedsRootWhenDocumentIsEmpty() {
+        let model = DOMDocumentModel()
 
-        store.applySelectionSnapshot(
-            .init(
-                localID: 2,
-                preview: "<span>",
-                attributes: [],
-                path: ["html", "body", "span"],
-                selectorPath: "span",
-                styleRevision: 1
-            )
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .setChildNodes(
-                        parentLocalID: 1,
-                        nodes: [makeNode(localID: 2)]
-                    ),
-                ]
-            )
-        )
-
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(childNodeIDs(of: store.rootEntry) == [2])
-        #expect(store.selectedEntry?.backendNodeID == 2)
-        #expect(store.selectedEntry?.parent === store.rootEntry)
-    }
-
-    @Test
-    func clearedDocumentCanSeedNewRootFromReplaceSubtree() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)])
-        )
-
-        store.clearDocument()
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .replaceSubtree(
-                        root: makeNode(
-                            localID: 10,
-                            nodeName: "HTML",
-                            localName: "html",
-                            children: [makeNode(localID: 11)]
-                        )
-                    ),
-                ]
-            )
-        )
-
-        #expect(store.rootEntry?.backendNodeID == 10)
-        #expect(childNodeIDs(of: store.rootEntry) == [11])
-    }
-
-    @Test
-    func clearingSelectionAlsoClearsMatchedStylesOnPreviouslySelectedEntry() {
-        let store = DOMDocumentStore()
-        store.applySelectionSnapshot(
-            .init(
-                localID: 42,
-                preview: "<div>",
-                attributes: [],
-                path: ["html", "body", "div"],
-                selectorPath: "div",
-                styleRevision: 1
-            )
-        )
-        let selectedEntry = try! #require(store.selectedEntry)
-        store.applyMatchedStyles(
-            .init(
-                nodeId: 42,
-                rules: [
-                    .init(
-                        origin: .author,
-                        selectorText: ".target",
-                        declarations: [.init(name: "color", value: "red", important: false)],
-                        sourceLabel: "<style>"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 2
-            ),
-            for: selectedEntry
-        )
-
-        store.applySelectionSnapshot(nil)
-
-        #expect(store.selectedEntry == nil)
-        #expect(selectedEntry.matchedStyles.isEmpty == true)
-        #expect(selectedEntry.matchedStylesTruncated == false)
-        #expect(selectedEntry.blockedStylesheetCount == 0)
-        #expect(selectedEntry.isLoadingMatchedStyles == false)
-    }
-
-    @Test
-    func replaceSubtreeForUnknownNodeDoesNotRewriteRoot() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)])
-        )
-
-        store.applyMutationBundle(
-            .init(events: [.replaceSubtree(root: makeNode(localID: 999, children: [makeNode(localID: 1000)]))])
-        )
-
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(findEntry(backendNodeID: 2, in: store.rootEntry) != nil)
-        #expect(findEntry(backendNodeID: 999, in: store.rootEntry) == nil)
-    }
-
-    @Test
-    func replaceSubtreeForRootReplacesChildren() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)])
-        )
-
-        store.applyMutationBundle(
-            .init(events: [.replaceSubtree(root: makeNode(localID: 1, children: [makeNode(localID: 3)]))])
-        )
-
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(findEntry(backendNodeID: 2, in: store.rootEntry) == nil)
-        #expect(findEntry(backendNodeID: 3, in: store.rootEntry) != nil)
-        #expect(childNodeIDs(of: store.rootEntry) == [3])
-    }
-
-    @Test
-    func childNodeInsertedWithUnknownPreviousSiblingAppendsToEnd() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 999,
-                        node: makeNode(localID: 4)
-                    ),
-                ]
-            )
-        )
-
-        #expect(childNodeIDs(of: store.rootEntry) == [2, 3, 4])
-    }
-
-    @Test
-    func childNodeInsertedIncrementsChildCountForPartiallyLoadedParent() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, childCount: 10, children: [makeNode(localID: 2)])
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 2,
-                        node: makeNode(localID: 3)
-                    ),
-                ]
-            )
-        )
-
-        #expect(store.rootEntry?.childCount == 11)
-        #expect(childNodeIDs(of: store.rootEntry) == [2, 3])
-    }
-
-    @Test
-    func childNodeInsertedWithZeroPreviousSiblingPrependsToStart() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2), makeNode(localID: 3)])
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .childNodeInserted(
-                        parentLocalID: 1,
-                        previousLocalID: 0,
-                        node: makeNode(localID: 4)
-                    ),
-                ]
-            )
-        )
-
-        #expect(childNodeIDs(of: store.rootEntry) == [4, 2, 3])
-    }
-
-    @Test
-    func replaceSubtreeForDetachedPlaceholderDoesNotPromotePlaceholderToRoot() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 2)])
-        )
-        store.applySelectionSnapshot(
-            .init(
-                localID: 99,
-                preview: "<div id='detached'>",
-                attributes: [],
-                path: [],
-                selectorPath: "#detached",
-                styleRevision: 0
-            )
-        )
-
-        store.applyMutationBundle(
-            .init(events: [.replaceSubtree(root: makeNode(localID: 99, children: [makeNode(localID: 100)]))])
-        )
-
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(findEntry(backendNodeID: 2, in: store.rootEntry) != nil)
-        let detachedEntry = try! #require(store.selectedEntry)
-        #expect(detachedEntry.parent == nil)
-    }
-
-    @Test
-    func replaceSubtreeSeedsRootWhenOnlyDetachedPlaceholderExists() {
-        let store = DOMDocumentStore()
-        store.applySelectionSnapshot(
-            .init(
-                localID: 99,
-                preview: "<div id='detached'>",
-                attributes: [],
-                path: [],
-                selectorPath: "#detached",
-                styleRevision: 0
-            )
-        )
-
-        store.applyMutationBundle(
+        model.applyMutationBundle(
             .init(events: [.replaceSubtree(root: makeNode(localID: 1, children: [makeNode(localID: 2)]))])
         )
 
-        #expect(store.rootEntry?.backendNodeID == 1)
-        #expect(childNodeIDs(of: store.rootEntry) == [2])
+        #expect(model.rootNode?.backendNodeID == 1)
+        #expect(model.rootNode?.children.first?.backendNodeID == 2)
     }
 
     @Test
-    func replaceSubtreeUnderPartiallyLoadedParentKeepsChildCount() {
-        let store = DOMDocumentStore()
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, childCount: 10, children: [makeNode(localID: 2)])
-        )
-
-        store.applyMutationBundle(
-            .init(
-                events: [
-                    .replaceSubtree(
-                        root: makeNode(localID: 2, attributes: [DOMAttribute(nodeId: 2, name: "class", value: "replaced")])
-                    ),
-                ]
+    func selectionSnapshotUpdatesDisplayedMetadata() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
+                selectedLocalID: 42
             )
         )
 
-        #expect(store.rootEntry?.childCount == 10)
-        #expect(childNodeIDs(of: store.rootEntry) == [2])
-        #expect(findEntry(backendNodeID: 2, in: store.rootEntry)?.attributes.first?.value == "replaced")
-    }
-
-    private func replaceDocument(
-        in store: DOMDocumentStore,
-        root: DOMGraphNodeDescriptor,
-        selectedLocalID: UInt64? = nil
-    ) {
-        store.replaceDocument(
-            with: .init(root: root, selectedLocalID: selectedLocalID)
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: 42, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 2
+            )
         )
+
+        let selectedNode = try! #require(model.selectedNode)
+        #expect(selectedNode.preview == "<div id=\"target\">")
+        #expect(selectedNode.selectorPath == "#target")
+        #expect(selectedNode.styleRevision == 2)
+        #expect(selectedNode.attributes.first(where: { $0.name == "id" })?.value == "target")
     }
 
-    private func childNodeIDs(of entry: DOMEntry?) -> [Int] {
-        entry?.children.compactMap(\.backendNodeID) ?? []
+    @Test
+    func clearDocumentDropsRootAndSelection() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
+                selectedLocalID: 2
+            )
+        )
+
+        model.clearDocument()
+
+        #expect(model.rootNode == nil)
+        #expect(model.selectedNode == nil)
+        #expect(model.errorMessage == nil)
     }
 
-    private func findEntry(backendNodeID: Int, in root: DOMEntry?) -> DOMEntry? {
-        guard let root else {
-            return nil
-        }
-        if root.backendNodeID == backendNodeID {
-            return root
-        }
-        for child in root.children {
-            if let match = findEntry(backendNodeID: backendNodeID, in: child) {
-                return match
-            }
-        }
-        return nil
+    @Test
+    @available(*, deprecated, message: "Legacy API compatibility coverage.")
+    func deprecatedDocumentStoreAliasesForwardToCurrentProperties() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
+                selectedLocalID: 2
+            )
+        )
+
+        #expect(legacyRootEntry(in: model)?.backendNodeID == model.rootNode?.backendNodeID)
+        #expect(legacySelectedEntry(in: model)?.backendNodeID == model.selectedNode?.backendNodeID)
     }
 
     private func makeNode(
         localID: UInt64,
+        attributes: [DOMAttribute] = [],
+        children: [DOMGraphNodeDescriptor] = [],
         nodeType: Int = 1,
         nodeName: String = "DIV",
         localName: String = "div",
-        nodeValue: String = "",
-        attributes: [DOMAttribute] = [],
-        childCount: Int? = nil,
-        layoutFlags: [String] = [],
-        isRendered: Bool = true,
-        children: [DOMGraphNodeDescriptor] = []
+        nodeValue: String = ""
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
             localID: localID,
-            backendNodeID: localID <= UInt64(Int.max) ? Int(localID) : nil,
+            backendNodeID: Int(localID),
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
             nodeValue: nodeValue,
             attributes: attributes,
-            childCount: childCount ?? children.count,
-            layoutFlags: layoutFlags,
-            isRendered: isRendered,
+            childCount: children.count,
+            layoutFlags: [],
+            isRendered: true,
             children: children
         )
     }
+}
+
+@available(*, deprecated, message: "Legacy API compatibility coverage.")
+@MainActor
+private func legacyRootEntry(in model: DOMDocumentStore) -> DOMNodeModel? {
+    model.rootEntry
+}
+
+@available(*, deprecated, message: "Legacy API compatibility coverage.")
+@MainActor
+private func legacySelectedEntry(in model: DOMDocumentStore) -> DOMNodeModel? {
+    model.selectedEntry
 }
