@@ -15,6 +15,14 @@ struct DOMInspectorTests {
     }
 
     @Test
+    @available(*, deprecated, message: "Legacy API compatibility coverage.")
+    func deprecatedWIDOMModelDocumentStoreAliasForwardsToDocument() {
+        let inspector: WIDOMModel = WIInspectorController().dom
+
+        #expect(ObjectIdentifier(legacyDocumentStore(of: inspector)) == ObjectIdentifier(inspector.document))
+    }
+
+    @Test
     func hasPageWebViewReflectsAttachAndDetach() async {
         let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
@@ -866,6 +874,12 @@ struct DOMInspectorTests {
             children: children
         )
     }
+}
+
+@available(*, deprecated, message: "Legacy API compatibility coverage.")
+@MainActor
+private func legacyDocumentStore(of inspector: WIDOMModel) -> DOMDocumentModel {
+    inspector.documentStore
 }
 
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {

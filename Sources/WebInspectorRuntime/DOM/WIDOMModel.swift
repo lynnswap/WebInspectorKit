@@ -52,6 +52,12 @@ public final class WIDOMInspector {
     package let session: DOMSession
     package let transport: DOMInspectorRuntime
     public let document: DOMDocumentModel
+
+    @available(*, deprecated, renamed: "document", message: "Use document.")
+    public var documentStore: DOMDocumentModel {
+        document
+    }
+
     public private(set) var isSelectingElement = false
 
     @ObservationIgnored private var externalRecoverableErrorHandler: (@MainActor (String?) -> Void)?

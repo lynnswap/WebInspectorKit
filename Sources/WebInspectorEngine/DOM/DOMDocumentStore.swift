@@ -11,6 +11,16 @@ public final class DOMDocumentModel {
     public private(set) var selectedNode: DOMNodeModel?
     public private(set) var errorMessage: String?
 
+    @available(*, deprecated, renamed: "rootNode", message: "Use rootNode.")
+    public var rootEntry: DOMNodeModel? {
+        rootNode
+    }
+
+    @available(*, deprecated, renamed: "selectedNode", message: "Use selectedNode.")
+    public var selectedEntry: DOMNodeModel? {
+        selectedNode
+    }
+
     package private(set) var documentIdentity = UUID()
 
     private var nodesByLocalID: [UInt64: DOMNodeModel] = [:]
