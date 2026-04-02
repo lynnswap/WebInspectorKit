@@ -1611,6 +1611,515 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func adoptPageContextPreservesSelectionStateWhenRequested() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        seedSelection(
+            store,
+            localID: 42,
+            preview: "<div id=\"target\">",
+            attributes: [.init(nodeId: 42, name: "id", value: "target")],
+            path: ["html", "body", "div"],
+            selectorPath: "#target",
+            styleRevision: 1,
+            matchedStyles: [],
+            isLoading: false
+        )
+        store.setPendingSelectionOverride(localID: 42)
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+
+        #expect(didAdopt == true)
+        #expect(store.currentPageEpoch == 4)
+        #expect(store.currentDocumentScopeID == 6)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 42)
+        #expect(store.testPendingSelectionOverrideLocalID == 42)
+    }
+
+    @Test
+    func adoptPageContextClearsQueuedDocumentRequest() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        _ = await store.requestDocument(depth: 4, mode: .fresh)
+        #expect(store.currentBootstrapPayload["pendingDocumentRequest"] != nil)
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6)
+        )
+
+        #expect(didAdopt == true)
+        #expect(store.currentBootstrapPayload["pendingDocumentRequest"] == nil)
+    }
+
+    @Test
+    func adoptPageContextDefersDOMBundlesUntilReplacementRequestDispatches() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        store.testConfigurationApplyOverride = { _ in }
+        await drainInitialBootstrapWork(store)
+        store.testDocumentRequestApplyOverride = { _, _ in
+            await harness.blockUntilResumed()
+        }
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+        #expect(store.acceptsDOMBundle(documentScopeID: 6) == false)
+
+        let requestTask = Task {
+            await store.requestDocument(
+                depth: 4,
+                mode: .preserveUIState,
+                expectedPageEpoch: store.currentPageEpoch,
+                expectedDocumentScopeID: store.currentDocumentScopeID
+            )
+        }
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        await harness.waitUntilStarted()
+        #expect(store.acceptsDOMBundle(documentScopeID: store.currentDocumentScopeID) == false)
+        await harness.resume()
+        let didRequestDocument = await requestTask.value
+        #expect(store.acceptsDOMBundle(documentScopeID: store.currentDocumentScopeID) == true)
+        #expect(didRequestDocument == true)
+    }
+
+    @Test
+    func adoptPageContextDefersFrontendMessagesUntilReplacementRequestDispatches() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        store.testConfigurationApplyOverride = { _ in }
+        await drainInitialBootstrapWork(store)
+        store.testDocumentRequestApplyOverride = { _, _ in
+            await harness.blockUntilResumed()
+        }
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == false
+        )
+
+        let requestTask = Task {
+            await store.requestDocument(
+                depth: 4,
+                mode: .preserveUIState,
+                expectedPageEpoch: store.currentPageEpoch,
+                expectedDocumentScopeID: store.currentDocumentScopeID
+            )
+        }
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        await harness.waitUntilStarted()
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == false
+        )
+        await harness.resume()
+        let didRequestDocument = await requestTask.value
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == true
+        )
+        #expect(didRequestDocument == true)
+    }
+
+    @Test
+    func adoptPageContextBlocksHighlightMessagesUntilReplacementRequestDispatches() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var highlightedNodeIDs: [Int] = []
+        store.testConfigurationApplyOverride = { _ in }
+        store.testDocumentRequestApplyOverride = { _, _ in }
+        store.session.testHighlightOverride = { nodeID in
+            highlightedNodeIDs.append(nodeID)
+        }
+        await drainInitialBootstrapWork(store)
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomHighlight",
+            body: [
+                "nodeId": 42,
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        let didHighlightDuringFence = await waitForCondition(maxAttempts: 5) {
+            highlightedNodeIDs.isEmpty == false
+        }
+        #expect(didHighlightDuringFence == false)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        let didRequestDocument = await store.requestDocument(
+            depth: 4,
+            mode: .preserveUIState,
+            expectedPageEpoch: store.currentPageEpoch,
+            expectedDocumentScopeID: store.currentDocumentScopeID
+        )
+        #expect(didRequestDocument == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomHighlight",
+            body: [
+                "nodeId": 42,
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        let didHighlightAfterReplacement = await waitForCondition(maxAttempts: 5) {
+            highlightedNodeIDs == [42]
+        }
+        #expect(didHighlightAfterReplacement == true)
+    }
+
+    @Test
+    func rejectedDocumentRequestDuringContextAdoptionDrainsAfterLaterReplacementDispatch() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var dispatchedKinds: [String] = []
+        store.testConfigurationApplyOverride = { _ in }
+        store.testDocumentRequestApplyOverride = { _, _ in }
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if let kind = body["kind"] as? String {
+                dispatchedKinds.append(kind)
+            }
+            return true
+        }
+        await drainInitialBootstrapWork(store)
+
+        let firstAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(firstAdopt == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomRequestDocument",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+                "depth": 4,
+                "mode": DOMDocumentReloadMode.preserveUIState.rawValue,
+            ]
+        )
+        let didReject = await waitForCondition(maxAttempts: 5) {
+            dispatchedKinds.contains("rejectDocumentRequest")
+        }
+        #expect(didReject == true)
+
+        let secondAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 5, documentScopeID: 7),
+            preserveCurrentDocumentState: true
+        )
+        #expect(secondAdopt == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        let didRequestDocument = await store.requestDocument(
+            depth: 4,
+            mode: .preserveUIState,
+            expectedPageEpoch: store.currentPageEpoch,
+            expectedDocumentScopeID: store.currentDocumentScopeID
+        )
+        #expect(didRequestDocument == true)
+
+        let didComplete = await waitForCondition(maxAttempts: 5) {
+            dispatchedKinds.contains("completeDocumentRequest")
+        }
+        #expect(didComplete == true)
+    }
+
+    @Test
+    func rejectedChildNodeRequestDuringContextAdoptionDrainsAfterLaterReplacementDispatch() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var retryPayloads: [[String: Any]] = []
+        store.testConfigurationApplyOverride = { _ in }
+        store.testDocumentRequestApplyOverride = { _, _ in }
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if body["kind"] as? String == "retryQueuedChildNodeRequests" {
+                retryPayloads.append(body)
+            }
+            return true
+        }
+        await drainInitialBootstrapWork(store)
+
+        let firstAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(firstAdopt == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomRequestChildren",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+                "nodeId": 11,
+                "depth": 2,
+            ]
+        )
+
+        let secondAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 5, documentScopeID: 7),
+            preserveCurrentDocumentState: true
+        )
+        #expect(secondAdopt == true)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        let didRequestDocument = await store.requestDocument(
+            depth: 4,
+            mode: .preserveUIState,
+            expectedPageEpoch: store.currentPageEpoch,
+            expectedDocumentScopeID: store.currentDocumentScopeID
+        )
+        #expect(didRequestDocument == true)
+
+        let didRetry = await waitForCondition(maxAttempts: 5) {
+            retryPayloads.contains {
+                ($0["pageEpoch"] as? Int) == store.currentPageEpoch
+                    && ($0["documentScopeID"] as? UInt64) == store.currentDocumentScopeID
+            }
+        }
+        #expect(didRetry == true)
+    }
+
+    @Test
+    func adoptPageContextPreservesReadyMessageUntilReplacementRequestDispatches() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        var documentRequestCount = 0
+        store.testConfigurationApplyOverride = { _ in }
+        await drainInitialBootstrapWork(store)
+        store.testDocumentRequestApplyOverride = { _, _ in
+            documentRequestCount += 1
+            await harness.blockUntilResumed()
+        }
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        await store.testWaitForBootstrapForTesting()
+        #expect(documentRequestCount == 0)
+
+        let requestTask = Task {
+            await store.requestDocument(
+                depth: 4,
+                mode: .preserveUIState,
+                expectedPageEpoch: store.currentPageEpoch,
+                expectedDocumentScopeID: store.currentDocumentScopeID
+            )
+        }
+        await harness.waitUntilStarted()
+        #expect(documentRequestCount == 1)
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == false
+        )
+        await harness.resume()
+        let didRequestDocument = await requestTask.value
+        #expect(didRequestDocument == true)
+        #expect(
+            store.acceptsFrontendMessage(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            ) == true
+        )
+    }
+
+    @Test
+    func adoptPageContextRebasesDeferredReadyAfterLaterContextAdoption() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        var documentRequestCount = 0
+        store.testConfigurationApplyOverride = { _ in }
+        await drainInitialBootstrapWork(store)
+        store.testDocumentRequestApplyOverride = { _, _ in
+            documentRequestCount += 1
+            await harness.blockUntilResumed()
+        }
+
+        let firstAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(firstAdopt == true)
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        await store.testWaitForBootstrapForTesting()
+        #expect(documentRequestCount == 0)
+
+        let secondAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 5, documentScopeID: 7),
+            preserveCurrentDocumentState: true
+        )
+        #expect(secondAdopt == true)
+
+        let requestTask = Task {
+            await store.requestDocument(
+                depth: 4,
+                mode: .preserveUIState,
+                expectedPageEpoch: store.currentPageEpoch,
+                expectedDocumentScopeID: store.currentDocumentScopeID
+            )
+        }
+
+        await harness.waitUntilStarted()
+        #expect(documentRequestCount == 1)
+        await harness.resume()
+        let didRequestDocument = await requestTask.value
+        #expect(didRequestDocument == true)
+        await store.testWaitForBootstrapForTesting()
+    }
+
+    @Test
+    func replacementRetryAfterContextAdoptionKeepsRequestedDocumentMode() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let harness = BootstrapHarness()
+        store.testConfigurationApplyOverride = { _ in }
+        await drainInitialBootstrapWork(store)
+        store.testDocumentRequestApplyOverride = { _, _ in
+            await harness.blockUntilResumed()
+        }
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+        #expect(store.currentBootstrapPayload["pendingDocumentRequest"] == nil)
+        #expect(store.acceptsDOMBundle(documentScopeID: store.currentDocumentScopeID) == false)
+
+        store.retryDocumentReplacementAfterContextAdoption(depth: 5, mode: .fresh)
+
+        let request = store.currentBootstrapPayload["pendingDocumentRequest"] as? [String: Any]
+        #expect(request?["depth"] as? Int == 5)
+        #expect(request?["mode"] as? String == DOMDocumentReloadMode.fresh.rawValue)
+        #expect(store.acceptsDOMBundle(documentScopeID: store.currentDocumentScopeID) == false)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorReady",
+            body: [
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+        await harness.waitUntilStarted()
+        await harness.resume()
+        await store.testWaitForBootstrapForTesting()
+        #expect(store.acceptsDOMBundle(documentScopeID: store.currentDocumentScopeID) == true)
+    }
+
+    @Test
+    func restartSelectionDependentRequestsAfterResyncDrainsDeferredFrontendRequests() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var dispatchedKinds: [String] = []
+        store.testSetReady(true)
+        store.testFrontendDispatchOverride = { payload in
+            let body = (payload as? [String: Any]) ?? [:]
+            if let kind = body["kind"] as? String {
+                dispatchedKinds.append(kind)
+            }
+            return true
+        }
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(pageEpoch: 4, documentScopeID: 6),
+            preserveCurrentDocumentState: true
+        )
+        #expect(didAdopt == true)
+
+        store.handleRejectedDocumentRequestMessage(
+            pageEpoch: store.currentPageEpoch,
+            documentScopeID: store.currentDocumentScopeID
+        )
+        store.handleRejectedChildNodeRequestMessage(
+            nodeID: 11,
+            pageEpoch: store.currentPageEpoch,
+            documentScopeID: store.currentDocumentScopeID
+        )
+
+        let didReject = await waitForCondition {
+            dispatchedKinds.contains("rejectDocumentRequest")
+                && dispatchedKinds.contains("rejectChildNodeRequest")
+        }
+        #expect(didReject == true)
+
+        store.clearDocumentReplacementAfterContextAdoptionRequirement()
+        store.restartSelectionDependentRequestsAfterResync()
+
+        let didDrain = await waitForCondition {
+            dispatchedKinds.contains("completeDocumentRequest")
+                && dispatchedKinds.contains("retryQueuedChildNodeRequests")
+        }
+        #expect(didDrain == true)
+    }
+
+    @Test
     func freshRequestDocumentDoesNotCommitProjectedScopeWhenDocumentScopeSyncFails() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.testFrontendDispatchOverride = { _ in true }
@@ -2326,6 +2835,12 @@ struct DOMInspectorRuntimeTests {
             )
         )
         return DOMInspectorRuntime(session: session)
+    }
+
+    private func drainInitialBootstrapWork(_ store: DOMInspectorRuntime) async {
+        store.testSetReady(true)
+        await store.testWaitForBootstrapForTesting()
+        store.testSetReady(false)
     }
 
     private func waitForPendingMatchedStylesRequestIDs(

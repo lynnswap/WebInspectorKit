@@ -70,6 +70,10 @@ public final class DOMPageAgent: NSObject, PageAgent {
         bridgeMode
     }
 
+    package var currentPageContext: DOMPageContext {
+        .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID)
+    }
+
     package convenience init(configuration: DOMConfiguration) {
         self.init(
             configuration: configuration,
@@ -499,6 +503,32 @@ extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
+    package func cancelPreparedPageContextSync() {
+        _ = beginPageEpochApplyGeneration()
+    }
+
+    package func readPageContext(on webView: WKWebView) async -> DOMPageContext? {
+        await pageContextFromPageIfPossible(on: webView)
+    }
+
+    package func commitPageContext(_ pageContext: DOMPageContext, on webView: WKWebView) {
+        guard self.webView === webView else {
+            return
+        }
+        if self.pageEpoch != pageContext.pageEpoch {
+            handleCache.clear()
+            self.pageEpoch = pageContext.pageEpoch
+        }
+        if self.documentScopeID != pageContext.documentScopeID {
+            handleCache.clear()
+            self.documentScopeID = pageContext.documentScopeID
+        }
+    }
+
+    package func refreshCurrentPageContextIfPossible(on webView: WKWebView) async -> Bool {
+        await refreshCachedPageContextFromPageIfPossible(on: webView)
+    }
+
     package func waitForPreparedPageContextSyncIfNeeded() async {
         while let pageEpochSyncTask {
             let generation = pageEpochSyncTaskGeneration
@@ -760,8 +790,16 @@ private extension DOMPageAgent {
 
     @discardableResult
     func refreshCachedPageContextFromPageIfPossible(on webView: WKWebView) async -> Bool {
-        guard self.webView === webView else {
+        guard let pageContext = await pageContextFromPageIfPossible(on: webView) else {
             return false
+        }
+        commitPageContext(pageContext, on: webView)
+        return true
+    }
+
+    func pageContextFromPageIfPossible(on webView: WKWebView) async -> DOMPageContext? {
+        guard self.webView === webView else {
+            return nil
         }
         do {
             let rawResult = try await webView.callAsyncJavaScript(
@@ -788,20 +826,15 @@ private extension DOMPageAgent {
             let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
             let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
             guard appliedEpoch != nil || appliedDocumentScopeID != nil else {
-                return false
+                return nil
             }
-            if let appliedEpoch, self.pageEpoch != appliedEpoch {
-                handleCache.clear()
-                self.pageEpoch = appliedEpoch
-            }
-            if let appliedDocumentScopeID, self.documentScopeID != appliedDocumentScopeID {
-                handleCache.clear()
-                self.documentScopeID = appliedDocumentScopeID
-            }
-            return true
+            return .init(
+                pageEpoch: appliedEpoch ?? pageEpoch,
+                documentScopeID: appliedDocumentScopeID ?? documentScopeID
+            )
         } catch {
             domLogger.debug("refresh cached page context skipped: \(error.localizedDescription, privacy: .public)")
-            return false
+            return nil
         }
     }
 

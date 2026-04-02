@@ -1,5 +1,10 @@
 import WebKit
 
+package struct DOMPageContext: Equatable, Sendable {
+    package let pageEpoch: Int
+    package let documentScopeID: DOMDocumentScopeID
+}
+
 package enum DOMMutationExecutionResult<Payload: Sendable>: Sendable {
     case applied(Payload)
     case ignoredStaleContext
@@ -8,7 +13,11 @@ package enum DOMMutationExecutionResult<Payload: Sendable>: Sendable {
 
 @MainActor
 package final class DOMSession {
-    package typealias AttachmentResult = (shouldReload: Bool, shouldPreserveInspectorState: Bool)
+    package typealias AttachmentResult = (
+        shouldReload: Bool,
+        shouldPreserveInspectorState: Bool,
+        observedPageContext: DOMPageContext?
+    )
 
     package private(set) var configuration: DOMConfiguration
 
@@ -37,6 +46,8 @@ package final class DOMSession {
         _ expectedDocumentScopeID: DOMDocumentScopeID?,
         _ perform: @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
     ) async -> DOMMutationExecutionResult<Void>)?
+    package var testHighlightOverride: (@MainActor (Int) async -> Void)?
+    package var testHideHighlightOverride: (@MainActor () async -> Void)?
 #endif
 
     var isAutoSnapshotEnabled: Bool {
@@ -78,7 +89,11 @@ package final class DOMSession {
     package func attach(to webView: WKWebView) async -> AttachmentResult {
         if pageAgent.webView === webView {
             lastPageWebView = webView
-            return (false, false)
+            let observedPageContext = await readObservedPageContextIfNewer(on: webView)
+            if autoSnapshotEnabled {
+                await pageAgent.setAutoSnapshot(enabled: true)
+            }
+            return (false, false, observedPageContext)
         }
 
         if let attachedWebView = pageAgent.webView, attachedWebView !== webView {
@@ -94,13 +109,38 @@ package final class DOMSession {
             pageEpoch: preparedPageEpoch,
             documentScopeID: preparedDocumentScopeID
         )
+        let observedPageContext = await readObservedPageContextIfNewer(on: webView)
         lastPageWebView = webView
 
         if autoSnapshotEnabled {
             await pageAgent.setAutoSnapshot(enabled: true)
         }
 
-        return (shouldReload, shouldPreserveState)
+        return (shouldReload, shouldPreserveState, observedPageContext)
+    }
+
+    private func readObservedPageContextIfNewer(on webView: WKWebView) async -> DOMPageContext? {
+        guard let refreshedPageContext = await pageAgent.readPageContext(on: webView),
+              shouldAdoptObservedPageContext(refreshedPageContext),
+              pageAgent.webView === webView
+        else {
+            return nil
+        }
+        pageAgent.commitPageContext(refreshedPageContext, on: webView)
+        pageAgent.cancelPreparedPageContextSync()
+        preparedPageEpoch = refreshedPageContext.pageEpoch
+        preparedDocumentScopeID = refreshedPageContext.documentScopeID
+        return refreshedPageContext
+    }
+
+    private func shouldAdoptObservedPageContext(_ pageContext: DOMPageContext) -> Bool {
+        if pageContext.pageEpoch > preparedPageEpoch {
+            return true
+        }
+        if pageContext.pageEpoch < preparedPageEpoch {
+            return false
+        }
+        return pageContext.documentScopeID > preparedDocumentScopeID
     }
 
     package func suspend() async {
@@ -163,6 +203,10 @@ package final class DOMSession {
         lastPageWebView = nil
         autoSnapshotEnabled = false
     }
+
+    package var currentPageContext: DOMPageContext {
+        pageAgent.currentPageContext
+    }
 }
 
 // MARK: - Snapshot API (for DOMTreeView)
@@ -205,10 +249,22 @@ extension DOMSession {
     }
 
     package func highlight(nodeId: Int) async {
+#if DEBUG
+        if let testHighlightOverride {
+            await testHighlightOverride(nodeId)
+            return
+        }
+#endif
         await pageAgent.highlight(nodeId: nodeId)
     }
 
     package func hideHighlight() async {
+#if DEBUG
+        if let testHideHighlightOverride {
+            await testHideHighlightOverride()
+            return
+        }
+#endif
         await pageAgent.hideHighlight()
     }
 }

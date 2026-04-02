@@ -149,10 +149,41 @@ public final class WIDOMInspector {
             session.prepareDocumentScopeID(transport.currentDocumentScopeID)
             outcome = await session.attach(to: webView)
         }
+        let didAdoptPageContext = if let observedPageContext = outcome.observedPageContext {
+            await transport.adoptPageContextIfNeeded(
+                observedPageContext,
+                preserveCurrentDocumentState: outcome.shouldPreserveInspectorState || outcome.shouldReload == false
+            )
+        } else {
+            false
+        }
         if outcome.shouldReload {
-            _ = await reloadDocumentImpl(
+            let reloadResult = await reloadDocumentImpl(
                 outcome.shouldPreserveInspectorState ? .preservingInspectorState : .fresh
             )
+            if didAdoptPageContext, reloadResult != .applied {
+                let resyncResult = await resyncDocumentAfterContextAdoptionFailure()
+                if resyncResult != .applied {
+                    transport.retryDocumentReplacementAfterContextAdoption(
+                        depth: session.configuration.snapshotDepth,
+                        mode: outcome.shouldPreserveInspectorState ? .preserveUIState : .fresh
+                    )
+                }
+            }
+        } else if didAdoptPageContext {
+            let reloadResult = await reloadDocumentImpl(
+                .preservingInspectorState,
+                expectedPageEpoch: transport.currentPageEpoch
+            )
+            if reloadResult != .applied {
+                let resyncResult = await resyncDocumentAfterContextAdoptionFailure()
+                if resyncResult != .applied {
+                    transport.retryDocumentReplacementAfterContextAdoption(
+                        depth: session.configuration.snapshotDepth,
+                        mode: .preserveUIState
+                    )
+                }
+            }
         }
     }
 
@@ -418,6 +449,35 @@ private extension WIDOMInspector {
                     documentScopeID: transport.currentDocumentScopeID
                 )
             )
+            applyRecoverableError(nil)
+            return .applied
+        } catch {
+            applyRecoverableError(error.localizedDescription)
+            return .failed
+        }
+    }
+
+    private func resyncDocumentAfterContextAdoptionFailure() async -> DOMMutationResult {
+        guard session.hasPageWebView else {
+            return .failed
+        }
+        do {
+            let payload = try await session.captureSnapshotPayload(maxDepth: session.configuration.snapshotDepth)
+            let didApplyReplacement = transport.applyReplacementDOMBundleAfterContextAdoption(
+                .init(
+                    objectEnvelope: [
+                        "version": 1,
+                        "kind": "snapshot",
+                        "reason": "documentUpdated",
+                        "snapshot": payload,
+                    ],
+                    pageEpoch: transport.currentPageEpoch,
+                    documentScopeID: transport.currentDocumentScopeID
+                )
+            )
+            guard didApplyReplacement else {
+                return .failed
+            }
             applyRecoverableError(nil)
             return .applied
         } catch {

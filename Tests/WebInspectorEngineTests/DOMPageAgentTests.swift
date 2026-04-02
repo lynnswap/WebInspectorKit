@@ -97,6 +97,64 @@ struct DOMSessionTests {
     }
 
     @Test
+    func reattachingSameWebViewRefreshesCachedPageContext() async throws {
+        let session = DOMSession(configuration: .init())
+        let (webView, _) = makeTestWebView()
+
+        session.preparePageEpoch(1)
+        session.prepareDocumentScopeID(2)
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await session.attach(to: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.webInspectorDOM.setPageEpoch(5);
+            window.webInspectorDOM.setDocumentScopeID(7);
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        let secondAttach = await session.attach(to: webView)
+
+        #expect(secondAttach.shouldReload == false)
+        #expect(secondAttach.shouldPreserveInspectorState == false)
+        #expect(secondAttach.observedPageContext?.pageEpoch == 5)
+        #expect(secondAttach.observedPageContext?.documentScopeID == 7)
+        #expect(session.testCachedPageEpoch == 5)
+        #expect(session.testCachedDocumentScopeID == 7)
+    }
+
+    @Test
+    func reattachingSameWebViewAdoptsNewerPageEpochBeforeDocumentScopeCatchesUp() async throws {
+        let session = DOMSession(configuration: .init())
+        let (webView, _) = makeTestWebView()
+
+        session.preparePageEpoch(4)
+        session.prepareDocumentScopeID(8)
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await session.attach(to: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.webInspectorDOM.setPageEpoch(5);
+            window.webInspectorDOM.setDocumentScopeID(7);
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        let secondAttach = await session.attach(to: webView)
+
+        #expect(secondAttach.shouldReload == false)
+        #expect(secondAttach.shouldPreserveInspectorState == false)
+        #expect(secondAttach.observedPageContext?.pageEpoch == 5)
+        #expect(secondAttach.observedPageContext?.documentScopeID == 7)
+        #expect(session.testCachedPageEpoch == 5)
+        #expect(session.testCachedDocumentScopeID == 7)
+    }
+
+    @Test
     func suspendRemovesHandlersAndClearsWebView() async {
         let session = DOMSession(configuration: .init())
         let (webView, controller) = makeTestWebView()

@@ -239,6 +239,71 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func attachAdoptsNewerPreparedPageContextBeforeAttributeMutation() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let controller = webView.configuration.userContentController
+        let registry = WIUserContentControllerStateRegistry.shared
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML(html, in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 6)
+        let seeded = await waitForCondition {
+            seedAgent.testCachedPageEpoch == 4 && seedAgent.testCachedDocumentScopeID == 6
+        }
+        #expect(seeded == true)
+
+        await inspector.attach(to: webView)
+
+        #expect(inspector.transport.currentPageEpoch == 4)
+        #expect(inspector.transport.currentDocumentScopeID == 7)
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [
+                    .init(nodeId: targetNodeID, name: "id", value: "target"),
+                    .init(nodeId: targetNodeID, name: "class", value: "before"),
+                ],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let updateResult = await inspector.updateSelectedAttribute(name: "class", value: "after")
+        #expect(updateResult == .applied)
+
+        let classUpdated = await waitForCondition {
+            let pageValue = await domAttributeValue(elementID: "target", attributeName: "class", in: webView)
+            let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
+            return pageValue == "after" && modelValue == "after"
+        }
+        #expect(classUpdated == true)
+    }
+
+    @Test
     func attributeMutationDoesNotReachPageWhileResyncFails() async throws {
         let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
