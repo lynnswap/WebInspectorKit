@@ -309,6 +309,7 @@ package final class DOMInspectorRuntime: NSObject {
             cancelMatchedStylesRequest()
             cancelSelectorPathRequest()
             currentDocumentScope = nextDocumentScope
+            pendingSelectionOverrideLocalID = nil
             payloadNormalizer.resetForDocumentUpdate()
             currentDocumentModel.clearDocument(isFreshDocument: true)
             pendingDocumentRequest = .init(depth: depth, mode: mode)

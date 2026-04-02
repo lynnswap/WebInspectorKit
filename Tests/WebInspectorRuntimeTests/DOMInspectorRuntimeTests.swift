@@ -1597,6 +1597,19 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func freshRequestDocumentClearsPendingUndoSelectionOverride() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        store.testFrontendDispatchOverride = { _ in true }
+        store.testDocumentScopeSyncOverride = { _ in }
+        store.setPendingSelectionOverride(localID: 42)
+
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
+
+        #expect(didRequestDocument == true)
+        #expect(store.testPendingSelectionOverrideLocalID == nil)
+    }
+
+    @Test
     func freshRequestDocumentDoesNotCommitProjectedScopeWhenDocumentScopeSyncFails() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.testFrontendDispatchOverride = { _ in true }
