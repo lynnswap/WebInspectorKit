@@ -11,6 +11,7 @@ private let domAgentPresenceProbeScript: String = """
 private let autoSnapshotConfigureRetryCount = 20
 private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
 private let pageEpochApplyRetryDelayNanoseconds: UInt64 = 50_000_000
+private let documentScopeSyncRetryLimit = 100
 private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
 private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKContentWorld) async throws -> Void
 
@@ -62,6 +63,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
         DOMDocumentScopeID?,
         @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
     ) async -> DOMMutationExecutionResult<Void>)?
+    package var testDocumentScopeSyncRetryLimitOverride: Int?
 #endif
 
     package var currentBridgeMode: WIBridgeMode {
@@ -519,6 +521,22 @@ extension DOMPageAgent {
         on webView: WKWebView,
         expectedPageEpoch: Int? = nil
     ) async -> Bool {
+        let retryLimit: Int
+#if DEBUG
+        retryLimit = max(1, testDocumentScopeSyncRetryLimitOverride ?? documentScopeSyncRetryLimit)
+#else
+        retryLimit = documentScopeSyncRetryLimit
+#endif
+        var remainingStallRetries = retryLimit
+        var lastObservedDocumentScopeID = self.documentScopeID
+        func consumeRetry(progressedForward: Bool) -> Bool {
+            if progressedForward {
+                remainingStallRetries = retryLimit
+                return true
+            }
+            remainingStallRetries -= 1
+            return remainingStallRetries > 0
+        }
         while Task.isCancelled == false {
             guard self.webView === webView else {
                 return false
@@ -538,9 +556,17 @@ extension DOMPageAgent {
                     if self.documentScopeID >= documentScopeID {
                         return true
                     }
+                    let didProgressForward = self.documentScopeID > lastObservedDocumentScopeID
+                    if didProgressForward {
+                        lastObservedDocumentScopeID = self.documentScopeID
+                    }
+                    if !consumeRetry(progressedForward: didProgressForward) {
+                        return false
+                    }
                 } else {
-                    try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
-                    continue
+                    if !consumeRetry(progressedForward: false) {
+                        return false
+                    }
                 }
             }
             let didApply = await applyDocumentScopeID(documentScopeID, on: webView)
@@ -554,8 +580,21 @@ extension DOMPageAgent {
             if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
                 return false
             }
-            if didRefreshContext, self.documentScopeID >= documentScopeID {
-                return true
+            if didRefreshContext {
+                if self.documentScopeID >= documentScopeID {
+                    return true
+                }
+                let didProgressForward = self.documentScopeID > lastObservedDocumentScopeID
+                if didProgressForward {
+                    lastObservedDocumentScopeID = self.documentScopeID
+                }
+                if !consumeRetry(progressedForward: didProgressForward) {
+                    return false
+                }
+            } else {
+                if !consumeRetry(progressedForward: false) {
+                    return false
+                }
             }
             try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
         }
@@ -1290,6 +1329,10 @@ extension DOMPageAgent {
         pageEpochApplyGeneration = generation
         pageEpochSyncTaskGeneration = generation
         pageEpochSyncTask = Task.detached {}
+    }
+
+    func testSetDocumentScopeSyncRetryLimitOverride(_ limit: Int?) {
+        testDocumentScopeSyncRetryLimitOverride = limit
     }
 
     func testAdvancePageEpochApplyGenerationWithoutClearingTask() {

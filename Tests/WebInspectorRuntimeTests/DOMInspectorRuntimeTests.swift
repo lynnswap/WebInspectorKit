@@ -1625,6 +1625,62 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func currentDocumentScopeResyncReusesInFlightTask() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let syncHarness = BootstrapHarness()
+        var syncInvocationCount = 0
+        store.testDocumentScopeSyncOverride = { _ in
+            syncInvocationCount += 1
+            await syncHarness.blockUntilResumed()
+        }
+
+        let firstTask = Task {
+            await store.testSyncCurrentDocumentScopeIDIfNeeded()
+        }
+        await syncHarness.waitUntilStarted()
+
+        let secondTask = Task {
+            await store.testSyncCurrentDocumentScopeIDIfNeeded()
+        }
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(syncInvocationCount == 1)
+
+        await syncHarness.resume()
+
+        #expect(await firstTask.value == true)
+        #expect(await secondTask.value == true)
+        #expect(syncInvocationCount == 1)
+    }
+
+    @Test
+    func currentDocumentScopeResyncDoesNotReuseCompletedTask() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var syncInvocationCount = 0
+        store.testDocumentScopeSyncOverride = { _ in
+            syncInvocationCount += 1
+        }
+
+        #expect(await store.testSyncCurrentDocumentScopeIDIfNeeded() == true)
+        #expect(await store.testSyncCurrentDocumentScopeIDIfNeeded() == true)
+        #expect(syncInvocationCount == 2)
+    }
+
+    @Test
+    func mutationContextSyncFailsFastWithoutPageWebView() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var syncInvocationCount = 0
+        store.testDocumentScopeSyncOverride = { _ in
+            syncInvocationCount += 1
+        }
+
+        let didSync = await store.syncMutationContextToPageIfNeeded(store.currentMutationContext)
+
+        #expect(didSync == false)
+        #expect(syncInvocationCount == 0)
+    }
+
+    @Test
     func freshRequestDocumentAbortAfterScopeSyncResetsProjectedDocumentIdentity() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let syncHarness = BootstrapHarness()

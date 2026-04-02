@@ -500,7 +500,10 @@ private extension WIDOMInspector {
             return .failed
         }
 
-        await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        let didSyncMutationContext = await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        guard didSyncMutationContext || session.hasPageWebView == false else {
+            return .ignoredStaleContext
+        }
         guard transport.matchesCurrentMutationContext(expectedContext) else {
             return .ignoredStaleContext
         }
@@ -550,7 +553,10 @@ private extension WIDOMInspector {
             return .failed
         }
 
-        await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        let didSyncMutationContext = await transport.syncMutationContextToPageIfNeeded(expectedContext)
+        guard didSyncMutationContext || session.hasPageWebView == false else {
+            return .ignoredStaleContext
+        }
         guard transport.matchesCurrentMutationContext(expectedContext) else {
             return .ignoredStaleContext
         }
@@ -624,7 +630,11 @@ private extension WIDOMInspector {
                 mutationResult = .ignoredStaleContext
                 return
             }
-            await self.transport.syncMutationContextToPageIfNeeded(expectedContext)
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(expectedContext)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                mutationResult = .ignoredStaleContext
+                return
+            }
             guard self.transport.matchesCurrentMutationContext(expectedContext) else {
                 mutationResult = .ignoredStaleContext
                 return
@@ -766,7 +776,11 @@ private extension WIDOMInspector {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
             }
-            await self.transport.syncMutationContextToPageIfNeeded(context)
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(context)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
             guard self.transport.matchesCurrentMutationContext(context) else {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
@@ -852,7 +866,11 @@ private extension WIDOMInspector {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
             }
-            await self.transport.syncMutationContextToPageIfNeeded(context)
+            let didSyncMutationContext = await self.transport.syncMutationContextToPageIfNeeded(context)
+            guard didSyncMutationContext || self.session.hasPageWebView == false else {
+                self.clearDeleteUndoHistory(using: undoManager)
+                return
+            }
             guard self.transport.matchesCurrentMutationContext(context) else {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return

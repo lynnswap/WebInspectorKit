@@ -353,6 +353,28 @@ struct DOMSessionTests {
     }
 
     @Test
+    func syncDocumentScopeReturnsFalseWhenDOMAgentIsUnavailable() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        agent.testSetDocumentScopeSyncRetryLimitOverride(3)
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
+
+        #expect(didSync == false)
+        #expect(extractDocumentScopeID(from: agent) == 0)
+    }
+
+    @Test
     func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() async {
         let firstSession = DOMSession(configuration: .init())
         let secondSession = DOMSession(configuration: .init())

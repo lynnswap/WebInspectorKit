@@ -106,6 +106,18 @@ package final class DOMInspectorRuntime: NSObject {
     private var needsFrontendDocumentRequestDrain = false
     private var needsFrontendChildNodeRetryDrain = false
     private var pendingSelectionOverrideLocalID: UInt64?
+    private var pendingDocumentScopeSyncTask: Task<Bool, Never>?
+    private var pendingDocumentScopeRecoveryTask: Task<Void, Never>?
+    private var pendingDocumentScopeSyncGeneration: UInt64 = 0
+    private var pendingDocumentScopeRecoveryGeneration: UInt64 = 0
+    private let documentScopeResyncRetryAttempts = 12
+    private let documentScopeResyncRetryDelayNanoseconds: UInt64 = 250_000_000
+    private let pendingDocumentScopeSyncRetryAttempts = 3
+    private let pendingDocumentScopeSyncRetryDelayNanoseconds: UInt64 = 500_000_000
+    private var pendingDocumentScopeSyncPageEpoch: Int?
+    private var pendingDocumentScopeSyncDocumentScopeID: UInt64?
+    private var pendingDocumentScopeRecoveryPageEpoch: Int?
+    private var pendingDocumentScopeRecoveryDocumentScopeID: UInt64?
 
 #if DEBUG
     private var matchedStylesFetchOverride: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)?
@@ -115,6 +127,10 @@ package final class DOMInspectorRuntime: NSObject {
     var testFrontendDispatchOverride: (@MainActor (Any) async -> Bool)?
     var testDocumentScopeSyncOverride: (@MainActor (UInt64) async -> Void)?
     var testDocumentScopeSyncResultOverride: Bool?
+    var testDocumentScopeResyncRetryAttemptsOverride: Int?
+    var testDocumentScopeResyncRetryDelayNanosecondsOverride: UInt64?
+    var testPendingDocumentScopeSyncRetryAttemptsOverride: Int?
+    var testPendingDocumentScopeSyncRetryDelayNanosecondsOverride: UInt64?
 #endif
 
     private var webView: InspectorWebView? {
@@ -321,19 +337,42 @@ package final class DOMInspectorRuntime: NSObject {
         allowsMissingPage: Bool = false,
         expectedPageEpoch: Int? = nil
     ) async -> Bool {
+        if session.hasPageWebView == false {
+            session.prepareDocumentScopeID(documentScopeID)
+#if DEBUG
+            if let testDocumentScopeSyncOverride {
+                await testDocumentScopeSyncOverride(documentScopeID)
+                return testDocumentScopeSyncResultOverride ?? allowsMissingPage
+            }
+#endif
+            return allowsMissingPage
+        }
 #if DEBUG
         if let testDocumentScopeSyncOverride {
             await testDocumentScopeSyncOverride(documentScopeID)
             return testDocumentScopeSyncResultOverride ?? true
         }
 #endif
-        if allowsMissingPage, session.hasPageWebView == false {
-            return true
+        while Task.isCancelled == false {
+            let didSync = await performDocumentScopeSync(
+                documentScopeID,
+                expectedPageEpoch: expectedPageEpoch
+            )
+            if didSync {
+                return true
+            }
+            if session.hasPageWebView == false {
+                return false
+            }
+            if expectedPageEpoch != nil, acceptsExpectedPageEpoch(expectedPageEpoch) == false {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
+            guard Task.isCancelled == false else {
+                return false
+            }
         }
-        return await session.syncCurrentDocumentScopeIDIfNeeded(
-            documentScopeID,
-            expectedPageEpoch: expectedPageEpoch
-        )
+        return false
     }
 
     func updateConfiguration(_ configuration: DOMConfiguration, expectedPageEpoch: Int? = nil) async {
@@ -387,6 +426,14 @@ package final class DOMInspectorRuntime: NSObject {
 
     isolated deinit {
         bootstrapTask?.cancel()
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         mutationPipeline.reset()
@@ -395,6 +442,38 @@ package final class DOMInspectorRuntime: NSObject {
 }
 
 extension DOMInspectorRuntime {
+    private var documentScopeResyncRetryAttemptsValue: Int {
+#if DEBUG
+        testDocumentScopeResyncRetryAttemptsOverride ?? documentScopeResyncRetryAttempts
+#else
+        documentScopeResyncRetryAttempts
+#endif
+    }
+
+    private var documentScopeResyncRetryDelayNanosecondsValue: UInt64 {
+#if DEBUG
+        testDocumentScopeResyncRetryDelayNanosecondsOverride ?? documentScopeResyncRetryDelayNanoseconds
+#else
+        documentScopeResyncRetryDelayNanoseconds
+#endif
+    }
+
+    private var pendingDocumentScopeSyncRetryAttemptsValue: Int {
+#if DEBUG
+        testPendingDocumentScopeSyncRetryAttemptsOverride ?? pendingDocumentScopeSyncRetryAttempts
+#else
+        pendingDocumentScopeSyncRetryAttempts
+#endif
+    }
+
+    private var pendingDocumentScopeSyncRetryDelayNanosecondsValue: UInt64 {
+#if DEBUG
+        testPendingDocumentScopeSyncRetryDelayNanosecondsOverride ?? pendingDocumentScopeSyncRetryDelayNanoseconds
+#else
+        pendingDocumentScopeSyncRetryDelayNanoseconds
+#endif
+    }
+
     func matchesCurrentMutationContext(_ context: MutationContext?) -> Bool {
         guard let context else {
             return true
@@ -403,11 +482,57 @@ extension DOMInspectorRuntime {
             && currentDocumentScope.documentScopeID == context.documentScopeID
     }
 
-    func syncMutationContextToPageIfNeeded(_ context: MutationContext) async {
-        _ = await session.syncCurrentDocumentScopeIDIfNeeded(
-            context.documentScopeID,
-            expectedPageEpoch: context.pageEpoch
+    private func performDocumentScopeSync(
+        _ documentScopeID: UInt64,
+        expectedPageEpoch: Int? = nil
+    ) async -> Bool {
+#if DEBUG
+        if let testDocumentScopeSyncOverride {
+            await testDocumentScopeSyncOverride(documentScopeID)
+            return testDocumentScopeSyncResultOverride ?? true
+        }
+#endif
+        return await session.syncCurrentDocumentScopeIDIfNeeded(
+            documentScopeID,
+            expectedPageEpoch: expectedPageEpoch
         )
+    }
+
+    func syncMutationContextToPageIfNeeded(_ context: MutationContext) async -> Bool {
+        guard session.hasPageWebView else {
+            if matchesCurrentMutationContext(context) {
+                session.prepareDocumentScopeID(context.documentScopeID)
+            }
+            return false
+        }
+        var remainingAttempts = documentScopeResyncRetryAttemptsValue
+        while remainingAttempts > 0, Task.isCancelled == false {
+            let didSync = await performDocumentScopeSync(
+                context.documentScopeID,
+                expectedPageEpoch: context.pageEpoch
+            )
+            if didSync {
+                return true
+            }
+            if session.hasPageWebView == false {
+                return false
+            }
+            if matchesCurrentMutationContext(context) == false {
+                return false
+            }
+            remainingAttempts -= 1
+            if remainingAttempts > 0 {
+                try? await Task.sleep(nanoseconds: documentScopeResyncRetryDelayNanosecondsValue)
+                guard Task.isCancelled == false else {
+                    return false
+                }
+            }
+        }
+        guard matchesCurrentMutationContext(context) else {
+            return false
+        }
+        syncCurrentDocumentScopeIDIfNeeded()
+        return false
     }
 
     func setPendingSelectionOverride(localID: UInt64?) {
@@ -417,12 +542,155 @@ extension DOMInspectorRuntime {
     private func syncCurrentDocumentScopeIDIfNeeded() {
         let documentScopeID = currentDocumentScope.documentScopeID
         let pageEpoch = self.pageEpoch
-        Task.immediateIfAvailable { [weak self] in
-            _ = await self?.session.syncCurrentDocumentScopeIDIfNeeded(
-                documentScopeID,
-                expectedPageEpoch: pageEpoch
-            )
+        session.prepareDocumentScopeID(documentScopeID)
+        if let pendingDocumentScopeRecoveryTask,
+           pendingDocumentScopeRecoveryPageEpoch == pageEpoch,
+           pendingDocumentScopeRecoveryDocumentScopeID == documentScopeID {
+            _ = pendingDocumentScopeRecoveryTask
+            return
         }
+
+        if pendingDocumentScopeSyncPageEpoch != pageEpoch
+            || pendingDocumentScopeSyncDocumentScopeID != documentScopeID {
+            pendingDocumentScopeSyncTask?.cancel()
+            pendingDocumentScopeSyncTask = nil
+            pendingDocumentScopeSyncGeneration &+= 1
+            pendingDocumentScopeSyncPageEpoch = nil
+            pendingDocumentScopeSyncDocumentScopeID = nil
+        }
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeRecoveryPageEpoch = pageEpoch
+        pendingDocumentScopeRecoveryDocumentScopeID = documentScopeID
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        let generation = pendingDocumentScopeRecoveryGeneration
+        let recoveryTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.finishPendingDocumentScopeRecoveryTask(
+                    generation: generation,
+                    pageEpoch: pageEpoch,
+                    documentScopeID: documentScopeID
+                )
+            }
+            var remainingRecoveryRetries = self.documentScopeResyncRetryAttemptsValue
+            while Task.isCancelled == false,
+                  remainingRecoveryRetries > 0,
+                  self.session.hasPageWebView,
+                  self.pageEpoch == pageEpoch,
+                  self.currentDocumentScope.documentScopeID == documentScopeID {
+                let didSync = await self.syncCurrentDocumentScopeIDIfNeeded(
+                    documentScopeID: documentScopeID,
+                    pageEpoch: pageEpoch
+                )
+                if didSync {
+                    return
+                }
+                remainingRecoveryRetries -= 1
+                guard self.session.hasPageWebView,
+                      self.pageEpoch == pageEpoch,
+                      self.currentDocumentScope.documentScopeID == documentScopeID,
+                      remainingRecoveryRetries > 0,
+                      Task.isCancelled == false
+                else {
+                    return
+                }
+                try? await Task.sleep(
+                    nanoseconds: self.documentScopeResyncRetryDelayNanosecondsValue
+                )
+                guard Task.isCancelled == false else {
+                    return
+                }
+            }
+        }
+        pendingDocumentScopeRecoveryTask = recoveryTask
+    }
+
+    private func syncCurrentDocumentScopeIDIfNeeded(
+        documentScopeID: UInt64,
+        pageEpoch: Int
+    ) async -> Bool {
+        if let pendingDocumentScopeSyncTask,
+           pendingDocumentScopeSyncPageEpoch == pageEpoch,
+           pendingDocumentScopeSyncDocumentScopeID == documentScopeID {
+            return await pendingDocumentScopeSyncTask.value
+        }
+
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeSyncGeneration &+= 1
+        let generation = pendingDocumentScopeSyncGeneration
+        pendingDocumentScopeSyncPageEpoch = pageEpoch
+        pendingDocumentScopeSyncDocumentScopeID = documentScopeID
+        let task = Task { @MainActor [weak self] in
+            guard let self else {
+                return false
+            }
+            let maxAttempts = self.pendingDocumentScopeSyncRetryAttemptsValue
+            for attempt in 0..<maxAttempts {
+                guard Task.isCancelled == false else {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return false
+                }
+                let didSync = await self.performDocumentScopeSync(
+                    documentScopeID,
+                    expectedPageEpoch: pageEpoch
+                )
+                guard self.pendingDocumentScopeSyncGeneration == generation else {
+                    return false
+                }
+                if didSync {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return true
+                }
+                guard self.session.hasPageWebView,
+                      self.pageEpoch == pageEpoch,
+                      self.currentDocumentScope.documentScopeID == documentScopeID,
+                      Task.isCancelled == false
+                else {
+                    self.finishPendingDocumentScopeSync(generation: generation)
+                    return false
+                }
+                if attempt + 1 < maxAttempts {
+                    try? await Task.sleep(
+                        nanoseconds: self.pendingDocumentScopeSyncRetryDelayNanosecondsValue
+                    )
+                    guard Task.isCancelled == false else {
+                        self.finishPendingDocumentScopeSync(generation: generation)
+                        return false
+                    }
+                }
+            }
+            self.finishPendingDocumentScopeSync(generation: generation)
+            return false
+        }
+        pendingDocumentScopeSyncTask = task
+        return await task.value
+    }
+
+    private func finishPendingDocumentScopeSync(generation: UInt64) {
+        guard pendingDocumentScopeSyncGeneration == generation else {
+            return
+        }
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+    }
+
+    private func finishPendingDocumentScopeRecoveryTask(
+        generation: UInt64,
+        pageEpoch: Int,
+        documentScopeID: UInt64
+    ) {
+        guard pendingDocumentScopeRecoveryGeneration == generation,
+              pendingDocumentScopeRecoveryPageEpoch == pageEpoch,
+              pendingDocumentScopeRecoveryDocumentScopeID == documentScopeID
+        else {
+            return
+        }
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
     }
 
     private func makeNextDocumentScope() -> DocumentScope {
@@ -743,6 +1011,16 @@ extension DOMInspectorRuntime {
     private func beginTransition(advancePageEpoch: Bool) -> TransitionContext {
         bootstrapTask?.cancel()
         bootstrapTask = nil
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
         let suspendedDeferredDOMBundles = deferredDOMBundlesDuringBootstrap
         deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
         cancelMatchedStylesRequest()
@@ -834,6 +1112,16 @@ extension DOMInspectorRuntime {
     func resetInspectorState() {
         bootstrapTask?.cancel()
         bootstrapTask = nil
+        pendingDocumentScopeSyncTask?.cancel()
+        pendingDocumentScopeRecoveryTask?.cancel()
+        pendingDocumentScopeSyncTask = nil
+        pendingDocumentScopeRecoveryTask = nil
+        pendingDocumentScopeSyncGeneration &+= 1
+        pendingDocumentScopeRecoveryGeneration &+= 1
+        pendingDocumentScopeSyncPageEpoch = nil
+        pendingDocumentScopeSyncDocumentScopeID = nil
+        pendingDocumentScopeRecoveryPageEpoch = nil
+        pendingDocumentScopeRecoveryDocumentScopeID = nil
         cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         isReady = false
@@ -1869,6 +2157,13 @@ extension DOMInspectorRuntime {
 
     func testResetInspectorStateForTesting() {
         resetInspectorState()
+    }
+
+    func testSyncCurrentDocumentScopeIDIfNeeded() async -> Bool {
+        await syncCurrentDocumentScopeIDIfNeeded(
+            documentScopeID: currentDocumentScope.documentScopeID,
+            pageEpoch: pageEpoch
+        )
     }
 
     func testWaitForBootstrapForTesting() async {

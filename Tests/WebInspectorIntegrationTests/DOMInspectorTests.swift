@@ -231,6 +231,63 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func attributeMutationDoesNotReachPageWhileResyncFails() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [
+                    .init(nodeId: targetNodeID, name: "id", value: "target"),
+                    .init(nodeId: targetNodeID, name: "class", value: "before"),
+                ],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+        inspector.transport.testDocumentScopeSyncOverride = { _ in }
+        inspector.transport.testDocumentScopeSyncResultOverride = false
+        inspector.transport.testDocumentScopeResyncRetryAttemptsOverride = 1
+        inspector.transport.testDocumentScopeResyncRetryDelayNanosecondsOverride = 0
+        inspector.transport.testPendingDocumentScopeSyncRetryAttemptsOverride = 1
+        inspector.transport.testPendingDocumentScopeSyncRetryDelayNanosecondsOverride = 0
+        var setAttributeCallCount = 0
+        inspector.session.testSetAttributeInterposer = { _, _, _, _, _, performMutation in
+            setAttributeCallCount += 1
+            return await performMutation()
+        }
+
+        let updateResult = await inspector.updateSelectedAttribute(name: "class", value: "after")
+
+        #expect(updateResult == .ignoredStaleContext)
+        #expect(setAttributeCallCount == 0)
+        #expect(await domAttributeValue(elementID: "target", attributeName: "class", in: webView) == "before")
+        #expect(
+            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "before"
+        )
+    }
+
+    @Test
     func staleNodeIdentityMutationIsIgnoredAfterFreshReplacement() async {
         let inspector = WIInspectorController().dom
         inspector.document.replaceDocument(
