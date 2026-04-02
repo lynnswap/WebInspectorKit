@@ -331,6 +331,18 @@ extension DOMSession {
 
 #if DEBUG
 extension DOMSession {
+    package var testHasPreparedPageContextSyncTask: Bool {
+        pageAgent.testHasPreparedPageContextSyncTask
+    }
+
+    package var testCachedPageEpoch: Int {
+        pageAgent.testCachedPageEpoch
+    }
+
+    package var testCachedDocumentScopeID: DOMDocumentScopeID {
+        pageAgent.testCachedDocumentScopeID
+    }
+
     package var testSetAttributeInterposer: (@MainActor (
         Int,
         String,

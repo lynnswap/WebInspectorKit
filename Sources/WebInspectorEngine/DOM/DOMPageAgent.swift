@@ -895,8 +895,8 @@ private extension DOMPageAgent {
             let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
             let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
             let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
-            let pageEpochMatches = epoch == nil || appliedEpoch == epoch
-            let documentScopeMatches = documentScopeID == nil || appliedDocumentScopeID == documentScopeID
+            let pageEpochMatches = epoch == nil || ((appliedEpoch ?? .min) >= epoch!)
+            let documentScopeMatches = documentScopeID == nil || ((appliedDocumentScopeID ?? 0) >= documentScopeID!)
             guard (appliedEpoch != nil || appliedDocumentScopeID != nil), pageEpochMatches, documentScopeMatches else {
                 return false
             }
@@ -1323,6 +1323,14 @@ private extension DOMPageAgent {
 extension DOMPageAgent {
     func testSetCachedDocumentScopeID(_ documentScopeID: DOMDocumentScopeID) {
         self.documentScopeID = documentScopeID
+    }
+
+    var testCachedPageEpoch: Int {
+        pageEpoch
+    }
+
+    var testCachedDocumentScopeID: DOMDocumentScopeID {
+        documentScopeID
     }
 
     func testInstallCompletedPreparedPageContextSyncTask(generation: UInt64) {

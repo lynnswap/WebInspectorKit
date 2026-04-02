@@ -215,6 +215,38 @@ struct DOMSessionTests {
     }
 
     @Test
+    func preparedPageContextAcceptsNewerPageStateWithoutSchedulingRetry() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 5)
+        let initialSyncApplied = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 3 && jsScope == 5
+        }
+        #expect(initialSyncApplied == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1, documentScopeID: 2)
+
+        #expect(agent.testHasPreparedPageContextSyncTask == false)
+        #expect(agent.testCachedPageEpoch == 3)
+        #expect(agent.testCachedDocumentScopeID == 5)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 5)
+    }
+
+    @Test
     func staleDocumentScopeSyncReturnsAfterNewerScopeIsApplied() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()
@@ -372,6 +404,74 @@ struct DOMSessionTests {
 
         #expect(didSync == false)
         #expect(extractDocumentScopeID(from: agent) == 0)
+    }
+
+    @Test
+    func attachAcceptsNewerPreparedPageContextAndMutationsDoNotWaitOnStaleSync() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+        let session = DOMSession(configuration: .init())
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML(html, in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 6)
+        let seeded = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 4 && jsScope == 6
+        }
+        #expect(seeded == true)
+
+        session.preparePageEpoch(1)
+        session.prepareDocumentScopeID(2)
+
+        _ = await session.attach(to: webView)
+
+        #expect(session.testHasPreparedPageContextSyncTask == false)
+        #expect(session.testCachedPageEpoch == 4)
+        #expect(session.testCachedDocumentScopeID == 6)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 4)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 6)
+
+        let snapshot = try await session.captureSnapshot(maxDepth: 5)
+        let nodeId = try #require(
+            findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target")
+        )
+
+        let mutationFinished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                matchesApplied(
+                    await session.setAttribute(nodeId: nodeId, name: "class", value: "after")
+                )
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(mutationFinished == true)
+        let didApplyMutation = await waitForCondition {
+            await domAttributeValue(elementID: "target", attributeName: "class", in: webView) == "after"
+        }
+        #expect(didApplyMutation == true)
     }
 
     @Test
@@ -771,6 +871,26 @@ struct DOMSessionTests {
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
         return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
+    }
+
+    private func domAttributeValue(
+        elementID: String,
+        attributeName: String,
+        in webView: WKWebView
+    ) async -> String? {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return document.getElementById(identifier)?.getAttribute(attributeName) ?? null;",
+            arguments: [
+                "identifier": elementID,
+                "attributeName": attributeName,
+            ],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        if rawValue is NSNull {
+            return nil
+        }
+        return rawValue as? String
     }
 }
 
