@@ -21,10 +21,6 @@ let package = Package(
             targets: ["WebInspectorEngine"]
         ),
         .library(
-            name: "WKViewport",
-            targets: ["WKViewport"]
-        ),
-        .library(
             name: "WebInspectorRuntime",
             targets: ["WebInspectorRuntime"]
         ),
@@ -57,6 +53,10 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/MachOKit.git",
             revision: "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
+        ),
+        .package(
+            url: "https://github.com/lynnswap/WKViewportCoordinator.git",
+            exact: "0.1.3"
         )
     ],
     targets: [
@@ -66,11 +66,6 @@ let package = Package(
                 "WebInspectorBridge",
                 "WebInspectorScripts",
             ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WKViewport",
-            dependencies: [],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -185,14 +180,6 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
-            name: "WKViewportTests",
-            dependencies: [
-                "WKViewport"
-            ],
-            path: "Tests/WKViewportTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
             name: "WebInspectorEngineTests",
             dependencies: [
                 "WebInspectorEngine",
@@ -225,7 +212,7 @@ let package = Package(
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
-                "WKViewport",
+                .product(name: "WKViewportCoordinator", package: "WKViewportCoordinator"),
                 "WebInspectorUI",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",

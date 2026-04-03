@@ -2,7 +2,7 @@
 import OSLog
 import UIKit
 import WebInspectorKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 final class BrowserPageViewController: UIViewController {
@@ -122,9 +122,16 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.handleViewDidAppear()
         refreshChromeControls()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
     }
 
     @objc

@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 import WebKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 struct WKViewportConsumerSmokeTests {
@@ -21,15 +21,19 @@ struct WKViewportConsumerSmokeTests {
         ])
 
         let navigationController = UINavigationController(rootViewController: hostViewController)
+        navigationController.setToolbarHidden(false, animated: false)
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.rootViewController = navigationController
         window.makeKeyAndVisible()
+        window.layoutIfNeeded()
         defer {
             window.isHidden = true
             window.rootViewController = nil
         }
 
         let coordinator = ViewportCoordinator(webView: webView)
+        coordinator.handleWebViewHierarchyDidChange()
+        coordinator.handleViewDidAppear()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         coordinator.invalidate()
@@ -55,6 +59,8 @@ struct WKViewportConsumerSmokeTests {
 
         let containerView = try #require(box.view)
         let coordinator = ViewportCoordinator(webView: webView)
+        coordinator.handleWebViewHierarchyDidChange()
+        coordinator.handleViewDidAppear()
 
         #expect(hostingController.contentScrollView(for: .top) === webView.scrollView)
         #expect(hostingController.contentScrollView(for: .bottom) === webView.scrollView)
@@ -89,12 +95,15 @@ struct WKViewportConsumerSmokeTests {
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.rootViewController = hostViewController
         window.makeKeyAndVisible()
+        window.layoutIfNeeded()
         defer {
             window.isHidden = true
             window.rootViewController = nil
         }
 
         let coordinator = ViewportCoordinator(webView: webView)
+        coordinator.handleWebViewHierarchyDidChange()
+        coordinator.handleViewDidAppear()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         #expect(containsViewportObservationView(in: containerView))
@@ -115,6 +124,7 @@ struct WKViewportConsumerSmokeTests {
         let window = UIWindow(frame: UIScreen.main.bounds)
         window.rootViewController = navigationController
         window.makeKeyAndVisible()
+        window.layoutIfNeeded()
         defer {
             window.isHidden = true
             window.rootViewController = nil
@@ -133,6 +143,7 @@ struct WKViewportConsumerSmokeTests {
             webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
         ])
         hostViewController.view.layoutIfNeeded()
+        coordinator.handleViewDidAppear()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         #expect(containsViewportObservationView(in: hostViewController.view))
