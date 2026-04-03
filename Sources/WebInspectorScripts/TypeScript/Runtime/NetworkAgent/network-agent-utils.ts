@@ -76,6 +76,7 @@ type NetworkState = {
     controlAuthToken: string;
     resourceObserver: PerformanceObserver | null;
     resourceSeen: Set<string> | null;
+    resourceReserved: Map<string, () => NetworkEventPayload> | null;
     resourceStartCutoffMs: number | null;
 };
 
@@ -90,6 +91,7 @@ const networkState: NetworkState = {
     controlAuthToken: "",
     resourceObserver: null,
     resourceSeen: null,
+    resourceReserved: null,
     resourceStartCutoffMs: null
 };
 
@@ -537,6 +539,9 @@ type ThrottleState = {
     intervalMs: number;
     maxQueuedEvents: number;
     queue: NetworkEventPayload[];
+    tailQueue: NetworkEventPayload[];
+    replayProvider: ((limit: number) => { events: NetworkEventPayload[]; hasMore: boolean }) | null;
+    prefersReplayOnNextMixedBatch: boolean;
     timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -544,6 +549,9 @@ const throttleState: ThrottleState = {
     intervalMs: DEFAULT_THROTTLE_INTERVAL_MS,
     maxQueuedEvents: MAX_QUEUED_EVENTS,
     queue: [],
+    tailQueue: [],
+    replayProvider: null,
+    prefersReplayOnNextMixedBatch: false,
     timer: null
 };
 
@@ -564,6 +572,9 @@ const bufferEvent = (event: NetworkEventPayload) => {
 
 const clearThrottledEvents = () => {
     throttleState.queue.splice(0, throttleState.queue.length);
+    throttleState.tailQueue.splice(0, throttleState.tailQueue.length);
+    throttleState.replayProvider = null;
+    throttleState.prefersReplayOnNextMixedBatch = false;
     if (throttleState.timer) {
         clearTimeout(throttleState.timer);
         throttleState.timer = null;
@@ -593,17 +604,106 @@ const deliverNetworkEvents = (events: NetworkEventPayload[]) => {
     }
 };
 
+const currentThrottleBatchSize = () => throttleState.maxQueuedEvents > 0
+    ? throttleState.maxQueuedEvents
+    : MAX_QUEUED_EVENTS;
+
+const hasPendingThrottledEvents = () => (
+    throttleState.queue.length > 0
+    || throttleState.replayProvider != null
+    || throttleState.tailQueue.length > 0
+);
+
+const pushBoundedThrottledEvent = (targetQueue: NetworkEventPayload[], event: NetworkEventPayload) => {
+    if (targetQueue.length >= throttleState.maxQueuedEvents) {
+        targetQueue.shift();
+        recordDroppedEvents(1);
+    }
+    targetQueue.push(event);
+};
+
+const takeReplayBatch = (limit: number) => {
+    const provider = throttleState.replayProvider;
+    if (!provider) {
+        return [];
+    }
+    const batch = provider(limit);
+    if (!batch.hasMore) {
+        throttleState.replayProvider = null;
+    }
+    return batch.events;
+};
+
+const takePendingThrottledBatch = () => {
+    const batchSize = currentThrottleBatchSize();
+    const headLiveEvents = throttleState.queue.splice(0, batchSize);
+    const remainingCapacity = Math.max(0, batchSize - headLiveEvents.length);
+    if (remainingCapacity === 0) {
+        return headLiveEvents;
+    }
+
+    const hasReplay = throttleState.replayProvider != null;
+    if (!hasReplay) {
+        const tailLiveEvents = throttleState.tailQueue.splice(0, remainingCapacity);
+        return headLiveEvents.concat(tailLiveEvents);
+    }
+    if (!throttleState.tailQueue.length) {
+        const replayEvents = takeReplayBatch(remainingCapacity);
+        return headLiveEvents.concat(replayEvents);
+    }
+
+    const prefersReplay = throttleState.prefersReplayOnNextMixedBatch;
+    throttleState.prefersReplayOnNextMixedBatch = !prefersReplay;
+    if (prefersReplay) {
+        const replayEvents = takeReplayBatch(remainingCapacity);
+        const extraCapacity = Math.max(0, remainingCapacity - replayEvents.length);
+        if (extraCapacity === 0) {
+            return headLiveEvents.concat(replayEvents);
+        }
+        const tailLiveEvents = throttleState.tailQueue.splice(0, extraCapacity);
+        return headLiveEvents.concat(replayEvents, tailLiveEvents);
+    }
+
+    const tailLiveEvents = throttleState.tailQueue.splice(0, remainingCapacity);
+    const extraCapacity = Math.max(0, remainingCapacity - tailLiveEvents.length);
+    if (extraCapacity === 0) {
+        return headLiveEvents.concat(tailLiveEvents);
+    }
+    const replayEvents = takeReplayBatch(extraCapacity);
+    return headLiveEvents.concat(tailLiveEvents, replayEvents);
+};
+
 const flushThrottledEvents = () => {
-    if (!throttleState.queue.length) {
+    if (!hasPendingThrottledEvents()) {
         return;
     }
-    const events = throttleState.queue.splice(0, throttleState.queue.length);
     throttleState.timer = null;
+    if (throttleState.intervalMs <= 0) {
+        while (hasPendingThrottledEvents()) {
+            const events = takePendingThrottledBatch();
+            if (!events.length) {
+                continue;
+            }
+            deliverNetworkEvents(events);
+        }
+        return;
+    }
+
+    const events = takePendingThrottledBatch();
+    if (!events.length) {
+        if (hasPendingThrottledEvents()) {
+            scheduleThrottledFlush();
+        }
+        return;
+    }
     deliverNetworkEvents(events);
+    if (hasPendingThrottledEvents()) {
+        scheduleThrottledFlush();
+    }
 };
 
 const scheduleThrottledFlush = () => {
-    if (!throttleState.queue.length) {
+    if (!hasPendingThrottledEvents()) {
         return;
     }
     if (throttleState.intervalMs <= 0) {
@@ -620,11 +720,19 @@ const scheduleThrottledFlush = () => {
 };
 
 const enqueueThrottledEvent = (event: NetworkEventPayload) => {
-    if (throttleState.queue.length >= throttleState.maxQueuedEvents) {
-        throttleState.queue.shift();
-        recordDroppedEvents(1);
+    if (throttleState.replayProvider != null || throttleState.tailQueue.length > 0) {
+        pushBoundedThrottledEvent(throttleState.tailQueue, event);
+    } else {
+        pushBoundedThrottledEvent(throttleState.queue, event);
     }
-    throttleState.queue.push(event);
+    scheduleThrottledFlush();
+};
+
+const setLosslessThrottledReplayProvider = (
+    provider: ((limit: number) => { events: NetworkEventPayload[]; hasMore: boolean }) | null
+) => {
+    throttleState.replayProvider = provider;
+    throttleState.prefersReplayOnNextMixedBatch = false;
     scheduleThrottledFlush();
 };
 
@@ -637,7 +745,7 @@ const setThrottleOptions = (options: { intervalMs?: number; maxQueuedEvents?: nu
         : MAX_QUEUED_EVENTS;
     throttleState.intervalMs = interval >= 0 ? interval : 0;
     throttleState.maxQueuedEvents = limit > 0 ? limit : MAX_QUEUED_EVENTS;
-    if (throttleState.intervalMs === 0 && throttleState.queue.length) {
+    if (throttleState.intervalMs === 0 && hasPendingThrottledEvents()) {
         flushThrottledEvents();
     }
 };
@@ -1112,7 +1220,22 @@ const shouldTrackResourceEntry = (entry: PerformanceEntry): entry is Performance
     return false;
 };
 
-const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | null => {
+const ensureResourceEntrySets = () => {
+    if (!networkState.resourceSeen) {
+        networkState.resourceSeen = new Set<string>();
+    }
+    if (!networkState.resourceReserved) {
+        networkState.resourceReserved = new Map<string, () => NetworkEventPayload>();
+    }
+    return {
+        resourceSeen: networkState.resourceSeen,
+        resourceReserved: networkState.resourceReserved
+    };
+};
+
+const resourceEntryKey = (name: string, startTime: number) => String(name || "") + "::" + startTime;
+
+const prepareResourceEntry = (entry: PerformanceEntry): { key: string; makePayload: () => NetworkEventPayload } | null => {
     if (!shouldTrackResourceEntry(entry)) {
         return null;
     }
@@ -1122,20 +1245,7 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
     if (typeof resourceStartCutoffMs === "number" && startTime < resourceStartCutoffMs) {
         return null;
     }
-    if (!networkState.resourceSeen) {
-        networkState.resourceSeen = new Set<string>();
-    }
-    const resourceSeen = networkState.resourceSeen;
-    if (!resourceSeen) {
-        return null;
-    }
-    const key = String(resourceEntry.name || "") + "::" + startTime;
-    if (resourceSeen.has(key)) {
-        return null;
-    }
-    resourceSeen.add(key);
-
-    const requestId = nextRequestID();
+    const key = resourceEntryKey(resourceEntry.name || "", startTime);
     const duration = typeof resourceEntry.duration === "number" && resourceEntry.duration >= 0 ? resourceEntry.duration : 0;
     const endTime = startTime + duration;
     const requestType = resourceEntry.initiatorType || "resource";
@@ -1164,18 +1274,67 @@ const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | nul
         ? requestMethod.toUpperCase()
         : "GET";
     return {
-        kind: "resourceTiming",
-        requestId: requestId,
-        url: resourceEntry.name || "",
-        method: method,
-        status: status,
-        mimeType: "",
-        initiator: requestType,
-        startTime: startTimePayload,
-        endTime: endTimePayload,
-        encodedBodyLength: encoded,
-        decodedBodySize: decodedSize
+        key: key,
+        makePayload: () => ({
+            kind: "resourceTiming",
+            requestId: nextRequestID(),
+            url: resourceEntry.name || "",
+            method: method,
+            status: status,
+            mimeType: "",
+            initiator: requestType,
+            startTime: startTimePayload,
+            endTime: endTimePayload,
+            encodedBodyLength: encoded,
+            decodedBodySize: decodedSize
+        })
     };
+};
+
+const reserveResourceEntry = (entry: PerformanceEntry): string | null => {
+    const prepared = prepareResourceEntry(entry);
+    if (!prepared) {
+        return null;
+    }
+    const {resourceSeen, resourceReserved} = ensureResourceEntrySets();
+    if (!resourceSeen || !resourceReserved) {
+        return null;
+    }
+    if (resourceSeen.has(prepared.key) || resourceReserved.has(prepared.key)) {
+        return null;
+    }
+    resourceReserved.set(prepared.key, prepared.makePayload);
+    return prepared.key;
+};
+
+const materializeReservedResourceEntry = (key: string): NetworkEventPayload | null => {
+    const {resourceSeen, resourceReserved} = ensureResourceEntrySets();
+    if (!resourceSeen || !resourceReserved || !resourceReserved.has(key)) {
+        return null;
+    }
+    const makePayload = resourceReserved.get(key);
+    resourceReserved.delete(key);
+    if (!makePayload) {
+        return null;
+    }
+    resourceSeen.add(key);
+    return makePayload();
+};
+
+const handleResourceEntry = (entry: PerformanceEntry): NetworkEventPayload | null => {
+    const prepared = prepareResourceEntry(entry);
+    if (!prepared) {
+        return null;
+    }
+    const {resourceSeen, resourceReserved} = ensureResourceEntrySets();
+    if (!resourceSeen || !resourceReserved) {
+        return null;
+    }
+    if (resourceSeen.has(prepared.key) || resourceReserved.has(prepared.key)) {
+        return null;
+    }
+    resourceSeen.add(prepared.key);
+    return prepared.makePayload();
 };
 
 export {
@@ -1202,14 +1361,17 @@ export {
     makeBodyHandle,
     makeBodyRef,
     makeNetworkTime,
+    materializeReservedResourceEntry,
     networkState,
     nextRequestID,
     normalizeHeaders,
     now,
     parseRawHeaders,
     queuedEvents,
+    reserveResourceEntry,
     serializeRequestBody,
     setThrottleOptions,
+    setLosslessThrottledReplayProvider,
     shouldCaptureNetworkBodies,
     shouldQueueNetworkEvent,
     shouldThrottleDelivery,

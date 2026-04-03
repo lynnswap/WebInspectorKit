@@ -120,35 +120,28 @@ public protocol ViewportMetricsProvider {
 }
 
 @MainActor
-public final class NavigationControllerViewportMetricsProvider: ViewportMetricsProvider {
-    public init() {}
-
-    public func makeViewportMetrics(
-        in hostViewController: UIViewController,
-        webView: WKWebView,
-        keyboardOverlapHeight: CGFloat,
-        inputAccessoryOverlapHeight: CGFloat
-    ) -> ViewportMetrics {
-        let safeAreaInsets = hostViewController.viewIfLoaded?.safeAreaInsets ?? .zero
-        return ViewportMetrics(
-            safeAreaInsets: safeAreaInsets,
-            topObscuredHeight: safeAreaInsets.top,
-            bottomObscuredHeight: safeAreaInsets.bottom,
-            keyboardOverlapHeight: keyboardOverlapHeight,
-            inputAccessoryOverlapHeight: inputAccessoryOverlapHeight,
-            bottomChromeMode: .normal
-        )
-    }
-}
-
-@MainActor
 public final class ViewportCoordinator: NSObject {
-    public weak var hostViewController: UIViewController?
+    public weak var hostViewController: UIViewController? {
+        didSet {
+            lastAppliedResolvedMetrics = nil
+            updateViewport()
+        }
+    }
     public weak var webView: WKWebView?
-    public var configuration: ViewportConfiguration
-    public var metricsProvider: any ViewportMetricsProvider
+    public var configuration: ViewportConfiguration {
+        didSet {
+            updateViewport()
+        }
+    }
+    public var metricsProvider: any ViewportMetricsProvider {
+        didSet {
+            lastAppliedResolvedMetrics = nil
+            updateViewport()
+        }
+    }
 
     private var keyboardFrameInScreen: CGRect = .null
+    private var lastKnownWindowIdentity: ObjectIdentifier?
     private var lastAppliedResolvedMetrics: ResolvedViewportMetrics?
     private var observationView: ViewportObservationView?
     private weak var observedHostViewController: UIViewController?
@@ -173,28 +166,36 @@ public final class ViewportCoordinator: NSObject {
     var resolvedHostViewControllerForTesting: UIViewController? {
         resolvedHostViewController()
     }
+
+    var observationSuperviewForTesting: UIView? {
+        observationView?.superview
+    }
+
+    var observationViewForTesting: UIView? {
+        observationView
+    }
 #endif
 
     public init(
         hostViewController: UIViewController? = nil,
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider()
     ) {
         self.hostViewController = hostViewController
         self.webView = webView
         self.configuration = configuration
         self.metricsProvider = metricsProvider
         super.init()
-        installObservationViewIfPossible()
         observeKeyboardNotifications()
         observeWebViewStateIfPossible()
+        updateViewport()
     }
 
     public convenience init(
         webView: WKWebView,
         configuration: ViewportConfiguration = .init(),
-        metricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider()
+        metricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider()
     ) {
         self.init(
             hostViewController: nil,
@@ -212,17 +213,42 @@ public final class ViewportCoordinator: NSObject {
         updateViewport()
     }
 
+    public func handleWebViewHierarchyDidChange() {
+        if let currentWindowIdentity = webView?.window.map(ObjectIdentifier.init) {
+            if let lastKnownWindowIdentity, lastKnownWindowIdentity != currentWindowIdentity {
+                keyboardFrameInScreen = .null
+            }
+            lastKnownWindowIdentity = currentWindowIdentity
+        }
+        updateViewport()
+    }
+
+    public func handleWebViewSafeAreaInsetsDidChange() {
+        lastAppliedResolvedMetrics = nil
+        updateViewport()
+    }
+
     public func updateViewport() {
-        guard let webView, let resolvedHostViewController = resolvedHostViewController() else {
+        guard let webView else {
             return
         }
-        guard let hostView = resolvedHostViewController.view else {
+        guard let observationContainerView = resolvedObservationContainerView() else {
+            clearTransientViewportStateIfNeeded(
+                resolvedHostViewController: resolvedHostViewController(),
+                webView: webView
+            )
+            return
+        }
+
+        installObservationViewIfPossible(in: observationContainerView)
+        let resolvedHostViewController = resolvedHostViewController()
+
+        guard let resolvedHostViewController, resolvedHostViewController.view != nil else {
+            clearHostResolutionStateIfNeeded(webView: webView)
             return
         }
 
         updateObservedHostViewControllerIfNeeded(resolvedHostViewController, webView: webView)
-
-        installObservationViewIfPossible(in: hostView)
 
         applyScrollViewConfiguration(to: webView.scrollView)
         resolvedHostViewController.setContentScrollView(webView.scrollView)
@@ -235,8 +261,9 @@ public final class ViewportCoordinator: NSObject {
         )
         effectiveMetrics.safeAreaAffectedEdges = configuration.safeAreaAffectedEdges
 
-        let screenScale = hostView.window?.screen.scale
-            ?? hostView.traitCollection.displayScale
+        let screenScale = observationContainerView.window?.screen.scale
+            ?? webView.window?.screen.scale
+            ?? observationContainerView.traitCollection.displayScale
         let resolvedMetrics = ResolvedViewportMetrics(
             state: effectiveMetrics,
             screenScale: screenScale
@@ -271,9 +298,7 @@ public final class ViewportCoordinator: NSObject {
     public func invalidate() {
         NotificationCenter.default.removeObserver(self)
         webViewStateCancellables.removeAll()
-        observationView?.onViewportGeometryChanged = nil
-        observationView?.removeFromSuperview()
-        observationView = nil
+        clearObservationViewIfNeeded()
 
         guard let webView else {
             return
@@ -297,11 +322,11 @@ public final class ViewportCoordinator: NSObject {
     }
 
     private func installObservationViewIfPossible() {
-        guard let hostView = resolvedHostViewController()?.viewIfLoaded else {
+        guard let observationContainerView = resolvedObservationContainerView() else {
             return
         }
 
-        installObservationViewIfPossible(in: hostView)
+        installObservationViewIfPossible(in: observationContainerView)
     }
 
     private func installObservationViewIfPossible(in hostView: UIView) {
@@ -309,16 +334,22 @@ public final class ViewportCoordinator: NSObject {
             return
         }
 
-        observationView?.onViewportGeometryChanged = nil
-        observationView?.removeFromSuperview()
+        clearObservationViewIfNeeded()
 
         let observationView = ViewportObservationView()
-        observationView.onViewportGeometryChanged = { [weak self] in
-            self?.updateViewport()
+        self.observationView = observationView
+        observationView.onViewportGeometryChanged = { [weak self, weak observationView] in
+            guard let self, let observationView, self.observationView === observationView else {
+                return
+            }
+            self.updateViewport()
         }
         observationView.translatesAutoresizingMaskIntoConstraints = false
         observationView.isUserInteractionEnabled = false
         observationView.backgroundColor = .clear
+        if #available(iOS 15.0, *) {
+            observationView.keyboardLayoutGuide.followsUndockedKeyboard = true
+        }
         hostView.addSubview(observationView)
         hostView.sendSubviewToBack(observationView)
 
@@ -329,9 +360,40 @@ public final class ViewportCoordinator: NSObject {
             observationView.bottomAnchor.constraint(equalTo: hostView.bottomAnchor)
         ])
 
-        self.observationView = observationView
         observationView.setNeedsLayout()
         observationView.layoutIfNeeded()
+    }
+
+    private func resolvedObservationContainerView() -> UIView? {
+        webView?.superview
+    }
+
+    private func clearTransientViewportStateIfNeeded(
+        resolvedHostViewController: UIViewController?,
+        webView: WKWebView
+    ) {
+        clearObservedScrollViewIfNeeded(
+            on: observedHostViewController ?? resolvedHostViewController,
+            webView: webView
+        )
+        observedHostViewController = nil
+        lastAppliedResolvedMetrics = nil
+        clearObservationViewIfNeeded()
+    }
+
+    private func clearHostResolutionStateIfNeeded(webView: WKWebView) {
+        clearObservedScrollViewIfNeeded(
+            on: observedHostViewController ?? hostViewController,
+            webView: webView
+        )
+        observedHostViewController = nil
+        lastAppliedResolvedMetrics = nil
+    }
+
+    private func clearObservationViewIfNeeded() {
+        observationView?.onViewportGeometryChanged = nil
+        observationView?.removeFromSuperview()
+        observationView = nil
     }
 
     private func resolvedHostViewController() -> UIViewController? {
@@ -408,20 +470,39 @@ public final class ViewportCoordinator: NSObject {
 #endif
 
     private func keyboardOverlapHeight() -> CGFloat {
-        guard
+        let frameIntersectionHeight: CGFloat
+        if
             let hostView = resolvedHostViewController()?.view,
             let window = hostView.window,
             keyboardFrameInScreen.isNull == false
-        else {
+        {
+            let keyboardFrameInWindow = window.convert(
+                keyboardFrameInScreen,
+                from: window.screen.coordinateSpace
+            )
+            let keyboardFrameInHostView = hostView.convert(keyboardFrameInWindow, from: nil)
+            frameIntersectionHeight = max(0, hostView.bounds.intersection(keyboardFrameInHostView).height)
+        } else {
+            frameIntersectionHeight = 0
+        }
+
+        return max(frameIntersectionHeight, keyboardLayoutGuideCoverageHeight())
+    }
+
+    private func keyboardLayoutGuideCoverageHeight() -> CGFloat {
+        guard let observationView else {
             return 0
         }
 
-        let keyboardFrameInWindow = window.convert(
-            keyboardFrameInScreen,
-            from: window.screen.coordinateSpace
-        )
-        let keyboardFrameInHostView = hostView.convert(keyboardFrameInWindow, from: nil)
-        return max(0, hostView.bounds.intersection(keyboardFrameInHostView).height)
+        if #available(iOS 15.0, *) {
+            let layoutFrame = observationView.keyboardLayoutGuide.layoutFrame
+            guard layoutFrame.isEmpty == false else {
+                return 0
+            }
+            return max(0, observationView.bounds.intersection(layoutFrame).height)
+        }
+
+        return 0
     }
 
     private func inputAccessoryOverlapHeight() -> CGFloat {

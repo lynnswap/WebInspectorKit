@@ -6,19 +6,19 @@ import WebKit
 public final class ManagedViewportWebView: WKWebView {
     public weak var viewportHostViewController: UIViewController? {
         didSet {
-            refreshViewportCoordinator(forceRebuild: true)
+            viewportCoordinator?.hostViewController = viewportHostViewController
         }
     }
 
     public var viewportConfiguration = ViewportConfiguration() {
         didSet {
-            refreshViewportCoordinator()
+            viewportCoordinator?.configuration = viewportConfiguration
         }
     }
 
-    public var viewportMetricsProvider: any ViewportMetricsProvider = NavigationControllerViewportMetricsProvider() {
+    public var viewportMetricsProvider: any ViewportMetricsProvider = UIKitChromeViewportMetricsProvider() {
         didSet {
-            refreshViewportCoordinator()
+            viewportCoordinator?.metricsProvider = viewportMetricsProvider
         }
     }
 
@@ -26,12 +26,12 @@ public final class ManagedViewportWebView: WKWebView {
 
     public override init(frame: CGRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
-        refreshViewportCoordinator()
+        installViewportCoordinator()
     }
 
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
-        refreshViewportCoordinator()
+        installViewportCoordinator()
     }
 
     isolated deinit {
@@ -40,72 +40,36 @@ public final class ManagedViewportWebView: WKWebView {
 
     public override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        refreshViewportCoordinator()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
     }
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
-        refreshViewportCoordinator()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
     }
 
     public override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        refreshViewportCoordinator()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
     }
 
     var activeViewportCoordinatorForTesting: ViewportCoordinator? {
         viewportCoordinator
     }
 
+#if DEBUG
     var resolvedHostViewControllerForTesting: UIViewController? {
-        resolvedViewportHostViewController()
+        viewportCoordinator?.resolvedHostViewControllerForTesting
     }
+#endif
 
-    private func refreshViewportCoordinator(forceRebuild: Bool = false) {
-        let resolvedHostViewController = resolvedViewportHostViewController()
-        let needsRebuild = forceRebuild
-            || viewportCoordinator == nil
-            || viewportCoordinator?.hostViewController !== resolvedHostViewController
-
-        if needsRebuild {
-            viewportCoordinator?.invalidate()
-            viewportCoordinator = nil
-
-            guard let resolvedHostViewController else {
-                return
-            }
-
-            viewportCoordinator = ViewportCoordinator(
-                hostViewController: resolvedHostViewController,
-                webView: self,
-                configuration: viewportConfiguration,
-                metricsProvider: viewportMetricsProvider
-            )
-        }
-
-        guard let viewportCoordinator else {
-            return
-        }
-
-        viewportCoordinator.configuration = viewportConfiguration
-        viewportCoordinator.metricsProvider = viewportMetricsProvider
-        viewportCoordinator.updateViewport()
-    }
-
-    private func resolvedViewportHostViewController() -> UIViewController? {
-        if let viewportHostViewController {
-            return viewportHostViewController
-        }
-
-        var responder: UIResponder? = self
-        while let nextResponder = responder?.next {
-            if let viewController = nextResponder as? UIViewController {
-                return viewController
-            }
-            responder = nextResponder
-        }
-
-        return window?.rootViewController
+    private func installViewportCoordinator() {
+        viewportCoordinator = ViewportCoordinator(
+            hostViewController: viewportHostViewController,
+            webView: self,
+            configuration: viewportConfiguration,
+            metricsProvider: viewportMetricsProvider
+        )
     }
 }
 #endif

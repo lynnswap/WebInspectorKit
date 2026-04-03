@@ -32,7 +32,8 @@ struct ManagedViewportWebViewTests {
         hostViewController.view.layoutIfNeeded()
 
         #expect(webView.resolvedHostViewControllerForTesting === hostViewController)
-        #expect(webView.activeViewportCoordinatorForTesting?.hostViewController === hostViewController)
+        #expect(webView.activeViewportCoordinatorForTesting?.resolvedHostViewControllerForTesting === hostViewController)
+        #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
     }
 
     @Test

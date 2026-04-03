@@ -3,6 +3,9 @@ import UIKit
 import WebKit
 import XCTest
 @testable import Monocly
+@testable import WebInspectorEngine
+@testable import WebInspectorRuntime
+@_spi(Monocly) import WebInspectorTransport
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
@@ -133,6 +136,24 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
         XCTAssertGreaterThan(pageViewController.view.safeAreaInsets.bottom, windowSafeAreaBottom)
+    }
+
+    @MainActor
+    func testRegularNavigationBarContributesFullTopViewportInset() throws {
+        let fixture = try makeHostedRootViewController()
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+        drainMainQueue()
+
+        let adjustedTopInset = rootViewController.store.webView.scrollView.adjustedContentInset.top
+        let pageSafeAreaTop = pageViewController.view.safeAreaInsets.top
+        let windowSafeAreaTop = fixture.window.safeAreaInsets.top
+
+        XCTAssertEqual(adjustedTopInset, pageSafeAreaTop, accuracy: 0.5)
+        XCTAssertGreaterThan(adjustedTopInset, windowSafeAreaTop)
     }
 
     @MainActor
@@ -314,6 +335,188 @@ final class BrowserNavigationChromeTests: XCTestCase {
                 attachedSceneCount: 1
             )
         )
+    }
+
+    @MainActor
+    func testOpeningInspectorBootstrapsCurrentPageResourceTimings() throws {
+        try WIBackendFactoryTesting.withPageAgentFallback(reason: "Monocly page-agent bootstrap regression") {
+            let initialURL = try makeTemporaryHTMLURL(named: "network-bootstrap", title: "Network Bootstrap")
+            let fixture = try makeHostedRootViewController(initialURL: initialURL)
+            let rootViewController = fixture.rootViewController
+            let pageViewController = fixture.pageViewController
+            let inspectorController = rootViewController.inspectorController
+
+            pageViewController.setSupportsMultipleScenesForTesting(true)
+            applyHorizontalSizeClass(.regular, to: rootViewController)
+
+            XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+            try installSyntheticResourceTimings(
+                [[
+                    "decodedBodySize": 256,
+                    "duration": 4,
+                    "encodedBodySize": 128,
+                    "initiatorType": "script",
+                    "name": "https://example.com/bootstrap.js",
+                    "requestMethod": "GET",
+                    "responseStatus": 200,
+                    "startTime": 12
+                ]],
+                on: rootViewController.store.webView
+            )
+
+            _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+            selectInspectorTab("wi_network", in: inspectorController)
+
+            let bootstrapped = waitForCondition(description: "open inspector bootstraps existing page resources") {
+                inspectorController.network.session.mode == .active
+                    && inspectorController.network.store.entries.contains { $0.url == "https://example.com/bootstrap.js" }
+            }
+            XCTAssertTrue(
+                bootstrapped,
+                "Opening the inspector on the Network tab did not bootstrap the current page resource timings into the shared network store."
+            )
+        }
+    }
+
+    @MainActor
+    func testDismissingCompactInspectorSuspendsControllerAndClearsNetworkStore() throws {
+        let initialURL = try makeTemporaryHTMLURL(named: "network-close", title: "Network Close")
+        let fixture = try makeHostedRootViewController(initialURL: initialURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let inspectorController = rootViewController.inspectorController
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+
+        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspectorController)
+        try seedNetworkStore(
+            url: "https://example.com/seed-close",
+            requestID: 701,
+            into: inspectorController.network.store
+        )
+
+        let seeded = waitForCondition(description: "seed network entries before dismiss") {
+            inspectorController.network.session.mode == .active
+                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-close" }
+        }
+        XCTAssertTrue(seeded, "The regular inspector did not expose the seeded network store entry before dismiss.")
+
+        dismissPresentedInspector(from: rootViewController)
+
+        let suspendedAndCleared = waitForCondition(description: "dismiss compact inspector clears network store") {
+            inspectorController.lifecycle == .suspended
+                && inspectorController.network.session.mode == .stopped
+                && inspectorController.network.store.entries.isEmpty
+        }
+        XCTAssertTrue(
+            suspendedAndCleared,
+            "Dismissing the compact inspector did not suspend the shared inspector controller and clear the network store."
+        )
+    }
+
+    @MainActor
+    func testReopeningCompactInspectorRebootstrapsCurrentPageNetworkEntries() throws {
+        let initialURL = try makeTemporaryHTMLURL(named: "network-reopen", title: "Network Reopen")
+        let fixture = try makeHostedRootViewController(initialURL: initialURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let inspectorController = rootViewController.inspectorController
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+
+        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspectorController)
+        try seedNetworkStore(
+            url: "https://example.com/seed-reopen",
+            requestID: 702,
+            into: inspectorController.network.store
+        )
+
+        let firstSeed = waitForCondition(description: "seed network entry before reopen") {
+            inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-reopen" }
+        }
+        XCTAssertTrue(firstSeed, "The first inspector presentation did not expose the seeded network entry.")
+
+        dismissPresentedInspector(from: rootViewController)
+
+        let cleared = waitForCondition(description: "network store clears after dismiss") {
+            inspectorController.network.store.entries.isEmpty
+                && inspectorController.network.session.mode == .stopped
+        }
+        XCTAssertTrue(cleared, "The shared inspector controller did not clear the network store after dismiss.")
+
+        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspectorController)
+        let expectedFinishCount = rootViewController.store.didFinishNavigationCount + 1
+        rootViewController.store.webView.reload()
+
+        let rebound = waitForCondition(description: "fresh network capture after reopen") {
+            inspectorController.lifecycle == .active
+                && inspectorController.network.session.mode == .active
+                && rootViewController.store.didFinishNavigationCount >= expectedFinishCount
+                && inspectorController.network.store.entries.isEmpty == false
+        }
+        XCTAssertTrue(rebound, "Reopening the inspector did not produce a fresh network session after the page reloaded.")
+
+        dismissPresentedInspector(from: rootViewController)
+    }
+
+    @MainActor
+    func testSwitchingCompactInspectorTabsKeepsNetworkStoreWhileInspectorStaysPresented() throws {
+        let initialURL = try makeTemporaryHTMLURL(named: "network-tab-switch", title: "Network Tab Switch")
+        let fixture = try makeHostedRootViewController(initialURL: initialURL)
+        let rootViewController = fixture.rootViewController
+        let pageViewController = fixture.pageViewController
+        let inspectorController = rootViewController.inspectorController
+
+        pageViewController.setSupportsMultipleScenesForTesting(true)
+        applyHorizontalSizeClass(.regular, to: rootViewController)
+
+        XCTAssertTrue(waitForNavigation(to: initialURL, minimumDidFinishCount: 1, in: rootViewController.store))
+
+        _ = try presentRegularInspector(from: pageViewController, rootViewController: rootViewController)
+        selectInspectorTab("wi_network", in: inspectorController)
+        try seedNetworkStore(
+            url: "https://example.com/seed-switch",
+            requestID: 703,
+            into: inspectorController.network.store
+        )
+
+        let seeded = waitForCondition(description: "seed network entries before tab switch") {
+            inspectorController.network.session.mode == .active
+                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+        }
+        XCTAssertTrue(seeded, "The inspector did not expose the seeded network entry before switching tabs.")
+
+        let bootstrappedEntryCount = inspectorController.network.store.entries.count
+        selectInspectorTab("wi_dom", in: inspectorController)
+
+        let switchedToDOM = waitForCondition(description: "switch to DOM without clearing network store") {
+            inspectorController.lifecycle == .active
+                && inspectorController.network.session.mode == .buffering
+                && inspectorController.network.store.entries.count >= bootstrappedEntryCount
+                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+        }
+        XCTAssertTrue(switchedToDOM, "Switching away from the Network tab cleared the network store while the inspector stayed open.")
+
+        selectInspectorTab("wi_network", in: inspectorController)
+
+        let switchedBack = waitForCondition(description: "switch back to network without clearing network store") {
+            inspectorController.lifecycle == .active
+                && inspectorController.network.session.mode == .active
+                && inspectorController.network.store.entries.count >= bootstrappedEntryCount
+                && inspectorController.network.store.entries.contains { $0.url == "https://example.com/seed-switch" }
+        }
+        XCTAssertTrue(switchedBack, "Switching back to the Network tab did not preserve the existing network store entries.")
+
+        dismissPresentedInspector(from: rootViewController)
     }
 
     @MainActor
@@ -597,6 +800,119 @@ private extension BrowserNavigationChromeTests {
     }
 
     @MainActor
+    func presentRegularInspector(
+        from pageViewController: BrowserPageViewController,
+        rootViewController: BrowserRootViewController
+    ) throws -> WITabViewController {
+        XCTAssertTrue(pageViewController.triggerInspectorPrimaryActionForTesting())
+        drainMainQueue()
+
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        inspectorContainer.loadViewIfNeeded()
+        inspectorContainer.view.layoutIfNeeded()
+        return inspectorContainer
+    }
+
+    @MainActor
+    func selectCompactInspectorTab(
+        _ identifier: String,
+        in inspectorContainer: WITabViewController
+    ) throws {
+        let compactHost = try XCTUnwrap(inspectorContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController)
+        let targetTab = try XCTUnwrap(compactHost.currentUITabsForTesting.first(where: { $0.identifier == identifier }))
+        let previousTab = compactHost.selectedTab
+        XCTAssertTrue(compactHost.tabBarController(compactHost, shouldSelectTab: targetTab))
+        compactHost.selectedTab = targetTab
+        compactHost.tabBarController(compactHost, didSelectTab: targetTab, previousTab: previousTab)
+        drainMainQueue()
+    }
+
+    @MainActor
+    func selectInspectorTab(_ identifier: String, in inspectorController: WIInspectorController) {
+        let tab = inspectorController.tabs.first(where: { $0.identifier == identifier })
+        inspectorController.setSelectedTab(tab)
+        drainMainQueue()
+    }
+
+    @MainActor
+    func seedNetworkStore(
+        url: String,
+        requestID: Int,
+        into store: NetworkStore
+    ) throws {
+        let payload: [String: Any] = [
+            "kind": "requestWillBeSent",
+            "requestId": requestID,
+            "url": url,
+            "method": "GET",
+            "time": [
+                "monotonicMs": 1_000.0,
+                "wallMs": 1_700_000_000_000.0
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let event = try JSONDecoder().decode(NetworkWire.PageHook.Event.self, from: data)
+        store.apply(event, sessionID: "")
+    }
+
+    @MainActor
+    func installSyntheticResourceTimings(
+        _ entries: [[String: Any]],
+        on webView: WKWebView
+    ) throws {
+        let expectation = XCTestExpectation(description: "install synthetic resource timings")
+        var installed = false
+        var capturedError: Error?
+
+        Task { @MainActor in
+            defer { expectation.fulfill() }
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    """
+                    return (function(entries) {
+                        const prototype = Object.getPrototypeOf(performance) || performance;
+                        const original = performance.getEntriesByType.bind(performance);
+                        Object.defineProperty(prototype, "getEntriesByType", {
+                            configurable: true,
+                            writable: true,
+                            value(type) {
+                                if (type === "resource") {
+                                    return entries;
+                                }
+                                return original(type);
+                            }
+                        });
+                        const applied = performance.getEntriesByType("resource");
+                        return {
+                            count: Array.isArray(applied) ? applied.length : -1,
+                            installed: Array.isArray(applied) && applied.length === entries.length
+                        };
+                    })(entries);
+                    """,
+                    arguments: [
+                        "entries": entries
+                    ],
+                    in: nil,
+                    contentWorld: .page
+                )
+                if let payload = result as? NSDictionary {
+                    installed = (payload["installed"] as? Bool)
+                        ?? ((payload["installed"] as? NSNumber)?.boolValue ?? false)
+                }
+            } catch {
+                capturedError = error
+            }
+        }
+
+        let waitResult = XCTWaiter().wait(for: [expectation], timeout: 5)
+        XCTAssertEqual(waitResult, .completed, "Timed out while installing synthetic resource timings into the page.")
+        if let capturedError {
+            throw capturedError
+        }
+        XCTAssertTrue(installed, "The page did not accept the synthetic resource timing override.")
+    }
+
+    @MainActor
     func dismissPresentedInspector(from rootViewController: BrowserRootViewController) {
         rootViewController.presentedViewController?.dismiss(animated: false)
         let deadline = Date().addingTimeInterval(1)
@@ -609,6 +925,22 @@ private extension BrowserNavigationChromeTests {
     @MainActor
     func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    @MainActor
+    func waitForCondition(
+        description _: String,
+        timeout: TimeInterval = 5,
+        condition: () -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            drainMainQueue()
+        }
+        return condition()
     }
 
     @MainActor
