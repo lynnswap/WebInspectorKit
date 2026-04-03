@@ -1,6 +1,14 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
 import { WI_DOM_SNAPSHOT_SCHEMA_VERSION } from "../../Contracts/agent-contract";
 
+export const INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE = "data-web-inspector-overlay";
+export const INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE = "data-web-inspector-selection-shield";
+
+const inspectorInternalAttributes = [
+    INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
+    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
+];
+
 type DOMNodeDescriptor = {
     nodeId?: number;
     children: DOMNodeDescriptor[];
@@ -53,6 +61,39 @@ function serializeNodeIfSupported(node: Node | null): unknown | null {
     return null;
 }
 
+function parseSerializedPayload(payload: unknown): unknown {
+    if (typeof payload !== "string") {
+        return payload;
+    }
+    try {
+        return JSON.parse(payload);
+    } catch {
+        return payload;
+    }
+}
+
+function serializedNodeIdentifierFromPayload(payload: unknown): number | null {
+    const resolvedPayload = parseSerializedPayload(payload);
+    if (!resolvedPayload || typeof resolvedPayload !== "object") {
+        return null;
+    }
+
+    const object = resolvedPayload as Record<string, unknown>;
+    if (typeof object.nodeId === "number" && Number.isFinite(object.nodeId)) {
+        return object.nodeId;
+    }
+    if (typeof object.id === "number" && Number.isFinite(object.id)) {
+        return object.id;
+    }
+    if (object.type === "serialized-node-envelope") {
+        return serializedNodeIdentifierFromPayload(object.node ?? object.fallback);
+    }
+    if ("root" in object) {
+        return serializedNodeIdentifierFromPayload(object.root);
+    }
+    return null;
+}
+
 function makeSerializedEnvelope(
     node: Node | null,
     fallback: SnapshotDescriptorPayload | DOMNodeDescriptor | null,
@@ -79,6 +120,9 @@ export function rememberNode(node: AnyNode | null) {
     if (!node) {
         return 0;
     }
+    if (isInspectorInternalNode(node)) {
+        return 0;
+    }
     if (!inspector.map) {
         inspector.map = new Map();
     }
@@ -96,6 +140,14 @@ export function rememberNode(node: AnyNode | null) {
     inspector.map.set(id, node);
     inspector.nodeMap.set(node, id);
     return id;
+}
+
+export function stableNodeIdentifier(node: AnyNode | null) {
+    const serializedNodeId = serializedNodeIdentifierFromPayload(serializeNodeIfSupported(node));
+    if (typeof serializedNodeId === "number" && Number.isFinite(serializedNodeId) && serializedNodeId > 0) {
+        return serializedNodeId;
+    }
+    return rememberNode(node);
 }
 
 export function layoutInfoForNode(node: AnyNode | null) {
@@ -121,6 +173,91 @@ export function nodeIsRendered(node: AnyNode | null) {
         return true;
     default:
         return true;
+    }
+}
+
+function nodeAncestorElement(node: Node | null | undefined): Element | null {
+    if (!node) {
+        return null;
+    }
+    if (node.nodeType === 1) {
+        return node as Element;
+    }
+    return (node.parentElement || null);
+}
+
+export function isInspectorInternalNode(node: Node | null | undefined): boolean {
+    var element = nodeAncestorElement(node);
+    while (element) {
+        for (var i = 0; i < inspectorInternalAttributes.length; ++i) {
+            if (element.hasAttribute(inspectorInternalAttributes[i])) {
+                return true;
+            }
+        }
+        element = element.parentElement;
+    }
+    return false;
+}
+
+function inspectableChildNodes(node: Node | null | undefined): AnyNode[] {
+    if (!node || !node.childNodes || !node.childNodes.length) {
+        return [];
+    }
+    var children: AnyNode[] = [];
+    for (var i = 0; i < node.childNodes.length; ++i) {
+        var child = node.childNodes[i] as AnyNode;
+        if (isInspectorInternalNode(child)) {
+            continue;
+        }
+        children.push(child);
+    }
+    return children;
+}
+
+export function inspectableChildCount(node: Node | null | undefined): number {
+    return inspectableChildNodes(node).length;
+}
+
+export function previousInspectableSibling(node: Node | null | undefined): AnyNode | null {
+    var current = node || null;
+    while (current) {
+        if (!isInspectorInternalNode(current)) {
+            return current as AnyNode;
+        }
+        current = current.previousSibling;
+    }
+    return null;
+}
+
+export function mutationTouchesInspectableDOM(record: MutationRecord | null | undefined): boolean {
+    if (!record) {
+        return false;
+    }
+    switch (record.type) {
+    case "attributes":
+    case "characterData":
+        return !isInspectorInternalNode(record.target);
+    case "childList":
+        if (isInspectorInternalNode(record.target)) {
+            return false;
+        }
+        if (record.addedNodes && record.addedNodes.length) {
+            for (var i = 0; i < record.addedNodes.length; ++i) {
+                if (!isInspectorInternalNode(record.addedNodes[i])) {
+                    return true;
+                }
+            }
+        }
+        if (record.removedNodes && record.removedNodes.length) {
+            for (var r = 0; r < record.removedNodes.length; ++r) {
+                if (!isInspectorInternalNode(record.removedNodes[r])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    default:
+        return !isInspectorInternalNode(record.target);
     }
 }
 
@@ -201,6 +338,9 @@ export function describe(node: AnyNode | null, depth: number, maxDepth: number, 
     if (!node) {
         return null;
     }
+    if (isInspectorInternalNode(node)) {
+        return null;
+    }
 
     var identifier = rememberNode(node);
     if (!identifier) {
@@ -213,7 +353,7 @@ export function describe(node: AnyNode | null, depth: number, maxDepth: number, 
         nodeName: node.nodeName || "",
         localName: node.localName || (node.nodeName || "").toLowerCase(),
         nodeValue: node.nodeType === Node.TEXT_NODE || node.nodeType === Node.COMMENT_NODE ? (node.nodeValue || "") : "",
-        childNodeCount: node.childNodes ? node.childNodes.length : 0,
+        childNodeCount: inspectableChildCount(node),
         children: []
     };
     var layoutInfo = layoutInfoForNode(node);
@@ -243,11 +383,12 @@ export function describe(node: AnyNode | null, depth: number, maxDepth: number, 
         descriptor.value = node.value || "";
     }
 
-    if (depth < maxDepth && node.childNodes && node.childNodes.length) {
+    var children = inspectableChildNodes(node);
+    if (depth < maxDepth && children.length) {
         var limit = typeof childLimit === "number" && Number.isFinite(childLimit) ? childLimit : 150;
         var selectionIndex = Array.isArray(selectionPath) && selectionPath.length > depth ? selectionPath[depth] : -1;
-        for (var childIndex = 0; childIndex < node.childNodes.length; ++childIndex) {
-            var childNode = node.childNodes[childIndex];
+        for (var childIndex = 0; childIndex < children.length; ++childIndex) {
+            var childNode = children[childIndex];
             var mustInclude = selectionIndex === childIndex;
             if (descriptor.children.length >= limit && !mustInclude) {
                 break;
@@ -287,6 +428,9 @@ export function computeNodePath(node: AnyNode | null) {
     if (!node) {
         return null;
     }
+    if (isInspectorInternalNode(node)) {
+        return null;
+    }
     var root = document.documentElement || document.body;
     if (!root) {
         return null;
@@ -298,7 +442,8 @@ export function computeNodePath(node: AnyNode | null) {
         if (!parent) {
             return null;
         }
-        var index = Array.prototype.indexOf.call(parent.childNodes, current);
+        var siblings = inspectableChildNodes(parent);
+        var index = siblings.indexOf(current);
         if (index < 0) {
             return null;
         }
@@ -344,6 +489,9 @@ export function captureDOMPayload(maxDepth?: number): SnapshotDescriptorPayload 
     }
     if (typeof inspector.nextId !== "number" || inspector.nextId < 1 || shouldReset) {
         inspector.nextId = 1;
+    }
+    if (shouldReset) {
+        inspector.nextInitialSnapshotMode = "fresh";
     }
     inspector.documentURL = currentURL;
 

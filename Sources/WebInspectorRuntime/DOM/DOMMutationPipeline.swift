@@ -48,7 +48,7 @@ final class DOMMutationSender {
     private var jsBufferSequence = 0
 #if DEBUG
     var testBeforeBundleDispatchOverride: (@MainActor () async -> Void)?
-    var testApplyBundlesOverride: (@MainActor ([Any]) async -> Void)?
+    var testApplyBundlesOverride: (@MainActor ([[String: Any]]) async -> Void)?
 #endif
 
     init(
@@ -85,6 +85,9 @@ final class DOMMutationSender {
         pageEpoch: Int,
         documentScopeID: UInt64
     ) {
+        domMutationPipelineLogger.notice(
+            "[TEMP DOM TRACE][Pipeline] enqueueMutationBundle generation=\(generation, privacy: .public) pageEpoch=\(pageEpoch, privacy: .public) documentScopeID=\(documentScopeID, privacy: .public) preservingState=\(preservingInspectorState, privacy: .public)"
+        )
         pendingBundles.append(
             PendingBundle(
                 bundle: bundle,
@@ -280,14 +283,11 @@ final class DOMMutationSender {
         guard !bundles.isEmpty else {
             return false
         }
+        domMutationPipelineLogger.notice(
+            "[TEMP DOM TRACE][Pipeline] applyBundlesNow generation=\(generation, privacy: .public) pageEpoch=\(pageEpoch, privacy: .public) bundleCount=\(bundles.count, privacy: .public)"
+        )
 
-        let payloads: [[String: Any]] = bundles.map {
-            [
-                "bundle": $0.bundle,
-                "mode": $0.preservesInspectorState ? "preserve-ui-state" : "fresh",
-                "documentScopeID": $0.documentScopeID,
-            ]
-        }
+        let payloads = bundles.map(Self.makeFrontendTransportPayload(for:))
 
         guard Task.isCancelled == false else {
             return false
@@ -301,7 +301,7 @@ final class DOMMutationSender {
         }
         if let testApplyBundlesOverride {
             activeDispatchGeneration = generation
-            await testApplyBundlesOverride(bundles.map(\.bundle))
+            await testApplyBundlesOverride(payloads)
             return Task.isCancelled == false
         }
 #endif
@@ -412,6 +412,15 @@ final class DOMMutationSender {
 }
 
 extension DOMMutationSender {
+    private static func makeFrontendTransportPayload(for bundle: PendingBundle) -> [String: Any] {
+        [
+            "bundle": bundle.bundle,
+            "mode": bundle.preservesInspectorState ? "preserve-ui-state" : "fresh",
+            "pageEpoch": bundle.pageEpoch,
+            "documentScopeID": bundle.documentScopeID,
+        ]
+    }
+
     static func makeBufferTransportPayload(_ payloads: [[String: Any]]) -> [Any]? {
         makeBufferTransportValue(payloads) as? [Any]
     }

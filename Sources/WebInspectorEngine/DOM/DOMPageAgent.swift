@@ -13,18 +13,76 @@ private let autoSnapshotConfigureRetryDelayNanoseconds: UInt64 = 50_000_000
 private let pageEpochApplyRetryDelayNanoseconds: UInt64 = 50_000_000
 private let documentScopeSyncRetryLimit = 100
 private let unavailableBridgeSentinel = "__wi_bridge_unavailable__"
+private let domAgentBootstrapWindowKey = "__wiDOMAgentBootstrap"
+private let domAgentBootstrapScriptMarker = "__wiDOMAgentBootstrapUserScript"
 private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKContentWorld) async throws -> Void
+
+private struct DOMBootstrapConfiguration {
+    let pageEpoch: Int
+    let documentScopeID: DOMDocumentScopeID
+    let autoSnapshotEnabled: Bool
+    let autoSnapshotMaxDepth: Int
+    let autoSnapshotDebounce: Int
+
+    var signature: String {
+        "\(pageEpoch)|\(documentScopeID)|\(autoSnapshotEnabled ? 1 : 0)|\(autoSnapshotMaxDepth)|\(autoSnapshotDebounce)"
+    }
+
+    var autoSnapshotOptions: NSDictionary {
+        [
+            "maxDepth": NSNumber(value: autoSnapshotMaxDepth),
+            "debounce": NSNumber(value: autoSnapshotDebounce),
+            "enabled": NSNumber(value: autoSnapshotEnabled),
+        ]
+    }
+
+    var scriptSource: String {
+        let enabledLiteral = autoSnapshotEnabled ? "true" : "false"
+        return """
+        (function() {
+            /* \(domAgentBootstrapScriptMarker) */
+            const bootstrap = {
+                pageEpoch: \(pageEpoch),
+                documentScopeID: \(documentScopeID),
+                autoSnapshot: {
+                    enabled: \(enabledLiteral),
+                    maxDepth: \(autoSnapshotMaxDepth),
+                    debounce: \(autoSnapshotDebounce)
+                }
+            };
+            Object.defineProperty(window, "\(domAgentBootstrapWindowKey)", {
+                value: bootstrap,
+                configurable: true,
+                writable: false,
+                enumerable: false
+            });
+            if (
+                window.webInspectorDOM &&
+                typeof window.webInspectorDOM.bootstrap === "function"
+            ) {
+                window.webInspectorDOM.bootstrap(bootstrap);
+            }
+        })();
+        """
+    }
+}
 
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
     public struct SelectionModeResult: Decodable, Sendable {
         public let cancelled: Bool
         public let requiredDepth: Int
+        public let selectedPath: [Int]?
+        public let selectedNodeId: UInt64?
+        public let ancestorNodeIds: [UInt64]?
+        public let selectedHandleId: UInt64?
+        public let ancestorHandleIds: [UInt64]?
     }
 
     private enum HandlerName: String, CaseIterable {
         case snapshot = "webInspectorDOMSnapshot"
         case mutation = "webInspectorDOMMutations"
+        case log = "webInspectorDOMLog"
     }
 
     private enum HandleCommand {
@@ -43,6 +101,8 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private var configuration: DOMConfiguration
     private var pageEpoch = 0
     private var documentScopeID: DOMDocumentScopeID = 0
+    private var documentURL: String?
+    private var autoSnapshotEnabled = false
 
     private let runtime: WISPIRuntime
     private let bridgeWorld: WKContentWorld
@@ -64,6 +124,8 @@ public final class DOMPageAgent: NSObject, PageAgent {
         @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
     ) async -> DOMMutationExecutionResult<Void>)?
     package var testDocumentScopeSyncRetryLimitOverride: Int?
+    package var testPageContextFromPageOverride: (@MainActor (WKWebView) async -> DOMPageContext?)?
+    package var testApplyDocumentScopeIDOverride: (@MainActor (DOMDocumentScopeID, WKWebView) async -> Bool)?
 #endif
 
     package var currentBridgeMode: WIBridgeMode {
@@ -71,7 +133,7 @@ public final class DOMPageAgent: NSObject, PageAgent {
     }
 
     package var currentPageContext: DOMPageContext {
-        .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID)
+        .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID, documentURL: documentURL)
     }
 
     package convenience init(configuration: DOMConfiguration) {
@@ -126,7 +188,18 @@ extension DOMPageAgent: WKScriptMessageHandler {
         guard message.frameInfo.isMainFrame else {
             return
         }
-        guard HandlerName(rawValue: message.name) != nil else {
+        guard let handlerName = HandlerName(rawValue: message.name) else {
+            return
+        }
+        if handlerName == .log {
+            if let body = message.body as? NSDictionary,
+               let logMessage = body["message"] as? String {
+                domLogger.notice("[TEMP DOM TRACE][Page] \(logMessage, privacy: .public)")
+            } else if let logMessage = message.body as? String {
+                domLogger.notice("[TEMP DOM TRACE][Page] \(logMessage, privacy: .public)")
+            } else {
+                domLogger.notice("[TEMP DOM TRACE][Page] \(String(describing: message.body), privacy: .public)")
+            }
             return
         }
         guard let payload = message.body as? NSDictionary,
@@ -140,6 +213,16 @@ extension DOMPageAgent: WKScriptMessageHandler {
         let payloadDocumentScopeID = (payload["documentScopeID"] as? NSNumber)?.uint64Value
             ?? (payload["documentScopeID"] as? UInt64)
             ?? documentScopeID
+        let payloadKind = if let dictionary = bundle as? NSDictionary {
+            dictionary["kind"] as? String ?? "unknown"
+        } else if let dictionary = bundle as? [String: Any] {
+            dictionary["kind"] as? String ?? "unknown"
+        } else {
+            "raw"
+        }
+        domLogger.notice(
+            "[TEMP DOM TRACE][PageAgent] received \(handlerName.rawValue, privacy: .public) kind=\(payloadKind, privacy: .public) pageEpoch=\(payloadPageEpoch, privacy: .public) documentScopeID=\(payloadDocumentScopeID, privacy: .public)"
+        )
 
         if let rawJSON = bundle as? String, !rawJSON.isEmpty {
             sink?.domDidEmit(
@@ -189,18 +272,36 @@ extension DOMPageAgent {
         )
     }
 
-    package func highlight(nodeId: Int) async {
+    package func setPendingSelectionPath(_ path: [Int]?) async {
         guard let webView else {
             return
         }
-        if await runHandleCommand(.highlight, nodeId: nodeId, on: webView, expectedPageEpoch: pageEpoch) {
+        try? await webView.callAsyncVoidJavaScript(
+            "window.webInspectorDOM.setPendingSelectionPath(path)",
+            arguments: ["path": path as Any],
+            contentWorld: bridgeWorld
+        )
+    }
+
+    package func highlight(nodeId: Int, reveal: Bool = true) async {
+        guard let webView else {
+            return
+        }
+        if await runHandleCommand(
+            .highlight,
+            nodeId: nodeId,
+            on: webView,
+            expectedPageEpoch: pageEpoch,
+            reveal: reveal
+        ) {
             return
         }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorDOM.highlightNode(identifier, expectedPageEpoch)",
+            "window.webInspectorDOM.highlightNode(identifier, expectedPageEpoch, reveal)",
             arguments: [
                 "identifier": nodeId,
                 "expectedPageEpoch": pageEpoch,
+                "reveal": reveal,
             ],
             contentWorld: bridgeWorld
         )
@@ -480,17 +581,20 @@ extension DOMPageAgent {
 
 extension DOMPageAgent {
     package func setAutoSnapshot(enabled: Bool) async {
+        autoSnapshotEnabled = enabled
+        let bootstrap = currentBootstrapConfiguration()
+        let options = bootstrap.autoSnapshotOptions
+        domLogger.notice(
+            "[TEMP DOM TRACE][PageAgent] setAutoSnapshot enabled=\(enabled, privacy: .public) pageEpoch=\(self.pageEpoch, privacy: .public) documentScopeID=\(self.documentScopeID, privacy: .public) maxDepth=\(bootstrap.autoSnapshotMaxDepth, privacy: .public) debounceMs=\(bootstrap.autoSnapshotDebounce, privacy: .public)"
+        )
         guard let webView else {
+            domLogger.notice("[TEMP DOM TRACE][PageAgent] setAutoSnapshot enabled=\(enabled, privacy: .public) persisted: no webView")
             return
         }
-        let debounceMs = max(50, Int(configuration.autoUpdateDebounce * 1000))
-        let options: NSDictionary = [
-            "maxDepth": NSNumber(value: max(1, configuration.snapshotDepth)),
-            "debounce": NSNumber(value: debounceMs),
-            "enabled": NSNumber(value: enabled),
-        ]
+        await refreshDOMBootstrapIfNeeded(on: webView)
         do {
             let didConfigure = try await configureAutoSnapshotWhenReady(on: webView, options: options)
+            domLogger.notice("[TEMP DOM TRACE][PageAgent] configureAutoSnapshotWhenReady didConfigure=\(didConfigure, privacy: .public)")
             if !didConfigure {
                 domLogger.error("configure auto snapshot skipped: DOM agent is not ready")
             }
@@ -503,6 +607,24 @@ extension DOMPageAgent {
 // MARK: - PageAgent
 
 extension DOMPageAgent {
+    package func preparePageEpoch(_ pageEpoch: Int) {
+        guard pageEpoch != self.pageEpoch else {
+            return
+        }
+        handleCache.clear()
+        self.pageEpoch = pageEpoch
+        scheduleBootstrapRefreshIfAttached()
+    }
+
+    package func prepareDocumentScopeID(_ documentScopeID: DOMDocumentScopeID) {
+        guard documentScopeID != self.documentScopeID else {
+            return
+        }
+        handleCache.clear()
+        self.documentScopeID = documentScopeID
+        scheduleBootstrapRefreshIfAttached()
+    }
+
     package func cancelPreparedPageContextSync() {
         _ = beginPageEpochApplyGeneration()
     }
@@ -515,14 +637,14 @@ extension DOMPageAgent {
         guard self.webView === webView else {
             return
         }
-        if self.pageEpoch != pageContext.pageEpoch {
+        let incomingDocumentURL = normalizedDocumentURL(pageContext.documentURL)
+        let didChangeDocument = incomingDocumentURL != documentURL
+        if didChangeDocument || pageContext.pageEpoch != self.pageEpoch || pageContext.documentScopeID != self.documentScopeID {
             handleCache.clear()
             self.pageEpoch = pageContext.pageEpoch
-        }
-        if self.documentScopeID != pageContext.documentScopeID {
-            handleCache.clear()
             self.documentScopeID = pageContext.documentScopeID
         }
+        documentURL = incomingDocumentURL
     }
 
     package func refreshCurrentPageContextIfPossible(on webView: WKWebView) async -> Bool {
@@ -574,35 +696,32 @@ extension DOMPageAgent {
             if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
                 return false
             }
-            if self.documentScopeID >= documentScopeID {
-                let didRefreshContext = await refreshCachedPageContextFromPageIfPossible(on: webView)
+            if self.documentScopeID == documentScopeID {
+                let observedPageContext = await pageContextFromPageIfPossible(on: webView)
                 guard self.webView === webView else {
                     return false
                 }
                 if let expectedPageEpoch, self.pageEpoch != expectedPageEpoch {
                     return false
                 }
-                if didRefreshContext {
-                    if self.documentScopeID >= documentScopeID {
+                if let observedPageContext {
+                    commitPageContext(observedPageContext, on: webView)
+                    if observedPageContext.documentScopeID == documentScopeID {
                         return true
                     }
-                    let didProgressForward = self.documentScopeID > lastObservedDocumentScopeID
-                    if didProgressForward {
-                        lastObservedDocumentScopeID = self.documentScopeID
-                    }
-                    if !consumeRetry(progressedForward: didProgressForward) {
-                        return false
+                    let didProgress = observedPageContext.documentScopeID != lastObservedDocumentScopeID
+                    if didProgress {
+                        lastObservedDocumentScopeID = observedPageContext.documentScopeID
                     }
                 } else {
                     if !consumeRetry(progressedForward: false) {
                         return false
                     }
                     try? await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
-                    continue
                 }
             }
             let didApply = await applyDocumentScopeID(documentScopeID, on: webView)
-            if didApply || self.documentScopeID >= documentScopeID {
+            if didApply {
                 return true
             }
             let didRefreshContext = await refreshCachedPageContextFromPageIfPossible(on: webView)
@@ -613,14 +732,14 @@ extension DOMPageAgent {
                 return false
             }
             if didRefreshContext {
-                if self.documentScopeID >= documentScopeID {
+                if self.documentScopeID == documentScopeID {
                     return true
                 }
-                let didProgressForward = self.documentScopeID > lastObservedDocumentScopeID
-                if didProgressForward {
+                let didProgress = self.documentScopeID != lastObservedDocumentScopeID
+                if didProgress {
                     lastObservedDocumentScopeID = self.documentScopeID
                 }
-                if !consumeRetry(progressedForward: didProgressForward) {
+                if !consumeRetry(progressedForward: didProgress) {
                     return false
                 }
             } else {
@@ -667,8 +786,12 @@ extension DOMPageAgent {
         pageEpoch: Int?,
         documentScopeID: DOMDocumentScopeID? = nil
     ) async {
+        domLogger.notice(
+            "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled requestedPageEpoch=\(String(describing: pageEpoch), privacy: .public) requestedDocumentScopeID=\(String(describing: documentScopeID), privacy: .public)"
+        )
         await installDOMAgentScriptIfNeeded(on: webView)
         await refreshCachedPageContextFromPageIfPossible(on: webView)
+        await refreshDOMBootstrapIfNeeded(on: webView)
         if pageEpoch != nil || documentScopeID != nil {
             let generation = beginPageEpochApplyGeneration()
             let didApply = await applyPreparedPageContext(
@@ -684,7 +807,16 @@ extension DOMPageAgent {
                     on: webView,
                     generation: generation
                 )
+            } else {
+                await refreshDOMBootstrapIfNeeded(on: webView)
             }
+            domLogger.notice(
+                "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled applyPreparedPageContext didApply=\(didApply, privacy: .public) currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.documentScopeID, privacy: .public)"
+            )
+        } else {
+            domLogger.notice(
+                "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled refreshed currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.documentScopeID, privacy: .public)"
+            )
         }
     }
 
@@ -709,12 +841,94 @@ extension DOMPageAgent {
     func didClearPageWebView() {
         _ = beginPageEpochApplyGeneration()
         handleCache.clear()
+        documentURL = nil
     }
 }
 
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func scheduleBootstrapRefreshIfAttached() {
+        guard let webView else {
+            return
+        }
+        Task { @MainActor [weak self, weak webView] in
+            guard let self, let webView, self.webView === webView else {
+                return
+            }
+            await refreshDOMBootstrapIfNeeded(on: webView)
+        }
+    }
+
+    func currentBootstrapConfiguration() -> DOMBootstrapConfiguration {
+        DOMBootstrapConfiguration(
+            pageEpoch: pageEpoch,
+            documentScopeID: documentScopeID,
+            autoSnapshotEnabled: autoSnapshotEnabled,
+            autoSnapshotMaxDepth: max(1, configuration.snapshotDepth),
+            autoSnapshotDebounce: max(50, Int(configuration.autoUpdateDebounce * 1000))
+        )
+    }
+
+    func makeBootstrapUserScript(_ bootstrap: DOMBootstrapConfiguration) -> WKUserScript {
+        WKUserScript(
+            source: bootstrap.scriptSource,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true,
+            in: bridgeWorld
+        )
+    }
+
+    func replaceBootstrapUserScript(
+        on controller: WKUserContentController,
+        with bootstrapScript: WKUserScript
+    ) {
+        var didReplaceExistingBootstrap = false
+        let updatedScripts = controller.userScripts.compactMap { script in
+            guard script.source.contains(domAgentBootstrapScriptMarker) else {
+                return script
+            }
+            guard !didReplaceExistingBootstrap else {
+                return nil
+            }
+            didReplaceExistingBootstrap = true
+            return bootstrapScript
+        }
+
+        controller.removeAllUserScripts()
+        if didReplaceExistingBootstrap {
+            updatedScripts.forEach { controller.addUserScript($0) }
+        } else {
+            controller.addUserScript(bootstrapScript)
+            updatedScripts.forEach { controller.addUserScript($0) }
+        }
+    }
+
+    func refreshDOMBootstrapIfNeeded(on webView: WKWebView) async {
+        guard self.webView === webView else {
+            return
+        }
+        let controller = webView.configuration.userContentController
+        let bootstrap = currentBootstrapConfiguration()
+        let didAppendUserScript = controllerStateRegistry.domBootstrapSignature(on: controller) != bootstrap.signature
+        if didAppendUserScript {
+            replaceBootstrapUserScript(on: controller, with: makeBootstrapUserScript(bootstrap))
+            controllerStateRegistry.setDOMBootstrapSignature(bootstrap.signature, on: controller)
+        }
+        domLogger.notice(
+            "[TEMP DOM TRACE][PageAgent] refreshDOMBootstrap appended=\(didAppendUserScript, privacy: .public) signature=\(bootstrap.signature, privacy: .public) pageEpoch=\(bootstrap.pageEpoch, privacy: .public) documentScopeID=\(bootstrap.documentScopeID, privacy: .public) enabled=\(bootstrap.autoSnapshotEnabled, privacy: .public)"
+        )
+
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                bootstrap.scriptSource,
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            domLogger.debug("refresh DOM bootstrap skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     func beginPageEpochApplyGeneration() -> UInt64 {
         pageEpochSyncTask?.cancel()
         pageEpochSyncTask = nil
@@ -803,6 +1017,11 @@ private extension DOMPageAgent {
         guard self.webView === webView else {
             return nil
         }
+#if DEBUG
+        if let testPageContextFromPageOverride {
+            return await testPageContextFromPageOverride(webView)
+        }
+#endif
         do {
             let rawResult = try await webView.callAsyncJavaScript(
                 """
@@ -815,6 +1034,7 @@ private extension DOMPageAgent {
                         return null;
                     }
                     return {
+                        documentURL: typeof status.documentURL === "string" ? status.documentURL : null,
                         pageEpoch: typeof status.pageEpoch === "number" ? status.pageEpoch : null,
                         documentScopeID: typeof status.documentScopeID === "number" ? status.documentScopeID : null
                     };
@@ -825,14 +1045,16 @@ private extension DOMPageAgent {
                 contentWorld: bridgeWorld
             )
             let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
+            let appliedDocumentURL = appliedContext?["documentURL"] as? String
             let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
             let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
-            guard appliedEpoch != nil || appliedDocumentScopeID != nil else {
+            guard appliedEpoch != nil || appliedDocumentScopeID != nil || normalizedDocumentURL(appliedDocumentURL) != nil else {
                 return nil
             }
             return .init(
                 pageEpoch: appliedEpoch ?? pageEpoch,
-                documentScopeID: appliedDocumentScopeID ?? documentScopeID
+                documentScopeID: appliedDocumentScopeID ?? documentScopeID,
+                documentURL: appliedDocumentURL
             )
         } catch {
             domLogger.debug("refresh cached page context skipped: \(error.localizedDescription, privacy: .public)")
@@ -848,6 +1070,11 @@ private extension DOMPageAgent {
         guard self.webView === webView else {
             return true
         }
+#if DEBUG
+        if let testApplyDocumentScopeIDOverride {
+            return await testApplyDocumentScopeIDOverride(documentScopeID, webView)
+        }
+#endif
         do {
             let rawResult = try await webView.callAsyncJavaScript(
                 """
@@ -877,6 +1104,7 @@ private extension DOMPageAgent {
                 handleCache.clear()
                 self.documentScopeID = appliedDocumentScopeID
             }
+            await refreshDOMBootstrapIfNeeded(on: webView)
             return true
         } catch {
             domLogger.debug("set document scope skipped: \(error.localizedDescription, privacy: .public)")
@@ -930,8 +1158,8 @@ private extension DOMPageAgent {
             let appliedContext = rawResult as? [String: Any] ?? (rawResult as? NSDictionary as? [String: Any])
             let appliedEpoch = (appliedContext?["pageEpoch"] as? Int) ?? (appliedContext?["pageEpoch"] as? NSNumber)?.intValue
             let appliedDocumentScopeID = (appliedContext?["documentScopeID"] as? UInt64) ?? (appliedContext?["documentScopeID"] as? NSNumber)?.uint64Value
-            let pageEpochMatches = epoch == nil || ((appliedEpoch ?? .min) >= epoch!)
-            let documentScopeMatches = documentScopeID == nil || ((appliedDocumentScopeID ?? 0) >= documentScopeID!)
+            let pageEpochMatches = epoch == nil || appliedEpoch == epoch
+            let documentScopeMatches = documentScopeID == nil || appliedDocumentScopeID == documentScopeID
             guard (appliedEpoch != nil || appliedDocumentScopeID != nil), pageEpochMatches, documentScopeMatches else {
                 return false
             }
@@ -946,6 +1174,7 @@ private extension DOMPageAgent {
                 handleCache.clear()
                 self.documentScopeID = appliedDocumentScopeID
             }
+            await refreshDOMBootstrapIfNeeded(on: webView)
             clearPreparedPageContextSyncTaskIfCurrent(generation: generation)
             return true
         } catch {
@@ -1045,7 +1274,10 @@ private extension DOMPageAgent {
 
     func installDOMAgentScriptIfNeeded(on webView: WKWebView) async {
         let controller = webView.configuration.userContentController
+        let bootstrap = currentBootstrapConfiguration()
+
         if controllerStateRegistry.domBridgeScriptInstalled(on: controller) {
+            await refreshDOMBootstrapIfNeeded(on: webView)
             return
         }
 
@@ -1057,6 +1289,10 @@ private extension DOMPageAgent {
             return
         }
 
+        controller.addUserScript(
+            makeBootstrapUserScript(bootstrap)
+        )
+        controllerStateRegistry.setDOMBootstrapSignature(bootstrap.signature, on: controller)
         controller.addUserScript(
             WKUserScript(
                 source: scriptSource,
@@ -1076,6 +1312,10 @@ private extension DOMPageAgent {
         controllerStateRegistry.setDOMBridgeScriptInstalled(true, on: controller)
 
         do {
+            try await webView.callAsyncVoidJavaScript(
+                bootstrap.scriptSource,
+                contentWorld: bridgeWorld
+            )
             try await installDOMBridgeScript(webView, scriptSource, bridgeWorld)
         } catch {
             domLogger.error(
@@ -1217,7 +1457,8 @@ private extension DOMPageAgent {
         _ command: HandleCommand,
         nodeId: Int,
         on webView: WKWebView,
-        expectedPageEpoch: Int? = nil
+        expectedPageEpoch: Int? = nil,
+        reveal: Bool = true
     ) async -> Bool {
         guard bridgeMode != .legacyJSON else {
             return false
@@ -1230,7 +1471,8 @@ private extension DOMPageAgent {
             let invocation = makeHandleInvocation(
                 command: command,
                 handle: handle,
-                expectedPageEpoch: expectedPageEpoch
+                expectedPageEpoch: expectedPageEpoch,
+                reveal: reveal
             )
             let rawResult = try await webView.callAsyncJavaScript(
                 invocation.script,
@@ -1300,11 +1542,13 @@ private extension DOMPageAgent {
     private func makeHandleInvocation(
         command: HandleCommand,
         handle: AnyObject,
-        expectedPageEpoch: Int?
+        expectedPageEpoch: Int?,
+        reveal: Bool
     ) -> (script: String, arguments: [String: Any]) {
         var arguments: [String: Any] = [
             "handle": handle,
             "unavailable": unavailableBridgeSentinel,
+            "reveal": reveal,
         ]
         if let expectedPageEpoch {
             arguments["expectedPageEpoch"] = expectedPageEpoch
@@ -1317,7 +1561,7 @@ private extension DOMPageAgent {
             if (!window.webInspectorDOM || typeof window.webInspectorDOM.highlightNodeHandle !== "function") {
                 return unavailable;
             }
-            return window.webInspectorDOM.highlightNodeHandle(handle, expectedPageEpoch);
+            return window.webInspectorDOM.highlightNodeHandle(handle, expectedPageEpoch, reveal);
             """
         }
 
@@ -1352,6 +1596,13 @@ private extension DOMPageAgent {
             return .failed
         }
     }
+}
+
+private func normalizedDocumentURL(_ documentURL: String?) -> String? {
+    guard let documentURL, !documentURL.isEmpty else {
+        return nil
+    }
+    return documentURL
 }
 
 #if DEBUG

@@ -145,8 +145,6 @@ public final class WIDOMInspector {
                 return await self.session.attach(to: webView)
             }
         } else {
-            session.preparePageEpoch(transport.currentPageEpoch)
-            session.prepareDocumentScopeID(transport.currentDocumentScopeID)
             outcome = await session.attach(to: webView)
         }
         let didAdoptPageContext = if let observedPageContext = outcome.observedPageContext {
@@ -443,6 +441,7 @@ private extension WIDOMInspector {
                         "version": 1,
                         "kind": "snapshot",
                         "reason": "documentUpdated",
+                        "snapshotMode": "preserve-ui-state",
                         "snapshot": payload,
                     ],
                     pageEpoch: transport.currentPageEpoch,
@@ -469,6 +468,7 @@ private extension WIDOMInspector {
                         "version": 1,
                         "kind": "snapshot",
                         "reason": "documentUpdated",
+                        "snapshotMode": "fresh",
                         "snapshot": payload,
                     ],
                     pageEpoch: transport.currentPageEpoch,
@@ -1107,12 +1107,235 @@ private extension WIDOMInspector {
             return result
         }
 
-        let requestedDepth = max(session.configuration.snapshotDepth, result.requiredDepth + 1)
-        await updateSnapshotDepthImpl(requestedDepth)
-        try Task.checkCancellation()
-        try ensureSelectionRequestIsCurrent(request)
-        _ = await reloadDocumentImpl(.preservingInspectorState)
+        let expectedContext = transport.currentMutationContext
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return result
+        }
+
+        guard let selectedNode = await resolveSelectionNode(
+            result,
+            expectedContext: expectedContext
+        ) else {
+            applyRecoverableError("Failed to resolve selected element.")
+            return result
+        }
+
+        applyRecoverableError(nil)
+        await applySelection(
+            selectedNode,
+            expectedContext: expectedContext
+        )
         return result
+    }
+
+    private func resolveSelectionNode(
+        _ result: DOMSelectionResult,
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMNodeModel? {
+        guard let selectedNodeID = selectedBackendNodeID(from: result) else {
+            if let selectedPath = result.selectedPath {
+                return documentNode(at: selectedPath, from: document.rootNode)
+            }
+            return nil
+        }
+
+        let existingNode = document.node(backendNodeID: selectedNodeID)
+
+        if let materializedNode = await materializeSelectionNode(
+            selectedNodeID: selectedNodeID,
+            ancestorNodeIDs: result.ancestorNodeIds ?? [],
+            selectedHandleID: result.selectedHandleId,
+            ancestorHandleIDs: result.ancestorHandleIds ?? [],
+            fallbackDepth: result.requiredDepth,
+            expectedContext: expectedContext
+        ) {
+            return materializedNode
+        }
+
+        if let selectedPath = result.selectedPath {
+            return documentNode(at: selectedPath, from: document.rootNode)
+        }
+
+        if let existingNode {
+            return existingNode
+        }
+
+        return nil
+    }
+
+    private func selectedBackendNodeID(from result: DOMSelectionResult) -> Int? {
+        guard let selectedNodeId = result.selectedNodeId,
+              selectedNodeId <= UInt64(Int.max)
+        else {
+            return nil
+        }
+        return Int(selectedNodeId)
+    }
+
+    private func materializeSelectionNode(
+        selectedNodeID: Int,
+        ancestorNodeIDs: [UInt64],
+        selectedHandleID: UInt64?,
+        ancestorHandleIDs: [UInt64],
+        fallbackDepth: Int,
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async -> DOMNodeModel? {
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return nil
+        }
+
+        let normalizedAncestors = ancestorNodeIDs.compactMap { ancestorNodeID -> Int? in
+            guard ancestorNodeID <= UInt64(Int.max) else {
+                return nil
+            }
+            return Int(ancestorNodeID)
+        }
+        let normalizedAncestorHandleIDs = ancestorHandleIDs.compactMap { ancestorHandleID -> Int? in
+            guard ancestorHandleID <= UInt64(Int.max) else {
+                return nil
+            }
+            return Int(ancestorHandleID)
+        }
+        let normalizedSelectedHandleID: Int? = {
+            guard let selectedHandleID, selectedHandleID <= UInt64(Int.max) else {
+                return nil
+            }
+            return Int(selectedHandleID)
+        }()
+
+        var fetchCandidates: [(nodeID: Int, depth: Int)] = []
+        for (index, ancestorNodeID) in normalizedAncestors.enumerated().reversed() {
+            guard document.node(backendNodeID: ancestorNodeID) != nil else {
+                continue
+            }
+            let candidateHandleID =
+                index < normalizedAncestorHandleIDs.count
+                ? normalizedAncestorHandleIDs[index]
+                : ancestorNodeID
+            fetchCandidates.append((
+                nodeID: candidateHandleID,
+                depth: max(1, normalizedAncestors.count - index)
+            ))
+            break
+        }
+
+        if let fallbackHandleID = normalizedAncestorHandleIDs.first ?? normalizedSelectedHandleID {
+            fetchCandidates.append((
+                nodeID: fallbackHandleID,
+                depth: max(1, fallbackDepth)
+            ))
+        } else if let rootBackendNodeID = document.rootNode?.backendNodeID {
+            fetchCandidates.append((
+                nodeID: rootBackendNodeID,
+                depth: max(1, fallbackDepth)
+            ))
+        }
+
+        var attemptedNodeIDs = Set<Int>()
+        for candidate in fetchCandidates {
+            guard attemptedNodeIDs.insert(candidate.nodeID).inserted else {
+                continue
+            }
+            let didMaterialize = await transport.materializeSubtree(
+                nodeID: candidate.nodeID,
+                depth: candidate.depth,
+                expectedContext: expectedContext
+            )
+            guard didMaterialize,
+                  transport.matchesCurrentMutationContext(expectedContext)
+            else {
+                continue
+            }
+            if let materializedNode = document.node(backendNodeID: selectedNodeID) {
+                return materializedNode
+            }
+        }
+
+        return nil
+    }
+
+    private func applySelection(
+        _ node: DOMNodeModel,
+        expectedContext: DOMInspectorRuntime.MutationContext
+    ) async {
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return
+        }
+
+        let selectionPayload = selectionPayloadDictionary(for: node)
+        transport.handleDOMSelectionMessage(selectionPayload)
+        guard transport.matchesCurrentMutationContext(expectedContext) else {
+            return
+        }
+
+        _ = await transport.dispatchSelectionToFrontend(
+            localID: node.localID,
+            expectedContext: expectedContext
+        )
+    }
+
+    private func selectionPayloadDictionary(for node: DOMNodeModel) -> [String: Any] {
+        [
+            "id": node.localID,
+            "preview": selectionPreview(for: node),
+            "attributes": node.attributes.map {
+                [
+                    "nodeId": $0.nodeId as Any,
+                    "name": $0.name,
+                    "value": $0.value,
+                ]
+            },
+            "path": selectionPathLabels(for: node),
+            "selectorPath": node.selectorPath,
+            "styleRevision": node.styleRevision,
+        ]
+    }
+
+    private func selectionPreview(for node: DOMNodeModel) -> String {
+        if !node.preview.isEmpty {
+            return node.preview
+        }
+
+        if node.nodeType == 3 {
+            return node.nodeValue
+        }
+
+        let resolvedLocalName = node.localName.isEmpty ? node.nodeName.lowercased() : node.localName
+        let serializedAttributes = node.attributes.prefix(2).map { attribute in
+            "\(attribute.name)=\"\(attribute.value)\""
+        }.joined(separator: " ")
+        if serializedAttributes.isEmpty {
+            return "<\(resolvedLocalName)>"
+        }
+        return "<\(resolvedLocalName) \(serializedAttributes)>"
+    }
+
+    private func selectionPathLabels(for node: DOMNodeModel) -> [String] {
+        if !node.path.isEmpty {
+            return node.path
+        }
+
+        var labels: [String] = []
+        var currentNode: DOMNodeModel? = node
+        while let current = currentNode {
+            labels.insert(selectionPreview(for: current), at: 0)
+            currentNode = current.parent
+        }
+        return labels
+    }
+
+    private func documentNode(at path: [Int], from root: DOMNodeModel?) -> DOMNodeModel? {
+        guard let root else {
+            return nil
+        }
+        var current = root
+        for index in path {
+            guard index >= 0, index < current.children.count else {
+                return nil
+            }
+            current = current.children[index]
+        }
+        return current
     }
 
     func applyRecoverableError(_ message: String?) {

@@ -226,6 +226,49 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func switchingAwayFromDOMAndBackKeepsDocumentScopeForSamePage() async throws {
+        let controller = makeBoundSession(tabs: [.dom(), .network()])
+        let webView = makeTestWebView()
+
+        await controller.connect(to: webView)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <main id="feed">
+                        <article id="item">Item</article>
+                    </main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+        try await seedDocumentFromPageSnapshot(in: controller.dom, depth: 6)
+        let initialDocumentLoaded = await waitForCondition {
+            self.modelContainsNode(
+                controller.dom.document.rootNode,
+                attributeName: "id",
+                attributeValue: "item"
+            )
+        }
+        #expect(initialDocumentLoaded == true)
+        let initialDocumentScopeID = controller.dom.transport.currentDocumentScopeID
+
+        await selectTab("wi_network", in: controller)
+        await selectTab("wi_dom", in: controller)
+
+        let documentStillAvailable = await waitForCondition(maxAttempts: 160) {
+            self.modelContainsNode(
+                controller.dom.document.rootNode,
+                attributeName: "id",
+                attributeValue: "item"
+            )
+        }
+        #expect(documentStillAvailable == true)
+        #expect(controller.dom.transport.currentDocumentScopeID == initialDocumentScopeID)
+    }
+
+    @Test
     func disconnectKeepsNetworkStoppedForControllerOnlyUsage() async {
         let controller = WIInspectorController()
         let webView = makeTestWebView()
@@ -589,6 +632,35 @@ struct ControllerActivationTests {
         return controller
     }
 
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private func seedDocumentFromPageSnapshot(
+        in inspector: WIDOMInspector,
+        depth: Int
+    ) async throws {
+        let payload = try await inspector.session.captureSnapshotPayload(maxDepth: depth)
+        inspector.transport.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "test-seed",
+                    "snapshot": payload,
+                ],
+                pageEpoch: inspector.transport.currentPageEpoch,
+                documentScopeID: inspector.transport.currentDocumentScopeID
+            )
+        )
+    }
+
     private func makeTestWebView() -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -670,6 +742,47 @@ struct ControllerActivationTests {
             networkMode=\(controller.network.session.mode)
             """
         )
+    }
+
+    private func waitForCondition(
+        maxAttempts: Int = 100,
+        intervalNanoseconds: UInt64 = 20_000_000,
+        _ condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<maxAttempts {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return condition()
+    }
+
+    private func modelContainsNode(
+        _ node: DOMNodeModel?,
+        attributeName: String,
+        attributeValue: String
+    ) -> Bool {
+        guard let node else {
+            return false
+        }
+        if node.attributes.contains(where: { $0.name == attributeName && $0.value == attributeValue }) {
+            return true
+        }
+        for child in node.children where modelContainsNode(child, attributeName: attributeName, attributeValue: attributeValue) {
+            return true
+        }
+        return false
+    }
+
+    @MainActor
+    private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+        var continuation: CheckedContinuation<Void, Never>?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            continuation?.resume()
+            continuation = nil
+        }
     }
 
 #if canImport(UIKit)

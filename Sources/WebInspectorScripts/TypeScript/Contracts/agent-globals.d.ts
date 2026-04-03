@@ -7,12 +7,24 @@ type WebKitMessageHandler = {
 declare global {
     interface Window {
         __wiDOMFrontendInitialPageEpoch?: number;
+        __wiDOMAgentBootstrap?: {
+            pageEpoch?: number;
+            documentScopeID?: number;
+            autoSnapshot?: {
+                enabled?: boolean;
+                maxDepth?: number;
+                debounce?: number;
+            };
+        };
         __wiDOMFrontendBootstrap?: {
             config?: {
                 snapshotDepth?: number;
                 subtreeDepth?: number;
                 autoUpdateDebounce?: number;
+            };
+            context?: {
                 pageEpoch?: number;
+                documentScopeID?: number;
             };
             preferredDepth?: number;
             pendingDocumentRequest?: {
@@ -25,6 +37,16 @@ declare global {
             __installed?: boolean;
             detach?: () => void;
             setPageEpoch?: (epoch: number) => void;
+            setPendingSelectionPath?: (path: number[] | null) => boolean;
+            bootstrap?: (bootstrap?: {
+                pageEpoch?: number;
+                documentScopeID?: number;
+                autoSnapshot?: {
+                    enabled?: boolean;
+                    maxDepth?: number;
+                    debounce?: number;
+                };
+            } | null) => boolean;
         };
         webInspectorNetworkAgent?: {
             __installed?: boolean;
@@ -38,6 +60,7 @@ declare global {
             messageHandlers?: {
                 webInspectorDOMSnapshot?: WebKitMessageHandler;
                 webInspectorDOMMutations?: WebKitMessageHandler;
+                webInspectorDOMLog?: WebKitMessageHandler;
                 webInspectorDomRequestDocument?: WebKitMessageHandler;
                 webInspectorDomRequestChildren?: WebKitMessageHandler;
                 webInspectorDomHighlight?: WebKitMessageHandler;

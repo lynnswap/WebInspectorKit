@@ -1,5 +1,13 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
-import {captureDOMEnvelope, describe, layoutInfoForNode, rememberNode} from "./dom-agent-dom-core";
+import {
+    captureDOMEnvelope,
+    describe,
+    inspectableChildCount,
+    layoutInfoForNode,
+    mutationTouchesInspectableDOM,
+    previousInspectableSibling,
+    rememberNode
+} from "./dom-agent-dom-core";
 
 const MAX_PENDING_MUTATIONS = 1500;
 const MAX_LAYOUT_INFO_RECORDS = 400;
@@ -33,8 +41,20 @@ function mutationUpdateHandler(): MessageHandler | null {
     return window?.webkit?.messageHandlers?.webInspectorDOMMutations || null;
 }
 
+function domLogHandler(): MessageHandler | null {
+    return window?.webkit?.messageHandlers?.webInspectorDOMLog || null;
+}
+
+function postDOMTrace(message: string): void {
+    try {
+        domLogHandler()?.postMessage({message});
+    } catch {
+    }
+}
+
 export function enableAutoSnapshotIfSupported() {
     if (autoSnapshotHandler()) {
+        postDOMTrace(`enableAutoSnapshotIfSupported handlerPresent=true enabled=${inspector.snapshotAutoUpdateEnabled}`);
         enableAutoSnapshot();
     }
 }
@@ -50,17 +70,22 @@ function ensureAutoSnapshotObserver(): MutationObserver | null {
         if (!mutations || !mutations.length) {
             return;
         }
+        var inspectableMutations = mutations.filter(mutationTouchesInspectableDOM);
+        if (!inspectableMutations.length) {
+            return;
+        }
+        postDOMTrace(`MutationObserver observed count=${inspectableMutations.length} enabled=${inspector.snapshotAutoUpdateEnabled} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         var queue = inspector.pendingMutations;
         if (!Array.isArray(queue)) {
             queue = inspector.pendingMutations = [];
         }
         var overflow = false;
-        for (var i = 0; i < mutations.length; ++i) {
+        for (var i = 0; i < inspectableMutations.length; ++i) {
             if (queue.length >= MAX_PENDING_MUTATIONS) {
                 overflow = true;
                 break;
             }
-            queue.push(mutations[i]);
+            queue.push(inspectableMutations[i]);
         }
         if (overflow) {
             inspector.snapshotAutoUpdateOverflow = true;
@@ -174,6 +199,10 @@ function queueSnapshotAutoUpdateDispatch(reason: string) {
     if (inspector.snapshotAutoUpdateFrame !== null) {
         return;
     }
+    if (typeof requestAnimationFrame !== "function") {
+        sendAutoSnapshotUpdate(reason);
+        return;
+    }
     inspector.snapshotAutoUpdateFrame = requestAnimationFrame(function() {
         inspector.snapshotAutoUpdateFrame = null;
         if (!inspector.snapshotAutoUpdateEnabled) {
@@ -186,6 +215,7 @@ function queueSnapshotAutoUpdateDispatch(reason: string) {
 function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
     var handler = autoSnapshotHandler();
     if (!handler) {
+        postDOMTrace(`sendFullSnapshot skipped missingHandler reason=${reason}`);
         return;
     }
     try {
@@ -198,6 +228,7 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             version: 1,
             kind: "snapshot",
             reason: reason || inspector.snapshotAutoUpdateReason || "mutation",
+            snapshotMode: inspector.nextInitialSnapshotMode || undefined,
             depth: maxDepth,
             documentURL: document.URL || "",
             snapshot: snapshot,
@@ -209,7 +240,9 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             documentScopeID: inspector.documentScopeID,
             bundle: payload
         });
+        postDOMTrace(`sendFullSnapshot posted reason=${payload.reason} depth=${maxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     } catch (error) {
+        postDOMTrace(`sendFullSnapshot failed reason=${reason} error=${String(error)}`);
         console.error("auto snapshot failed", error);
     }
 }
@@ -273,7 +306,7 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
     }
     for (var i = 0; i < records.length; ++i) {
         var record = records[i];
-        if (!record || !record.target) {
+        if (!record || !record.target || !mutationTouchesInspectableDOM(record)) {
             continue;
         }
         var targetId = rememberNode(record.target as AnyNode);
@@ -315,12 +348,15 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
             break;
         }
         case "childList": {
+            var hadInspectableChildMutation = false;
             if (record.removedNodes && record.removedNodes.length) {
                 for (var r = 0; r < record.removedNodes.length; ++r) {
-                    var removedNodeId = rememberNode(record.removedNodes[r] as AnyNode);
+                    var removedNode = record.removedNodes[r] as AnyNode;
+                    var removedNodeId = rememberNode(removedNode);
                     if (!removedNodeId) {
                         continue;
                     }
+                    hadInspectableChildMutation = true;
                     events.push({
                         method: "DOM.childNodeRemoved",
                         params: {
@@ -334,13 +370,14 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
                 }
             }
             if (record.addedNodes && record.addedNodes.length) {
-                var referenceNode = record.previousSibling || null;
+                var referenceNode = previousInspectableSibling(record.previousSibling);
                 for (var a = 0; a < record.addedNodes.length; ++a) {
                     var addedNode = record.addedNodes[a];
                     var descriptor = describe(addedNode as AnyNode, 0, descriptorDepth, null);
                     if (!descriptor) {
                         continue;
                     }
+                    hadInspectableChildMutation = true;
                     var previousNodeId = referenceNode ? rememberNode(referenceNode as AnyNode) : 0;
                     events.push({
                         method: "DOM.childNodeInserted",
@@ -356,13 +393,16 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
                     referenceNode = addedNode;
                 }
             }
+            if (!hadInspectableChildMutation) {
+                break;
+            }
             if (!childCountUpdates.has(targetId)) {
                 if (bumpEventCount()) {
                     return {events: [], compactTriggered: true};
                 }
             }
             childCountUpdates.set(targetId, {
-                count: record.target.childNodes ? record.target.childNodes.length : 0
+                count: inspectableChildCount(record.target)
             });
             break;
         }
@@ -423,6 +463,7 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
 function sendAutoSnapshotUpdate(reasonOverride?: string) {
     var mutationHandler = mutationUpdateHandler();
     if (!mutationHandler) {
+        postDOMTrace("sendAutoSnapshotUpdate missing mutation handler; detaching");
         const webInspectorDOM = window.webInspectorDOM as { detach?: () => void } | undefined;
         webInspectorDOM?.detach?.();
         return;
@@ -433,9 +474,14 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
     var overflow = inspector.snapshotAutoUpdateOverflow === true;
     inspector.snapshotAutoUpdateOverflow = false;
     var mapSize = inspector.map?.size || 0;
-    if (!mapSize) {
+    postDOMTrace(`sendAutoSnapshotUpdate reason=${reasonOverride || inspector.snapshotAutoUpdateReason} pending=${pending.length} overflow=${overflow} mapSize=${mapSize} enabled=${inspector.snapshotAutoUpdateEnabled} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
+    if (inspector.nextInitialSnapshotMode || !mapSize) {
         sendFullSnapshot("initial");
-        return;
+        inspector.nextInitialSnapshotMode = null;
+        mapSize = inspector.map?.size || 0;
+        if (!pending.length) {
+            return;
+        }
     }
     
     if (overflow) {
@@ -475,8 +521,10 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
                 documentScopeID: inspector.documentScopeID,
                 bundle: payload
             });
+            postDOMTrace(`sendAutoSnapshotUpdate posted mutation chunkSize=${payload.events.length} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         }
     } catch (error) {
+        postDOMTrace(`sendAutoSnapshotUpdate failed error=${String(error)}`);
         console.error("mutation update failed", error);
         sendFullSnapshot("post-error");
     }
@@ -498,6 +546,7 @@ export function configureAutoSnapshot(options: AutoSnapshotOptions | null) {
     if (!options || typeof options !== "object") {
         return;
     }
+    postDOMTrace(`configureAutoSnapshot enabled=${String(options.enabled)} maxDepth=${String(options.maxDepth)} debounce=${String(options.debounce)}`);
     configureAutoSnapshotOptions(options);
     if (options.enabled === true) {
         enableAutoSnapshot();
@@ -513,6 +562,7 @@ export function setAutoSnapshotOptions(options: AutoSnapshotOptions | null) {
 
 export function enableAutoSnapshot() {
     if (inspector.snapshotAutoUpdateEnabled) {
+        postDOMTrace(`enableAutoSnapshot noop alreadyEnabled=true pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         return true;
     }
     inspector.snapshotAutoUpdateEnabled = true;
@@ -520,13 +570,18 @@ export function enableAutoSnapshot() {
         inspector.pendingMutations = [];
     }
     inspector.snapshotAutoUpdateOverflow = false;
+    if (!inspector.nextInitialSnapshotMode) {
+        inspector.nextInitialSnapshotMode = "preserve-ui-state";
+    }
     connectAutoSnapshotObserver();
     scheduleSnapshotAutoUpdate("initial");
+    postDOMTrace(`enableAutoSnapshot activated debounce=${inspector.snapshotAutoUpdateDebounce} maxDepth=${inspector.snapshotAutoUpdateMaxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     return inspector.snapshotAutoUpdateEnabled;
 }
 
 export function disableAutoSnapshot() {
     if (!inspector.snapshotAutoUpdateEnabled) {
+        postDOMTrace("disableAutoSnapshot noop alreadyDisabled=true");
         return false;
     }
     inspector.snapshotAutoUpdateEnabled = false;
@@ -544,7 +599,11 @@ export function disableAutoSnapshot() {
     inspector.snapshotAutoUpdateSuppressedCount = 0;
     inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
     inspector.snapshotAutoUpdatePendingReason = null;
+    if (!inspector.nextInitialSnapshotMode) {
+        inspector.nextInitialSnapshotMode = "preserve-ui-state";
+    }
     disconnectAutoSnapshotObserver();
+    postDOMTrace(`disableAutoSnapshot completed pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     return inspector.snapshotAutoUpdateEnabled;
 }
 

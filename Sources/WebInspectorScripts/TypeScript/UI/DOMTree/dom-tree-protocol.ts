@@ -3,6 +3,7 @@
  */
 
 import {
+    DOMDocumentContext,
     ProtocolConfig,
     RequestDocumentMode,
     RequestDocumentOptions,
@@ -27,16 +28,6 @@ const childNodeRequestCompletedHandlers = new Set<(nodeId: number) => void>();
 
 function typedHandler(name: TypedHandlerName): WebKitMockHandler | null {
     return (window.webkit?.messageHandlers?.[name] as WebKitMockHandler | undefined) ?? null;
-}
-
-function normalizedPageEpoch(partial: ProtocolConfig | null | undefined): number | null {
-    if (typeof partial?.pageEpoch !== "number" || !Number.isFinite(partial.pageEpoch)) {
-        return null;
-    }
-    if (partial.pageEpoch < protocolState.pageEpoch) {
-        return null;
-    }
-    return partial.pageEpoch;
 }
 
 function postTypedMessage(
@@ -100,49 +91,57 @@ export function updateConfig(partial: ProtocolConfig | null | undefined): void {
         return;
     }
 
-    const previousPageEpoch = protocolState.pageEpoch;
-    const previousDocumentScopeID = protocolState.documentScopeID;
-    const hasExplicitPageEpoch =
-        typeof partial.pageEpoch === "number" && Number.isFinite(partial.pageEpoch);
-    const hasExplicitDocumentScopeID =
-        typeof partial.documentScopeID === "number" && Number.isFinite(partial.documentScopeID);
-    const nextPageEpoch = normalizedPageEpoch(partial);
-    const resolvedPageEpoch = typeof nextPageEpoch === "number" ? nextPageEpoch : protocolState.pageEpoch;
-    const nextDocumentScopeID = hasExplicitDocumentScopeID ? partial.documentScopeID ?? protocolState.documentScopeID : protocolState.documentScopeID;
-
-    if (hasExplicitPageEpoch && nextPageEpoch == null) {
-        return;
-    }
-    if ((hasExplicitPageEpoch || hasExplicitDocumentScopeID)
-        && resolvedPageEpoch === protocolState.pageEpoch
-        && nextDocumentScopeID < protocolState.documentScopeID) {
-        return;
-    }
-
     if (typeof partial.snapshotDepth === "number") {
         protocolState.snapshotDepth = partial.snapshotDepth;
     }
     if (typeof partial.subtreeDepth === "number") {
         protocolState.subtreeDepth = partial.subtreeDepth;
     }
-    if (typeof nextPageEpoch === "number") {
-        protocolState.pageEpoch = nextPageEpoch;
-    }
-    if (hasExplicitDocumentScopeID) {
-        protocolState.documentScopeID = nextDocumentScopeID;
+}
+
+export function adoptDocumentContext(context: DOMDocumentContext | null | undefined): boolean {
+    if (typeof context !== "object" || context === null) {
+        return false;
     }
 
-    if (
-        protocolState.pageEpoch !== previousPageEpoch
-        || protocolState.documentScopeID != previousDocumentScopeID
-    ) {
-        pendingChildNodeDepths.clear();
-        activeChildNodeRequests.clear();
-        activeChildNodeRequestDepths.clear();
-        pageEpochDidChangeHandlers.forEach((handler) => {
-            handler();
-        });
+    const nextPageEpoch =
+        typeof context.pageEpoch === "number" && Number.isFinite(context.pageEpoch)
+            ? context.pageEpoch
+            : protocolState.pageEpoch;
+    const nextDocumentScopeID =
+        typeof context.documentScopeID === "number" && Number.isFinite(context.documentScopeID)
+            ? context.documentScopeID
+            : protocolState.documentScopeID;
+
+    const didChange =
+        nextPageEpoch !== protocolState.pageEpoch
+        || nextDocumentScopeID !== protocolState.documentScopeID;
+    if (!didChange) {
+        return true;
     }
+
+    protocolState.pageEpoch = nextPageEpoch;
+    protocolState.documentScopeID = nextDocumentScopeID;
+    pendingChildNodeDepths.clear();
+    activeChildNodeRequests.clear();
+    activeChildNodeRequestDepths.clear();
+    pageEpochDidChangeHandlers.forEach((handler) => {
+        handler();
+    });
+    return true;
+}
+
+export function matchesCurrentDocumentContext(
+    pageEpoch?: number,
+    documentScopeID?: number
+): boolean {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return false;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return false;
+    }
+    return true;
 }
 
 export function requestDocumentFromBackend(options: RequestDocumentOptions = {}): void {
@@ -242,11 +241,14 @@ export function completeChildNodeRequest(nodeId: number, pageEpoch?: number, doc
     markChildNodesRequestCompleted(nodeId);
 }
 
-export function requestHighlightNode(nodeId: number): void {
+export function requestHighlightNode(nodeId: number, options: { reveal?: boolean } = {}): void {
     if (typeof nodeId !== "number" || nodeId <= 0) {
         return;
     }
-    postTypedMessage("webInspectorDomHighlight", { nodeId });
+    postTypedMessage("webInspectorDomHighlight", {
+        nodeId,
+        reveal: options.reveal !== false,
+    });
 }
 
 export function requestHideHighlight(): void {

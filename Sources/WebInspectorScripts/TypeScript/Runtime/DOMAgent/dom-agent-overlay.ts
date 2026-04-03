@@ -1,5 +1,10 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
-import {nodeIsRendered, rectForNode} from "./dom-agent-dom-core";
+import {
+    INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
+    mutationTouchesInspectableDOM,
+    nodeIsRendered,
+    rectForNode
+} from "./dom-agent-dom-core";
 
 function matchesPageEpoch(expectedPageEpoch?: number) {
     return typeof expectedPageEpoch !== "number"
@@ -20,6 +25,7 @@ function ensureOverlay() {
     overlay.style.pointerEvents = "none";
     overlay.style.boxSizing = "border-box";
     overlay.style.display = "none";
+    overlay.setAttribute(INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE, "true");
     document.documentElement.appendChild(overlay);
     inspector.overlay = overlay;
     return overlay;
@@ -59,7 +65,10 @@ function connectOverlayMutationObserver() {
         return;
     }
     if (!inspector.overlayMutationObserver) {
-        inspector.overlayMutationObserver = new MutationObserver(function() {
+        inspector.overlayMutationObserver = new MutationObserver(function(mutations: MutationRecord[]) {
+            if (!Array.isArray(mutations) || !mutations.some(mutationTouchesInspectableDOM)) {
+                return;
+            }
             scheduleOverlayUpdate();
         });
     }
@@ -178,7 +187,7 @@ function scrollRectIntoViewIfNeeded(rect: DOMRect | null) {
     return true;
 }
 
-export function highlightDOMNode(identifier: number, expectedPageEpoch?: number) {
+export function highlightDOMNode(identifier: number, expectedPageEpoch?: number, reveal = true) {
     if (!matchesPageEpoch(expectedPageEpoch)) {
         return false;
     }
@@ -187,20 +196,20 @@ export function highlightDOMNode(identifier: number, expectedPageEpoch?: number)
         return false;
     }
     var node = map.get(identifier);
-    return highlightResolvedNode(node as AnyNode | null, expectedPageEpoch);
+    return highlightResolvedNode(node as AnyNode | null, expectedPageEpoch, reveal);
 }
 
-export function highlightDOMNodeHandle(handle: unknown, expectedPageEpoch?: number) {
+export function highlightDOMNodeHandle(handle: unknown, expectedPageEpoch?: number, reveal = true) {
     if (!matchesPageEpoch(expectedPageEpoch)) {
         return false;
     }
     if (!handle || typeof handle !== "object") {
         return false;
     }
-    return highlightResolvedNode(handle as AnyNode, expectedPageEpoch);
+    return highlightResolvedNode(handle as AnyNode, expectedPageEpoch, reveal);
 }
 
-function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number) {
+function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number, reveal = true) {
     if (!matchesPageEpoch(expectedPageEpoch)) {
         return false;
     }
@@ -213,7 +222,7 @@ function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number)
     }
     setOverlayTarget(node);
     var rect = rectForNode(node);
-    if (rect) {
+    if (reveal && rect) {
         scrollRectIntoViewIfNeeded(rect);
     }
     return true;

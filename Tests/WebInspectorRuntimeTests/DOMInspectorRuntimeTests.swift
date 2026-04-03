@@ -946,6 +946,138 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func preserveSnapshotDoesNotAdvanceDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                    ],
+                ]
+            )
+        )
+
+        let initialDocumentScopeID = store.currentDocumentScopeID
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "manual",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": ["class", "updated"],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialDocumentScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialDocumentScopeID)
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.name == "class")
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "updated")
+    }
+
+    @Test
+    func mutationFlushRebasesObjectEnvelopeToCurrentContextAndDropsPostDocumentUpdatedEvents() async {
+        let store = makeStore(autoUpdateDebounce: 0.01)
+        let initialPageEpoch = store.currentPageEpoch
+        let initialScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+
+        let rebasedBundle = store.testBundleForFrontend(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "pageEpoch": initialPageEpoch,
+                    "documentScopeID": initialScopeID,
+                    "events": [
+                        [
+                            "method": "DOM.documentUpdated",
+                            "params": [:],
+                        ],
+                        [
+                            "method": "DOM.attributeModified",
+                            "params": [
+                                "nodeId": 1,
+                                "name": "class",
+                                "value": "after",
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: initialPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+        #expect(store.currentDocumentScopeID > initialScopeID)
+        #expect(rebasedBundle.pageEpoch == store.currentPageEpoch)
+        #expect(rebasedBundle.documentScopeID == store.currentDocumentScopeID)
+        let embeddedPayload = rebasedBundle.objectEnvelope as? [String: Any]
+        #expect(embeddedPayload?["pageEpoch"] as? Int == store.currentPageEpoch)
+        #expect(embeddedPayload?["documentScopeID"] as? UInt64 == store.currentDocumentScopeID)
+        let events = embeddedPayload?["events"] as? [[String: Any]]
+        #expect(events?.count == 1)
+        #expect(events?.first?["method"] as? String == "DOM.documentUpdated")
+    }
+
+    @Test
+    func mutationFlushRebasesRawJSONPayloadToCurrentContext() async {
+        let store = makeStore(autoUpdateDebounce: 0.01)
+        let initialPageEpoch = store.currentPageEpoch
+        let initialScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        let rawPayload = """
+        {
+          "version": 1,
+          "kind": "mutation",
+          "pageEpoch": \(initialPageEpoch),
+          "documentScopeID": \(initialScopeID),
+          "events": [
+            {
+              "method": "DOM.documentUpdated",
+              "params": {}
+            }
+          ]
+        }
+        """
+        let rebasedBundle = store.testBundleForFrontend(
+            .init(
+                rawJSON: rawPayload,
+                pageEpoch: initialPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+        #expect(store.currentDocumentScopeID > initialScopeID)
+        let embeddedPayload = rebasedBundle.objectEnvelope as? [String: Any]
+        #expect(rebasedBundle.pageEpoch == store.currentPageEpoch)
+        #expect(rebasedBundle.documentScopeID == store.currentDocumentScopeID)
+        #expect(embeddedPayload?["pageEpoch"] as? Int == store.currentPageEpoch)
+        #expect(embeddedPayload?["documentScopeID"] as? UInt64 == store.currentDocumentScopeID)
+    }
+
+    @Test
     func resetMarkedSnapshotClearsPreviousProjectionBeforeApply() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         seedSelection(
@@ -1569,7 +1701,7 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
-    func commitCurrentDocumentScopeClearsPendingUndoSelectionOverride() async {
+    func initialSnapshotClearsPendingUndoSelectionOverride() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.setPendingSelectionOverride(localID: 42)
         store.handleDOMBundle(
@@ -1577,7 +1709,7 @@ struct DOMInspectorRuntimeTests {
                 objectEnvelope: [
                     "version": 1,
                     "kind": "snapshot",
-                    "reason": "documentUpdated",
+                    "reason": "initial",
                     "snapshot": [
                         "root": [
                             "nodeId": 1,
@@ -1595,6 +1727,453 @@ struct DOMInspectorRuntimeTests {
         )
 
         #expect(store.testPendingSelectionOverrideLocalID == nil)
+    }
+
+    @Test
+    func initialSnapshotWithExistingDocumentPreservesDocumentScopeWithoutReplacementFence() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "body")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "body", "class", "same-page"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 2)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "same-page"
+            } == true
+        )
+    }
+
+    @Test
+    func sameDocumentInitialSnapshotDoesNotAdvanceScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "page-one")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one", "class", "preserved"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "preserved"
+            } == true
+        )
+    }
+
+    @Test
+    func sameContextFreshSnapshotDoesNotAdvanceDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "page-one")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshotMode": "fresh",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one", "class", "fresh-same-context"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "fresh-same-context"
+            } == true
+        )
+    }
+
+    @Test
+    func selectionSnapshotModePreservesCurrentDocumentContext() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "before")]
+                    ),
+                ]
+            )
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "selection",
+                    "snapshotMode": "preserve-ui-state",
+                    "snapshot": [
+                        "selectedNodeId": 3,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "before"],
+                                    "children": [
+                                        [
+                                            "nodeId": 3,
+                                            "nodeType": 1,
+                                            "nodeName": "DIV",
+                                            "localName": "div",
+                                            "attributes": ["id", "target"],
+                                            "children": [],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 3)
+    }
+
+    @Test
+    func runtimeDoesNotDropSelectionFollowupMutationsForSameContext() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "selection",
+                    "snapshotMode": "preserve-ui-state",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "body"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.childNodeInserted",
+                            "params": [
+                                "parentNodeId": 2,
+                                "previousNodeId": 0,
+                                "node": [
+                                    "nodeId": 3,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "after-selection"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.rootNode?.children.first?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "after-selection" })
+            } == true
+        )
+    }
+
+    @Test
+    func initialSnapshotWithDifferentDocumentURLAndOlderScopeReplacesCurrentTree() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-two",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-two"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let staleDocumentScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 10,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 11,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: staleDocumentScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == staleDocumentScopeID)
+        #expect(
+            store.currentDocumentModel.rootNode?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "page-one" })
+            } == true
+        )
+        #expect(
+            store.currentDocumentModel.rootNode?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "page-two" })
+            } == false
+        )
     }
 
     @Test
@@ -1756,7 +2335,7 @@ struct DOMInspectorRuntimeTests {
         var highlightedNodeIDs: [Int] = []
         store.testConfigurationApplyOverride = { _ in }
         store.testDocumentRequestApplyOverride = { _, _ in }
-        store.session.testHighlightOverride = { nodeID in
+        store.session.testHighlightOverride = { nodeID, _ in
             highlightedNodeIDs.append(nodeID)
         }
         await drainInitialBootstrapWork(store)
@@ -1807,6 +2386,34 @@ struct DOMInspectorRuntimeTests {
             highlightedNodeIDs == [42]
         }
         #expect(didHighlightAfterReplacement == true)
+    }
+
+    @Test
+    func highlightMessagePreservesRevealIntentFromFrontendPayload() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var highlightedRequests: [(nodeID: Int, reveal: Bool)] = []
+        store.session.testHighlightOverride = { nodeID, reveal in
+            highlightedRequests.append((nodeID, reveal))
+        }
+        await drainInitialBootstrapWork(store)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomHighlight",
+            body: [
+                "nodeId": 42,
+                "reveal": false,
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+
+        let didReceiveHighlight = await waitForCondition(maxAttempts: 5) {
+            highlightedRequests.count == 1
+        }
+
+        #expect(didReceiveHighlight == true)
+        #expect(highlightedRequests.map(\.nodeID) == [42])
+        #expect(highlightedRequests.map(\.reveal) == [false])
     }
 
     @Test

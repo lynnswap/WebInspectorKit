@@ -3,6 +3,8 @@ import WebKit
 @testable import WebInspectorEngine
 @testable import WebInspectorBridge
 
+private let bootstrapUserScriptMarker = "__wiDOMAgentBootstrapUserScript"
+
 @MainActor
 struct DOMSessionTests {
     @Test
@@ -77,7 +79,8 @@ struct DOMSessionTests {
         #expect(addedHandlerNames.contains("webInspectorDOMSnapshot"))
         #expect(addedHandlerNames.contains("webInspectorDOMMutations"))
         #expect(controller.addedHandlers.allSatisfy { $0.world == bridgeWorld })
-        #expect(controller.userScripts.count == 2)
+        #expect(controller.userScripts.count == 3)
+        #expect(controller.userScripts.contains { $0.source.contains(bootstrapUserScriptMarker) })
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorDOM") })
     }
 
@@ -126,7 +129,7 @@ struct DOMSessionTests {
     }
 
     @Test
-    func reattachingSameWebViewAdoptsNewerPageEpochBeforeDocumentScopeCatchesUp() async throws {
+    func reattachingSameWebViewAdoptsObservedDocumentScopeWhenEpochAdvances() async throws {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
@@ -355,7 +358,7 @@ struct DOMSessionTests {
     }
 
     @Test
-    func syncDocumentScopeRefreshesStaleCachedScopeBeforeShortCircuiting() async throws {
+    func syncDocumentScopeAppliesPreparedScopeWhenPageRestoresOlderDocumentScope() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()
         let agent = DOMPageAgent(
@@ -367,17 +370,21 @@ struct DOMSessionTests {
         }
 
         agent.attachPageWebView(webView)
-        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
-        await agent.ensureDOMAgentScriptInstalled(on: webView)
-        await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
         agent.testSetCachedDocumentScopeID(4)
-        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 1)
+        agent.testPageContextFromPageOverride = { _ in
+            .init(pageEpoch: 0, documentScopeID: 1)
+        }
+        var appliedScopeIDs: [UInt64] = []
+        agent.testApplyDocumentScopeIDOverride = { documentScopeID, _ in
+            appliedScopeIDs.append(documentScopeID)
+            return true
+        }
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(4, on: webView)
+
+        #expect(didSync == true)
         #expect(extractDocumentScopeID(from: agent) == 4)
-
-        await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
-
-        #expect(extractDocumentScopeID(from: agent) == 2)
-        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 2)
+        #expect(appliedScopeIDs == [4])
     }
 
     @Test
@@ -585,7 +592,7 @@ struct DOMSessionTests {
 
         _ = await firstSession.attach(to: webView)
         let firstScriptCount = controller.userScripts.count
-        #expect(firstScriptCount == 2)
+        #expect(firstScriptCount == 3)
 
         _ = await secondSession.attach(to: webView)
 
@@ -612,12 +619,44 @@ struct DOMSessionTests {
         await agent.ensureDOMAgentScriptInstalled(on: webView)
         let firstScriptCount = controller.userScripts.count
 
-        #expect(firstScriptCount == 2)
+        #expect(firstScriptCount == 3)
         #expect(registry.domBridgeScriptInstalled(on: controller) == true)
 
         await agent.ensureDOMAgentScriptInstalled(on: webView)
 
         #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
+    func bootstrapRefreshReplacesExistingBootstrapUserScript() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 5, subtreeDepth: 2, autoUpdateDebounce: 0.2),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1, documentScopeID: 2)
+
+        let initialScriptCount = controller.userScripts.count
+        #expect(initialScriptCount == 3)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        await agent.setAutoSnapshot(enabled: true)
+        #expect(controller.userScripts.count == initialScriptCount)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 4)
+        #expect(controller.userScripts.count == initialScriptCount)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        let bootstrapScripts = controller.userScripts.filter { $0.source.contains(bootstrapUserScriptMarker) }
+        #expect(bootstrapScripts.count == 1)
     }
 
     @Test
@@ -699,6 +738,71 @@ struct DOMSessionTests {
 
         #expect(maxDepth == 5)
         #expect(debounce == 300)
+    }
+
+    @Test
+    func documentStartBootstrapRestoresPageContextAndAutoSnapshotAfterReload() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 6, subtreeDepth: 2, autoUpdateDebounce: 0.18),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><p>first</p></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 5)
+        await agent.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 5)
+
+        await loadHTML("<html><body><p>second</p></body></html>", in: webView)
+
+        let restoredAfterReload = await waitForCondition(attempts: 100) {
+            let status = await autoSnapshotStatus(on: webView)
+            let enabled = (status?["snapshotAutoUpdateEnabled"] as? Bool)
+                ?? (status?["snapshotAutoUpdateEnabled"] as? NSNumber)?.boolValue
+                ?? false
+            let maxDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+                ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+            let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+                ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+            let pageEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let documentScopeID = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return enabled && maxDepth == 6 && debounce == 180 && pageEpoch == 3 && documentScopeID == 5
+        }
+
+        #expect(restoredAfterReload == true)
+    }
+
+    @Test
+    func preparingDocumentScopeWhileAttachedRefreshesBootstrapBeforeNextNavigation() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 4, subtreeDepth: 2, autoUpdateDebounce: 0.2))
+        let (webView, _) = makeTestWebView()
+
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><p>first</p></body></html>", in: webView)
+        await session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        session.prepareDocumentScopeID(2)
+
+        let appliedToCurrentPage = await waitForCondition {
+            (try? await currentDOMAgentDocumentScopeID(in: webView)) == 2
+        }
+        #expect(appliedToCurrentPage == true)
+
+        await loadHTML("<html><body><p>second</p></body></html>", in: webView)
+
+        let restoredOnNextNavigation = await waitForCondition {
+            (try? await currentDOMAgentDocumentScopeID(in: webView)) == 2
+        }
+        #expect(restoredOnNextNavigation == true)
     }
 
     @Test

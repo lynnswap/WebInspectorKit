@@ -1,11 +1,21 @@
 import {inspector, type AnyNode, type SelectionState} from "./dom-agent-state";
-import {computeNodePath} from "./dom-agent-dom-core";
+import {
+    computeNodePath,
+    rememberNode,
+    stableNodeIdentifier,
+    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
+} from "./dom-agent-dom-core";
 import {clearHighlight, highlightSelectionNode} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
 
 type SelectionResult = {
     cancelled: boolean;
     requiredDepth: number;
+    selectedPath?: number[];
+    selectedNodeId?: number;
+    ancestorNodeIds?: number[];
+    selectedHandleId?: number;
+    ancestorHandleIds?: number[];
 };
 
 type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
@@ -90,9 +100,81 @@ function scheduleWindowClickBlockerRelease() {
     }, 350);
 }
 
+function createSelectionShield() {
+    const shield = document.createElement("div");
+    shield.setAttribute(INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE, "true");
+    shield.style.position = "fixed";
+    shield.style.left = "0";
+    shield.style.top = "0";
+    shield.style.width = "100vw";
+    shield.style.height = "100vh";
+    shield.style.zIndex = "2147483646";
+    shield.style.background = "transparent";
+    shield.style.cursor = "crosshair";
+    shield.style.pointerEvents = "auto";
+    shield.style.touchAction = "none";
+    shield.style.userSelect = "none";
+    document.documentElement.appendChild(shield);
+    return shield;
+}
+
+function removeSelectionShield(shield: HTMLDivElement | null) {
+    if (!shield || !shield.parentNode) {
+        return;
+    }
+    shield.parentNode.removeChild(shield);
+}
+
+function computeAncestorNodeIds(node: AnyNode | null): number[] {
+    if (!node) {
+        return [];
+    }
+    const root = document.documentElement || document.body;
+    if (!root) {
+        return [];
+    }
+    const ancestorNodeIds: number[] = [];
+    let current = node.parentNode as AnyNode | null;
+    while (current) {
+        const stableNodeId = stableNodeIdentifier(current);
+        if (stableNodeId) {
+            ancestorNodeIds.unshift(stableNodeId);
+        }
+        if (current === root) {
+            break;
+        }
+        current = current.parentNode as AnyNode | null;
+    }
+    return ancestorNodeIds;
+}
+
+function computeAncestorHandleIds(node: AnyNode | null): number[] {
+    if (!node) {
+        return [];
+    }
+    const root = document.documentElement || document.body;
+    if (!root) {
+        return [];
+    }
+    const ancestorHandleIds: number[] = [];
+    let current = node.parentNode as AnyNode | null;
+    while (current) {
+        const handleId = rememberNode(current);
+        if (handleId) {
+            ancestorHandleIds.unshift(handleId);
+        }
+        if (current === root) {
+            break;
+        }
+        current = current.parentNode as AnyNode | null;
+    }
+    return ancestorHandleIds;
+}
+
 export function startElementSelection() {
     cancelElementSelection();
     return new Promise<SelectionResult>(function(resolve) {
+        const selectionShield = createSelectionShield();
         var state: SelectionState = {
             active: true,
             latestTarget: null,
@@ -107,14 +189,18 @@ export function startElementSelection() {
         var listenerOptions = {capture: true, passive: false};
 
         function bind(type: string, handler: EventListenerOrEventListenerObject) {
-            document.addEventListener(type, handler, listenerOptions);
+            selectionShield.addEventListener(type, handler, listenerOptions);
             state.bindings.push([type, handler]);
         }
 
         function removeListeners() {
             for (var i = 0; i < state.bindings.length; ++i) {
                 var binding = state.bindings[i];
-                document.removeEventListener(binding[0], binding[1], listenerOptions);
+                if (binding[0] === "keydown") {
+                    document.removeEventListener(binding[0], binding[1], listenerOptions);
+                    continue;
+                }
+                selectionShield.removeEventListener(binding[0], binding[1], listenerOptions);
             }
             state.bindings = [];
         }
@@ -127,6 +213,9 @@ export function startElementSelection() {
             removeListeners();
             restoreSelectionCursor();
             scheduleWindowClickBlockerRelease();
+            setTimeout(function() {
+                removeSelectionShield(selectionShield);
+            }, 350);
             inspector.selectionState = null;
             resumeSnapshotAutoUpdate("selection");
             resolve(payload);
@@ -146,34 +235,51 @@ export function startElementSelection() {
                 cancelSelection();
                 return;
             }
-            var path = computeNodePath(node);
-            if (!path) {
+            const selectedHandleId = rememberNode(node);
+            if (!selectedHandleId) {
                 cancelSelection();
                 return;
             }
-            inspector.pendingSelectionPath = path;
+            const selectedNodeId = stableNodeIdentifier(node) || selectedHandleId;
+            var path = computeNodePath(node);
             highlightSelectionNode(node);
-            finish({ cancelled: false, requiredDepth: path.length });
+            finish({
+                cancelled: false,
+                requiredDepth: Array.isArray(path) ? path.length : computeAncestorNodeIds(node).length,
+                selectedPath: path || undefined,
+                selectedNodeId,
+                ancestorNodeIds: computeAncestorNodeIds(node),
+                selectedHandleId,
+                ancestorHandleIds: computeAncestorHandleIds(node),
+            });
         }
 
         function resolveEventTarget(event: Event | null) {
             if (!event) {
                 return null;
             }
+            function elementAtPoint(x: number, y: number) {
+                selectionShield.style.pointerEvents = "none";
+                try {
+                    return document.elementFromPoint(x, y);
+                } finally {
+                    selectionShield.style.pointerEvents = "auto";
+                }
+            }
             if ("touches" in event && (event as TouchEvent).touches && (event as TouchEvent).touches.length) {
                 var touch = (event as TouchEvent).touches[(event as TouchEvent).touches.length - 1];
-                var candidate = document.elementFromPoint(touch.clientX, touch.clientY);
+                var candidate = elementAtPoint(touch.clientX, touch.clientY);
                 return (candidate as AnyNode | null) || (event.target as AnyNode | null) || null;
             }
             if ("changedTouches" in event && (event as TouchEvent).changedTouches && (event as TouchEvent).changedTouches.length) {
                 var changed = (event as TouchEvent).changedTouches[(event as TouchEvent).changedTouches.length - 1];
-                var fallback = document.elementFromPoint(changed.clientX, changed.clientY);
+                var fallback = elementAtPoint(changed.clientX, changed.clientY);
                 return (fallback as AnyNode | null) || (event.target as AnyNode | null) || null;
             }
             if ("clientX" in event && "clientY" in event) {
                 const pointerEvent = event as MouseEvent | PointerEvent;
                 if (typeof pointerEvent.clientX === "number" && typeof pointerEvent.clientY === "number") {
-                    var pointTarget = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+                    var pointTarget = elementAtPoint(pointerEvent.clientX, pointerEvent.clientY);
                     return (pointTarget as AnyNode | null) || (event.target as AnyNode | null) || null;
                 }
             }
@@ -230,7 +336,8 @@ export function startElementSelection() {
         upEvents.forEach(function(type) { bind(type, handlePointerLikeUp); });
         bind("touchcancel", handleTouchCancel);
         blockOnlyEvents.forEach(function(type) { bind(type, preventDefaultHandler); });
-        bind("keydown", handleKeyDown);
+        document.addEventListener("keydown", handleKeyDown, listenerOptions);
+        state.bindings.push(["keydown", handleKeyDown]);
     });
 }
 
@@ -243,5 +350,20 @@ export function cancelElementSelection() {
     inspector.pendingSelectionPath = null;
     restoreSelectionCursor();
     uninstallWindowClickBlocker();
+    removeSelectionShield(
+        document.querySelector(`[${INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE}]`) as HTMLDivElement | null
+    );
     return false;
+}
+
+export function setPendingSelectionPath(path: unknown) {
+    if (!Array.isArray(path)) {
+        inspector.pendingSelectionPath = null;
+        return false;
+    }
+    const normalizedPath = path.filter(function(entry): entry is number {
+        return typeof entry === "number" && Number.isFinite(entry) && entry >= 0;
+    });
+    inspector.pendingSelectionPath = normalizedPath.length ? normalizedPath : null;
+    return normalizedPath.length > 0;
 }

@@ -40,7 +40,16 @@ final class DOMPayloadNormalizer {
         switch stringValue(object["kind"]) {
         case "snapshot":
             let reason = stringValue(object["reason"])
-            let shouldResetDocument = reason == "initial"
+            let snapshotMode = stringValue(object["snapshotMode"])
+            let shouldResetDocument: Bool
+            switch snapshotMode {
+            case "fresh":
+                shouldResetDocument = true
+            case "preserve-ui-state":
+                shouldResetDocument = false
+            default:
+                shouldResetDocument = reason == "initial"
+            }
             if shouldResetDocument {
                 resetForDocumentUpdate()
             }

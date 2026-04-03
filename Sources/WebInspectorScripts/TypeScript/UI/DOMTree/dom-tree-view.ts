@@ -9,11 +9,13 @@
 
 import { DOMFrontendBootstrapState, WebInspectorDOMFrontend } from "./dom-tree-types";
 import {
+    adoptDocumentContext,
     updateConfig,
     completeChildNodeRequest,
     rejectChildNodeRequest,
     retryQueuedChildNodeRequests,
     resetChildNodeRequests,
+    matchesCurrentDocumentContext,
 } from "./dom-tree-protocol";
 import { protocolState } from "./dom-tree-state";
 import {
@@ -28,7 +30,7 @@ import {
     registerTreeHandlers,
     setPreferredDepth,
 } from "./dom-tree-snapshot";
-import { setSearchTerm } from "./dom-tree-view-support";
+import { selectNode, setSearchTerm } from "./dom-tree-view-support";
 
 // =============================================================================
 // Event Handlers
@@ -39,6 +41,9 @@ function attachEventListeners(): void {
     const bootstrap = readBootstrap();
     if (bootstrap.config) {
         updateConfig(bootstrap.config);
+    }
+    if (bootstrap.context) {
+        adoptDocumentContext(bootstrap.context);
     }
     if (typeof bootstrap.preferredDepth === "number") {
         setPreferredDepth(bootstrap.preferredDepth, protocolState.pageEpoch);
@@ -85,27 +90,56 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            const incomingContext = { pageEpoch, documentScopeID };
+            if (mode === "preserve-ui-state" && !matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
-            setSnapshot(snapshot as never, { mode });
+            const previousContext = {
+                pageEpoch: protocolState.pageEpoch,
+                documentScopeID: protocolState.documentScopeID,
+            };
+            if (mode === "fresh") {
+                adoptDocumentContext(incomingContext);
+            }
+            if (!setSnapshot(snapshot as never, { mode })) {
+                if (mode === "fresh") {
+                    adoptDocumentContext(previousContext);
+                }
+                return;
+            }
         },
         applySubtreePayload: (
             payload,
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
-            applySubtree(payload as never);
+            if (!applySubtree(payload as never)) {
+                return;
+            }
+        },
+        applySelectionPayload: (
+            nodeId,
+            pageEpoch = protocolState.pageEpoch,
+            documentScopeID = protocolState.documentScopeID
+        ) => {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+                return false;
+            }
+            return selectNode(nodeId, {
+                shouldHighlight: false,
+                autoScroll: true,
+                notifyNative: false,
+            });
         },
         completeChildNodeRequest: (
             nodeId,
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             completeChildNodeRequest(nodeId, pageEpoch, documentScopeID);
@@ -115,7 +149,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             rejectChildNodeRequest(nodeId, pageEpoch, documentScopeID);
@@ -124,7 +158,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             retryQueuedChildNodeRequests();
@@ -133,7 +167,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             resetChildNodeRequests(pageEpoch, documentScopeID);
@@ -142,7 +176,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             resetDocumentRequestStateForPageEpoch(pageEpoch, documentScopeID);
@@ -151,7 +185,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             rejectDocumentRequest(pageEpoch, documentScopeID);
@@ -160,7 +194,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             completeDocumentRequest(pageEpoch, documentScopeID);

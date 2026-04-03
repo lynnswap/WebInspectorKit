@@ -64,7 +64,13 @@ final class DOMInspectorBridge: NSObject {
         let controller = inspectorWebView.configuration.userContentController
         let bootstrapPayload = runtime?.currentBootstrapPayload ?? [
             "config": [
+                "snapshotDepth": 4,
+                "subtreeDepth": 3,
+                "autoUpdateDebounce": 0.6,
+            ],
+            "context": [
                 "pageEpoch": runtime?.currentPageEpoch ?? 0,
+                "documentScopeID": runtime?.currentDocumentScopeID ?? 0,
             ],
         ]
         let bootstrapData = try? JSONSerialization.data(withJSONObject: bootstrapPayload)
@@ -119,7 +125,13 @@ final class DOMInspectorBridge: NSObject {
     private func applyLatestBootstrapPayload(on inspectorWebView: InspectorWebView) {
         let bootstrapPayload = runtime?.currentBootstrapPayload ?? [
             "config": [
+                "snapshotDepth": 4,
+                "subtreeDepth": 3,
+                "autoUpdateDebounce": 0.6,
+            ],
+            "context": [
                 "pageEpoch": runtime?.currentPageEpoch ?? 0,
+                "documentScopeID": runtime?.currentDocumentScopeID ?? 0,
             ],
         ]
         guard let bootstrapData = try? JSONSerialization.data(withJSONObject: bootstrapPayload),
@@ -190,6 +202,22 @@ final class DOMInspectorBridge: NSObject {
         return nil
     }
 
+    private func readRevealFlag(from payload: Any?) -> Bool? {
+        if let dictionary = payload as? [String: Any] {
+            return parseBooleanValue(dictionary["reveal"])
+        }
+        if let dictionary = payload as? NSDictionary {
+            return parseBooleanValue(dictionary["reveal"])
+        }
+        if let string = payload as? String,
+           let data = string.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data),
+           let dictionary = object as? [String: Any] {
+            return parseBooleanValue(dictionary["reveal"])
+        }
+        return nil
+    }
+
     private func parsePageEpochValue(_ value: Any?) -> Int? {
         parseIntegerValue(value)
     }
@@ -219,6 +247,26 @@ final class DOMInspectorBridge: NSObject {
         }
         if let value = value as? String, let parsed = UInt64(value) {
             return parsed
+        }
+        return nil
+    }
+
+    private func parseBooleanValue(_ value: Any?) -> Bool? {
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.boolValue
+        }
+        if let value = value as? String {
+            switch value.lowercased() {
+            case "true", "1":
+                return true
+            case "false", "0":
+                return false
+            default:
+                return nil
+            }
         }
         return nil
     }

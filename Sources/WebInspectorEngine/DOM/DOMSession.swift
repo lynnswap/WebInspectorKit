@@ -3,6 +3,17 @@ import WebKit
 package struct DOMPageContext: Equatable, Sendable {
     package let pageEpoch: Int
     package let documentScopeID: DOMDocumentScopeID
+    package let documentURL: String?
+
+    package init(
+        pageEpoch: Int,
+        documentScopeID: DOMDocumentScopeID,
+        documentURL: String? = nil
+    ) {
+        self.pageEpoch = pageEpoch
+        self.documentScopeID = documentScopeID
+        self.documentURL = documentURL
+    }
 }
 
 package enum DOMMutationExecutionResult<Payload: Sendable>: Sendable {
@@ -26,6 +37,7 @@ package final class DOMSession {
     private var autoSnapshotEnabled = false
     private var preparedPageEpoch = 0
     private var preparedDocumentScopeID: DOMDocumentScopeID = 0
+    private var preparedDocumentURL: String?
 
 #if DEBUG
     package var testRemoveNodeOverride: (@MainActor (
@@ -46,7 +58,7 @@ package final class DOMSession {
         _ expectedDocumentScopeID: DOMDocumentScopeID?,
         _ perform: @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
     ) async -> DOMMutationExecutionResult<Void>)?
-    package var testHighlightOverride: (@MainActor (Int) async -> Void)?
+    package var testHighlightOverride: (@MainActor (Int, Bool) async -> Void)?
     package var testHideHighlightOverride: (@MainActor () async -> Void)?
 #endif
 
@@ -104,11 +116,15 @@ package final class DOMSession {
         let shouldPreserveState = pageAgent.webView == nil && previousWebView === webView
         let shouldReload = shouldPreserveState || previousWebView !== webView
         pageAgent.attachPageWebView(webView)
-        await pageAgent.ensureDOMAgentScriptInstalled(
-            on: webView,
-            pageEpoch: preparedPageEpoch,
-            documentScopeID: preparedDocumentScopeID
-        )
+        await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
+        let existingPageContext = await pageAgent.readPageContext(on: webView)
+        if !shouldPreferObservedPageContextDuringAttach(existingPageContext) {
+            await pageAgent.ensureDOMAgentScriptInstalled(
+                on: webView,
+                pageEpoch: preparedPageEpoch,
+                documentScopeID: preparedDocumentScopeID
+            )
+        }
         let observedPageContext = await readObservedPageContextIfNewer(on: webView)
         lastPageWebView = webView
 
@@ -130,17 +146,39 @@ package final class DOMSession {
         pageAgent.cancelPreparedPageContextSync()
         preparedPageEpoch = refreshedPageContext.pageEpoch
         preparedDocumentScopeID = refreshedPageContext.documentScopeID
+        preparedDocumentURL = normalizedDocumentURL(refreshedPageContext.documentURL)
         return refreshedPageContext
     }
 
     private func shouldAdoptObservedPageContext(_ pageContext: DOMPageContext) -> Bool {
-        if pageContext.pageEpoch > preparedPageEpoch {
+        let observedDocumentURL = normalizedDocumentURL(pageContext.documentURL)
+        if let observedDocumentURL,
+           observedDocumentURL != preparedDocumentURL {
             return true
         }
-        if pageContext.pageEpoch < preparedPageEpoch {
+        return pageContext.pageEpoch != preparedPageEpoch
+            || pageContext.documentScopeID != preparedDocumentScopeID
+    }
+
+    private func shouldPreferObservedPageContextDuringAttach(_ pageContext: DOMPageContext?) -> Bool {
+        guard let pageContext else {
             return false
         }
-        return pageContext.documentScopeID > preparedDocumentScopeID
+        if preparedPageEpoch == nil
+            && preparedDocumentScopeID == nil
+            && preparedDocumentURL == nil
+        {
+            return true
+        }
+        let observedDocumentURL = normalizedDocumentURL(pageContext.documentURL)
+        if let observedDocumentURL,
+           let preparedDocumentURL,
+           observedDocumentURL != preparedDocumentURL {
+            return true
+        }
+        return pageContext.pageEpoch == preparedPageEpoch
+            && pageContext.documentScopeID == preparedDocumentScopeID
+            && observedDocumentURL == preparedDocumentURL
     }
 
     package func suspend() async {
@@ -150,6 +188,7 @@ package final class DOMSession {
     package func detach() async {
         await suspend()
         lastPageWebView = nil
+        preparedDocumentURL = nil
     }
 
     package func reloadPage() {
@@ -168,18 +207,17 @@ package final class DOMSession {
 
     package func setAutoSnapshot(enabled: Bool) async {
         autoSnapshotEnabled = enabled
-        guard pageAgent.webView != nil else {
-            return
-        }
         await pageAgent.setAutoSnapshot(enabled: enabled)
     }
 
     package func preparePageEpoch(_ epoch: Int) {
         preparedPageEpoch = epoch
+        pageAgent.preparePageEpoch(epoch)
     }
 
     package func prepareDocumentScopeID(_ scopeID: DOMDocumentScopeID) {
         preparedDocumentScopeID = scopeID
+        pageAgent.prepareDocumentScopeID(scopeID)
     }
 
     package func syncCurrentDocumentScopeIDIfNeeded(
@@ -202,11 +240,19 @@ package final class DOMSession {
         pageAgent.tearDownForDeinit()
         lastPageWebView = nil
         autoSnapshotEnabled = false
+        preparedDocumentURL = nil
     }
 
     package var currentPageContext: DOMPageContext {
         pageAgent.currentPageContext
     }
+}
+
+private func normalizedDocumentURL(_ documentURL: String?) -> String? {
+    guard let documentURL, !documentURL.isEmpty else {
+        return nil
+    }
+    return documentURL
 }
 
 // MARK: - Snapshot API (for DOMTreeView)
@@ -248,14 +294,18 @@ extension DOMSession {
         await pageAgent.cancelSelectionMode()
     }
 
-    package func highlight(nodeId: Int) async {
+    package func setPendingSelectionPath(_ path: [Int]?) async {
+        await pageAgent.setPendingSelectionPath(path)
+    }
+
+    package func highlight(nodeId: Int, reveal: Bool = true) async {
 #if DEBUG
         if let testHighlightOverride {
-            await testHighlightOverride(nodeId)
+            await testHighlightOverride(nodeId, reveal)
             return
         }
 #endif
-        await pageAgent.highlight(nodeId: nodeId)
+        await pageAgent.highlight(nodeId: nodeId, reveal: reveal)
     }
 
     package func hideHighlight() async {

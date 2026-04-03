@@ -639,6 +639,7 @@ export function debugStatus() {
         pendingMutations: Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.length : 0,
         overlayActive: !!inspector.overlayTarget,
         selectionActive: !!inspector.selectionState,
+        nextInitialSnapshotMode: inspector.nextInitialSnapshotMode,
         documentURL: inspector.documentURL || document.URL || "",
         pageEpoch: inspector.pageEpoch,
         documentScopeID: inspector.documentScopeID

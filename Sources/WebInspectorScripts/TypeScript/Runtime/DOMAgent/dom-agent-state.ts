@@ -12,6 +12,8 @@ export type SelectionState = {
     cancel?: () => void;
 };
 
+export type InitialSnapshotMode = "fresh" | "preserve-ui-state";
+
 export type InspectorState = {
     map: Map<number, AnyNode> | null;
     nodeMap: WeakMap<AnyNode, number> | null;
@@ -41,16 +43,60 @@ export type InspectorState = {
     snapshotAutoUpdateSuppressedCount: number;
     snapshotAutoUpdatePendingWhileSuppressed: boolean;
     snapshotAutoUpdatePendingReason: string | null;
+    nextInitialSnapshotMode: InitialSnapshotMode | null;
     documentURL: string | null;
     pageEpoch: number;
     documentScopeID: number;
 };
 
+export type DOMAgentAutoSnapshotBootstrap = {
+    enabled?: boolean;
+    maxDepth?: number;
+    debounce?: number;
+};
+
+export type DOMAgentBootstrapState = {
+    pageEpoch?: number;
+    documentScopeID?: number;
+    autoSnapshot?: DOMAgentAutoSnapshotBootstrap;
+};
+
+function readFiniteNumber(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        return null;
+    }
+    return value;
+}
+
+function readPositiveNumber(value: unknown, fallback: number, minimum = 1): number {
+    const numericValue = readFiniteNumber(value);
+    if (numericValue === null || numericValue < minimum) {
+        return fallback;
+    }
+    return numericValue;
+}
+
+export function readDOMAgentBootstrap(): DOMAgentBootstrapState {
+    const bootstrap = (window as Window & {
+        __wiDOMAgentBootstrap?: DOMAgentBootstrapState;
+    }).__wiDOMAgentBootstrap;
+    if (!bootstrap || typeof bootstrap !== "object") {
+        return {};
+    }
+    return bootstrap;
+}
+
+const initialBootstrap = readDOMAgentBootstrap();
 const initialPageEpoch =
-    typeof window.__wiDOMFrontendInitialPageEpoch === "number"
-    && Number.isFinite(window.__wiDOMFrontendInitialPageEpoch)
-        ? window.__wiDOMFrontendInitialPageEpoch
-        : 0;
+    readFiniteNumber(initialBootstrap.pageEpoch)
+    ?? (
+        typeof window.__wiDOMFrontendInitialPageEpoch === "number"
+        && Number.isFinite(window.__wiDOMFrontendInitialPageEpoch)
+            ? window.__wiDOMFrontendInitialPageEpoch
+            : 0
+    );
+const initialDocumentScopeID = readFiniteNumber(initialBootstrap.documentScopeID) ?? 0;
+const initialAutoSnapshot = initialBootstrap.autoSnapshot;
 
 export const inspector: InspectorState = {
     map: new Map<number, AnyNode>(),
@@ -73,15 +119,40 @@ export const inspector: InspectorState = {
     snapshotAutoUpdatePending: false,
     snapshotAutoUpdateTimer: null,
     snapshotAutoUpdateFrame: null,
-    snapshotAutoUpdateDebounce: 600,
-    snapshotAutoUpdateMaxDepth: 4,
+    snapshotAutoUpdateDebounce: readPositiveNumber(initialAutoSnapshot?.debounce, 600, 50),
+    snapshotAutoUpdateMaxDepth: readPositiveNumber(initialAutoSnapshot?.maxDepth, 4),
     snapshotAutoUpdateReason: "mutation",
     pendingMutations: [],
     snapshotAutoUpdateOverflow: false,
     snapshotAutoUpdateSuppressedCount: 0,
     snapshotAutoUpdatePendingWhileSuppressed: false,
     snapshotAutoUpdatePendingReason: null,
+    nextInitialSnapshotMode: "fresh",
     documentURL: null,
     pageEpoch: initialPageEpoch,
-    documentScopeID: 0
+    documentScopeID: initialDocumentScopeID
 };
+
+export function applyDOMAgentBootstrapContext(bootstrap: DOMAgentBootstrapState | null | undefined): boolean {
+    if (!bootstrap || typeof bootstrap !== "object") {
+        return false;
+    }
+    let didApply = false;
+    const pageEpoch = readFiniteNumber(bootstrap.pageEpoch);
+    if (pageEpoch !== null) {
+        if (pageEpoch !== inspector.pageEpoch) {
+            inspector.nextInitialSnapshotMode = "fresh";
+        }
+        inspector.pageEpoch = pageEpoch;
+        didApply = true;
+    }
+    const documentScopeID = readFiniteNumber(bootstrap.documentScopeID);
+    if (documentScopeID !== null) {
+        if (documentScopeID !== inspector.documentScopeID) {
+            inspector.nextInitialSnapshotMode = "fresh";
+        }
+        inspector.documentScopeID = documentScopeID;
+        didApply = true;
+    }
+    return didApply;
+}

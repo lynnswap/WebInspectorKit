@@ -13,6 +13,7 @@ package final class WIUserContentControllerStateRegistry {
 
     private final class StateBox {
         var domBridgeScriptInstalled = false
+        var domBootstrapSignature: String?
         var networkBridgeScriptInstalled = false
         var networkTokenBootstrapSignature: String?
     }
@@ -35,6 +36,17 @@ package final class WIUserContentControllerStateRegistry {
             return
         }
         state.domBridgeScriptInstalled = installed
+    }
+
+    package func domBootstrapSignature(on controller: WKUserContentController) -> String? {
+        stateBox(for: controller)?.domBootstrapSignature
+    }
+
+    package func setDOMBootstrapSignature(_ signature: String?, on controller: WKUserContentController) {
+        guard let state = stateBox(for: controller, createIfNeeded: true) else {
+            return
+        }
+        state.domBootstrapSignature = signature
     }
 
     package func networkBridgeScriptInstalled(on controller: WKUserContentController) -> Bool {

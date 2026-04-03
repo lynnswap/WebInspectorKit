@@ -108,6 +108,7 @@ package final class DOMInspectorRuntime: NSObject {
     private var replacementFenceContext: MutationContext?
     private var deferredReadyMessageContexts: [MutationContext] = []
     private var pendingSelectionOverrideLocalID: UInt64?
+    private var lastSnapshotDocumentURL: String?
     private var pendingDocumentScopeSyncTask: Task<Bool, Never>?
     private var pendingDocumentScopeRecoveryTask: Task<Void, Never>?
     private var pendingDocumentScopeSyncGeneration: UInt64 = 0
@@ -207,6 +208,7 @@ package final class DOMInspectorRuntime: NSObject {
     func resetDocumentStoreForDetachment() {
         deferredReadyMessageContexts.removeAll(keepingCapacity: true)
         replacementFenceContext = nil
+        lastSnapshotDocumentURL = nil
         replaceCurrentDocumentModel()
         payloadNormalizer.resetForDocumentUpdate()
     }
@@ -216,9 +218,14 @@ package final class DOMInspectorRuntime: NSObject {
         _ pageContext: DOMPageContext,
         preserveCurrentDocumentState: Bool = false
     ) async -> Bool {
-        let adoptedPageEpoch = max(pageEpoch, pageContext.pageEpoch)
+        let adoptedPageEpoch = pageContext.pageEpoch
+        let incomingDocumentURL = normalizedDocumentURL(pageContext.documentURL)
+        let didChangeDocument = incomingDocumentURL != nil
+            && incomingDocumentURL != normalizedDocumentURL(lastSnapshotDocumentURL)
+        let hasExistingDocumentContext = currentDocumentModel.rootNode != nil || lastSnapshotDocumentURL != nil
         guard adoptedPageEpoch != pageEpoch
-            || pageContext.documentScopeID > currentDocumentScope.documentScopeID
+            || pageContext.documentScopeID != currentDocumentScope.documentScopeID
+            || (didChangeDocument && hasExistingDocumentContext)
         else {
             return false
         }
@@ -250,6 +257,7 @@ package final class DOMInspectorRuntime: NSObject {
         discardedMutationGeneration = 0
         if !preserveCurrentDocumentState {
             pendingSelectionOverrideLocalID = nil
+            lastSnapshotDocumentURL = incomingDocumentURL
             currentDocumentModel.clearDocument(isFreshDocument: true)
             payloadNormalizer.resetForDocumentUpdate()
         }
@@ -300,9 +308,7 @@ package final class DOMInspectorRuntime: NSObject {
         }
         if mode == .fresh {
             let transition = beginTransition(advancePageEpoch: false)
-            let nextDocumentScope = makeNextDocumentScope()
             let currentProjectedDocumentScopeID = currentDocumentScope.documentScopeID
-            let allowsMissingPageScopeSync = session.hasPageWebView == false
             guard acceptsExpectedPageEpoch(expectedPageEpoch),
                   acceptsExpectedDocumentScopeID(expectedDocumentScopeID),
                   pageEpoch == transition.epoch,
@@ -334,26 +340,12 @@ package final class DOMInspectorRuntime: NSObject {
                 restartSelectionDependentRequestsIfNeeded()
                 return false
             }
-            let didSyncDocumentScope = await syncFreshRequestDocumentScopeID(
-                nextDocumentScope.documentScopeID,
-                allowsMissingPage: allowsMissingPageScopeSync,
-                expectedPageEpoch: transition.epoch
-            )
-            guard didSyncDocumentScope else {
-                restoreDeferredDOMBundles(from: transition)
-                completeTransition(transition)
-                restartSelectionDependentRequestsIfNeeded()
-                return false
-            }
             guard acceptsExpectedPageEpoch(expectedPageEpoch),
                   acceptsExpectedDocumentScopeID(expectedDocumentScopeID),
                   pageEpoch == transition.epoch,
                   phase.generation == transition.generation
             else {
-                adoptSyncedDocumentScopeAfterAbortedFreshRequest(
-                    nextDocumentScope,
-                    transition: transition
-                )
+                restoreDeferredDOMBundles(from: transition)
                 completeTransition(transition)
                 return false
             }
@@ -363,10 +355,13 @@ package final class DOMInspectorRuntime: NSObject {
             moveReadySignal(
                 to: .init(
                     pageEpoch: transition.epoch,
-                    documentScopeID: nextDocumentScope.documentScopeID
+                    documentScopeID: currentProjectedDocumentScopeID
                 )
             )
-            currentDocumentScope = nextDocumentScope
+            currentDocumentScope = .init(
+                documentScopeID: currentProjectedDocumentScopeID,
+                requestScope: RequestScope()
+            )
             pendingSelectionOverrideLocalID = nil
             payloadNormalizer.resetForDocumentUpdate()
             currentDocumentModel.clearDocument(isFreshDocument: true)
@@ -473,7 +468,8 @@ package final class DOMInspectorRuntime: NSObject {
 
     var currentBootstrapPayload: [String: Any] {
         var payload: [String: Any] = [
-            "config": frontendConfigurationPayload()
+            "config": frontendConfigurationPayload(),
+            "context": frontendContextPayload(),
         ]
         if let pendingPreferredDepth {
             payload["preferredDepth"] = pendingPreferredDepth
@@ -798,6 +794,11 @@ extension DOMInspectorRuntime {
         cancelSelectorPathRequest()
         bridge.refreshBootstrapPayloadIfPossible()
         syncCurrentDocumentScopeIDIfNeeded()
+        if phase.allowsFrontendTraffic, hasPendingBootstrapWork == false {
+            activateDeferredReadyMessageIfMatchingCurrentContext()
+        }
+        updateMutationPipelineReadyState()
+        scheduleBootstrapIfNeeded()
     }
 
     private func advanceCurrentDocumentScope(clearCurrentContents: Bool) {
@@ -841,15 +842,15 @@ extension DOMInspectorRuntime {
             switch event {
             case .documentUpdated:
                 applyMutationEventsToCurrentDocumentModel(bufferedEvents)
-                bufferedEvents.removeAll(keepingCapacity: true)
                 payloadNormalizer.resetForDocumentUpdate()
                 advanceCurrentDocumentScope(clearCurrentContents: true)
+                return
             default:
                 bufferedEvents.append(event)
             }
         }
 
-            applyMutationEventsToCurrentDocumentModel(bufferedEvents)
+        applyMutationEventsToCurrentDocumentModel(bufferedEvents)
     }
 
     func updateMutationPipelineReadyState() {
@@ -889,7 +890,7 @@ extension DOMInspectorRuntime {
 
     private func activateDeferredReadyMessageIfMatchingCurrentContext() {
         let currentContext = currentMutationContext
-        pruneDeferredReadyMessages(olderThan: currentContext)
+        pruneDeferredReadyMessages(except: currentContext)
         guard hasReplacementFenceForCurrentContext == false,
               consumeDeferredReadyMessage(for: currentContext)
         else {
@@ -956,11 +957,6 @@ extension DOMInspectorRuntime {
         configurationNeedsBootstrap || pendingPreferredDepth != nil || pendingDocumentRequest != nil
     }
 
-    private func contextPrecedes(_ lhs: MutationContext, _ rhs: MutationContext) -> Bool {
-        lhs.pageEpoch < rhs.pageEpoch
-            || (lhs.pageEpoch == rhs.pageEpoch && lhs.documentScopeID < rhs.documentScopeID)
-    }
-
     private func enqueueDeferredReadyMessage(_ context: MutationContext) {
         guard deferredReadyMessageContexts.contains(context) == false else {
             return
@@ -968,9 +964,12 @@ extension DOMInspectorRuntime {
         deferredReadyMessageContexts.append(context)
     }
 
-    private func pruneDeferredReadyMessages(olderThan context: MutationContext) {
+    private func pruneDeferredReadyMessages(except context: MutationContext? = nil) {
         deferredReadyMessageContexts.removeAll { queuedContext in
-            contextPrecedes(queuedContext, context)
+            guard let context else {
+                return true
+            }
+            return queuedContext != context
         }
     }
 
@@ -989,18 +988,15 @@ extension DOMInspectorRuntime {
 
     private func moveReadySignal(to context: MutationContext) {
         let hasCurrentReadySignal = isReady || hasDeferredReadyMessage(for: currentMutationContext)
-        pruneDeferredReadyMessages(olderThan: context)
+        pruneDeferredReadyMessages()
+        isReady = false
         if hasCurrentReadySignal {
-            isReady = false
             enqueueDeferredReadyMessage(context)
         }
     }
 
     private func isReadyContextCurrentOrNewer(_ context: MutationContext) -> Bool {
-        if context.pageEpoch != pageEpoch {
-            return context.pageEpoch > pageEpoch
-        }
-        return context.documentScopeID >= currentDocumentScope.documentScopeID
+        context == currentMutationContext
     }
 
     private var hasReplacementFenceForCurrentContext: Bool {
@@ -1033,6 +1029,11 @@ extension DOMInspectorRuntime {
             "snapshotDepth": configuration.snapshotDepth,
             "subtreeDepth": configuration.subtreeDepth,
             "autoUpdateDebounce": configuration.autoUpdateDebounce,
+        ]
+    }
+
+    func frontendContextPayload() -> [String: Any] {
+        [
             "pageEpoch": pageEpoch,
             "documentScopeID": currentDocumentScope.documentScopeID,
         ]
@@ -1070,6 +1071,7 @@ extension DOMInspectorRuntime {
                         self.phase = .bootstrapping(epoch: expectedPageEpoch, generation: expectedGeneration)
                     } else {
                         self.phase = .idle(epoch: expectedPageEpoch)
+                        self.activateDeferredReadyMessageIfMatchingCurrentContext()
                     }
                 }
                 self.updateMutationPipelineReadyState()
@@ -1240,17 +1242,46 @@ extension DOMInspectorRuntime {
     }
 
     private func rebasedDOMBundle(_ bundle: DOMBundle, documentScopeID: UInt64?) -> DOMBundle {
+        bundleByUpdatingTransportContext(
+            bundle,
+            pageEpoch: bundle.pageEpoch,
+            documentScopeID: documentScopeID
+        )
+    }
+
+    private func bundleByUpdatingTransportContext(
+        _ bundle: DOMBundle,
+        pageEpoch: Int?,
+        documentScopeID: UInt64?
+    ) -> DOMBundle {
         switch bundle.payload {
         case let .jsonString(rawJSON):
+            let rebasedPayload = payloadByUpdatingTransportContext(
+                rawJSON,
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID
+            )
+            if let rebasedJSON = rebasedPayload as? String {
+                return .init(
+                    rawJSON: rebasedJSON,
+                    pageEpoch: pageEpoch,
+                    documentScopeID: documentScopeID
+                )
+            }
             return .init(
-                rawJSON: rawJSON,
-                pageEpoch: bundle.pageEpoch,
+                objectEnvelope: rebasedPayload,
+                pageEpoch: pageEpoch,
                 documentScopeID: documentScopeID
             )
         case let .objectEnvelope(objectEnvelope):
+            let rebasedPayload = payloadByUpdatingTransportContext(
+                objectEnvelope,
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID
+            )
             return .init(
-                objectEnvelope: objectEnvelope,
-                pageEpoch: bundle.pageEpoch,
+                objectEnvelope: rebasedPayload,
+                pageEpoch: pageEpoch,
                 documentScopeID: documentScopeID
             )
         }
@@ -1469,6 +1500,63 @@ extension DOMInspectorRuntime {
         return (payload, false)
     }
 
+    private func payloadByUpdatingTransportContext(
+        _ payload: Any,
+        pageEpoch: Int?,
+        documentScopeID: UInt64?
+    ) -> Any {
+        func applyContext(to object: inout [String: Any]) {
+            if let pageEpoch {
+                object["pageEpoch"] = pageEpoch
+            }
+            if let documentScopeID {
+                object["documentScopeID"] = documentScopeID
+            }
+            guard object["kind"] as? String == "mutation",
+                  let events = object["events"] as? [Any]
+            else {
+                return
+            }
+            object["events"] = truncatedMutationEvents(events)
+        }
+
+        func truncatedMutationEvents(_ events: [Any]) -> [Any] {
+            var truncated: [Any] = []
+            truncated.reserveCapacity(events.count)
+
+            for event in events {
+                truncated.append(event)
+                if let dictionary = event as? [String: Any],
+                   dictionary["method"] as? String == "DOM.documentUpdated" {
+                    break
+                }
+                if let dictionary = event as? NSDictionary,
+                   dictionary["method"] as? String == "DOM.documentUpdated" {
+                    break
+                }
+            }
+
+            return truncated
+        }
+
+        if var dictionary = payload as? [String: Any] {
+            applyContext(to: &dictionary)
+            return dictionary
+        }
+        if let dictionary = payload as? NSDictionary {
+            var copied = dictionary as? [String: Any] ?? [:]
+            applyContext(to: &copied)
+            return copied
+        }
+        if let json = payload as? String,
+           let data = json.data(using: .utf8),
+           var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            applyContext(to: &object)
+            return object
+        }
+        return payload
+    }
+
     func startMatchedStylesRequest(nodeID: Int, selectionEntry: DOMNodeModel) {
         cancelMatchedStylesRequest()
         matchedStylesRequestCount += 1
@@ -1642,6 +1730,26 @@ extension DOMInspectorRuntime {
         return nil
     }
 
+    func parseBooleanValue(_ value: Any?) -> Bool? {
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.boolValue
+        }
+        if let value = value as? String {
+            switch value.lowercased() {
+            case "true", "1":
+                return true
+            case "false", "0":
+                return false
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
     func currentSelectedEntry(nodeID: Int, documentScopeID: UInt64) -> DOMNodeModel? {
         guard currentDocumentScope.documentScopeID == documentScopeID,
               let selectedEntry = currentDocumentModel.selectedNode,
@@ -1751,6 +1859,104 @@ extension DOMInspectorRuntime {
             return true
         } catch {
             inspectorLogger.error("dispatch subtree failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @discardableResult
+    func materializeSubtree(
+        nodeID: Int,
+        depth: Int,
+        expectedContext: MutationContext
+    ) async -> Bool {
+        guard matchesCurrentMutationContext(expectedContext) else {
+            return false
+        }
+
+        let requestScope = currentRequestScope
+        let requestDocumentScopeID = currentDocumentScope.documentScopeID
+
+        do {
+            let payload = try await session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
+            guard matchesCurrentMutationContext(expectedContext),
+                  currentRequestScope === requestScope
+            else {
+                return false
+            }
+
+            if webView != nil {
+                let didDispatch = await dispatchSubtreePayloadToFrontend(
+                    payload,
+                    pageEpoch: expectedContext.pageEpoch,
+                    documentScopeID: requestDocumentScopeID,
+                    requestScope: requestScope
+                )
+                guard didDispatch else {
+                    return false
+                }
+            }
+
+            guard matchesCurrentMutationContext(expectedContext),
+                  currentRequestScope === requestScope
+            else {
+                return false
+            }
+
+            guard let delta = payloadNormalizer.normalizeBackendResponse(
+                method: "DOM.requestChildNodes",
+                responseObject: ["result": payload],
+                resetDocument: false
+            ),
+            case let .replaceSubtree(root) = delta
+            else {
+                return false
+            }
+
+            currentDocumentModel.applyMutationBundle(
+                .init(events: [.replaceSubtree(root: root)])
+            )
+            return true
+        } catch {
+            inspectorLogger.debug("materialize subtree failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    @discardableResult
+    func dispatchSelectionToFrontend(
+        localID: UInt64,
+        expectedContext: MutationContext
+    ) async -> Bool {
+        guard matchesCurrentMutationContext(expectedContext) else {
+            return false
+        }
+#if DEBUG
+        if let testFrontendDispatchOverride {
+            return await testFrontendDispatchOverride([
+                "kind": "selection",
+                "localID": localID,
+                "pageEpoch": expectedContext.pageEpoch,
+                "documentScopeID": expectedContext.documentScopeID,
+            ])
+        }
+#endif
+        guard let webView else {
+            return false
+        }
+        do {
+            let rawResult = try await webView.callAsyncJavaScript(
+                "return window.webInspectorDOMFrontend?.applySelectionPayload?.(nodeId, pageEpoch, documentScopeID) ?? false",
+                arguments: [
+                    "nodeId": localID,
+                    "pageEpoch": expectedContext.pageEpoch,
+                    "documentScopeID": expectedContext.documentScopeID,
+                ],
+                in: nil,
+                contentWorld: .page
+            )
+            return parseBooleanValue(rawResult) ?? false
+        } catch {
+            inspectorLogger.error("dispatch selection failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
     }
@@ -2062,11 +2268,12 @@ extension DOMInspectorRuntime {
             return
         }
         let nodeID = parseIntegerValue(body["nodeId"]) ?? 0
+        let reveal = parseBooleanValue(body["reveal"]) ?? true
         guard nodeID > 0 else {
             return
         }
         Task.immediateIfAvailable { [weak self] in
-            await self?.session.highlight(nodeId: nodeID)
+            await self?.session.highlight(nodeId: nodeID, reveal: reveal)
         }
     }
 
@@ -2106,33 +2313,75 @@ extension DOMInspectorRuntime {
         }
     }
 
-    private func applyBundleToCurrentDocumentStore(_ payload: Any) {
+    private func applyBundleToCurrentDocumentStore(
+        _ payload: Any,
+        bundleDocumentScopeID: DOMDocumentScopeID?
+    ) -> Bool {
+        let incomingDocumentURL = documentURL(from: payload)
         guard let delta = payloadNormalizer.normalizeBundlePayload(payload) else {
-            return
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] applyBundleToCurrentDocumentStore normalizeBundlePayload=nil")
+            return true
         }
         switch delta {
         case let .snapshot(snapshot, shouldResetDocument):
-            payloadNormalizer.resetForDocumentUpdate()
-            advanceCurrentDocumentScope(clearCurrentContents: shouldResetDocument)
-            currentDocumentModel.replaceDocument(with: snapshot, isFreshDocument: shouldResetDocument)
+            let shouldReplaceCurrentDocument = shouldResetDocument || currentDocumentModel.rootNode == nil
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=snapshot resetDocument=\(shouldResetDocument, privacy: .public) replaceCurrentDocument=\(shouldReplaceCurrentDocument, privacy: .public) advanceScope=false rootLocalID=\(snapshot.root.localID, privacy: .public)")
+            if shouldReplaceCurrentDocument {
+                payloadNormalizer.resetForDocumentUpdate()
+            }
+            currentDocumentModel.replaceDocument(
+                with: snapshot,
+                isFreshDocument: shouldReplaceCurrentDocument
+            )
+            if let incomingDocumentURL {
+                lastSnapshotDocumentURL = incomingDocumentURL
+            }
+            return !shouldReplaceCurrentDocument
         case let .mutations(bundle):
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=mutations events=\(bundle.events.count, privacy: .public)")
             applyMutationBundleAcrossDocumentUpdates(bundle)
             if bundle.events.contains(where: Self.isStructuralMutationEvent),
                let selectedEntry = currentDocumentModel.selectedNode,
                let nodeID = selectedEntry.backendNodeID {
                 startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
             }
+            return !bundle.events.contains {
+                if case .documentUpdated = $0 {
+                    return true
+                }
+                return false
+            }
         case let .replaceSubtree(root):
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=replaceSubtree rootLocalID=\(root.localID, privacy: .public)")
             currentDocumentModel.applyMutationBundle(.init(events: [.replaceSubtree(root: root)]))
             if let selectedEntry = currentDocumentModel.selectedNode,
                let nodeID = selectedEntry.backendNodeID {
                 startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
             }
+            return true
         case let .selection(selection):
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=selection hasSelection=\(selection != nil, privacy: .public)")
             currentDocumentModel.applySelectionSnapshot(selection)
+            return true
         case let .selectorPath(selector):
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=selectorPath localID=\(String(describing: selector.localID), privacy: .public)")
             currentDocumentModel.applySelectorPath(selector)
+            return true
         }
+    }
+
+    private func documentURLChanged(_ incomingDocumentURL: String?) -> Bool {
+        guard let incomingDocumentURL = normalizedDocumentURL(incomingDocumentURL) else {
+            return false
+        }
+        guard let lastSnapshotDocumentURL = normalizedDocumentURL(lastSnapshotDocumentURL) else {
+            return true
+        }
+        return incomingDocumentURL != lastSnapshotDocumentURL
+    }
+
+    private func documentURL(from payload: Any) -> String? {
+        payloadDictionary(from: payload)?["documentURL"] as? String
     }
 
     func domDidEmit(bundle: DOMBundle) {
@@ -2140,22 +2389,51 @@ extension DOMInspectorRuntime {
     }
 
     func handleDOMBundle(_ bundle: DOMBundle) {
+        let payloadKind = switch bundle.payload {
+        case let .jsonString(rawJSON):
+            if let data = rawJSON.data(using: .utf8),
+               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                object["kind"] as? String ?? "raw"
+            } else {
+                "raw"
+            }
+        case let .objectEnvelope(object):
+            if let dictionary = object as? [String: Any] {
+                dictionary["kind"] as? String ?? "object"
+            } else if let dictionary = object as? NSDictionary,
+                      let swiftDictionary = dictionary as? [String: Any] {
+                swiftDictionary["kind"] as? String ?? "object"
+            } else {
+                "object"
+            }
+        }
+        inspectorLogger.notice(
+            "[TEMP DOM TRACE][Runtime] handleDOMBundle kind=\(payloadKind, privacy: .public) bundlePageEpoch=\(String(describing: bundle.pageEpoch), privacy: .public) bundleDocumentScopeID=\(String(describing: bundle.documentScopeID), privacy: .public) currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.currentDocumentScope.documentScopeID, privacy: .public) bootstrapTaskActive=\(self.bootstrapTask != nil, privacy: .public) replacementFence=\(self.hasReplacementFenceForCurrentContext, privacy: .public)"
+        )
         if hasReplacementFenceForCurrentContext,
            bundle.pageEpoch == pageEpoch,
            bundle.documentScopeID == currentDocumentScope.documentScopeID
         {
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: replacement fence")
             deferredDOMBundlesDuringBootstrap.append(.init(bundle: bundle))
             return
         }
+        if acceptsDOMBundle(documentScopeID: bundle.documentScopeID) == false,
+           adoptAuthoritativeInitialSnapshotContextIfNeeded(from: bundle) {
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle adopted authoritative initial snapshot context")
+        }
         guard acceptsDOMBundle(documentScopeID: bundle.documentScopeID) else {
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle ignored: acceptsDOMBundle=false")
             return
         }
         if bootstrapTask != nil {
+            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: bootstrap in progress")
             deferredDOMBundlesDuringBootstrap.append(.init(bundle: bundle))
             return
         }
-        applyDOMBundleToCurrentDocumentStore(bundle)
-        enqueueMutationPayload(bundle)
+        inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle applying and enqueueing")
+        let preservesInspectorState = applyDOMBundleToCurrentDocumentStore(bundle)
+        enqueueMutationPayload(bundle, preservingInspectorState: preservesInspectorState)
     }
 
     private func applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: Int) {
@@ -2174,18 +2452,95 @@ extension DOMInspectorRuntime {
             guard acceptsDOMBundle(documentScopeID: entry.bundle.documentScopeID) else {
                 continue
             }
-            applyDOMBundleToCurrentDocumentStore(entry.bundle)
-            enqueueMutationPayload(entry.bundle)
+            let preservesInspectorState = applyDOMBundleToCurrentDocumentStore(entry.bundle)
+            enqueueMutationPayload(entry.bundle, preservingInspectorState: preservesInspectorState)
         }
     }
 
-    private func applyDOMBundleToCurrentDocumentStore(_ bundle: DOMBundle) {
+    private func applyDOMBundleToCurrentDocumentStore(_ bundle: DOMBundle) -> Bool {
         switch bundle.payload {
         case let .jsonString(rawJSON):
-            applyBundleToCurrentDocumentStore(rawJSON)
+            return applyBundleToCurrentDocumentStore(
+                rawJSON,
+                bundleDocumentScopeID: bundle.documentScopeID
+            )
         case let .objectEnvelope(object):
-            applyBundleToCurrentDocumentStore(object)
+            return applyBundleToCurrentDocumentStore(
+                object,
+                bundleDocumentScopeID: bundle.documentScopeID
+            )
         }
+    }
+
+    private func adoptAuthoritativeInitialSnapshotContextIfNeeded(from bundle: DOMBundle) -> Bool {
+        guard let bundleDocumentScopeID = bundle.documentScopeID,
+              let initialSnapshotMetadata = initialSnapshotMetadata(for: bundle),
+              initialSnapshotMetadata.shouldAdopt,
+              (bundle.pageEpoch ?? pageEpoch) == pageEpoch
+        else {
+            return false
+        }
+
+        nextDocumentScopeID = max(nextDocumentScopeID, bundleDocumentScopeID)
+        commitCurrentDocumentScope(
+            .init(documentScopeID: bundleDocumentScopeID, requestScope: RequestScope()),
+            clearCurrentContents: true
+        )
+        payloadNormalizer.resetForDocumentUpdate()
+        lastSnapshotDocumentURL = initialSnapshotMetadata.documentURL
+        return true
+    }
+
+    private func initialSnapshotMetadata(
+        for bundle: DOMBundle
+    ) -> (documentURL: String?, shouldAdopt: Bool)? {
+        let payload: Any = switch bundle.payload {
+        case let .jsonString(rawJSON):
+            rawJSON
+        case let .objectEnvelope(object):
+            object
+        }
+        guard let object = payloadDictionary(from: payload),
+              (object["kind"] as? String) == "snapshot"
+        else {
+            return nil
+        }
+        let snapshotMode = object["snapshotMode"] as? String
+        let documentURL = normalizedDocumentURL(object["documentURL"] as? String)
+        let shouldAdopt = switch snapshotMode {
+        case "fresh":
+            true
+        case "preserve-ui-state":
+            false
+        default:
+            documentURLChanged(documentURL)
+        }
+        return (
+            documentURL: documentURL,
+            shouldAdopt: shouldAdopt
+        )
+    }
+
+    private func payloadDictionary(from payload: Any) -> [String: Any]? {
+        if let object = payload as? [String: Any] {
+            return object
+        }
+        if let object = payload as? NSDictionary {
+            return object as? [String: Any]
+        }
+        if let rawJSON = payload as? String,
+           let data = rawJSON.data(using: .utf8),
+           let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            return object
+        }
+        return nil
+    }
+
+    private func normalizedDocumentURL(_ documentURL: String?) -> String? {
+        guard let documentURL, !documentURL.isEmpty else {
+            return nil
+        }
+        return documentURL
     }
 
     func applyReplacementDOMBundleAfterContextAdoption(_ bundle: DOMBundle) -> Bool {
@@ -2249,7 +2604,7 @@ extension DOMInspectorRuntime {
         if appliedSelectionOverride {
             pendingSelectionOverrideLocalID = nil
         }
-        enqueueMutationPayload(adjustedBundle)
+        enqueueMutationPayload(adjustedBundle, preservingInspectorState: !clearsReplacementFence)
         clearDocumentReplacementAfterContextAdoptionRequirement()
         if clearsReplacementFence {
             restartSelectionDependentRequestsAfterResync()
@@ -2257,12 +2612,17 @@ extension DOMInspectorRuntime {
         return true
     }
 
-    private func enqueueMutationPayload(_ bundle: DOMBundle) {
-        switch bundle.payload {
+    private func enqueueMutationPayload(_ bundle: DOMBundle, preservingInspectorState: Bool) {
+        let adjustedBundle = bundleByUpdatingTransportContext(
+            bundle,
+            pageEpoch: pageEpoch,
+            documentScopeID: currentDocumentScope.documentScopeID
+        )
+        switch adjustedBundle.payload {
         case let .jsonString(rawJSON):
-            enqueueMutationBundle(rawJSON, preservingInspectorState: true)
+            enqueueMutationBundle(rawJSON, preservingInspectorState: preservingInspectorState)
         case let .objectEnvelope(object):
-            enqueueMutationBundle(object, preservingInspectorState: true)
+            enqueueMutationBundle(object, preservingInspectorState: preservingInspectorState)
         }
     }
 
@@ -2401,9 +2761,17 @@ extension DOMInspectorRuntime {
     func handleLogMessage(_ payload: Any) {
         if let dictionary = payload as? NSDictionary,
            let logMessage = dictionary["message"] as? String {
-            inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+            if logMessage.contains("[TEMP DOM TRACE]") {
+                inspectorLogger.notice("\(logMessage, privacy: .public)")
+            } else {
+                inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+            }
         } else if let logMessage = payload as? String {
-            inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+            if logMessage.contains("[TEMP DOM TRACE]") {
+                inspectorLogger.notice("\(logMessage, privacy: .public)")
+            } else {
+                inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
+            }
         }
     }
 
@@ -2484,7 +2852,7 @@ extension DOMInspectorRuntime {
         }
     }
 
-    var testMutationFlushOverride: (@MainActor ([Any]) async -> Void)? {
+    var testMutationFlushOverride: (@MainActor ([[String: Any]]) async -> Void)? {
         get { mutationPipeline.testApplyBundlesOverride }
         set { mutationPipeline.testApplyBundlesOverride = newValue }
     }
@@ -2533,6 +2901,19 @@ extension DOMInspectorRuntime {
 
     func testWaitForBootstrapForTesting() async {
         await bootstrapTask?.value
+    }
+
+    @discardableResult
+    func testFlushPendingMutationBundlesNowForTesting() async -> DOMMutationSender.FlushSettlement? {
+        await mutationPipeline.flushPendingBundlesNow()
+    }
+
+    func testBundleForFrontend(_ bundle: DOMBundle) -> DOMBundle {
+        bundleByUpdatingTransportContext(
+            bundle,
+            pageEpoch: pageEpoch,
+            documentScopeID: currentDocumentScope.documentScopeID
+        )
     }
 
     var testMatchedStylesFetcher: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)? {

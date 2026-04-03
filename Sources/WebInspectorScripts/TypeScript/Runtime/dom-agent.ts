@@ -7,13 +7,20 @@ import {
 } from "./DOMAgent/dom-agent-dom-core";
 import {clearHighlight, highlightDOMNode, highlightDOMNodeHandle} from "./DOMAgent/dom-agent-overlay";
 import {cancelElementSelection, startElementSelection} from "./DOMAgent/dom-agent-selection";
+import {setPendingSelectionPath} from "./DOMAgent/dom-agent-selection";
 import {
     configureAutoSnapshot,
     disableAutoSnapshot,
     enableAutoSnapshotIfSupported,
     triggerSnapshotUpdate
 } from "./DOMAgent/dom-agent-snapshot";
-import { inspector } from "./DOMAgent/dom-agent-state";
+import {
+    applyDOMAgentBootstrapContext,
+    inspector,
+    readDOMAgentBootstrap,
+    type DOMAgentAutoSnapshotBootstrap,
+    type DOMAgentBootstrapState
+} from "./DOMAgent/dom-agent-state";
 import {
     debugStatus,
     outerHTMLForNode,
@@ -37,8 +44,8 @@ function setPageEpoch(epoch: number): boolean {
     if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
         return false;
     }
-    if (epoch < inspector.pageEpoch) {
-        return false;
+    if (epoch !== inspector.pageEpoch) {
+        inspector.nextInitialSnapshotMode = "fresh";
     }
     inspector.pageEpoch = epoch;
     return true;
@@ -48,11 +55,56 @@ function setDocumentScopeID(documentScopeID: number): boolean {
     if (typeof documentScopeID !== "number" || !Number.isFinite(documentScopeID)) {
         return false;
     }
-    if (documentScopeID < inspector.documentScopeID) {
-        return false;
+    if (documentScopeID !== inspector.documentScopeID) {
+        inspector.nextInitialSnapshotMode = "fresh";
     }
     inspector.documentScopeID = documentScopeID;
     return true;
+}
+
+function postDOMAgentTrace(message: string): void {
+    try {
+        window.webkit?.messageHandlers?.webInspectorDOMLog?.postMessage({message});
+    } catch {
+    }
+}
+
+function applyAutoSnapshotBootstrap(
+    options: DOMAgentAutoSnapshotBootstrap | null | undefined,
+    useFallback: boolean
+): void {
+    const configure = function() {
+        if (options && typeof options === "object") {
+            configureAutoSnapshot(options);
+            return;
+        }
+        if (useFallback) {
+            enableAutoSnapshotIfSupported();
+        }
+    };
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", configure, {once: true});
+        return;
+    }
+
+    configure();
+}
+
+function bootstrapDOMAgent(bootstrap?: DOMAgentBootstrapState | null): boolean {
+    const previousPageEpoch = inspector.pageEpoch;
+    const previousDocumentScopeID = inspector.documentScopeID;
+    const nextBootstrap = bootstrap && typeof bootstrap === "object" ? bootstrap : readDOMAgentBootstrap();
+    const didApplyContext = applyDOMAgentBootstrapContext(nextBootstrap);
+    const hasAutoSnapshotBootstrap = Boolean(nextBootstrap.autoSnapshot && typeof nextBootstrap.autoSnapshot === "object");
+    if (didApplyContext && (inspector.pageEpoch !== previousPageEpoch || inspector.documentScopeID !== previousDocumentScopeID)) {
+        inspector.nextInitialSnapshotMode = "fresh";
+    }
+    postDOMAgentTrace(
+        `bootstrapDOMAgent pageEpoch=${String(nextBootstrap.pageEpoch)} documentScopeID=${String(nextBootstrap.documentScopeID)} hasAutoSnapshot=${hasAutoSnapshotBootstrap}`
+    );
+    applyAutoSnapshotBootstrap(nextBootstrap.autoSnapshot, !hasAutoSnapshotBootstrap);
+    return didApplyContext || hasAutoSnapshotBootstrap;
 }
 
 if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
@@ -63,6 +115,7 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         captureSubtreeEnvelope: captureDOMSubtreeEnvelope,
         startSelection: startElementSelection,
         cancelSelection: cancelElementSelection,
+        setPendingSelectionPath: setPendingSelectionPath,
         highlightNode: highlightDOMNode,
         highlightNodeHandle: highlightDOMNodeHandle,
         clearHighlight: clearHighlight,
@@ -70,6 +123,7 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         disableAutoSnapshot: disableAutoSnapshot,
         setPageEpoch: setPageEpoch,
         setDocumentScopeID: setDocumentScopeID,
+        bootstrap: bootstrapDOMAgent,
         detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,
         outerHTMLForNode: outerHTMLForNode,
@@ -91,10 +145,5 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         writable: false,
         configurable: false
     });
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", enableAutoSnapshotIfSupported, {once: true});
-    } else {
-        enableAutoSnapshotIfSupported();
-    }
+    bootstrapDOMAgent();
 }

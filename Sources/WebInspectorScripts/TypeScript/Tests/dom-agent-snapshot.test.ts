@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     disableAutoSnapshot,
@@ -6,6 +6,12 @@ import {
     setAutoSnapshotOptions,
     triggerSnapshotUpdate
 } from "../Runtime/DOMAgent/dom-agent-snapshot";
+import {
+    captureDOMPayload,
+    computeNodePath,
+    INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
+    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
+} from "../Runtime/DOMAgent/dom-agent-dom-core";
 import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
 
 type WebKitMockHandler = {
@@ -51,6 +57,7 @@ function resetInspectorState() {
     inspector.snapshotAutoUpdateSuppressedCount = 0;
     inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
     inspector.snapshotAutoUpdatePendingReason = null;
+    inspector.nextInitialSnapshotMode = null;
     inspector.documentURL = null;
 }
 
@@ -60,6 +67,19 @@ describe("dom-agent-snapshot", () => {
         document.body.innerHTML = "<main id=\"app\"></main>";
         snapshotHandler().postMessage.mockClear();
         mutationHandler().postMessage.mockClear();
+    });
+
+    afterEach(() => {
+        disableAutoSnapshot();
+        if (inspector.snapshotAutoUpdateTimer) {
+            clearTimeout(inspector.snapshotAutoUpdateTimer);
+            inspector.snapshotAutoUpdateTimer = null;
+        }
+        if (inspector.snapshotAutoUpdateFrame !== null) {
+            cancelAnimationFrame(inspector.snapshotAutoUpdateFrame);
+            inspector.snapshotAutoUpdateFrame = null;
+        }
+        inspector.snapshotAutoUpdatePending = false;
     });
 
     it("debounce is clamped to the 50ms minimum", () => {
@@ -176,6 +196,44 @@ describe("dom-agent-snapshot", () => {
         expect(mutationHandler().postMessage).not.toHaveBeenCalled();
     });
 
+    it("ignores inspector internal child-list mutations", () => {
+        const overlay = document.createElement("div");
+        overlay.setAttribute(INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE, "true");
+        document.documentElement.appendChild(overlay);
+
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.pendingMutations = [{
+            type: "childList",
+            target: document.documentElement,
+            addedNodes: [overlay] as unknown as NodeList,
+            removedNodes: [] as unknown as NodeList,
+            previousSibling: document.body
+        } as unknown as MutationRecord];
+
+        triggerSnapshotUpdate("mutation");
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).not.toHaveBeenCalled();
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
+    });
+
+    it("omits inspector internal nodes from computed selection paths and snapshots", () => {
+        const shield = document.createElement("div");
+        shield.setAttribute(INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE, "true");
+        const target = document.createElement("div");
+        target.id = "target";
+        document.body.replaceChildren(shield, target);
+
+        const path = computeNodePath(target);
+        const payload = captureDOMPayload(4);
+        const bodyDescriptor = payload.root?.children?.find((child) => child.localName === "body") ?? null;
+
+        expect(path).toEqual([1, 0]);
+        expect(bodyDescriptor?.children).toHaveLength(1);
+        expect(bodyDescriptor?.children?.[0]?.attributes).toEqual(["id", "target"]);
+    });
+
     it("emits initial full snapshot when auto updates are re-enabled with no pending mutations", () => {
         inspector.map = new Map([[1, document.documentElement]]);
         inspector.snapshotAutoUpdateDebounce = 50;
@@ -190,5 +248,206 @@ describe("dom-agent-snapshot", () => {
         const payload = parseBundleCall(snapshotHandler());
         expect(payload.kind).toBe("snapshot");
         expect(payload.reason).toBe("initial");
+        expect(payload.snapshotMode).toBe("preserve-ui-state");
+    });
+
+    it("does not downgrade a pending fresh snapshot when auto updates are enabled", () => {
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.pendingMutations = [];
+        disableAutoSnapshot();
+        inspector.nextInitialSnapshotMode = "fresh";
+
+        enableAutoSnapshot();
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(parseBundleCall(snapshotHandler()).snapshotMode).toBe("fresh");
+    });
+
+    it("emits an initial full snapshot before queued mutations after auto snapshot resumes", () => {
+        const node = document.createElement("div");
+        node.setAttribute("class", "ready");
+        document.body.appendChild(node);
+
+        inspector.map = new Map([[1, node]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        disableAutoSnapshot();
+        enableAutoSnapshot();
+        inspector.pendingMutations = [{
+            type: "attributes",
+            target: node,
+            attributeName: "class",
+            addedNodes: [] as unknown as NodeList,
+            removedNodes: [] as unknown as NodeList,
+            previousSibling: null
+        } as unknown as MutationRecord];
+
+        vi.advanceTimersByTime(82);
+
+        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(mutationHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(snapshotHandler().postMessage.mock.invocationCallOrder[0]).toBeLessThan(
+            mutationHandler().postMessage.mock.invocationCallOrder[0]
+        );
+        expect(parseBundleCall(snapshotHandler()).reason).toBe("initial");
+        expect(parseBundleCall(snapshotHandler()).snapshotMode).toBe("preserve-ui-state");
+        expect(parseBundleCall(mutationHandler()).kind).toBe("mutation");
+    });
+});
+
+describe("dom-agent bootstrap", () => {
+    beforeEach(() => {
+        vi.resetModules();
+        vi.useFakeTimers();
+        document.body.innerHTML = "<main id=\"app\"></main>";
+        delete (window as Window & { __wiDOMAgentBootstrap?: unknown }).__wiDOMAgentBootstrap;
+        window.webkit = {
+            messageHandlers: {
+                webInspectorDOMSnapshot: { postMessage: vi.fn() },
+                webInspectorDOMMutations: { postMessage: vi.fn() },
+                webInspectorDOMLog: { postMessage: vi.fn() },
+            }
+        } as never;
+    });
+
+    afterEach(() => {
+        const api = window.webInspectorDOM as { detach?: () => void } | undefined;
+        api?.detach?.();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        delete (window as Window & { __wiDOMAgentBootstrap?: unknown }).__wiDOMAgentBootstrap;
+    });
+
+    it("hydrates page context from bootstrap state and applies later bootstrap contexts exactly", async () => {
+        (window as Window & { __wiDOMAgentBootstrap?: unknown }).__wiDOMAgentBootstrap = {
+            pageEpoch: 4,
+            documentScopeID: 7,
+            autoSnapshot: {
+                enabled: true,
+                maxDepth: 9,
+                debounce: 80
+            }
+        };
+
+        await import("../Runtime/dom-agent");
+        const { inspector: importedInspector } = await import("../Runtime/DOMAgent/dom-agent-state");
+        const debugStatus = (window.webInspectorDOM as {
+            debugStatus?: () => Record<string, unknown>;
+        } | undefined)?.debugStatus?.() ?? {};
+
+        expect(importedInspector.pageEpoch).toBe(4);
+        expect(importedInspector.documentScopeID).toBe(7);
+        expect(debugStatus.pageEpoch).toBe(4);
+        expect(debugStatus.documentScopeID).toBe(7);
+        expect(debugStatus.snapshotAutoUpdateEnabled).toBe(true);
+        expect(debugStatus.snapshotAutoUpdateMaxDepth).toBe(9);
+        expect(debugStatus.snapshotAutoUpdateDebounce).toBe(80);
+
+        const api = window.webInspectorDOM as {
+            bootstrap?: (bootstrap?: unknown) => boolean;
+            debugStatus?: () => Record<string, unknown>;
+        } | undefined;
+
+        expect(api?.bootstrap?.({
+            pageEpoch: 6,
+            documentScopeID: 8,
+            autoSnapshot: {
+                enabled: true,
+                maxDepth: 6,
+                debounce: 70
+            }
+        })).toBe(true);
+        expect(api?.bootstrap?.({
+            pageEpoch: 5,
+            documentScopeID: 7,
+            autoSnapshot: {
+                enabled: true,
+                maxDepth: 4,
+                debounce: 50
+            }
+        })).toBe(true);
+
+        const finalDebugStatus = api?.debugStatus?.() ?? {};
+        expect(finalDebugStatus.pageEpoch).toBe(5);
+        expect(finalDebugStatus.documentScopeID).toBe(7);
+        expect(finalDebugStatus.snapshotAutoUpdateEnabled).toBe(true);
+        expect(finalDebugStatus.snapshotAutoUpdateMaxDepth).toBe(4);
+        expect(finalDebugStatus.snapshotAutoUpdateDebounce).toBe(50);
+    });
+
+    it("pageshow does not force a fresh snapshot for the current context", async () => {
+        await import("../Runtime/dom-agent");
+        const stateModule = await import("../Runtime/DOMAgent/dom-agent-state");
+        const api = window.webInspectorDOM as {
+            debugStatus?: () => Record<string, unknown>;
+        } | undefined;
+
+        stateModule.inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        const initialMode = api?.debugStatus?.()?.nextInitialSnapshotMode;
+        const regularPageShow = new Event("pageshow");
+        Object.defineProperty(regularPageShow, "persisted", { value: false });
+        window.dispatchEvent(regularPageShow);
+
+        let debugStatus = api?.debugStatus?.() ?? {};
+        expect(debugStatus.nextInitialSnapshotMode).toBe(initialMode);
+
+        stateModule.inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        const restoredPageShow = new Event("pageshow");
+        Object.defineProperty(restoredPageShow, "persisted", { value: true });
+        window.dispatchEvent(restoredPageShow);
+
+        debugStatus = api?.debugStatus?.() ?? {};
+        expect(debugStatus.nextInitialSnapshotMode).toBe(initialMode);
+    });
+
+    it("pagehide does not mark the current context for a fresh snapshot", async () => {
+        await import("../Runtime/dom-agent");
+        const stateModule = await import("../Runtime/DOMAgent/dom-agent-state");
+        const api = window.webInspectorDOM as {
+            debugStatus?: () => Record<string, unknown>;
+        } | undefined;
+
+        stateModule.inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        const initialMode = api?.debugStatus?.()?.nextInitialSnapshotMode;
+        window.dispatchEvent(new Event("pagehide"));
+
+        const debugStatus = api?.debugStatus?.() ?? {};
+        expect(debugStatus.nextInitialSnapshotMode).toBe(initialMode);
+    });
+
+    it("bootstrap adopts lower page epochs by exact assignment", async () => {
+        await import("../Runtime/dom-agent");
+        const api = window.webInspectorDOM as {
+            bootstrap?: (bootstrap: Record<string, unknown>) => boolean;
+            debugStatus?: () => Record<string, unknown>;
+        } | undefined;
+
+        expect(api?.bootstrap?.({
+            pageEpoch: 4,
+            documentScopeID: 7,
+            autoSnapshot: {
+                enabled: true,
+                maxDepth: 4,
+                debounce: 50
+            }
+        })).toBe(true);
+
+        inspector.nextInitialSnapshotMode = null;
+
+        expect(api?.bootstrap?.({
+            pageEpoch: 2,
+            documentScopeID: 3,
+            autoSnapshot: {
+                enabled: true,
+                maxDepth: 4,
+                debounce: 50
+            }
+        })).toBe(true);
+
+        const debugStatus = api?.debugStatus?.() ?? {};
+        expect(debugStatus.pageEpoch).toBe(2);
+        expect(debugStatus.documentScopeID).toBe(3);
+        expect(debugStatus.nextInitialSnapshotMode).toBe("fresh");
     });
 });
