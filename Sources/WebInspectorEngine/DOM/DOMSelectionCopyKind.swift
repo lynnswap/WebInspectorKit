@@ -1,7 +1,7 @@
 
 import Foundation
 
-public enum DOMSelectionCopyKind: String, CaseIterable, Sendable {
+package enum DOMSelectionCopyKind: String, CaseIterable, Sendable {
     case html = "HTML"
     case selectorPath = "selector"
     case xpath = "XPath"

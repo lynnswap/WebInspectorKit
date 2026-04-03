@@ -5,11 +5,11 @@ import AppKit
 public final class WIDOMViewController: NSSplitViewController {
     private static let splitViewAutosaveName = NSSplitView.AutosaveName("WebInspectorKit.DOMSplitView")
 
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private let domTreeViewController: WIDOMTreeViewController
     private let elementDetailsViewController: WIDOMDetailViewController
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspector) {
         self.inspector = inspector
         self.domTreeViewController = WIDOMTreeViewController(inspector: inspector)
         self.elementDetailsViewController = WIDOMDetailViewController(inspector: inspector)

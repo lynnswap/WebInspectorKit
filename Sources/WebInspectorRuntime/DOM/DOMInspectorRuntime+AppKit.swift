@@ -1,9 +1,9 @@
 #if canImport(AppKit)
 import AppKit
 
-extension DOMFrontendStore {
+extension DOMInspectorRuntime {
     func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        webView?.domContextMenuProvider = provider
+        bridge.setDOMContextMenuProvider(provider)
     }
 }
 #endif

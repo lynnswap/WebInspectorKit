@@ -39,17 +39,25 @@ public final class WIInspectorController {
         let network: NetworkPlan
     }
 
-    private struct WIRuntimeSnapshot {
-        let revision: Int
+    private struct WIRuntimeTarget: Equatable {
         let tabs: [WITab]
         let selectedTab: WITab?
         let preferredCompactSelectedTabIdentifier: String?
         let hasExplicitTabsConfiguration: Bool
-        let suppressesDirectHostActivation: Bool
         let primaryHostVisibility: WIHostVisibility
         let primaryHostPageWebViewIdentity: ObjectIdentifier?
         let primaryHostPageWebView: WKWebView?
         let lifecycle: WISessionLifecycle
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.tabs == rhs.tabs
+                && lhs.selectedTab == rhs.selectedTab
+                && lhs.preferredCompactSelectedTabIdentifier == rhs.preferredCompactSelectedTabIdentifier
+                && lhs.hasExplicitTabsConfiguration == rhs.hasExplicitTabsConfiguration
+                && lhs.primaryHostVisibility == rhs.primaryHostVisibility
+                && lhs.primaryHostPageWebViewIdentity == rhs.primaryHostPageWebViewIdentity
+                && lhs.lifecycle == rhs.lifecycle
+        }
     }
 
     private final class WIHostRecord {
@@ -71,7 +79,7 @@ public final class WIInspectorController {
         }
     }
 
-    public let dom: WIDOMModel
+    public let dom: WIDOMInspector
     public let network: WINetworkModel
 
     public private(set) var lastRecoverableError: String?
@@ -84,11 +92,14 @@ public final class WIInspectorController {
     @ObservationIgnored private var hostRegistry: [WIInspectorHostID: WIHostRecord] = [:]
     @ObservationIgnored private var nextHostRegistrationOrder = 0
     @ObservationIgnored private let directHostID = WIInspectorHostID()
-    @ObservationIgnored private var pendingRuntimeSnapshot: WIRuntimeSnapshot?
+    @ObservationIgnored private var desiredRuntimeTarget: WIRuntimeTarget?
+    @ObservationIgnored private var runtimeReconcileRequested = false
     @ObservationIgnored private var runtimeApplyTask: Task<Void, Never>?
-    @ObservationIgnored private var latestScheduledRevision = 0
     @ObservationIgnored private var isTearingDown = false
     @ObservationIgnored private var suppressesDirectHostActivation = false
+#if DEBUG
+    @ObservationIgnored var testRuntimeLifecycleCommitHook: (@MainActor (WISessionLifecycle) async -> Void)?
+#endif
 
     public init(configuration: WIModelConfiguration = .init()) {
         let domSession = DOMSession(configuration: configuration.dom)
@@ -100,7 +111,7 @@ public final class WIInspectorController {
             backend: networkBackend
         )
 
-        dom = WIDOMModel(session: domSession)
+        dom = WIDOMInspector(session: domSession)
         network = WINetworkModel(session: networkSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in
@@ -287,7 +298,8 @@ public final class WIInspectorController {
 
     @_spi(Monocly) public func tearDownForDeinit() {
         isTearingDown = true
-        pendingRuntimeSnapshot = nil
+        desiredRuntimeTarget = nil
+        runtimeReconcileRequested = false
         runtimeApplyTask?.cancel()
         runtimeApplyTask = nil
         hostRegistry.removeAll()
@@ -369,8 +381,8 @@ private extension WIInspectorController {
         guard isTearingDown == false else {
             return
         }
-        latestScheduledRevision += 1
-        pendingRuntimeSnapshot = makeRuntimeSnapshot(revision: latestScheduledRevision)
+        desiredRuntimeTarget = makeRuntimeTarget()
+        runtimeReconcileRequested = true
 
         guard runtimeApplyTask == nil else {
             return
@@ -383,35 +395,31 @@ private extension WIInspectorController {
 
             defer {
                 self.runtimeApplyTask = nil
-                if self.isTearingDown == false, self.pendingRuntimeSnapshot != nil {
+                if self.isTearingDown == false, self.runtimeReconcileRequested {
                     self.scheduleRuntimeApply()
                 }
             }
 
-            while let snapshot = self.pendingRuntimeSnapshot {
-                guard self.isTearingDown == false else {
-                    self.pendingRuntimeSnapshot = nil
+            while self.isTearingDown == false {
+                guard self.runtimeReconcileRequested, let target = self.desiredRuntimeTarget else {
                     return
                 }
-                self.pendingRuntimeSnapshot = nil
-                guard snapshot.revision == self.latestScheduledRevision else {
-                    continue
-                }
-                await self.applyRuntimeSnapshot(snapshot)
+                self.runtimeReconcileRequested = false
+                await self.applyRuntimeTarget(target)
             }
         }
         runtimeApplyTask = applyTask
     }
 
-    private func applyRuntimeSnapshot(_ snapshot: WIRuntimeSnapshot) async {
+    private func applyRuntimeTarget(_ target: WIRuntimeTarget) async {
         guard isTearingDown == false else {
             return
         }
-        let plan = runtimePlan(for: snapshot)
+        let plan = runtimePlan(for: target)
 
-        switch snapshot.lifecycle {
+        switch target.lifecycle {
         case .active:
-            await apply(plan, pageWebView: snapshot.primaryHostPageWebView)
+            await apply(plan, pageWebView: target.primaryHostPageWebView)
         case .suspended:
             if lifecycle == .active {
                 await apply(
@@ -428,11 +436,15 @@ private extension WIInspectorController {
             }
         }
 
-        lifecycle = snapshot.lifecycle
+#if DEBUG
+        if let testRuntimeLifecycleCommitHook {
+            await testRuntimeLifecycleCommitHook(target.lifecycle)
+        }
+#endif
+        lifecycle = target.lifecycle
     }
 
-    private func makeRuntimeSnapshot(revision: Int) -> WIRuntimeSnapshot {
-        let suppressesDirectHostActivation = suppressesDirectHostActivation
+    private func makeRuntimeTarget() -> WIRuntimeTarget {
         let visiblePrimaryHost = effectiveVisiblePrimaryHost(
             suppressingDirectHostActivation: suppressesDirectHostActivation
         )
@@ -448,13 +460,11 @@ private extension WIInspectorController {
             lifecycle = .disconnected
         }
 
-        return WIRuntimeSnapshot(
-            revision: revision,
+        return WIRuntimeTarget(
             tabs: state.tabs,
             selectedTab: state.selectedTab,
             preferredCompactSelectedTabIdentifier: state.preferredCompactSelectedTabIdentifier,
             hasExplicitTabsConfiguration: state.hasExplicitTabsConfiguration,
-            suppressesDirectHostActivation: suppressesDirectHostActivation,
             primaryHostVisibility: visiblePrimaryHost == nil ? .hidden : .visible,
             primaryHostPageWebViewIdentity: primaryHost?.pageWebView.map(ObjectIdentifier.init),
             primaryHostPageWebView: primaryHost?.pageWebView,
@@ -513,17 +523,17 @@ private extension WIInspectorController {
         return attachedDirectHosts.first
     }
 
-    private func runtimePlan(for snapshot: WIRuntimeSnapshot) -> WIRuntimePlan {
-        switch snapshot.lifecycle {
+    private func runtimePlan(for target: WIRuntimeTarget) -> WIRuntimePlan {
+        switch target.lifecycle {
         case .disconnected:
             return .init(dom: .detach, network: .detach)
         case .suspended:
             return .init(dom: .suspend, network: .suspend)
         case .active:
-            guard snapshot.primaryHostPageWebView != nil else {
+            guard target.primaryHostPageWebView != nil else {
                 return .init(dom: .suspend, network: .suspend)
             }
-            let tabState = resolvedTabState(for: snapshot)
+            let tabState = resolvedTabState(for: target)
             return .init(
                 dom: tabState.domEnabled
                     ? .attach(autoSnapshot: tabState.domAutoSnapshotEnabled)
@@ -535,26 +545,26 @@ private extension WIInspectorController {
         }
     }
 
-    private func resolvedTabState(for snapshot: WIRuntimeSnapshot) -> (
+    private func resolvedTabState(for target: WIRuntimeTarget) -> (
         domEnabled: Bool,
         networkEnabled: Bool,
         domAutoSnapshotEnabled: Bool,
         networkMode: NetworkLoggingMode
     ) {
-        if snapshot.tabs.isEmpty {
-            guard snapshot.hasExplicitTabsConfiguration == false else {
+        if target.tabs.isEmpty {
+            guard target.hasExplicitTabsConfiguration == false else {
                 return (false, false, false, .stopped)
             }
             return (true, true, true, .active)
         }
 
-        let domEnabled = snapshot.tabs.contains {
+        let domEnabled = target.tabs.contains {
             $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID
         }
-        let networkEnabled = snapshot.tabs.contains { $0.identifier == WITab.networkTabID }
-        let domAutoSnapshotEnabled = snapshot.selectedTab?.identifier == WITab.domTabID
-            || snapshot.selectedTab?.identifier == WITab.elementTabID
-        let networkMode: NetworkLoggingMode = snapshot.selectedTab?.identifier == WITab.networkTabID
+        let networkEnabled = target.tabs.contains { $0.identifier == WITab.networkTabID }
+        let domAutoSnapshotEnabled = target.selectedTab?.identifier == WITab.domTabID
+            || target.selectedTab?.identifier == WITab.elementTabID
+        let networkMode: NetworkLoggingMode = target.selectedTab?.identifier == WITab.networkTabID
             ? .active
             : .buffering
 

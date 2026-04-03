@@ -551,6 +551,119 @@ struct ViewportCoordinatorTests {
     }
 
     @Test
+    func coordinatorPreservesKeyboardOverlapWhenWebViewReparents() throws {
+        let hostViewController = UIViewController()
+        let webView = WKWebView(frame: .zero)
+        let firstContainer = UIView()
+        let secondContainer = UIView()
+        for container in [firstContainer, secondContainer] {
+            container.translatesAutoresizingMaskIntoConstraints = false
+            hostViewController.view.addSubview(container)
+        }
+        NSLayoutConstraint.activate([
+            firstContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            firstContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            firstContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            firstContainer.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+            secondContainer.topAnchor.constraint(equalTo: hostViewController.view.topAnchor),
+            secondContainer.leadingAnchor.constraint(equalTo: hostViewController.view.leadingAnchor),
+            secondContainer.trailingAnchor.constraint(equalTo: hostViewController.view.trailingAnchor),
+            secondContainer.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
+        ])
+
+        let firstConstraints = attach(webView, to: firstContainer)
+
+        let window = makeWindow(rootViewController: hostViewController)
+        defer {
+            postKeyboardFrameChange(.null)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let keyboardFrame = CGRect(
+            x: 0,
+            y: window.bounds.maxY - 240,
+            width: window.bounds.width,
+            height: 240
+        )
+        postKeyboardFrameChange(keyboardFrame)
+
+        let initialMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(initialMetrics.obscuredInsets.bottom == 240)
+
+        webView.removeFromSuperview()
+        NSLayoutConstraint.deactivate(firstConstraints)
+        attach(webView, to: secondContainer)
+        hostViewController.view.layoutIfNeeded()
+        coordinator.handleWebViewHierarchyDidChange()
+
+        let updatedMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(updatedMetrics.obscuredInsets.bottom == initialMetrics.obscuredInsets.bottom)
+        coordinator.invalidate()
+    }
+
+    @Test
+    func coordinatorClearsKeyboardOverlapWhenWebViewMovesToDifferentWindow() throws {
+        let firstHostViewController = UIViewController()
+        let firstContainer = UIView()
+        firstContainer.translatesAutoresizingMaskIntoConstraints = false
+        firstHostViewController.view.addSubview(firstContainer)
+        NSLayoutConstraint.activate([
+            firstContainer.topAnchor.constraint(equalTo: firstHostViewController.view.topAnchor),
+            firstContainer.leadingAnchor.constraint(equalTo: firstHostViewController.view.leadingAnchor),
+            firstContainer.trailingAnchor.constraint(equalTo: firstHostViewController.view.trailingAnchor),
+            firstContainer.bottomAnchor.constraint(equalTo: firstHostViewController.view.bottomAnchor),
+        ])
+
+        let secondHostViewController = UIViewController()
+        let secondContainer = UIView()
+        secondContainer.translatesAutoresizingMaskIntoConstraints = false
+        secondHostViewController.view.addSubview(secondContainer)
+        NSLayoutConstraint.activate([
+            secondContainer.topAnchor.constraint(equalTo: secondHostViewController.view.topAnchor),
+            secondContainer.leadingAnchor.constraint(equalTo: secondHostViewController.view.leadingAnchor),
+            secondContainer.trailingAnchor.constraint(equalTo: secondHostViewController.view.trailingAnchor),
+            secondContainer.bottomAnchor.constraint(equalTo: secondHostViewController.view.bottomAnchor),
+        ])
+
+        let webView = WKWebView(frame: .zero)
+        let firstConstraints = attach(webView, to: firstContainer)
+
+        let firstWindow = makeWindow(rootViewController: firstHostViewController)
+        let secondWindow = makeWindow(rootViewController: secondHostViewController)
+        defer {
+            postKeyboardFrameChange(.null)
+            firstWindow.isHidden = true
+            firstWindow.rootViewController = nil
+            secondWindow.isHidden = true
+            secondWindow.rootViewController = nil
+        }
+
+        let coordinator = ViewportCoordinator(webView: webView)
+        let keyboardFrame = CGRect(
+            x: 0,
+            y: firstWindow.bounds.maxY - 240,
+            width: firstWindow.bounds.width,
+            height: 240
+        )
+        postKeyboardFrameChange(keyboardFrame)
+
+        let initialMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(initialMetrics.obscuredInsets.bottom == 240)
+
+        webView.removeFromSuperview()
+        NSLayoutConstraint.deactivate(firstConstraints)
+        attach(webView, to: secondContainer)
+        secondHostViewController.view.layoutIfNeeded()
+        coordinator.handleWebViewHierarchyDidChange()
+
+        let updatedMetrics = try #require(coordinator.resolvedMetricsForTesting)
+        #expect(updatedMetrics.obscuredInsets.bottom == 0)
+        coordinator.invalidate()
+    }
+
+    @Test
     func coordinatorClearsObservedScrollViewWhenHostResolutionFails() {
         let hostViewController = UIViewController()
         let webView = WKWebView(frame: .zero)
@@ -815,6 +928,17 @@ private func projectedWindowSafeAreaInsets(in hostView: UIView) -> UIEdgeInsets 
         left: max(0, safeRectInWindow.minX - hostRectInWindow.minX),
         bottom: max(0, hostRectInWindow.maxY - safeRectInWindow.maxY),
         right: max(0, hostRectInWindow.maxX - safeRectInWindow.maxX)
+    )
+}
+
+@MainActor
+private func postKeyboardFrameChange(_ frame: CGRect) {
+    NotificationCenter.default.post(
+        name: UIResponder.keyboardWillChangeFrameNotification,
+        object: nil,
+        userInfo: [
+            UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: frame)
+        ]
     )
 }
 

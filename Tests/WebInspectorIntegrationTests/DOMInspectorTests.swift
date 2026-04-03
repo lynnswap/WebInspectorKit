@@ -1,201 +1,792 @@
 import Testing
 import WebKit
-import WebInspectorEngine
-@testable import WebInspectorUI
+@testable import WebInspectorEngine
 @testable import WebInspectorRuntime
 
 @MainActor
-
-
 struct DOMInspectorTests {
     @Test
-    func exposesSelectedItemFromSessionGraphStore() {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.selectedEntry == nil)
+    func inspectorStartsWithEmptyDocument() {
+        let inspector = WIInspectorController().dom
+
+        #expect(inspector.document.rootNode == nil)
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    @available(*, deprecated, message: "Legacy API compatibility coverage.")
+    func deprecatedWIDOMModelDocumentStoreAliasForwardsToDocument() {
+        let inspector: WIDOMModel = WIInspectorController().dom
+
+        #expect(ObjectIdentifier(legacyDocumentStore(of: inspector)) == ObjectIdentifier(inspector.document))
     }
 
     @Test
     func hasPageWebViewReflectsAttachAndDetach() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
+        let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
 
         #expect(inspector.hasPageWebView == false)
         await inspector.attach(to: webView)
         #expect(inspector.hasPageWebView == true)
-        #expect(inspector.session.lastPageWebView === webView)
 
         await inspector.detach()
         #expect(inspector.hasPageWebView == false)
-        #expect(inspector.session.lastPageWebView == nil)
-        #expect(inspector.selectedEntry == nil)
+        #expect(inspector.document.selectedNode == nil)
+        #expect(inspector.document.rootNode == nil)
     }
 
     @Test
-    func attachSwitchingPageClearsPendingMutationBundles() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        let firstWebView = makeTestWebView()
-        let secondWebView = makeTestWebView()
-
-        await inspector.attach(to: firstWebView)
-        inspector.enqueueMutationBundle("{\"kind\":\"test\"}", preserveState: true)
-        #expect(inspector.pendingMutationBundleCount == 1)
-
-        await inspector.attach(to: secondWebView)
-
-        #expect(inspector.session.lastPageWebView === secondWebView)
-        #expect(inspector.pendingMutationBundleCount == 0)
-    }
-
-    @Test
-    func reloadInspectorWithoutPageSetsErrorMessage() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        #expect(inspector.errorMessage == nil)
-
-        await inspector.reloadInspector()
-
-        #expect(inspector.errorMessage == "Web view unavailable.")
-    }
-
-    @Test
-    func updateSnapshotDepthClampsAndUpdatesConfiguration() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        await inspector.updateSnapshotDepth(0)
-        #expect(inspector.session.configuration.snapshotDepth == 1)
-
-        await inspector.updateSnapshotDepth(6)
-        #expect(inspector.session.configuration.snapshotDepth == 6)
-    }
-
-    @Test
-    func updateAndRemoveAttributeMutateSelectionState() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        inspector.session.graphStore.applySelectionSnapshot(
-            .init(
-                localID: 7,
-                preview: "<div id=\"foo\">",
-                attributes: [
-                    DOMAttribute(nodeId: 7, name: "class", value: "old"),
-                    DOMAttribute(nodeId: 7, name: "id", value: "foo"),
-                ],
-                path: [],
-                selectorPath: "#foo",
-                styleRevision: 0
-            )
-        )
-
-        await inspector.updateAttributeValue(name: "class", value: "new")
-        #expect(inspector.selectedEntry?.attributes.first(where: { $0.name == "class" })?.value == "new")
-
-        await inspector.removeAttribute(name: "id")
-        #expect(inspector.selectedEntry?.attributes.contains(where: { $0.name == "id" }) == false)
-    }
-
-    @Test
-    func detachClearsErrorMessage() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        await inspector.reloadInspector()
-        #expect(inspector.errorMessage != nil)
-
-        await inspector.detach()
-
-        #expect(inspector.errorMessage == nil)
-    }
-
-    @Test
-    func detachClearsMatchedStylesState() async {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
-        inspector.session.graphStore.applySelectionSnapshot(
-            .init(
-                localID: 11,
-                preview: "<div class=\"target\">",
-                attributes: [],
-                path: [],
-                selectorPath: ".target",
-                styleRevision: 0
-            )
-        )
-        inspector.session.graphStore.applyMatchedStyles(
-            .init(
-                nodeId: 11,
-                rules: [
-                    DOMMatchedStyleRule(
-                        origin: .author,
-                        selectorText: ".target",
-                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                        sourceLabel: "inline"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 3
-            ),
-            for: 11
-        )
-        inspector.session.graphStore.beginMatchedStylesLoading(for: 11)
-
-        await inspector.detach()
-
-        #expect(inspector.selectedEntry == nil)
-        #expect(inspector.session.graphStore.entriesByID.isEmpty)
-    }
-
-    @Test
-    func deletingTwoNodesThenUndoTwiceRestoresBothNodes() async throws {
-        let controller = WIInspectorController()
-        let inspector = controller.dom
+    func requestSelectionModeToggleUpdatesSelectionStateImmediately() async {
+        let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
-        let undoManager = UndoManager()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+
+        #expect(inspector.isSelectingElement == false)
+
+        inspector.requestSelectionModeToggle()
+        #expect(inspector.isSelectingElement == true)
+
+        let selectionStarted = await waitForCondition {
+            await selectionIsActive(in: webView)
+        }
+        #expect(selectionStarted == true)
+
+        inspector.requestSelectionModeToggle()
+        let selectionEnded = await waitForCondition {
+            guard inspector.isSelectingElement == false else {
+                return false
+            }
+            return await selectionIsActive(in: webView) == false
+        }
+        #expect(selectionEnded == true)
+    }
+
+    @Test
+    func reloadPageAdvancesPageEpoch() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Reload</div></body></html>", in: webView)
+        let initialPageEpoch = inspector.transport.currentPageEpoch
+
+        let result = await inspector.reloadPage()
+
+        #expect(result == .applied)
+        let epochAdvanced = await waitForCondition {
+            inspector.transport.currentPageEpoch == initialPageEpoch + 1
+        }
+        #expect(epochAdvanced == true)
+    }
+
+    @Test
+    func reloadDocumentWithoutPageWebViewPublishesRecoverableError() async {
+        let inspector = WIInspectorController().dom
+
+        let result = await inspector.reloadDocument()
+
+        #expect(result == .failed)
+        #expect(inspector.document.errorMessage == "Web view unavailable.")
+    }
+
+    @Test
+    func waitForPreparedPageContextSyncDiscardsCompletedStaleTask() async {
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: WIUserContentControllerStateRegistry.shared
+        )
+
+        agent.testInstallCompletedPreparedPageContextSyncTask(generation: 1)
+        agent.testAdvancePageEpochApplyGenerationWithoutClearingTask()
+
+        await agent.waitForPreparedPageContextSyncIfNeeded()
+        #expect(agent.testHasPreparedPageContextSyncTask == false)
+    }
+
+    @Test
+    func reloadDocumentReturnsAppliedAfterFreshReloadAdvancesDocumentScope() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        var didApplyDocumentRequest = false
+
+        await inspector.attach(to: webView)
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testPreferredDepthApplyOverride = { _ in }
+        inspector.transport.testDocumentRequestApplyOverride = { _, _ in
+            didApplyDocumentRequest = true
+        }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+        didApplyDocumentRequest = false
+
+        let result = await inspector.reloadDocument()
+
+        #expect(result == .applied)
+        #expect(didApplyDocumentRequest == true)
+    }
+
+    @Test
+    func sameLocalIDReprojectionPreservesNodeIdentity() {
+        let inspector = WIInspectorController().dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
+            )
+        )
+
+        let initialID = try! #require(inspector.document.selectedNode?.id)
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "class", value: "updated")])]
+                ),
+                selectedLocalID: 7
+            ),
+            isFreshDocument: false
+        )
+
+        let reprojectedID = try! #require(inspector.document.selectedNode?.id)
+        #expect(reprojectedID == initialID)
+    }
+
+    @Test
+    func freshDocumentChangesNodeIdentity() {
+        let inspector = WIInspectorController().dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
+            )
+        )
+
+        let initialID = try! #require(inspector.document.selectedNode?.id)
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 7)]),
+                selectedLocalID: 7
+            ),
+            isFreshDocument: true
+        )
+
+        let refreshedID = try! #require(inspector.document.selectedNode?.id)
+        #expect(refreshedID != initialID)
+    }
+
+    @Test
+    func successfulAttributeMutationUpdatesPageAndModel() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
         let html = """
         <html>
             <body>
-                <div id="first">First</div>
-                <div id="second">Second</div>
+                <div id="target" class="before" title="legacy">Target</div>
             </body>
         </html>
         """
 
         await inspector.attach(to: webView)
         await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
 
         let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
-        guard let firstNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "first"),
-              let secondNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "second")
-        else {
-            Issue.record("target nodes were not found in snapshot")
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
             return
         }
 
-        await inspector.deleteNode(nodeId: firstNodeID, undoManager: undoManager)
-        await inspector.deleteNode(nodeId: secondNodeID, undoManager: undoManager)
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [
+                    .init(nodeId: targetNodeID, name: "id", value: "target"),
+                    .init(nodeId: targetNodeID, name: "class", value: "before"),
+                    .init(nodeId: targetNodeID, name: "title", value: "legacy"),
+                ],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
 
-        let bothDeleted = await waitForCondition {
-            let firstExists = await domNodeExists(withID: "first", in: webView)
-            let secondExists = await domNodeExists(withID: "second", in: webView)
-            return !firstExists && !secondExists
+        let updateResult = await inspector.updateSelectedAttribute(name: "class", value: "after")
+        #expect(updateResult == .applied)
+
+        let classUpdated = await waitForCondition {
+            let pageValue = await domAttributeValue(elementID: "target", attributeName: "class", in: webView)
+            let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
+            return pageValue == "after" && modelValue == "after"
         }
-        #expect(bothDeleted == true)
+        #expect(classUpdated == true)
+
+        let removeResult = await inspector.removeSelectedAttribute(name: "title")
+        #expect(removeResult == .applied)
+
+        let titleRemoved = await waitForCondition {
+            let pageValue = await domAttributeValue(elementID: "target", attributeName: "title", in: webView)
+            let hasTitle = inspector.document.selectedNode?.attributes.contains(where: { $0.name == "title" }) == true
+            return pageValue == nil && hasTitle == false
+        }
+        #expect(titleRemoved == true)
+    }
+
+    @Test
+    func attachAdoptsNewerPreparedPageContextBeforeAttributeMutation() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let controller = webView.configuration.userContentController
+        let registry = WIUserContentControllerStateRegistry.shared
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML(html, in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 6)
+        let seeded = await waitForCondition {
+            seedAgent.testCachedPageEpoch == 4 && seedAgent.testCachedDocumentScopeID == 6
+        }
+        #expect(seeded == true)
+
+        await inspector.attach(to: webView)
+
+        #expect(inspector.transport.currentPageEpoch == 4)
+        #expect(inspector.transport.currentDocumentScopeID == 7)
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [
+                    .init(nodeId: targetNodeID, name: "id", value: "target"),
+                    .init(nodeId: targetNodeID, name: "class", value: "before"),
+                ],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let updateResult = await inspector.updateSelectedAttribute(name: "class", value: "after")
+        #expect(updateResult == .applied)
+
+        let classUpdated = await waitForCondition {
+            let pageValue = await domAttributeValue(elementID: "target", attributeName: "class", in: webView)
+            let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
+            return pageValue == "after" && modelValue == "after"
+        }
+        #expect(classUpdated == true)
+    }
+
+    @Test
+    func attributeMutationDoesNotReachPageWhileResyncFails() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [
+                    .init(nodeId: targetNodeID, name: "id", value: "target"),
+                    .init(nodeId: targetNodeID, name: "class", value: "before"),
+                ],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+        inspector.transport.testDocumentScopeSyncOverride = { _ in }
+        inspector.transport.testDocumentScopeSyncResultOverride = false
+        inspector.transport.testDocumentScopeResyncRetryAttemptsOverride = 1
+        inspector.transport.testDocumentScopeResyncRetryDelayNanosecondsOverride = 0
+        inspector.transport.testPendingDocumentScopeSyncRetryAttemptsOverride = 1
+        inspector.transport.testPendingDocumentScopeSyncRetryDelayNanosecondsOverride = 0
+        var setAttributeCallCount = 0
+        inspector.session.testSetAttributeInterposer = { _, _, _, _, _, performMutation in
+            setAttributeCallCount += 1
+            return await performMutation()
+        }
+
+        let updateResult = await inspector.updateSelectedAttribute(name: "class", value: "after")
+
+        #expect(updateResult == .ignoredStaleContext)
+        #expect(setAttributeCallCount == 0)
+        #expect(await domAttributeValue(elementID: "target", attributeName: "class", in: webView) == "before")
+        #expect(
+            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "before"
+        )
+    }
+
+    @Test
+    func staleNodeIdentityMutationIsIgnoredAfterFreshReplacement() async {
+        let inspector = WIInspectorController().dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "id", value: "target")])]
+                ),
+                selectedLocalID: 7
+            )
+        )
+
+        let staleID = try! #require(inspector.document.selectedNode?.id)
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "id", value: "target")])]
+                ),
+                selectedLocalID: 7
+            ),
+            isFreshDocument: true
+        )
+
+        let result = await inspector.removeAttribute(nodeID: staleID, name: "id")
+
+        #expect(result == .ignoredStaleContext)
+        #expect(inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" }) == true)
+    }
+
+    @Test
+    func reloadDocumentPreservingInspectorStateIgnoresStaleDocumentScopeChange() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        var didApplyDocumentRequest = false
+
+        await inspector.attach(to: webView)
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testPreferredDepthApplyOverride = { _ in
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        }
+        inspector.transport.testDocumentRequestApplyOverride = { _, _ in
+            didApplyDocumentRequest = true
+        }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+        didApplyDocumentRequest = false
+
+        let result = await inspector.reloadDocumentPreservingInspectorState()
+
+        #expect(result == .ignoredStaleContext)
+        #expect(didApplyDocumentRequest == false)
+    }
+
+    @Test
+    func reloadDocumentClearsPendingSelectionOverride() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+
+        inspector.transport.setPendingSelectionOverride(localID: 42)
+
+        let result = await inspector.reloadDocument()
+
+        #expect(result == .applied)
+        #expect(inspector.transport.testPendingSelectionOverrideLocalID == nil)
+    }
+
+    @Test
+    func reloadDocumentIgnoresFreshRequestAbortedAfterDocumentScopeSync() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testFrontendDispatchOverride = { _ in true }
+        inspector.transport.testDocumentScopeSyncOverride = { _ in
+            inspector.transport.testSetPhaseIdleForCurrentPage()
+        }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+
+        let result = await inspector.reloadDocument()
+
+        #expect(result == .ignoredStaleContext)
+    }
+
+    @Test
+    func undoSelectionRestoreUsesSelectedNodeLocalID() {
+        let inspector = WIInspectorController().dom
+        let selectedLocalID: UInt64 = 42
+        let selectedBackendNodeID = 77
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: selectedBackendNodeID,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: selectedBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                ),
+                selectedLocalID: selectedLocalID
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: selectedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let payload = inspector.testSelectionRestorePayload(for: selectedBackendNodeID)
+        inspector.transport.setPendingSelectionOverride(localID: payload?.localID)
+
+        #expect(payload?.localID == selectedLocalID)
+        #expect(inspector.transport.testPendingSelectionOverrideLocalID == selectedLocalID)
+    }
+
+    @Test
+    func deleteSelectionDoesNotPruneModelAfterMutationContextChangesMidFlight() async {
+        let inspector = WIInspectorController().dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "id", value: "target")])]
+                ),
+                selectedLocalID: 7
+            )
+        )
+        inspector.session.testRemoveNodeOverride = { _, _, _ in
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+            return .applied(())
+        }
+
+        let result = await inspector.deleteSelection()
+
+        #expect(result == .applied)
+        #expect(inspector.document.selectedNode?.backendNodeID == 7)
+        #expect(inspector.document.node(backendNodeID: 7) != nil)
+    }
+
+    @Test
+    func deleteSelectionRemovesPageNodeAndClearsSelection() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let html = """
+        <html>
+            <body>
+                <div id="target">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: targetNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let result = await inspector.deleteSelection()
+        #expect(result == .applied)
+
+        let deleted = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists == false && inspector.document.selectedNode == nil
+        }
+        #expect(deleted == true)
+    }
+
+    @Test
+    func undoDeleteRestoresPageNodeAndSelection() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let undoManager = UndoManager()
+        let html = """
+        <html>
+            <body>
+                <div id="target">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: targetNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let deleteResult = await inspector.deleteSelection(undoManager: undoManager)
+        #expect(deleteResult == .applied)
+
+        let deleted = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists == false && inspector.document.selectedNode == nil
+        }
+        #expect(deleted == true)
 
         undoManager.undo()
-        let secondRestored = await waitForCondition {
-            await domNodeExists(withID: "second", in: webView)
+
+        let restored = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            let selectedBackendNodeID = inspector.document.selectedNode?.backendNodeID
+            return exists && selectedBackendNodeID == targetNodeID
         }
-        #expect(secondRestored == true)
-        #expect(await domNodeExists(withID: "first", in: webView) == false)
+        #expect(restored == true)
+    }
+
+    @Test
+    func undoDeleteReloadsDocumentWhenMutationContextChangesAfterRestore() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let undoManager = UndoManager()
+        let html = """
+        <html>
+            <body>
+                <div id="target">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: targetNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let deleteResult = await inspector.deleteSelection(undoManager: undoManager)
+        #expect(deleteResult == .applied)
+        let deleted = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists == false && inspector.document.selectedNode == nil
+        }
+        #expect(deleted == true)
+
+        inspector.session.testUndoRemoveNodeInterposer = { _, _, _, perform in
+            let result = await perform()
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+            return result
+        }
+        defer {
+            inspector.session.testUndoRemoveNodeInterposer = nil
+        }
 
         undoManager.undo()
-        let firstRestored = await waitForCondition {
-            await domNodeExists(withID: "first", in: webView)
+
+        let restoredInPage = await waitForCondition {
+            await domNodeExists(withID: "target", in: webView)
         }
-        #expect(firstRestored == true)
-        #expect(await domNodeExists(withID: "second", in: webView) == true)
+        #expect(restoredInPage == true)
+
+        let restoredInModel = await waitForCondition {
+            modelContainsNode(
+                inspector.document.rootNode,
+                attributeName: "id",
+                attributeValue: "target"
+            )
+        }
+        #expect(restoredInModel == true)
+    }
+
+    @Test
+    func redoDeleteReloadsDocumentWhenMutationContextChangesAfterRemove() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        let undoManager = UndoManager()
+        let html = """
+        <html>
+            <body>
+                <div id="target">Target</div>
+            </body>
+        </html>
+        """
+
+        await inspector.attach(to: webView)
+        await loadHTML(html, in: webView)
+        _ = await inspector.reloadDocumentPreservingInspectorState()
+
+        let snapshot = try await inspector.session.captureSnapshot(maxDepth: 5)
+        guard let targetNodeID = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
+            Issue.record("target node was not found in snapshot")
+            return
+        }
+
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: UInt64(targetNodeID),
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: targetNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let deleteResult = await inspector.deleteSelection(undoManager: undoManager)
+        #expect(deleteResult == .applied)
+        let deleted = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists == false && inspector.document.selectedNode == nil
+        }
+        #expect(deleted == true)
+
+        undoManager.undo()
+        let restored = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists && inspector.document.node(backendNodeID: targetNodeID) != nil
+        }
+        #expect(restored == true)
+
+        inspector.session.testRedoRemoveNodeInterposer = { _, _, _, _, perform in
+            let result = await perform()
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+            return result
+        }
+        defer {
+            inspector.session.testRedoRemoveNodeInterposer = nil
+        }
+
+        undoManager.redo()
+
+        let removedAgain = await waitForCondition {
+            let exists = await domNodeExists(withID: "target", in: webView)
+            return exists == false && inspector.document.node(backendNodeID: targetNodeID) == nil
+        }
+        #expect(removedAgain == true)
+    }
+
+    @Test
+    func staleReloadClearsPendingSelectionOverride() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+        var didRequestDocument = false
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testPreferredDepthApplyOverride = { _ in
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        }
+        inspector.transport.testDocumentRequestApplyOverride = { _, _ in
+            didRequestDocument = true
+        }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+        didRequestDocument = false
+
+        inspector.transport.setPendingSelectionOverride(localID: 42)
+
+        let result = await inspector.reloadDocumentPreservingInspectorState()
+
+        #expect(result == .ignoredStaleContext)
+        #expect(didRequestDocument == false)
+        #expect(inspector.transport.testPendingSelectionOverrideLocalID == nil)
     }
 
     private func makeTestWebView() -> WKWebView {
@@ -239,6 +830,36 @@ struct DOMInspectorTests {
         return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
 
+    private func selectionIsActive(in webView: WKWebView) async -> Bool {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return window.webInspectorDOM.debugStatus().selectionActive;",
+            arguments: [:],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
+    }
+
+    private func domAttributeValue(
+        elementID: String,
+        attributeName: String,
+        in webView: WKWebView
+    ) async -> String? {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return document.getElementById(elementID)?.getAttribute(attributeName) ?? null;",
+            arguments: [
+                "elementID": elementID,
+                "attributeName": attributeName,
+            ],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        if rawValue is NSNull {
+            return nil
+        }
+        return rawValue as? String
+    }
+
     private func findNodeId(
         inSnapshotJSON snapshotJSON: String,
         attributeName: String,
@@ -278,6 +899,52 @@ struct DOMInspectorTests {
         }
         return nil
     }
+
+    private func modelContainsNode(
+        _ node: DOMNodeModel?,
+        attributeName: String,
+        attributeValue: String
+    ) -> Bool {
+        guard let node else {
+            return false
+        }
+        if node.attributes.contains(where: { $0.name == attributeName && $0.value == attributeValue }) {
+            return true
+        }
+        return node.children.contains {
+            modelContainsNode($0, attributeName: attributeName, attributeValue: attributeValue)
+        }
+    }
+
+    private func makeNode(
+        localID: UInt64,
+        attributes: [DOMAttribute] = [],
+        children: [DOMGraphNodeDescriptor] = [],
+        nodeType: Int = 1,
+        nodeName: String = "DIV",
+        localName: String = "div",
+        nodeValue: String = ""
+    ) -> DOMGraphNodeDescriptor {
+        DOMGraphNodeDescriptor(
+            localID: localID,
+            backendNodeID: Int(localID),
+            nodeType: nodeType,
+            nodeName: nodeName,
+            localName: localName,
+            nodeValue: nodeValue,
+            attributes: attributes,
+            childCount: children.count,
+            layoutFlags: [],
+            isRendered: true,
+            children: children
+        )
+    }
+}
+
+@available(*, deprecated, message: "Legacy API compatibility coverage.")
+@MainActor
+private func legacyDocumentStore(of inspector: WIDOMModel) -> DOMDocumentModel {
+    inspector.documentStore
 }
 
 private final class NavigationDelegate: NSObject, WKNavigationDelegate {

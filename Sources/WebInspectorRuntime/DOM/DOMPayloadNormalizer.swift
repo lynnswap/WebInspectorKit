@@ -72,7 +72,7 @@ final class DOMPayloadNormalizer {
         let preview = stringValue(object["preview"]) ?? ""
         let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
         let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
-        let selectorPath = stringValue(object["selectorPath"]) ?? ""
+        let selectorPath = stringValue(object["selectorPath"])
         let styleRevision = intValue(object["styleRevision"]) ?? 0
 
         let selection = DOMSelectionSnapshotPayload(
@@ -96,7 +96,11 @@ final class DOMPayloadNormalizer {
         return .selectorPath(.init(localID: localID, selectorPath: selectorPath))
     }
 
-    func normalizeProtocolResponse(
+    func normalizeSnapshot(_ payload: Any) -> DOMGraphSnapshot? {
+        normalizeSnapshotPayload(payload)
+    }
+
+    func normalizeBackendResponse(
         method: String,
         responseObject: [String: Any],
         resetDocument: Bool

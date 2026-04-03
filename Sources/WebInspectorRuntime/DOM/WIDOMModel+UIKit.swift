@@ -48,7 +48,7 @@ package enum WIDOMUIKitSceneActivationEnvironment {
     package static var sceneProvider: @MainActor (UIWindow) -> (any WIDOMUIKitSceneActivationTarget)? = { $0.windowScene }
 }
 
-extension WIDOMModel {
+extension WIDOMInspector {
     func activatePageWindowForSelectionIfPossible() {
         guard let pageWindow = session.pageWebView?.window else {
             return

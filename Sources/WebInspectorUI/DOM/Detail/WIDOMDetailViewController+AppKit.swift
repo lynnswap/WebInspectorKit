@@ -7,10 +7,10 @@ import SwiftUI
 
 @MainActor
 public final class WIDOMDetailViewController: NSViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private var hostingController: NSHostingController<ElementDetailsMacRootView>?
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspector) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -46,88 +46,87 @@ public final class WIDOMDetailViewController: NSViewController {
 
 @MainActor
 private struct ElementDetailsMacRootView: View {
-    private struct AttributeEditorState: Identifiable {
-        let nodeID: DOMEntryID?
-        let name: String
-        let initialValue: String
+    let inspector: WIDOMInspector
 
-        var id: String {
-            let localID = nodeID?.localID ?? 0
-            return "\(localID):\(name)"
-        }
-    }
+    @State private var draftSession: WIDOMAttributeDraftSession?
+    @State private var isDraftSaveInFlight = false
+    @State private var pendingDraftSelectionClearTask: Task<Void, Never>?
 
-    @Bindable var inspector: WIDOMModel
-    @State private var attributeEditorState: AttributeEditorState?
-    @State private var attributeEditorDraft = ""
-
-    private var selectedEntry: DOMEntry? {
-        inspector.selectedEntry
+    private var selectedNode: DOMNodeModel? {
+        inspector.document.selectedNode
     }
 
     private var hasSelection: Bool {
-        selectedEntry != nil
+        selectedNode != nil
     }
 
     var body: some View {
-        if hasSelection {
-            List {
-                if let errorMessage = inspector.errorMessage, !errorMessage.isEmpty {
-                    Section {
-                        infoRow(message: errorMessage, color: .orange)
+        Group {
+            if let selectedNode {
+                List {
+                    if let errorMessage = inspector.document.errorMessage, !errorMessage.isEmpty {
+                        Section {
+                            infoRow(message: errorMessage, color: .orange)
+                        }
+                    }
+
+                    Section(LocalizedStringResource("dom.element.section.element", bundle: .module)) {
+                        previewRow(selectedNode: selectedNode)
+                    }
+
+                    Section(LocalizedStringResource("dom.element.section.selector", bundle: .module)) {
+                        selectorRow(selectedNode: selectedNode)
+                    }
+
+                    Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
+                        stylesSection(selectedNode: selectedNode)
+                    }
+
+                    Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
+                        attributesSection(selectedNode: selectedNode)
                     }
                 }
-
-                Section(LocalizedStringResource("dom.element.section.element", bundle: .module)) {
-                    previewRow
-                }
-
-                Section(LocalizedStringResource("dom.element.section.selector", bundle: .module)) {
-                    selectorRow
-                }
-
-                Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
-                    stylesSection
-                }
-
-                Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
-                    attributesSection
-                }
+                .listStyle(.inset)
+            } else {
+                emptyState
             }
-            .listStyle(.inset)
-            .sheet(item: $attributeEditorState) { state in
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(wiLocalized("dom.element.attributes.edit", default: "Edit Attribute"))
-                        .font(.headline)
-                    Text(state.name)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                    TextField(
-                        wiLocalized("dom.element.attributes.value", default: "Value"),
-                        text: $attributeEditorDraft
+        }
+        .sheet(item: $draftSession, onDismiss: { clearDraftSession() }) { session in
+            VStack(alignment: .leading, spacing: 12) {
+                Text(wiLocalized("dom.element.attributes.edit", default: "Edit Attribute"))
+                    .font(.headline)
+                Text(session.key.attributeName)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                TextField(
+                    wiLocalized("dom.element.attributes.value", default: "Value"),
+                    text: Binding(
+                        get: { draftSession?.draftValue ?? "" },
+                        set: { updateDraft($0) }
                     )
-                    HStack {
-                        Spacer()
-                        Button(wiLocalized("cancel", default: "Cancel")) {
-                            attributeEditorState = nil
-                        }
-                        Button(wiLocalized("save", default: "Save")) {
-                            Task.immediateIfAvailable { [inspector] in
-                                await inspector.updateAttributeValue(name: state.name, value: attributeEditorDraft)
-                            }
-                            attributeEditorState = nil
-                        }
-                        .keyboardShortcut(.defaultAction)
+                )
+                .disabled(isDraftSaveInFlight)
+                HStack {
+                    Spacer()
+                    Button(wiLocalized("cancel", default: "Cancel")) {
+                        clearDraftSession()
                     }
-                }
-                .padding(16)
-                .frame(minWidth: 320)
-                .onAppear {
-                    attributeEditorDraft = state.initialValue
+                    .disabled(isDraftSaveInFlight)
+                    Button(wiLocalized("save", default: "Save")) {
+                        saveDraft()
+                    }
+                    .disabled(isDraftSaveInFlight)
+                    .keyboardShortcut(.defaultAction)
                 }
             }
-        } else {
-            emptyState
+            .padding(16)
+            .frame(minWidth: 320)
+        }
+        .onChange(of: selectedNode?.id) { _, _ in
+            reconcileDraftSession(allowTransientDeselection: true)
+        }
+        .onChange(of: selectedNode?.attributes) { _, _ in
+            reconcileDraftSession(allowTransientDeselection: false)
         }
     }
 
@@ -146,28 +145,28 @@ private struct ElementDetailsMacRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var previewRow: some View {
-        Text(selectedEntry?.preview ?? "")
+    private func previewRow(selectedNode: DOMNodeModel) -> some View {
+        Text(selectedNode.preview)
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
             .lineLimit(4)
     }
 
-    private var selectorRow: some View {
-        Text(selectedEntry?.selectorPath ?? "")
+    private func selectorRow(selectedNode: DOMNodeModel) -> some View {
+        Text(selectedNode.selectorPath)
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
             .lineLimit(4)
     }
 
     @ViewBuilder
-    private var stylesSection: some View {
-        if selectedEntry?.isLoadingMatchedStyles == true {
+    private func stylesSection(selectedNode: DOMNodeModel) -> some View {
+        if selectedNode.isLoadingMatchedStyles {
             infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if (selectedEntry?.matchedStyles ?? []).isEmpty {
+        } else if selectedNode.matchedStyles.isEmpty {
             infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
         } else {
-            ForEach(Array((selectedEntry?.matchedStyles ?? []).enumerated()), id: \.offset) { _, rule in
+            ForEach(Array(selectedNode.matchedStyles.enumerated()), id: \.offset) { _, rule in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(rule.selectorText)
                         .font(.subheadline.weight(.semibold))
@@ -179,12 +178,12 @@ private struct ElementDetailsMacRootView: View {
                 }
             }
 
-            if selectedEntry?.matchedStylesTruncated == true {
+            if selectedNode.matchedStylesTruncated {
                 infoRow(message: wiLocalized("dom.element.styles.truncated"), color: .secondary)
             }
-            if let blockedStylesheetCount = selectedEntry?.blockedStylesheetCount, blockedStylesheetCount > 0 {
+            if selectedNode.blockedStylesheetCount > 0 {
                 infoRow(
-                    message: "\(blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
+                    message: "\(selectedNode.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
                     color: .secondary
                 )
             }
@@ -192,38 +191,141 @@ private struct ElementDetailsMacRootView: View {
     }
 
     @ViewBuilder
-    private var attributesSection: some View {
-        if (selectedEntry?.attributes ?? []).isEmpty {
+    private func attributesSection(selectedNode: DOMNodeModel) -> some View {
+        if selectedNode.attributes.isEmpty {
             infoRow(message: wiLocalized("dom.element.attributes.empty"), color: .secondary)
         } else {
-            let attributes = selectedEntry?.attributes ?? []
-            ForEach(Array(attributes.enumerated()), id: \.offset) { _, attribute in
+            ForEach(selectedNode.attributes, id: \.name) { attribute in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(attribute.name)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Text(attribute.value)
+                    Text(attributeValue(for: attribute, selectedNode: selectedNode))
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
                         .lineLimit(6)
                 }
                 .contextMenu {
                     Button(wiLocalized("dom.element.attributes.edit", default: "Edit Attribute")) {
-                        attributeEditorState = AttributeEditorState(
-                            nodeID: selectedEntry?.id,
-                            name: attribute.name,
-                            initialValue: attribute.value
-                        )
-                        attributeEditorDraft = attribute.value
+                        beginDraft(attribute: attribute, selectedNode: selectedNode)
                     }
                     Button(wiLocalized("dom.element.attributes.delete", default: "Delete Attribute"), role: .destructive) {
-                        Task.immediateIfAvailable { [inspector] in
-                            await inspector.removeAttribute(name: attribute.name)
-                        }
+                        deleteAttribute(attribute: attribute, selectedNode: selectedNode)
                     }
                 }
             }
         }
+    }
+
+    private func beginDraft(attribute: DOMAttribute, selectedNode: DOMNodeModel) {
+        let key = WIDOMAttributeDraftKey(nodeID: selectedNode.id, attributeName: attribute.name)
+        if draftSession?.key == key {
+            return
+        }
+        draftSession = .init(key: key, value: attribute.value)
+    }
+
+    private func updateDraft(_ value: String) {
+        guard var draftSession else {
+            return
+        }
+        draftSession.updateDraft(value)
+        self.draftSession = draftSession
+    }
+
+    private func clearDraftSession() {
+        pendingDraftSelectionClearTask?.cancel()
+        pendingDraftSelectionClearTask = nil
+        isDraftSaveInFlight = false
+        draftSession = nil
+    }
+
+    private func deleteAttribute(attribute: DOMAttribute, selectedNode: DOMNodeModel) {
+        let key = WIDOMAttributeDraftKey(nodeID: selectedNode.id, attributeName: attribute.name)
+        let preservedDraftSession = draftSession?.key == key ? draftSession : nil
+        let inspector = inspector
+        Task {
+            let result = await inspector.removeAttribute(nodeID: selectedNode.id, name: attribute.name)
+            await MainActor.run {
+                if result == .applied {
+                    if self.draftSession?.key == key {
+                        self.clearDraftSession()
+                    }
+                    return
+                }
+                guard let preservedDraftSession, self.selectedNode?.id == key.nodeID else {
+                    return
+                }
+                if self.selectedNode?.attributes.contains(where: { $0.name == key.attributeName }) == true {
+                    self.draftSession = preservedDraftSession
+                }
+            }
+        }
+    }
+
+    private func saveDraft() {
+        guard !isDraftSaveInFlight, let draftSession else {
+            return
+        }
+        isDraftSaveInFlight = true
+        let key = draftSession.key
+        let submittedValue = draftSession.draftValue
+        let inspector = inspector
+        Task {
+            let result = await inspector.setAttribute(
+                nodeID: key.nodeID,
+                name: key.attributeName,
+                value: submittedValue
+            )
+            await MainActor.run {
+                self.isDraftSaveInFlight = false
+                guard result == .applied else {
+                    return
+                }
+                self.draftSession = resolveAttributeSheetDraftSessionAfterSuccessfulSave(
+                    self.draftSession,
+                    key: key,
+                    submittedValue: submittedValue
+                )
+            }
+        }
+    }
+
+    private func reconcileDraftSession(allowTransientDeselection: Bool) {
+        pendingDraftSelectionClearTask?.cancel()
+        pendingDraftSelectionClearTask = nil
+
+        guard let draftSession else {
+            return
+        }
+
+        switch reconcileAttributeDraftSession(
+            draftSession,
+            selectedNode: selectedNode,
+            allowTransientDeselection: allowTransientDeselection
+        ) {
+        case let .keep(updatedSession):
+            self.draftSession = updatedSession
+        case .clear:
+            self.draftSession = nil
+        case .deferClear:
+            pendingDraftSelectionClearTask = Task { @MainActor in
+                await Task.yield()
+                guard !Task.isCancelled else {
+                    return
+                }
+                pendingDraftSelectionClearTask = nil
+                reconcileDraftSession(allowTransientDeselection: false)
+            }
+        }
+    }
+
+    private func attributeValue(for attribute: DOMAttribute, selectedNode: DOMNodeModel) -> String {
+        let key = WIDOMAttributeDraftKey(nodeID: selectedNode.id, attributeName: attribute.name)
+        guard draftSession?.key == key else {
+            return attribute.value
+        }
+        return draftSession?.draftValue ?? attribute.value
     }
 
     private func styleRuleDetail(_ rule: DOMMatchedStyleRule) -> String {
@@ -266,6 +368,5 @@ import SwiftUI
     }
 }
 #endif
-
 
 #endif

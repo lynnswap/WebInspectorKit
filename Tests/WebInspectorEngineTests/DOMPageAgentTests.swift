@@ -6,40 +6,15 @@ import WebKit
 @MainActor
 struct DOMSessionTests {
     @Test
-    func detachClearsSelection() async {
+    func detachClearsLastPageWebView() async {
         let session = DOMSession(configuration: .init(snapshotDepth: 3, subtreeDepth: 2))
-        session.graphStore.applySelectionSnapshot(
-            .init(
-                localID: 42,
-                preview: "<div>",
-                attributes: [DOMAttribute(nodeId: 42, name: "class", value: "title")],
-                path: ["html", "body", "div"],
-                selectorPath: "#title",
-                styleRevision: 1
-            )
-        )
-        session.graphStore.applyMatchedStyles(
-            .init(
-                nodeId: 42,
-                rules: [
-                    DOMMatchedStyleRule(
-                        origin: .author,
-                        selectorText: ".title",
-                        declarations: [DOMMatchedStyleDeclaration(name: "color", value: "red", important: false)],
-                        sourceLabel: "inline"
-                    ),
-                ],
-                truncated: true,
-                blockedStylesheetCount: 2
-            ),
-            for: 42
-        )
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
 
         await session.detach()
 
-        #expect(session.graphStore.selectedEntry == nil)
-        #expect(session.graphStore.entriesByID.isEmpty)
-        #expect(session.graphStore.rootID == nil)
+        #expect(session.lastPageWebView == nil)
+        #expect(session.pageWebView == nil)
     }
 
     @Test
@@ -63,22 +38,6 @@ struct DOMSessionTests {
         let session = DOMSession(configuration: .init(snapshotDepth: 2))
         do {
             _ = try await session.captureSnapshot(maxDepth: 2)
-            #expect(Bool(false))
-        } catch let error as WebInspectorCoreError {
-            guard case .scriptUnavailable = error else {
-                #expect(Bool(false))
-                return
-            }
-        } catch {
-            #expect(Bool(false))
-        }
-    }
-
-    @Test
-    func selectionCopyTextWithoutWebViewThrows() async {
-        let session = DOMSession(configuration: .init())
-        do {
-            _ = try await session.selectionCopyText(nodeId: 1, kind: .html)
             #expect(Bool(false))
         } catch let error as WebInspectorCoreError {
             guard case .scriptUnavailable = error else {
@@ -123,24 +82,76 @@ struct DOMSessionTests {
     }
 
     @Test
-    func reattachingSameWebViewKeepsSelectionAndDoesNotRequestReload() async {
+    func reattachingSameWebViewDoesNotRequestReload() async {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
         let firstAttach = await session.attach(to: webView)
         #expect(firstAttach.shouldReload == true)
-        #expect(firstAttach.preserveState == false)
+        #expect(firstAttach.shouldPreserveInspectorState == false)
 
-        session.graphStore.applySelectionSnapshot(
-            .init(localID: 42, preview: "<div id=\"selected\">", attributes: [], path: [], selectorPath: "", styleRevision: 0)
+        let secondAttach = await session.attach(to: webView)
+
+        #expect(secondAttach.shouldReload == false)
+        #expect(secondAttach.shouldPreserveInspectorState == false)
+    }
+
+    @Test
+    func reattachingSameWebViewRefreshesCachedPageContext() async throws {
+        let session = DOMSession(configuration: .init())
+        let (webView, _) = makeTestWebView()
+
+        session.preparePageEpoch(1)
+        session.prepareDocumentScopeID(2)
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await session.attach(to: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.webInspectorDOM.setPageEpoch(5);
+            window.webInspectorDOM.setDocumentScopeID(7);
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
 
         let secondAttach = await session.attach(to: webView)
 
         #expect(secondAttach.shouldReload == false)
-        #expect(secondAttach.preserveState == false)
-        #expect(session.graphStore.selectedID?.localID == 42)
-        #expect(session.graphStore.selectedEntry?.preview == "<div id=\"selected\">")
+        #expect(secondAttach.shouldPreserveInspectorState == false)
+        #expect(secondAttach.observedPageContext?.pageEpoch == 5)
+        #expect(secondAttach.observedPageContext?.documentScopeID == 7)
+        #expect(session.testCachedPageEpoch == 5)
+        #expect(session.testCachedDocumentScopeID == 7)
+    }
+
+    @Test
+    func reattachingSameWebViewAdoptsNewerPageEpochBeforeDocumentScopeCatchesUp() async throws {
+        let session = DOMSession(configuration: .init())
+        let (webView, _) = makeTestWebView()
+
+        session.preparePageEpoch(4)
+        session.prepareDocumentScopeID(8)
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await session.attach(to: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.webInspectorDOM.setPageEpoch(5);
+            window.webInspectorDOM.setDocumentScopeID(7);
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        let secondAttach = await session.attach(to: webView)
+
+        #expect(secondAttach.shouldReload == false)
+        #expect(secondAttach.shouldPreserveInspectorState == false)
+        #expect(secondAttach.observedPageContext?.pageEpoch == 5)
+        #expect(secondAttach.observedPageContext?.documentScopeID == 7)
+        #expect(session.testCachedPageEpoch == 5)
+        #expect(session.testCachedDocumentScopeID == 7)
     }
 
     @Test
@@ -201,6 +212,369 @@ struct DOMSessionTests {
         )
         let installed = (raw as? Bool) ?? (raw as? NSNumber)?.boolValue ?? false
         #expect(installed == true)
+    }
+
+    @Test
+    func pageEpochSyncClearsCachedHandles() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: 1)
+        #expect(handleCache.handle(for: 1) != nil)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1)
+
+        for _ in 0..<20 where handleCache.handle(for: 1) != nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(handleCache.handle(for: 1) == nil)
+    }
+
+    @Test
+    func stalePageEpochSyncDoesNotRegressNativeEpoch() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1)
+        let firstSyncApplied = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            return jsEpoch == 1 && extractPageEpoch(from: agent) == 1
+        }
+        #expect(firstSyncApplied == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+        let staleSyncDidNotRegress = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            return jsEpoch == 1 && extractPageEpoch(from: agent) == 1
+        }
+        #expect(staleSyncDidNotRegress == true)
+    }
+
+    @Test
+    func preparedPageContextAcceptsNewerPageStateWithoutSchedulingRetry() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 5)
+        let initialSyncApplied = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 3 && jsScope == 5
+        }
+        #expect(initialSyncApplied == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1, documentScopeID: 2)
+
+        #expect(agent.testHasPreparedPageContextSyncTask == false)
+        #expect(agent.testCachedPageEpoch == 3)
+        #expect(agent.testCachedDocumentScopeID == 5)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 5)
+    }
+
+    @Test
+    func staleDocumentScopeSyncReturnsAfterNewerScopeIsApplied() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
+
+        let staleSyncFinished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(staleSyncFinished == true)
+        #expect(extractDocumentScopeID(from: agent) == 2)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 2)
+    }
+
+    @Test
+    func waitForPreparedPageContextSyncDiscardsCompletedStaleTask() async {
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: WIUserContentControllerStateRegistry.shared
+        )
+
+        agent.testInstallCompletedPreparedPageContextSyncTask(generation: 1)
+        agent.testAdvancePageEpochApplyGenerationWithoutClearingTask()
+
+        await agent.waitForPreparedPageContextSyncIfNeeded()
+        #expect(agent.testHasPreparedPageContextSyncTask == false)
+    }
+
+    @Test
+    func syncDocumentScopeRefreshesStaleCachedScopeBeforeShortCircuiting() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
+        agent.testSetCachedDocumentScopeID(4)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 1)
+        #expect(extractDocumentScopeID(from: agent) == 4)
+
+        await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
+
+        #expect(extractDocumentScopeID(from: agent) == 2)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 2)
+    }
+
+    @Test
+    func syncDocumentScopeDoesNotWriteOlderScopeWhenRefreshIsUnavailable() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        await agent.syncDocumentScopeIDIfNeeded(3, on: webView)
+        agent.testSetDocumentScopeSyncRetryLimitOverride(2)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            window.__domPageAgentTestsOriginalConsoleLog = console.log;
+            console.log = function() {
+                throw new Error("debugStatus unavailable");
+            };
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            """
+            if (window.__domPageAgentTestsOriginalConsoleLog) {
+                console.log = window.__domPageAgentTestsOriginalConsoleLog;
+            }
+            delete window.__domPageAgentTestsOriginalConsoleLog;
+            """,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        #expect(didSync == false)
+        #expect(extractDocumentScopeID(from: agent) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 3)
+    }
+
+    @Test
+    func syncDocumentScopeRefreshesStaleCachedScopeAfterRejectedApply() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView)
+        await agent.syncDocumentScopeIDIfNeeded(3, on: webView)
+        agent.testSetCachedDocumentScopeID(1)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 3)
+        #expect(extractDocumentScopeID(from: agent) == 1)
+
+        let syncFinished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(syncFinished == true)
+        #expect(extractDocumentScopeID(from: agent) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 3)
+    }
+
+    @Test
+    func staleExpectedPageEpochDoesNotApplyDocumentScopeToNewerPage() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1)
+        await agent.syncDocumentScopeIDIfNeeded(3, on: webView)
+
+        await agent.syncDocumentScopeIDIfNeeded(2, on: webView, expectedPageEpoch: 0)
+
+        #expect(extractDocumentScopeID(from: agent) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 3)
+    }
+
+    @Test
+    func syncDocumentScopeReturnsFalseWhenDOMAgentIsUnavailable() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
+        agent.testSetDocumentScopeSyncRetryLimitOverride(3)
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
+
+        #expect(didSync == false)
+        #expect(extractDocumentScopeID(from: agent) == 0)
+    }
+
+    @Test
+    func attachAcceptsNewerPreparedPageContextAndMutationsDoNotWaitOnStaleSync() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+        let session = DOMSession(configuration: .init())
+        let html = """
+        <html>
+            <body>
+                <div id="target" class="before">Target</div>
+            </body>
+        </html>
+        """
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML(html, in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 6)
+        let seeded = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 4 && jsScope == 6
+        }
+        #expect(seeded == true)
+
+        session.preparePageEpoch(1)
+        session.prepareDocumentScopeID(2)
+
+        _ = await session.attach(to: webView)
+
+        #expect(session.testHasPreparedPageContextSyncTask == false)
+        #expect(session.testCachedPageEpoch == 4)
+        #expect(session.testCachedDocumentScopeID == 6)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 4)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 6)
+
+        let snapshot = try await session.captureSnapshot(maxDepth: 5)
+        let nodeId = try #require(
+            findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target")
+        )
+
+        let mutationFinished = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                matchesApplied(
+                    await session.setAttribute(nodeId: nodeId, name: "class", value: "after")
+                )
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(mutationFinished == true)
+        let didApplyMutation = await waitForCondition {
+            await domAttributeValue(elementID: "target", attributeName: "class", in: webView) == "after"
+        }
+        #expect(didApplyMutation == true)
     }
 
     @Test
@@ -422,23 +796,24 @@ struct DOMSessionTests {
             return
         }
 
-        guard let undoToken = await session.removeNodeWithUndo(nodeId: nodeId) else {
+        let removeResult = await session.removeNodeWithUndo(nodeId: nodeId)
+        guard case let .applied(undoToken) = removeResult else {
             Issue.record("removeNodeWithUndo should return a valid token")
             return
         }
         #expect(await domNodeExists(withID: "target", in: webView) == false)
 
         let restored = await session.undoRemoveNode(undoToken: undoToken)
-        #expect(restored == true)
+        #expect(matchesApplied(restored) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == true)
 
         let removedAgain = await session.redoRemoveNode(undoToken: undoToken)
-        #expect(removedAgain == true)
+        #expect(matchesApplied(removedAgain) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
     }
 
     @Test
-    func removeNodeFallsBackWhenHandleAPIIsUnavailable() async throws {
+    func removeNodeDoesNotDependOnHandleMutationAPI() async throws {
         let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
         let (webView, _) = makeTestWebView()
         let html = """
@@ -457,7 +832,6 @@ struct DOMSessionTests {
             return
         }
 
-        let modeBeforeFallback = session.bridgeMode
         let didDisableHandleAPI = try await webView.callAsyncJavaScript(
             """
             return (function() {
@@ -470,10 +844,10 @@ struct DOMSessionTests {
                 try {
                     window.webInspectorDOM.removeNodeHandle = undefined;
                 } catch (_) {}
-                return (
-                    typeof window.webInspectorDOM.createNodeHandle !== "function"
-                    || typeof window.webInspectorDOM.removeNodeHandle !== "function"
-                );
+                try {
+                    window.webInspectorDOM.removeNodeHandleWithUndo = undefined;
+                } catch (_) {}
+                return typeof window.webInspectorDOM.createNodeHandle !== "function";
             })();
             """,
             arguments: [:],
@@ -481,13 +855,11 @@ struct DOMSessionTests {
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
 
-        await session.removeNode(nodeId: nodeId)
+        let removeResult = await session.removeNode(nodeId: nodeId)
 
+        #expect(matchesApplied(removeResult) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
-        if modeBeforeFallback != .legacyJSON,
-           ((didDisableHandleAPI as? Bool) ?? false) {
-            #expect(session.bridgeMode == .legacyJSON)
-        }
+        _ = didDisableHandleAPI
     }
 
     private func makeTestWebView() -> (WKWebView, RecordingUserContentController) {
@@ -603,6 +975,98 @@ struct DOMSessionTests {
         )
         return (rawValue as? Bool) ?? (rawValue as? NSNumber)?.boolValue ?? false
     }
+
+    private func domAttributeValue(
+        elementID: String,
+        attributeName: String,
+        in webView: WKWebView
+    ) async -> String? {
+        let rawValue = try? await webView.callAsyncJavaScript(
+            "return document.getElementById(identifier)?.getAttribute(attributeName) ?? null;",
+            arguments: [
+                "identifier": elementID,
+                "attributeName": attributeName,
+            ],
+            in: nil,
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+        if rawValue is NSNull {
+            return nil
+        }
+        return rawValue as? String
+    }
+}
+
+private func matchesApplied(_ result: DOMMutationExecutionResult<Void>) -> Bool {
+    if case .applied = result {
+        return true
+    }
+    return false
+}
+
+private func extractHandleCache(from agent: DOMPageAgent) -> WIJSHandleCache? {
+    Mirror(reflecting: agent).descendant("handleCache") as? WIJSHandleCache
+}
+
+private func extractPageEpoch(from agent: DOMPageAgent) -> Int? {
+    Mirror(reflecting: agent).descendant("pageEpoch") as? Int
+}
+
+private func extractDocumentScopeID(from agent: DOMPageAgent) -> UInt64? {
+    Mirror(reflecting: agent).descendant("documentScopeID") as? UInt64
+}
+
+@MainActor
+private func currentDOMAgentPageEpoch(in webView: WKWebView) async throws -> Int? {
+    let rawValue = try await webView.evaluateJavaScript(
+        "(() => window.webInspectorDOM?.debugStatus?.().pageEpoch ?? null)();",
+        in: nil,
+        contentWorld: WISPIContentWorldProvider.bridgeWorld()
+    )
+    if rawValue is NSNull {
+        return nil
+    }
+    if let value = rawValue as? Int {
+        return value
+    }
+    if let value = rawValue as? NSNumber {
+        return value.intValue
+    }
+    return nil
+}
+
+@MainActor
+private func currentDOMAgentDocumentScopeID(in webView: WKWebView) async throws -> UInt64? {
+    let rawValue = try await webView.evaluateJavaScript(
+        "(() => window.webInspectorDOM?.debugStatus?.().documentScopeID ?? null)();",
+        in: nil,
+        contentWorld: WISPIContentWorldProvider.bridgeWorld()
+    )
+    if rawValue is NSNull {
+        return nil
+    }
+    if let value = rawValue as? UInt64 {
+        return value
+    }
+    if let value = rawValue as? NSNumber {
+        return value.uint64Value
+    }
+    return nil
+}
+
+@MainActor
+private func waitForCondition(
+    attempts: Int = 20,
+    intervalNanoseconds: UInt64 = 10_000_000,
+    condition: @escaping @MainActor () async -> Bool
+) async -> Bool {
+    for _ in 0..<attempts {
+        if await condition() {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: intervalNanoseconds)
+    }
+    return await condition()
 }
 
 private final class RecordingUserContentController: WKUserContentController {

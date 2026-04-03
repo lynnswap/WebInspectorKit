@@ -1,186 +1,258 @@
 /**
- * DOMTreeProtocol - WebKit protocol communication layer.
- *
- * This module provides:
- * - Protocol message sending/receiving
- * - Command-response handling
- * - Event dispatching
- * - Error reporting
+ * DOMTreeBackendBridge - typed DOM frontend/backend communication layer.
  */
 
 import {
     ProtocolConfig,
-    ProtocolEventHandler,
-    ProtocolMessage,
+    RequestDocumentMode,
+    RequestDocumentOptions,
 } from "./dom-tree-types";
 import { protocolState } from "./dom-tree-state";
-import { safeParseJSON } from "./dom-tree-utilities";
 
-// =============================================================================
-// Request Child Nodes Handler
-// =============================================================================
+type TypedHandlerName =
+    | "webInspectorDomRequestChildren"
+    | "webInspectorDomRequestDocument"
+    | "webInspectorDomHighlight"
+    | "webInspectorDomHideHighlight";
 
-/** Handler for requestChildNodes command results */
-let requestChildNodesHandler: ((result: unknown) => void) | null = null;
+type WebKitMockHandler = {
+    postMessage: (message: unknown) => void;
+};
 
-/** Set the handler for requestChildNodes results */
-export function setRequestChildNodesHandler(
-    handler: ((result: unknown) => void) | null
-): void {
-    requestChildNodesHandler = typeof handler === "function" ? handler : null;
+const pendingChildNodeDepths = new Map<number, number>();
+const activeChildNodeRequests = new Map<number, number>();
+const activeChildNodeRequestDepths = new Map<number, number>();
+const pageEpochDidChangeHandlers = new Set<() => void>();
+const childNodeRequestCompletedHandlers = new Set<(nodeId: number) => void>();
+
+function typedHandler(name: TypedHandlerName): WebKitMockHandler | null {
+    return (window.webkit?.messageHandlers?.[name] as WebKitMockHandler | undefined) ?? null;
 }
 
-// =============================================================================
-// Configuration
-// =============================================================================
+function normalizedPageEpoch(partial: ProtocolConfig | null | undefined): number | null {
+    if (typeof partial?.pageEpoch !== "number" || !Number.isFinite(partial.pageEpoch)) {
+        return null;
+    }
+    if (partial.pageEpoch < protocolState.pageEpoch) {
+        return null;
+    }
+    return partial.pageEpoch;
+}
 
-/** Update protocol configuration */
+function postTypedMessage(
+    handlerName: TypedHandlerName,
+    payload: Record<string, unknown> = {}
+): void {
+    const handler = typedHandler(handlerName);
+    if (!handler || typeof handler.postMessage !== "function") {
+        const error = new Error(`${handlerName} handler unavailable`);
+        reportInspectorError(handlerName, error);
+        throw error;
+    }
+
+    handler.postMessage({
+        ...payload,
+        pageEpoch: protocolState.pageEpoch,
+        documentScopeID: protocolState.documentScopeID,
+    });
+}
+
+function drainQueuedChildNodeRequest(nodeId: number): void {
+    const requestPageEpoch = protocolState.pageEpoch;
+    if (activeChildNodeRequests.get(nodeId) === requestPageEpoch) {
+        return;
+    }
+    const nextDepth = pendingChildNodeDepths.get(nodeId);
+    if (typeof nextDepth !== "number") {
+        return;
+    }
+    pendingChildNodeDepths.delete(nodeId);
+    activeChildNodeRequests.set(nodeId, requestPageEpoch);
+    activeChildNodeRequestDepths.set(nodeId, nextDepth);
+    try {
+        postTypedMessage("webInspectorDomRequestChildren", {
+            nodeId,
+            depth: nextDepth,
+        });
+    } catch (error) {
+        activeChildNodeRequests.delete(nodeId);
+        activeChildNodeRequestDepths.delete(nodeId);
+        throw error;
+    }
+}
+
+export function onPageEpochDidChange(handler: () => void): () => void {
+    pageEpochDidChangeHandlers.add(handler);
+    return () => {
+        pageEpochDidChangeHandlers.delete(handler);
+    };
+}
+
+export function onChildNodeRequestCompleted(handler: (nodeId: number) => void): () => void {
+    childNodeRequestCompletedHandlers.add(handler);
+    return () => {
+        childNodeRequestCompletedHandlers.delete(handler);
+    };
+}
+
 export function updateConfig(partial: ProtocolConfig | null | undefined): void {
     if (typeof partial !== "object" || partial === null) {
         return;
     }
+
+    const previousPageEpoch = protocolState.pageEpoch;
+    const previousDocumentScopeID = protocolState.documentScopeID;
+    const hasExplicitPageEpoch =
+        typeof partial.pageEpoch === "number" && Number.isFinite(partial.pageEpoch);
+    const hasExplicitDocumentScopeID =
+        typeof partial.documentScopeID === "number" && Number.isFinite(partial.documentScopeID);
+    const nextPageEpoch = normalizedPageEpoch(partial);
+    const resolvedPageEpoch = typeof nextPageEpoch === "number" ? nextPageEpoch : protocolState.pageEpoch;
+    const nextDocumentScopeID = hasExplicitDocumentScopeID ? partial.documentScopeID ?? protocolState.documentScopeID : protocolState.documentScopeID;
+
+    if (hasExplicitPageEpoch && nextPageEpoch == null) {
+        return;
+    }
+    if ((hasExplicitPageEpoch || hasExplicitDocumentScopeID)
+        && resolvedPageEpoch === protocolState.pageEpoch
+        && nextDocumentScopeID < protocolState.documentScopeID) {
+        return;
+    }
+
     if (typeof partial.snapshotDepth === "number") {
         protocolState.snapshotDepth = partial.snapshotDepth;
     }
     if (typeof partial.subtreeDepth === "number") {
         protocolState.subtreeDepth = partial.subtreeDepth;
     }
-}
-
-// =============================================================================
-// Message Sending
-// =============================================================================
-
-/** Send a raw protocol message to the backend */
-export function sendProtocolMessage(message: string | object): void {
-    const handler = window.webkit?.messageHandlers?.webInspectorProtocol;
-    if (!handler || typeof handler.postMessage !== "function") {
-        const error = new Error("webInspectorProtocol handler unavailable");
-        reportInspectorError("protocol-handler", error);
-        throw error;
+    if (typeof nextPageEpoch === "number") {
+        protocolState.pageEpoch = nextPageEpoch;
     }
-    try {
-        handler.postMessage(message);
-    } catch (error) {
-        if (typeof message === "string") {
-            throw error;
-        }
-        handler.postMessage(JSON.stringify(message));
+    if (hasExplicitDocumentScopeID) {
+        protocolState.documentScopeID = nextDocumentScopeID;
     }
-}
 
-/** Send a protocol command and await the response */
-export async function sendCommand<T = unknown>(
-    method: string,
-    params: Record<string, unknown> = {}
-): Promise<T> {
-    const id = ++protocolState.lastId;
-    const message = { id, method, params };
-
-    return new Promise((resolve, reject) => {
-        protocolState.pending.set(id, {
-            resolve: resolve as (value: unknown) => void,
-            reject,
-            method,
+    if (
+        protocolState.pageEpoch !== previousPageEpoch
+        || protocolState.documentScopeID != previousDocumentScopeID
+    ) {
+        pendingChildNodeDepths.clear();
+        activeChildNodeRequests.clear();
+        activeChildNodeRequestDepths.clear();
+        pageEpochDidChangeHandlers.forEach((handler) => {
+            handler();
         });
-        try {
-            sendProtocolMessage(message);
-        } catch (error) {
-            protocolState.pending.delete(id);
-            reject(error);
-        }
+    }
+}
+
+export function requestDocumentFromBackend(options: RequestDocumentOptions = {}): void {
+    const requestPageEpoch =
+        typeof options.pageEpoch === "number" && Number.isFinite(options.pageEpoch)
+            ? options.pageEpoch
+            : protocolState.pageEpoch;
+    if (requestPageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+
+    const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
+    const mode: RequestDocumentMode = options.mode === "preserve-ui-state" ? "preserve-ui-state" : "fresh";
+    postTypedMessage("webInspectorDomRequestDocument", {
+        depth,
+        mode,
     });
 }
 
-// =============================================================================
-// Message Dispatch
-// =============================================================================
-
-/** Dispatch a message received from the backend */
-export function dispatchMessageFromBackend(message: string | ProtocolMessage): void {
-    const parsed = safeParseJSON<ProtocolMessage>(message);
-    if (!parsed || typeof parsed !== "object") {
+export async function requestChildNodes(nodeId: number, depth: number): Promise<void> {
+    if (typeof nodeId !== "number" || nodeId <= 0) {
         return;
     }
 
-    // Handle command response
-    if (Object.prototype.hasOwnProperty.call(parsed, "id")) {
-        const requestId = parsed.id;
-        if (typeof requestId !== "number") {
-            return;
-        }
-
-        const pending = protocolState.pending.get(requestId);
-        if (!pending) {
-            return;
-        }
-
-        protocolState.pending.delete(requestId);
-
-        if (parsed.error) {
-            pending.reject(parsed.error);
-        } else {
-            const method = pending.method || "";
-            let result = parsed.result;
-
-            if (typeof result === "string") {
-                result = safeParseJSON(result) ?? result;
-            }
-
-            if (method === "DOM.requestChildNodes" && requestChildNodesHandler) {
-                requestChildNodesHandler(result);
-            }
-
-            pending.resolve(result);
-        }
+    const requestPageEpoch = protocolState.pageEpoch;
+    if (
+        activeChildNodeRequests.get(nodeId) === requestPageEpoch
+        && activeChildNodeRequestDepths.get(nodeId) === depth
+    ) {
+        return;
+    }
+    if (pendingChildNodeDepths.get(nodeId) === depth) {
         return;
     }
 
-    // Handle event
-    if (typeof parsed.method !== "string") {
-        return;
-    }
-
-    emitProtocolEvent(parsed.method, parsed.params || {}, parsed);
+    pendingChildNodeDepths.set(nodeId, depth);
+    drainQueuedChildNodeRequest(nodeId);
 }
 
-// =============================================================================
-// Event Handling
-// =============================================================================
-
-/** Register an event handler for a protocol event */
-export function onProtocolEvent(method: string, handler: ProtocolEventHandler): void {
-    if (!protocolState.eventHandlers.has(method)) {
-        protocolState.eventHandlers.set(method, new Set());
-    }
-    protocolState.eventHandlers.get(method)!.add(handler);
-}
-
-/** Emit a protocol event to registered handlers */
-export function emitProtocolEvent(
-    method: string,
-    params: Record<string, unknown>,
-    rawMessage: unknown
-): void {
-    const listeners = protocolState.eventHandlers.get(method);
-    if (!listeners || !listeners.size) {
+export function markChildNodesRequestCompleted(nodeId: number): void {
+    if (typeof nodeId !== "number" || nodeId <= 0) {
         return;
     }
-
-    listeners.forEach((listener) => {
-        try {
-            listener(params, method, rawMessage);
-        } catch (error) {
-            reportInspectorError(`event:${method}`, error);
-        }
+    activeChildNodeRequests.delete(nodeId);
+    activeChildNodeRequestDepths.delete(nodeId);
+    childNodeRequestCompletedHandlers.forEach((handler) => {
+        handler(nodeId);
     });
+    drainQueuedChildNodeRequest(nodeId);
 }
 
-// =============================================================================
-// Error Reporting
-// =============================================================================
+export function rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    if (typeof nodeId !== "number" || nodeId <= 0) {
+        return;
+    }
 
-/** Report an error to console and native logger */
+    const activeDepth = activeChildNodeRequestDepths.get(nodeId);
+    activeChildNodeRequests.delete(nodeId);
+    activeChildNodeRequestDepths.delete(nodeId);
+    if (typeof activeDepth === "number" && !pendingChildNodeDepths.has(nodeId)) {
+        pendingChildNodeDepths.set(nodeId, activeDepth);
+    }
+}
+
+export function resetChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    pendingChildNodeDepths.clear();
+    activeChildNodeRequests.clear();
+    activeChildNodeRequestDepths.clear();
+}
+
+export function retryQueuedChildNodeRequests(): void {
+    const pendingNodeIDs = [...pendingChildNodeDepths.keys()];
+    for (const nodeId of pendingNodeIDs) {
+        drainQueuedChildNodeRequest(nodeId);
+    }
+}
+
+export function completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void {
+    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
+        return;
+    }
+    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+    markChildNodesRequestCompleted(nodeId);
+}
+
+export function requestHighlightNode(nodeId: number): void {
+    if (typeof nodeId !== "number" || nodeId <= 0) {
+        return;
+    }
+    postTypedMessage("webInspectorDomHighlight", { nodeId });
+}
+
+export function requestHideHighlight(): void {
+    postTypedMessage("webInspectorDomHideHighlight");
+}
+
 export function reportInspectorError(context: string, error: unknown): void {
     const details =
         error && typeof error === "object" && "stack" in error
@@ -196,4 +268,8 @@ export function reportInspectorError(context: string, error: unknown): void {
     } catch {
         // ignore logging failures
     }
+}
+
+export function isExpectedStaleProtocolResponseError(error: unknown): boolean {
+    return error instanceof Error && error.message === "Stale DOM request";
 }

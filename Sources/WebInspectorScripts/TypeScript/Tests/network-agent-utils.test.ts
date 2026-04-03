@@ -737,4 +737,38 @@ describe("network-agent-utils", () => {
 
         entriesSpy.mockRestore();
     });
+
+    it("bootstraps current page resources before starting the buffering cutoff", () => {
+        const entriesSpy = vi.spyOn(performance, "getEntriesByType").mockImplementation(type => {
+            if (type !== "resource") {
+                return [];
+            }
+            return ([{
+                name: "https://example.com/bootstrap-buffered.js",
+                startTime: 18,
+                duration: 2,
+                initiatorType: "script",
+                encodedBodySize: 24,
+                decodedBodySize: 36,
+                responseStatus: 200,
+                requestMethod: "GET"
+            }] as unknown) as PerformanceEntryList;
+        });
+
+        configureNetwork({
+            controlAuthToken: "test-control-token",
+            clear: true,
+            mode: NetworkLoggingMode.BUFFERING,
+            resourceObserverMode: "enabled"
+        });
+
+        expect(queuedEvents).toHaveLength(1);
+        expect(queuedEvents[0]).toMatchObject({
+            kind: "resourceTiming",
+            url: "https://example.com/bootstrap-buffered.js"
+        });
+        expect(typeof networkState.resourceStartCutoffMs).toBe("number");
+
+        entriesSpy.mockRestore();
+    });
 });

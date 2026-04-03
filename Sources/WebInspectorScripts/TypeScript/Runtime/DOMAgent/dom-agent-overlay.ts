@@ -1,6 +1,12 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
 import {nodeIsRendered, rectForNode} from "./dom-agent-dom-core";
 
+function matchesPageEpoch(expectedPageEpoch?: number) {
+    return typeof expectedPageEpoch !== "number"
+        || !Number.isFinite(expectedPageEpoch)
+        || expectedPageEpoch === inspector.pageEpoch;
+}
+
 function ensureOverlay() {
     var overlay = inspector.overlay;
     if (overlay && overlay.parentNode) {
@@ -172,23 +178,32 @@ function scrollRectIntoViewIfNeeded(rect: DOMRect | null) {
     return true;
 }
 
-export function highlightDOMNode(identifier: number) {
+export function highlightDOMNode(identifier: number, expectedPageEpoch?: number) {
+    if (!matchesPageEpoch(expectedPageEpoch)) {
+        return false;
+    }
     var map = inspector.map;
     if (!map || !map.size) {
         return false;
     }
     var node = map.get(identifier);
-    return highlightResolvedNode(node as AnyNode | null);
+    return highlightResolvedNode(node as AnyNode | null, expectedPageEpoch);
 }
 
-export function highlightDOMNodeHandle(handle: unknown) {
+export function highlightDOMNodeHandle(handle: unknown, expectedPageEpoch?: number) {
+    if (!matchesPageEpoch(expectedPageEpoch)) {
+        return false;
+    }
     if (!handle || typeof handle !== "object") {
         return false;
     }
-    return highlightResolvedNode(handle as AnyNode);
+    return highlightResolvedNode(handle as AnyNode, expectedPageEpoch);
 }
 
-function highlightResolvedNode(node: AnyNode | null) {
+function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number) {
+    if (!matchesPageEpoch(expectedPageEpoch)) {
+        return false;
+    }
     if (!node) {
         return false;
     }
@@ -204,8 +219,12 @@ function highlightResolvedNode(node: AnyNode | null) {
     return true;
 }
 
-export function clearHighlight() {
+export function clearHighlight(expectedPageEpoch?: number) {
+    if (!matchesPageEpoch(expectedPageEpoch)) {
+        return false;
+    }
     setOverlayTarget(null);
+    return true;
 }
 
 export function highlightSelectionNode(node: AnyNode | null) {

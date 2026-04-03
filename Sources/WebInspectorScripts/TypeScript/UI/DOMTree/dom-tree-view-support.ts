@@ -24,6 +24,7 @@ import {
     renderState,
     ensureDomElements,
     childRequestDepth,
+    protocolState,
     RENDER_BATCH_LIMIT,
     RENDER_TIME_BUDGET,
 } from "./dom-tree-state";
@@ -33,13 +34,18 @@ import {
     timeNow,
     trimText,
 } from "./dom-tree-utilities";
-import { sendCommand, reportInspectorError } from "./dom-tree-protocol";
+import {
+    isExpectedStaleProtocolResponseError,
+    reportInspectorError,
+    requestHideHighlight,
+    requestHighlightNode,
+    requestChildNodes,
+} from "./dom-tree-protocol";
 
 // =============================================================================
 // Module State
 // =============================================================================
 
-let selectorRequestToken = 0;
 let treeEventHandlersInstalled = false;
 let hoveredNodeId: number | null = null;
 
@@ -654,7 +660,7 @@ async function sendHighlight(nodeId: number): Promise<void> {
         return;
     }
     try {
-        await sendCommand("DOM.highlightNode", { nodeId });
+        requestHighlightNode(nodeId);
     } catch {
         // noop
     }
@@ -668,7 +674,7 @@ export function clearPageHighlight(): void {
 /** Hide highlight on the page */
 async function hideHighlight(): Promise<void> {
     try {
-        await sendCommand("Overlay.hideHighlight", {});
+        requestHideHighlight();
     } catch {
         // noop
     }
@@ -905,16 +911,22 @@ export function selectNodeByPath(
 export async function requestChildren(node: DOMNode): Promise<void> {
     if (!node.placeholderParentId && node.id > 0) {
         try {
-            await sendCommand("DOM.requestChildNodes", { nodeId: node.id, depth: childRequestDepth() });
+            await requestChildNodes(node.id, childRequestDepth());
         } catch (error) {
+            if (isExpectedStaleProtocolResponseError(error)) {
+                return;
+            }
             reportInspectorError("requestChildNodes", error);
         }
         return;
     }
     const parent = node.placeholderParentId || node.parentId || node.id;
     try {
-        await sendCommand("DOM.requestChildNodes", { nodeId: parent, depth: childRequestDepth() });
+        await requestChildNodes(parent, childRequestDepth());
     } catch (error) {
+        if (isExpectedStaleProtocolResponseError(error)) {
+            return;
+        }
         reportInspectorError("requestChildNodes", error);
     }
 }
@@ -1065,8 +1077,18 @@ function notifyNativeSelection(node: DOMNode | null): void {
                   : [],
               path: buildSelectionPath(node),
               styleRevision: treeState.styleRevision,
+              pageEpoch: protocolState.pageEpoch,
+              documentScopeID: protocolState.documentScopeID,
           }
-        : null;
+        : {
+              id: null,
+              preview: "",
+              attributes: [],
+              path: [],
+              styleRevision: treeState.styleRevision,
+              pageEpoch: protocolState.pageEpoch,
+              documentScopeID: protocolState.documentScopeID,
+          };
     try {
         handler.postMessage(payload);
     } catch (error) {
@@ -1080,39 +1102,9 @@ function notifyNativeSelection(node: DOMNode | null): void {
     }
 }
 
-/** Notify native code of selector path */
-async function notifyNativeSelectorPath(node: DOMNode | null): Promise<void> {
-    const handler = window.webkit?.messageHandlers?.webInspectorDomSelector;
-    if (!handler || typeof handler.postMessage !== "function") {
-        return;
-    }
-    const nodeId = node && typeof node.id === "number" ? node.id : null;
-    const currentToken = ++selectorRequestToken;
-
-    if (!nodeId) {
-        handler.postMessage({ id: null, selectorPath: "" });
-        return;
-    }
-
-    try {
-        const result = await sendCommand<{ selectorPath?: string }>("DOM.getSelectorPath", { nodeId });
-        if (currentToken !== selectorRequestToken) {
-            return;
-        }
-        const selectorPath = result && typeof result.selectorPath === "string" ? result.selectorPath : "";
-        handler.postMessage({ id: nodeId, selectorPath });
-    } catch {
-        if (currentToken !== selectorRequestToken) {
-            return;
-        }
-        handler.postMessage({ id: nodeId, selectorPath: "" });
-    }
-}
-
 /** Update details panel (notifies native) */
 export function updateDetails(node: DOMNode | null): void {
     notifyNativeSelection(node || null);
-    notifyNativeSelectorPath(node || null);
 }
 
 // =============================================================================

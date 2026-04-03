@@ -15,6 +15,22 @@ var removedNodeUndoEntries = new Map<number, RemovedNodeUndoEntry>();
 var removedNodeUndoOrder: number[] = [];
 var maxRemovedNodeUndoEntries = 128;
 
+type MutationResult = {
+    status: "applied" | "ignoredStaleContext" | "failed";
+    undoToken?: number;
+};
+
+function mutationResult(
+    status: MutationResult["status"],
+    undoToken?: number
+): MutationResult {
+    var result: MutationResult = { status };
+    if (typeof undoToken === "number" && Number.isFinite(undoToken) && undoToken > 0) {
+        result.undoToken = Math.floor(undoToken);
+    }
+    return result;
+}
+
 function resolveNode(identifier: number) {
     var map = inspector.map;
     if (!map || !map.size) {
@@ -28,6 +44,23 @@ function resolveHandleNode(handle: unknown): AnyNode | null {
         return null;
     }
     return handle as AnyNode;
+}
+
+function matchesExpectedPageContext(
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (typeof expectedPageEpoch === "number"
+        && Number.isFinite(expectedPageEpoch)
+        && expectedPageEpoch !== inspector.pageEpoch) {
+        return false;
+    }
+    if (typeof expectedDocumentScopeID === "number"
+        && Number.isFinite(expectedDocumentScopeID)
+        && expectedDocumentScopeID !== inspector.documentScopeID) {
+        return false;
+    }
+    return true;
 }
 
 function classNames(element: Element | null) {
@@ -336,38 +369,55 @@ export function xpathForNode(identifier: number) {
     return xpath(node);
 }
 
-export function removeNode(identifier: number) {
+export function removeNode(
+    identifier: number,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var node = resolveNode(identifier);
-    return removeResolvedNode(node);
+    return mutationResult(removeResolvedNode(node) ? "applied" : "failed");
 }
 
-export function removeNodeHandle(handle: unknown) {
-    return removeResolvedNode(resolveHandleNode(handle));
-}
-
-export function removeNodeWithUndo(identifier: number) {
+export function removeNodeWithUndo(
+    identifier: number,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var node = resolveNode(identifier);
-    return removeResolvedNodeWithUndo(node);
+    var undoToken = removeResolvedNodeWithUndo(node);
+    if (!undoToken) {
+        return mutationResult("failed");
+    }
+    return mutationResult("applied", undoToken);
 }
 
-export function removeNodeHandleWithUndo(handle: unknown) {
-    return removeResolvedNodeWithUndo(resolveHandleNode(handle));
-}
-
-export function undoRemoveNode(token: number | null | undefined) {
+export function undoRemoveNode(
+    token: number | null | undefined,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var resolvedToken = normalizeUndoToken(token);
     if (!resolvedToken) {
-        return false;
+        return mutationResult("failed");
     }
     var entry = removedNodeUndoEntries.get(resolvedToken);
     if (!entry || !entry.removed) {
-        return false;
+        return mutationResult("failed");
     }
 
     var parent = entry.parent;
     var node = entry.node;
     if (!parent || !node) {
-        return false;
+        return mutationResult("failed");
     }
 
     var restored = false;
@@ -388,28 +438,35 @@ export function undoRemoveNode(token: number | null | undefined) {
     }
 
     if (!restored) {
-        return false;
+        return mutationResult("failed");
     }
 
     entry.removed = false;
     clearHighlight();
     triggerSnapshotUpdate("undo-remove-node");
-    return true;
+    return mutationResult("applied");
 }
 
-export function redoRemoveNode(token: number | null | undefined) {
+export function redoRemoveNode(
+    token: number | null | undefined,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var resolvedToken = normalizeUndoToken(token);
     if (!resolvedToken) {
-        return false;
+        return mutationResult("failed");
     }
     var entry = removedNodeUndoEntries.get(resolvedToken);
     if (!entry || entry.removed) {
-        return false;
+        return mutationResult("failed");
     }
 
     var node = entry.node;
     if (!node || !node.parentNode) {
-        return false;
+        return mutationResult("failed");
     }
 
     entry.parent = node.parentNode as AnyNode;
@@ -419,7 +476,7 @@ export function redoRemoveNode(token: number | null | undefined) {
     if (removed) {
         entry.removed = true;
     }
-    return removed;
+    return mutationResult(removed ? "applied" : "failed");
 }
 
 function removeResolvedNode(node: AnyNode | null) {
@@ -509,13 +566,18 @@ function normalizeUndoToken(token: number | null | undefined) {
     return 0;
 }
 
-export function setAttributeForNode(identifier: number, name: string | null | undefined, value: string | null | undefined) {
+export function setAttributeForNode(
+    identifier: number,
+    name: string | null | undefined,
+    value: string | null | undefined,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var node = resolveNode(identifier);
-    return setAttributeForResolvedNode(node, name, value);
-}
-
-export function setAttributeForHandle(handle: unknown, name: string | null | undefined, value: string | null | undefined) {
-    return setAttributeForResolvedNode(resolveHandleNode(handle), name, value);
+    return mutationResult(setAttributeForResolvedNode(node, name, value) ? "applied" : "failed");
 }
 
 function setAttributeForResolvedNode(node: AnyNode | null, name: string | null | undefined, value: string | null | undefined) {
@@ -537,13 +599,17 @@ function setAttributeForResolvedNode(node: AnyNode | null, name: string | null |
     return true;
 }
 
-export function removeAttributeForNode(identifier: number, name: string | null | undefined) {
+export function removeAttributeForNode(
+    identifier: number,
+    name: string | null | undefined,
+    expectedPageEpoch?: number | null,
+    expectedDocumentScopeID?: number | null
+) {
+    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
+        return mutationResult("ignoredStaleContext");
+    }
     var node = resolveNode(identifier);
-    return removeAttributeForResolvedNode(node, name);
-}
-
-export function removeAttributeForHandle(handle: unknown, name: string | null | undefined) {
-    return removeAttributeForResolvedNode(resolveHandleNode(handle), name);
+    return mutationResult(removeAttributeForResolvedNode(node, name) ? "applied" : "failed");
 }
 
 function removeAttributeForResolvedNode(node: AnyNode | null, name: string | null | undefined) {
@@ -573,7 +639,9 @@ export function debugStatus() {
         pendingMutations: Array.isArray(inspector.pendingMutations) ? inspector.pendingMutations.length : 0,
         overlayActive: !!inspector.overlayTarget,
         selectionActive: !!inspector.selectionState,
-        documentURL: inspector.documentURL || document.URL || ""
+        documentURL: inspector.documentURL || document.URL || "",
+        pageEpoch: inspector.pageEpoch,
+        documentScopeID: inspector.documentScopeID
     };
     console.log("[webInspectorDOM] status:", status);
     return status;

@@ -1,12 +1,12 @@
 import Foundation
 
-public struct DOMMatchedStylesPayload: Codable, Hashable, Sendable {
-    public var nodeId: Int
-    public var rules: [DOMMatchedStyleRule]
-    public var truncated: Bool
-    public var blockedStylesheetCount: Int
+package struct DOMMatchedStylesPayload: Codable, Hashable, Sendable {
+    package var nodeId: Int
+    package var rules: [DOMMatchedStyleRule]
+    package var truncated: Bool
+    package var blockedStylesheetCount: Int
 
-    public init(
+    package init(
         nodeId: Int,
         rules: [DOMMatchedStyleRule],
         truncated: Bool,

@@ -6,9 +6,25 @@ type WebKitMessageHandler = {
 
 declare global {
     interface Window {
+        __wiDOMFrontendInitialPageEpoch?: number;
+        __wiDOMFrontendBootstrap?: {
+            config?: {
+                snapshotDepth?: number;
+                subtreeDepth?: number;
+                autoUpdateDebounce?: number;
+                pageEpoch?: number;
+            };
+            preferredDepth?: number;
+            pendingDocumentRequest?: {
+                depth?: number;
+                mode?: "fresh" | "preserve-ui-state";
+                pageEpoch?: number;
+            } | null;
+        };
         webInspectorDOM?: {
             __installed?: boolean;
             detach?: () => void;
+            setPageEpoch?: (epoch: number) => void;
         };
         webInspectorNetworkAgent?: {
             __installed?: boolean;
@@ -22,17 +38,19 @@ declare global {
             messageHandlers?: {
                 webInspectorDOMSnapshot?: WebKitMessageHandler;
                 webInspectorDOMMutations?: WebKitMessageHandler;
-                webInspectorProtocol?: WebKitMessageHandler;
+                webInspectorDomRequestDocument?: WebKitMessageHandler;
+                webInspectorDomRequestChildren?: WebKitMessageHandler;
+                webInspectorDomHighlight?: WebKitMessageHandler;
+                webInspectorDomHideHighlight?: WebKitMessageHandler;
                 webInspectorLog?: WebKitMessageHandler;
                 webInspectorReady?: WebKitMessageHandler;
                 webInspectorDomSelection?: WebKitMessageHandler;
-                webInspectorDomSelector?: WebKitMessageHandler;
                 webInspectorNetworkEvents?: WebKitMessageHandler;
                 webInspectorNetworkReset?: WebKitMessageHandler;
                 webInspectorWSUpdate?: WebKitMessageHandler;
             };
         };
-    }
+    };
 
     interface XMLHttpRequest {
         __wiNetwork?: {

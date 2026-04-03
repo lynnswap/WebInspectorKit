@@ -42,7 +42,15 @@ export type InspectorState = {
     snapshotAutoUpdatePendingWhileSuppressed: boolean;
     snapshotAutoUpdatePendingReason: string | null;
     documentURL: string | null;
+    pageEpoch: number;
+    documentScopeID: number;
 };
+
+const initialPageEpoch =
+    typeof window.__wiDOMFrontendInitialPageEpoch === "number"
+    && Number.isFinite(window.__wiDOMFrontendInitialPageEpoch)
+        ? window.__wiDOMFrontendInitialPageEpoch
+        : 0;
 
 export const inspector: InspectorState = {
     map: new Map<number, AnyNode>(),
@@ -73,5 +81,7 @@ export const inspector: InspectorState = {
     snapshotAutoUpdateSuppressedCount: 0,
     snapshotAutoUpdatePendingWhileSuppressed: false,
     snapshotAutoUpdatePendingReason: null,
-    documentURL: null
+    documentURL: null,
+    pageEpoch: initialPageEpoch,
+    documentScopeID: 0
 };

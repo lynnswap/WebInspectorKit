@@ -200,9 +200,13 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             reason: reason || inspector.snapshotAutoUpdateReason || "mutation",
             depth: maxDepth,
             documentURL: document.URL || "",
-            snapshot: snapshot
+            snapshot: snapshot,
+            pageEpoch: inspector.pageEpoch,
+            documentScopeID: inspector.documentScopeID
         };
         handler.postMessage({
+            pageEpoch: inspector.pageEpoch,
+            documentScopeID: inspector.documentScopeID,
             bundle: payload
         });
     } catch (error) {
@@ -462,9 +466,13 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
                 version: 1,
                 kind: "mutation",
                 reason: reason,
-                events: messages.slice(offset, offset + chunkSize)
+                events: messages.slice(offset, offset + chunkSize),
+                pageEpoch: inspector.pageEpoch,
+                documentScopeID: inspector.documentScopeID
             };
             mutationHandler.postMessage({
+                pageEpoch: inspector.pageEpoch,
+                documentScopeID: inspector.documentScopeID,
                 bundle: payload
             });
         }

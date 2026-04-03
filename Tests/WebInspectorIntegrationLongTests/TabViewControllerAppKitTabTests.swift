@@ -8,6 +8,7 @@ import WebKit
 import AppKit
 
 @MainActor
+@Suite(.serialized)
 struct TabViewControllerAppKitTabTests {
     private let tabPickerIdentifierRaw = "WIContainerToolbar.TabPicker"
     private let domPickIdentifierRaw = "WIContainerToolbar.DOMPick"
@@ -156,6 +157,62 @@ struct TabViewControllerAppKitTabTests {
         let labels = (0..<picker.segmentCount).map { picker.label(forSegment: $0) }
         #expect(labels == ["A", "B"])
         #expect(container.visibleContentTabIDForTesting == "tab_a")
+    }
+
+    @Test
+    func appKitDOMPickToolbarReflectsSelectionStateImmediately() async {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        let descriptors = [
+            makeDescriptor(id: WITab.domTabID, title: "DOM"),
+            makeDescriptor(id: WITab.networkTabID, title: "Network")
+        ]
+        let container = WITabViewController(controller, webView: webView, tabs: descriptors)
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await container.waitForRuntimeStateSyncForTesting()
+        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
+
+        selectTabViaPicker(index: 0, in: window)
+
+        #expect(waitUntil(cycles: 200) {
+            container.selectedTabIdentifierForTesting == WITab.domTabID
+        })
+
+        guard domPickToolbarItem(in: window) != nil else {
+            Issue.record(
+                "Expected DOM pick toolbar item, selectedTab=\(container.selectedTabIdentifierForTesting ?? "nil"), toolbar=\(toolbarIdentifierRawValues(in: window))"
+            )
+            return
+        }
+
+        #expect(waitUntil {
+            domPickToolbarItem(in: window)?.isEnabled == true
+        })
+
+        guard
+            let pickItem = domPickToolbarItem(in: window),
+            let action = pickItem.action,
+            let target = pickItem.target as? NSObject
+        else {
+            Issue.record("Expected DOM pick toolbar action")
+            return
+        }
+        _ = unsafe target.perform(action, with: pickItem)
+
+        #expect(controller.dom.isSelectingElement)
+        #expect(domPickToolbarItem(in: window)?.isEnabled == true)
+
+        _ = unsafe target.perform(action, with: pickItem)
+        #expect(controller.dom.isSelectingElement == false)
+
+        #expect(waitUntil {
+            domPickToolbarItem(in: window)?.isEnabled == true
+        })
     }
 
     @Test
@@ -608,6 +665,45 @@ struct TabViewControllerAppKitTabTests {
     }
 
     @Test
+    func setInspectorControllerWithCurrentControllerOverridesPendingSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [
+                makeDescriptor(id: WITab.domTabID, title: "DOM"),
+                makeDescriptor(id: WITab.networkTabID, title: "Network")
+            ]
+        )
+        let window = mountInWindow(container)
+        defer {
+            container.viewDidDisappear()
+            _ = window
+        }
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .active)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setInspectorController(firstController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .active),
+                (secondController, .disconnected)
+            ]
+        )
+
+        #expect(container.inspectorController === firstController)
+        #expect(firstController.lifecycle == .active)
+        #expect(secondController.lifecycle == .disconnected)
+    }
+
+    @Test
     func appKitProgrammaticSelectionReappliesRuntimeState() async {
         let controller = WIInspectorController()
         let container = WITabViewController(
@@ -722,6 +818,7 @@ struct TabViewControllerAppKitTabTests {
         container.loadViewIfNeeded()
         container.viewWillAppear()
         window.makeKeyAndOrderFront(nil)
+        container.viewDidAppear()
         drainMainQueue()
         return window
     }
@@ -750,6 +847,19 @@ struct TabViewControllerAppKitTabTests {
         return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == tabPickerIdentifierRaw })
     }
 
+    private func domPickToolbarItem(in window: NSWindow, cycles: Int = 200) -> NSToolbarItem? {
+        waitForToolbarItemsIfNeeded(in: window, cycles: cycles)
+        for _ in 0..<cycles {
+            if let item = window.toolbar?.items.first(where: {
+                $0.itemIdentifier.rawValue == domPickIdentifierRaw
+            }) {
+                return item
+            }
+            drainMainQueue()
+        }
+        return window.toolbar?.items.first(where: { $0.itemIdentifier.rawValue == domPickIdentifierRaw })
+    }
+
     private func networkFilterToolbarItem(in window: NSWindow) -> NSMenuToolbarItem? {
         waitForToolbarItemsIfNeeded(in: window)
         return window.toolbar?.items
@@ -768,8 +878,28 @@ struct TabViewControllerAppKitTabTests {
         }
     }
 
+    private func waitUntil(cycles: Int = 20, _ condition: () -> Bool) -> Bool {
+        for _ in 0..<cycles {
+            drainMainQueue()
+            if condition() {
+                return true
+            }
+        }
+        return condition()
+    }
+
     private func drainMainQueue() {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
+    private func loadHTML(_ html: String, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: nil)
+        }
     }
 
     private func selectTabViaPicker(index: Int, in window: NSWindow) {
@@ -799,6 +929,25 @@ struct TabViewControllerAppKitTabTests {
                 return
             }
         }
+    }
+}
+
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

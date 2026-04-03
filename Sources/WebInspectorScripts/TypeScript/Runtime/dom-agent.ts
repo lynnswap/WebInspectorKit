@@ -13,18 +13,15 @@ import {
     enableAutoSnapshotIfSupported,
     triggerSnapshotUpdate
 } from "./DOMAgent/dom-agent-snapshot";
+import { inspector } from "./DOMAgent/dom-agent-state";
 import {
     debugStatus,
     outerHTMLForNode,
     redoRemoveNode,
-    removeNodeHandleWithUndo,
     removeNodeWithUndo,
-    removeAttributeForHandle,
     removeAttributeForNode,
-    removeNodeHandle,
     removeNode,
     selectorPathForNode,
-    setAttributeForHandle,
     setAttributeForNode,
     undoRemoveNode,
     xpathForNode
@@ -34,6 +31,28 @@ function detachInspector() {
     cancelElementSelection();
     clearHighlight();
     disableAutoSnapshot();
+}
+
+function setPageEpoch(epoch: number): boolean {
+    if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
+        return false;
+    }
+    if (epoch < inspector.pageEpoch) {
+        return false;
+    }
+    inspector.pageEpoch = epoch;
+    return true;
+}
+
+function setDocumentScopeID(documentScopeID: number): boolean {
+    if (typeof documentScopeID !== "number" || !Number.isFinite(documentScopeID)) {
+        return false;
+    }
+    if (documentScopeID < inspector.documentScopeID) {
+        return false;
+    }
+    inspector.documentScopeID = documentScopeID;
+    return true;
 }
 
 if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
@@ -49,6 +68,8 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         clearHighlight: clearHighlight,
         configureAutoSnapshot: configureAutoSnapshot,
         disableAutoSnapshot: disableAutoSnapshot,
+        setPageEpoch: setPageEpoch,
+        setDocumentScopeID: setDocumentScopeID,
         detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,
         outerHTMLForNode: outerHTMLForNode,
@@ -57,15 +78,11 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         matchedStylesForNode: matchedStylesForNode,
         createNodeHandle: createNodeHandle,
         removeNode: removeNode,
-        removeNodeHandle: removeNodeHandle,
         removeNodeWithUndo: removeNodeWithUndo,
-        removeNodeHandleWithUndo: removeNodeHandleWithUndo,
         undoRemoveNode: undoRemoveNode,
         redoRemoveNode: redoRemoveNode,
         setAttributeForNode: setAttributeForNode,
-        setAttributeForHandle: setAttributeForHandle,
         removeAttributeForNode: removeAttributeForNode,
-        removeAttributeForHandle: removeAttributeForHandle,
         debugStatus: debugStatus,
         __installed: true
     };

@@ -8,13 +8,15 @@ import AppKit
 
 @MainActor
 public final class WIDOMTreeViewController: NSViewController {
-    private let inspector: WIDOMModel
+    private let inspector: WIDOMInspector
     private var contextMenuNodeID: Int?
+    private var contextMenuNodeIdentity: DOMNodeModel.ID?
     private var observationHandles: Set<ObservationHandle> = []
+    private var documentStoreObservationHandles: Set<ObservationHandle> = []
 
     private let errorLabel = NSTextField(labelWithString: "")
 
-    public init(inspector: WIDOMModel) {
+    public init(inspector: WIDOMInspector) {
         self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
@@ -38,6 +40,7 @@ public final class WIDOMTreeViewController: NSViewController {
                 return nil
             }
             self.contextMenuNodeID = nodeID
+            self.contextMenuNodeIdentity = nodeID.flatMap { self.inspector.document.node(backendNodeID: $0)?.id }
             return self.makeTreeContextMenu()
         }
 
@@ -60,15 +63,25 @@ public final class WIDOMTreeViewController: NSViewController {
         ])
 
         observeState()
-        updateErrorLabel(errorMessage: inspector.errorMessage)
+        updateErrorLabel(errorMessage: inspector.document.errorMessage)
     }
 
     private func observeState() {
         inspector.observe(
-            \.errorMessage,
-            options: [.removeDuplicates]
-        ) { [weak self] newErrorMessage in
-            self?.updateErrorLabel(errorMessage: newErrorMessage)
+            \.document
+        ) { [weak self] document in
+            guard let self else {
+                return
+            }
+            self.documentStoreObservationHandles.removeAll()
+            document.observe(
+                \.errorMessage,
+                options: [.removeDuplicates]
+            ) { [weak self] newErrorMessage in
+                self?.updateErrorLabel(errorMessage: newErrorMessage)
+            }
+            .store(in: &self.documentStoreObservationHandles)
+            self.updateErrorLabel(errorMessage: document.errorMessage)
         }
         .store(in: &observationHandles)
     }
@@ -141,30 +154,68 @@ public final class WIDOMTreeViewController: NSViewController {
     @objc
     private func deleteNode() {
         let nodeID = contextActionNodeID
+        let nodeIdentity = contextActionNodeIdentity
         contextMenuNodeID = nil
-        guard let nodeID else {
+        contextMenuNodeIdentity = nil
+        guard nodeID != nil || nodeIdentity != nil else {
             return
         }
-        let inspector = inspector
         let undoManager = undoManager
-        Task.immediateIfAvailable {
-            await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        Task {
+            _ = await deleteContextMenuNode(
+                nodeID: nodeID,
+                nodeIdentity: nodeIdentity,
+                undoManager: undoManager
+            )
         }
+    }
+
+    func invokeContextMenuDeleteForTesting(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        undoManager: UndoManager? = nil
+    ) async -> DOMMutationResult {
+        await deleteContextMenuNode(
+            nodeID: nodeID,
+            nodeIdentity: nodeIdentity,
+            undoManager: undoManager
+        )
+    }
+
+    private func deleteContextMenuNode(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        undoManager: UndoManager?
+    ) async -> DOMMutationResult {
+        if let nodeIdentity {
+            return await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+        }
+        if let nodeID,
+           let resolvedIdentity = inspector.document.node(backendNodeID: nodeID)?.id
+        {
+            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+        }
+        return await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
     }
 
     private var contextActionNodeID: Int? {
         contextMenuNodeID
     }
 
+    private var contextActionNodeIdentity: DOMNodeModel.ID? {
+        contextMenuNodeIdentity
+    }
+
     private func copyNodeForContextMenu(kind: DOMSelectionCopyKind) {
         let nodeID = contextActionNodeID
         contextMenuNodeID = nil
+        contextMenuNodeIdentity = nil
         guard let nodeID else {
             return
         }
         Task {
             do {
-                let text = try await inspector.session.selectionCopyText(nodeId: nodeID, kind: kind)
+                let text = try await inspector.copyNode(nodeId: nodeID, kind: kind)
                 guard !text.isEmpty else {
                     return
                 }

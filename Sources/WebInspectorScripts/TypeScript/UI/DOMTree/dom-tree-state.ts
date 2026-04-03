@@ -18,6 +18,7 @@ import {
     RefreshAttempt,
     RenderState,
     TreeState,
+    DOMFrontendBootstrapState,
     NODE_TYPES,
     INDENT_DEPTH_LIMIT,
     LAYOUT_FLAG_RENDERED,
@@ -29,6 +30,16 @@ import {
     REFRESH_RETRY_LIMIT,
     REFRESH_RETRY_WINDOW,
 } from "./dom-tree-types";
+
+const initialPageEpoch =
+    typeof (window as Window & { __wiDOMFrontendInitialPageEpoch?: unknown }).__wiDOMFrontendInitialPageEpoch === "number"
+        ? ((window as Window & { __wiDOMFrontendInitialPageEpoch?: number }).__wiDOMFrontendInitialPageEpoch ?? 0)
+        : 0;
+const initialBootstrap =
+    ((window as Window & { __wiDOMFrontendBootstrap?: DOMFrontendBootstrapState }).__wiDOMFrontendBootstrap ?? {});
+const initialConfig = typeof initialBootstrap.config === "object" && initialBootstrap.config !== null
+    ? initialBootstrap.config
+    : {};
 
 // Re-export constants for convenience
 export {
@@ -70,11 +81,10 @@ export function ensureDomElements(): void {
 
 /** Protocol state for managing CDP requests and events */
 export const protocolState: ProtocolState = {
-    lastId: 0,
-    pending: new Map(),
-    eventHandlers: new Map(),
-    snapshotDepth: 4,
-    subtreeDepth: 3,
+    snapshotDepth: typeof initialConfig.snapshotDepth === "number" ? initialConfig.snapshotDepth : 4,
+    subtreeDepth: typeof initialConfig.subtreeDepth === "number" ? initialConfig.subtreeDepth : 3,
+    pageEpoch: typeof initialConfig.pageEpoch === "number" ? initialConfig.pageEpoch : initialPageEpoch,
+    documentScopeID: typeof initialConfig.documentScopeID === "number" ? initialConfig.documentScopeID : 0,
 };
 
 // =============================================================================

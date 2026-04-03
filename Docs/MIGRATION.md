@@ -97,3 +97,24 @@ let controller = WITabViewController(
 ```
 
 If you only use the built-in tabs, keep using `.dom()`, `.network()`, and on UIKit `.element()`.
+
+## 4. Use intent-based DOM APIs
+
+The DOM model no longer exposes low-level `nodeId`-driven editing and reload APIs.
+
+Use `WIDOMModel` intent methods instead.
+
+| Previous | Current |
+| --- | --- |
+| `reloadInspector(preserveState: false)` | `reloadDocument()` |
+| `reloadInspector(preserveState: true)` | `reloadDocumentPreservingInspectorState()` |
+| `selectedEntry` on `WIDOMModel` | `documentStore.selectedEntry` |
+| `errorMessage` on `WIDOMModel` | `documentStore.errorMessage` |
+| `copySelection(.html)` | `copySelectedHTML()` |
+| `copySelection(.selectorPath)` | `copySelectedSelectorPath()` |
+| `copySelection(.xpath)` | `copySelectedXPath()` |
+| `deleteSelectedNode()` | `deleteSelection()` |
+| `updateAttributeValue(name:value:)` | `updateSelectedAttribute(name:value:)` |
+| `removeAttribute(name:)` | `removeSelectedAttribute(name:)` |
+
+Low-level `DOMSession` APIs such as `removeNode(nodeId:)`, `setAttribute(nodeId:...)`, and `selectorPath(nodeId:)` are no longer part of the supported app-facing API.

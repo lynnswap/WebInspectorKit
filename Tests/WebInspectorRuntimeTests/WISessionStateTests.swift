@@ -55,6 +55,120 @@ struct WISessionStateTests {
     }
 
     @Test
+    func rapidHostUpdatesKeepLifecycleAtLatestTargetUntilFinalCommit() async {
+        let controller = WIInspectorController()
+        let hostID = controller.registerHost(preferredRole: .primary)
+        let webView = makeTestWebView()
+
+        controller.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+        #expect(controller.lifecycle == .active)
+
+        let suspendedCommitGate = CommitGate()
+        let activeCommitGate = CommitGate()
+        controller.testRuntimeLifecycleCommitHook = { lifecycle in
+            switch lifecycle {
+            case .suspended:
+                await suspendedCommitGate.pause()
+            case .active:
+                await activeCommitGate.pause()
+            case .disconnected:
+                break
+            }
+        }
+
+        controller.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .hidden,
+            isAttached: true
+        )
+        await suspendedCommitGate.waitUntilEntered()
+
+        controller.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+
+        await suspendedCommitGate.resume()
+        await activeCommitGate.waitUntilEntered()
+
+        #expect(controller.lifecycle == .suspended)
+
+        await activeCommitGate.resume()
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.lifecycle == .active)
+    }
+
+    @Test
+    func supersededActiveApplyStillDetachesOnFinalizingPass() async {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+
+        let activeCommitGate = CommitGate()
+        controller.testRuntimeLifecycleCommitHook = { lifecycle in
+            if lifecycle == .active {
+                await activeCommitGate.pause()
+            }
+        }
+
+        let activateTask = Task {
+            await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        }
+        await activeCommitGate.waitUntilEntered()
+
+        let finalizeTask = Task {
+            await controller.applyHostState(pageWebView: nil, visibility: .finalizing)
+        }
+
+        await activeCommitGate.resume()
+        await activateTask.value
+        await finalizeTask.value
+
+        #expect(controller.lifecycle == .disconnected)
+        #expect(controller.dom.session.pageWebView == nil)
+    }
+
+    @Test
+    func rapidSelectedTabChangesResolveToLatestRuntimeMode() async {
+        let controller = WIInspectorController()
+        let hostID = controller.registerHost(preferredRole: .primary)
+        let webView = makeTestWebView()
+
+        controller.setTabs([.dom(), .network()])
+        controller.updateHost(
+            hostID,
+            pageWebView: webView,
+            visibility: .visible,
+            isAttached: true
+        )
+        await controller.waitForRuntimeApplyForTesting()
+
+        guard
+            let domTab = controller.tabs.first(where: { $0.identifier == WITab.domTabID }),
+            let networkTab = controller.tabs.first(where: { $0.identifier == WITab.networkTabID })
+        else {
+            Issue.record("Expected DOM and Network tabs")
+            return
+        }
+
+        controller.setSelectedTab(networkTab)
+        controller.setSelectedTab(domTab)
+        await controller.waitForRuntimeApplyForTesting()
+
+        #expect(controller.selectedTab === domTab)
+        #expect(controller.network.session.mode == .buffering)
+    }
+
+    @Test
     func setTabsNormalizesInvalidSelectionToFirstTab() {
         let customA = WITab(
             id: "a",
@@ -161,5 +275,35 @@ struct WISessionStateTests {
     private func selectTab(_ identifier: String, in controller: WIInspectorController) {
         let tab = controller.tabs.first(where: { $0.identifier == identifier })
         controller.setSelectedTab(tab)
+    }
+}
+
+private actor CommitGate {
+    private var didEnter = false
+    private var enterContinuations: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        didEnter = true
+        let continuations = enterContinuations
+        enterContinuations.removeAll()
+        continuations.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard didEnter == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            enterContinuations.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }

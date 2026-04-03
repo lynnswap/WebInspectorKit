@@ -323,15 +323,8 @@ const setNetworkPageHookMode = (mode: unknown) => {
 };
 
 const setNetworkResourceObserverMode = (mode: unknown) => {
-    const previousMode = resourceObserverModeState;
     resourceObserverModeState = normalizeResourceObserverMode(mode);
-    if (
-        previousMode === "disabled" &&
-        resourceObserverModeState === "enabled" &&
-        networkState.mode === NetworkLoggingMode.BUFFERING
-    ) {
-        networkState.resourceStartCutoffMs = now();
-    } else if (resourceObserverModeState === "disabled") {
+    if (resourceObserverModeState === "disabled") {
         networkState.resourceStartCutoffMs = null;
     }
     applyResourceObserverMode();
@@ -643,6 +636,7 @@ const configureNetwork = (
         return;
     }
     const previousMode = networkState.mode;
+    const previousResourceObserverMode = resourceObserverModeState;
     if (Object.prototype.hasOwnProperty.call(options, "mode")) {
         const mode = typeof options.mode === "string" ? options.mode : "";
         setNetworkLoggingMode(mode);
@@ -664,7 +658,20 @@ const configureNetwork = (
     }
     const shouldBootstrapCurrentPage = options.clear === true
         || (previousMode === NetworkLoggingMode.STOPPED && networkState.mode !== NetworkLoggingMode.STOPPED);
+    const shouldRefreshBufferingCutoff = networkState.mode === NetworkLoggingMode.BUFFERING
+        && resourceObserverModeState === "enabled"
+        && (
+            shouldBootstrapCurrentPage
+            || previousMode !== NetworkLoggingMode.BUFFERING
+            || previousResourceObserverMode === "disabled"
+        );
+    if (shouldBootstrapCurrentPage && shouldRefreshBufferingCutoff) {
+        networkState.resourceStartCutoffMs = null;
+    }
     bootstrapCurrentPageResourceTimings(shouldBootstrapCurrentPage);
+    if (shouldRefreshBufferingCutoff) {
+        networkState.resourceStartCutoffMs = now();
+    }
 };
 
 const setNetworkThrottling = (options: { intervalMs?: number; maxQueuedEvents?: number } | null | undefined) => {

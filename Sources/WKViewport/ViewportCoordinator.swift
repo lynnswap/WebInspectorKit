@@ -141,6 +141,7 @@ public final class ViewportCoordinator: NSObject {
     }
 
     private var keyboardFrameInScreen: CGRect = .null
+    private var lastKnownWindowIdentity: ObjectIdentifier?
     private var lastAppliedResolvedMetrics: ResolvedViewportMetrics?
     private var observationView: ViewportObservationView?
     private weak var observedHostViewController: UIViewController?
@@ -213,7 +214,12 @@ public final class ViewportCoordinator: NSObject {
     }
 
     public func handleWebViewHierarchyDidChange() {
-        keyboardFrameInScreen = .null
+        if let currentWindowIdentity = webView?.window.map(ObjectIdentifier.init) {
+            if let lastKnownWindowIdentity, lastKnownWindowIdentity != currentWindowIdentity {
+                keyboardFrameInScreen = .null
+            }
+            lastKnownWindowIdentity = currentWindowIdentity
+        }
         updateViewport()
     }
 

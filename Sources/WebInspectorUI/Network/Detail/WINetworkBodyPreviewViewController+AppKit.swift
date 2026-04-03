@@ -153,7 +153,7 @@ final class WINetworkBodyPreviewViewController: NSViewController, NSOutlineViewD
         outlineScrollView.hasVerticalScroller = true
         outlineScrollView.autohidesScrollers = true
 
-        outlineView.addTableColumn(outlineColumn)
+        unsafe outlineView.addTableColumn(outlineColumn)
         outlineView.outlineTableColumn = outlineColumn
         outlineView.headerView = nil
         outlineView.rowHeight = 28

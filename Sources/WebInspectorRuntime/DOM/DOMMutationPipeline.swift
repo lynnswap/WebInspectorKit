@@ -3,13 +3,33 @@ import WebInspectorEngine
 import WebInspectorBridge
 import WebKit
 
-private let domMutationPipelineLogger = Logger(subsystem: "WebInspectorKit", category: "DOMMutationPipeline")
+private let domMutationPipelineLogger = Logger(subsystem: "WebInspectorKit", category: "DOMMutationSender")
 
 @MainActor
-final class DOMMutationPipeline {
+final class DOMMutationSender {
     private struct PendingBundle {
         let bundle: Any
-        let preserveState: Bool
+        let preservesInspectorState: Bool
+        let generation: Int
+        let pageEpoch: Int
+        let documentScopeID: UInt64
+    }
+
+    struct FlushSettlement {
+        let completedGeneration: Int?
+        let discardedGeneration: Int?
+
+        var hasValue: Bool {
+            completedGeneration != nil || discardedGeneration != nil
+        }
+
+        static func completed(_ generation: Int) -> Self {
+            .init(completedGeneration: generation, discardedGeneration: nil)
+        }
+
+        static func discarded(_ generation: Int) -> Self {
+            .init(completedGeneration: nil, discardedGeneration: generation)
+        }
     }
 
     private let session: DOMSession
@@ -19,7 +39,17 @@ final class DOMMutationPipeline {
     private var configuration: DOMConfiguration
     private var pendingBundles: [PendingBundle] = []
     private var pendingBundleFlushTask: Task<Void, Never>?
+    private var activeFlushTask: Task<FlushSettlement, Never>?
+    private var activeFlushTaskToken = 0
+    private var activeFlushBundles: [PendingBundle] = []
+    private var activeFlushGeneration = 0
+    private var activeDispatchGeneration = 0
+    private var completedFlushGeneration = 0
     private var jsBufferSequence = 0
+#if DEBUG
+    var testBeforeBundleDispatchOverride: (@MainActor () async -> Void)?
+    var testApplyBundlesOverride: (@MainActor ([Any]) async -> Void)?
+#endif
 
     init(
         session: DOMSession,
@@ -48,41 +78,164 @@ final class DOMMutationPipeline {
         self.configuration = configuration
     }
 
-    func enqueueMutationBundle(_ bundle: Any, preserveState: Bool) {
-        pendingBundles.append(PendingBundle(bundle: bundle, preserveState: preserveState))
+    func enqueueMutationBundle(
+        _ bundle: Any,
+        preservingInspectorState: Bool,
+        generation: Int,
+        pageEpoch: Int,
+        documentScopeID: UInt64
+    ) {
+        pendingBundles.append(
+            PendingBundle(
+                bundle: bundle,
+                preservesInspectorState: preservingInspectorState,
+                generation: generation,
+                pageEpoch: pageEpoch,
+                documentScopeID: documentScopeID
+            )
+        )
         if isReady {
             schedulePendingBundleFlush()
         }
     }
 
-    func clearPendingMutationBundles() {
+    @discardableResult
+    func clearPendingMutationBundles(resetCompletedGeneration: Bool = false) -> Int {
+        let discardedPendingGeneration = pendingBundles.reduce(into: 0) { partialResult, bundle in
+            partialResult = max(partialResult, bundle.generation)
+        }
+        let discardedActiveGeneration = activeFlushGeneration
+        let discardedGeneration = max(discardedPendingGeneration, discardedActiveGeneration)
         pendingBundles.removeAll()
         cancelPendingBundleFlush()
+        activeFlushTaskToken += 1
+        activeFlushTask?.cancel()
+        activeFlushTask = nil
+        activeFlushBundles.removeAll()
+        activeFlushGeneration = 0
+        activeDispatchGeneration = 0
+        if resetCompletedGeneration {
+            completedFlushGeneration = 0
+        }
+        return discardedGeneration
     }
 
     func reset() {
         isReady = false
-        clearPendingMutationBundles()
+        _ = clearPendingMutationBundles(resetCompletedGeneration: true)
+        completedFlushGeneration = 0
     }
 
-    func flushPendingBundlesNow() async {
-        pendingBundleFlushTask?.cancel()
-        pendingBundleFlushTask = nil
-        guard isReady else { return }
-        let bundles = pendingBundles
-        pendingBundles.removeAll()
-        guard !bundles.isEmpty else {
+    func waitForActiveFlushIfNeeded() async {
+        guard let activeFlushTask else {
             return
         }
-        await applyBundlesNow(bundles)
+        let activeFlushTaskToken = self.activeFlushTaskToken
+        _ = await activeFlushTask.value
+        if self.activeFlushTaskToken == activeFlushTaskToken {
+            self.activeFlushTask = nil
+            activeFlushGeneration = 0
+            activeDispatchGeneration = 0
+        }
+    }
+
+    func cancelAndDrainFlushIfNeeded(resetCompletedGeneration: Bool = false) async -> Int {
+        let activeFlushTask = self.activeFlushTask
+        let discardedGeneration = clearPendingMutationBundles(
+            resetCompletedGeneration: resetCompletedGeneration
+        )
+        if let activeFlushTask {
+            _ = await activeFlushTask.value
+        }
+        return discardedGeneration
+    }
+
+    func flushPendingBundlesNow() async -> FlushSettlement? {
+        pendingBundleFlushTask?.cancel()
+        pendingBundleFlushTask = nil
+        guard isReady else { return nil }
+
+        var latestCompletedGeneration: Int?
+        var latestDiscardedGeneration: Int?
+        while isReady {
+            if let activeFlushTask {
+                let activeFlushTaskToken = self.activeFlushTaskToken
+                let settlement = await activeFlushTask.value
+                let isCurrentActiveFlush = self.activeFlushTaskToken == activeFlushTaskToken
+                if isCurrentActiveFlush {
+                    if let completedGeneration = settlement.completedGeneration {
+                        completedFlushGeneration = max(completedFlushGeneration, completedGeneration)
+                        latestCompletedGeneration = max(latestCompletedGeneration ?? 0, completedGeneration)
+                    }
+                    if let discardedGeneration = settlement.discardedGeneration {
+                        latestDiscardedGeneration = max(latestDiscardedGeneration ?? 0, discardedGeneration)
+                    }
+                }
+                if isCurrentActiveFlush {
+                    self.activeFlushTask = nil
+                    activeFlushGeneration = 0
+                    activeDispatchGeneration = 0
+                }
+                if pendingBundles.isEmpty {
+                    let latestSettlement = FlushSettlement(
+                        completedGeneration: latestCompletedGeneration,
+                        discardedGeneration: latestDiscardedGeneration
+                    )
+                    return latestSettlement.hasValue ? latestSettlement : nil
+                }
+                continue
+            }
+
+            let bundles = pendingBundles
+            pendingBundles.removeAll()
+            guard !bundles.isEmpty else {
+                let latestSettlement = FlushSettlement(
+                    completedGeneration: latestCompletedGeneration,
+                    discardedGeneration: latestDiscardedGeneration
+                )
+                return latestSettlement.hasValue ? latestSettlement : nil
+            }
+
+            let flushGeneration = bundles.reduce(into: 0) { partialResult, bundle in
+                partialResult = max(partialResult, bundle.generation)
+            }
+            activeFlushGeneration = flushGeneration
+            activeFlushBundles = bundles
+            activeDispatchGeneration = 0
+            activeFlushTaskToken += 1
+            let flushPageEpoch = bundles.last?.pageEpoch ?? 0
+            activeFlushTask = Task<FlushSettlement, Never> { @MainActor [weak self] in
+                guard let self else {
+                    return .discarded(flushGeneration)
+                }
+                return await self.runActiveFlush(generation: flushGeneration, pageEpoch: flushPageEpoch)
+            }
+        }
+        let latestSettlement = FlushSettlement(
+            completedGeneration: latestCompletedGeneration,
+            discardedGeneration: latestDiscardedGeneration
+        )
+        return latestSettlement.hasValue ? latestSettlement : nil
     }
 
     var pendingMutationBundleCount: Int {
         pendingBundles.count
     }
 
+    var hasPendingOrActiveBundleFlush: Bool {
+        !pendingBundles.isEmpty || activeFlushTask != nil
+    }
+
     var hasPendingBundleFlushTask: Bool {
         pendingBundleFlushTask != nil
+    }
+
+    var hasActiveBundleFlushTask: Bool {
+        activeFlushTask != nil
+    }
+
+    var completedMutationGeneration: Int {
+        completedFlushGeneration
     }
 
     var currentBundleFlushInterval: TimeInterval {
@@ -101,7 +254,7 @@ final class DOMMutationPipeline {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
-            await flushPendingBundlesNow()
+            _ = await flushPendingBundlesNow()
         }
     }
 
@@ -110,36 +263,84 @@ final class DOMMutationPipeline {
         pendingBundleFlushTask = nil
     }
 
-    private func applyBundlesNow(_ bundles: [PendingBundle]) async {
-        guard let webView, !bundles.isEmpty else {
-            return
+    private func runActiveFlush(generation: Int, pageEpoch: Int) async -> FlushSettlement {
+        let bundles = activeFlushBundles
+        activeFlushBundles = []
+        guard Task.isCancelled == false else {
+            return .discarded(generation)
+        }
+        let didApply = await applyBundlesNow(bundles, generation: generation, pageEpoch: pageEpoch)
+        return didApply ? .completed(generation) : .discarded(generation)
+    }
+
+    private func applyBundlesNow(_ bundles: [PendingBundle], generation: Int, pageEpoch: Int) async -> Bool {
+        guard Task.isCancelled == false else {
+            return false
+        }
+        guard !bundles.isEmpty else {
+            return false
         }
 
         let payloads: [[String: Any]] = bundles.map {
             [
                 "bundle": $0.bundle,
-                "preserveState": $0.preserveState,
+                "mode": $0.preservesInspectorState ? "preserve-ui-state" : "fresh",
+                "documentScopeID": $0.documentScopeID,
             ]
         }
 
-        if await applyBundlesWithBufferIfNeeded(payloads, on: webView) {
-            return
+        guard Task.isCancelled == false else {
+            return false
+        }
+#if DEBUG
+        if let testBeforeBundleDispatchOverride {
+            await testBeforeBundleDispatchOverride()
+        }
+        guard Task.isCancelled == false else {
+            return false
+        }
+        if let testApplyBundlesOverride {
+            activeDispatchGeneration = generation
+            await testApplyBundlesOverride(bundles.map(\.bundle))
+            return Task.isCancelled == false
+        }
+#endif
+        guard let webView else {
+            return false
+        }
+        guard Task.isCancelled == false else {
+            return false
+        }
+
+        if await applyBundlesWithBufferIfNeeded(payloads, on: webView, generation: generation, pageEpoch: pageEpoch) {
+            return Task.isCancelled == false
+        }
+        guard Task.isCancelled == false else {
+            return false
         }
 
         do {
+            activeDispatchGeneration = generation
             try await webView.callAsyncVoidJavaScript(
-                "window.webInspectorDOMFrontend?.applyMutationBundles?.(bundles)",
-                arguments: ["bundles": payloads],
+                "window.webInspectorDOMFrontend?.applyMutationBundles?.(bundles, pageEpoch)",
+                arguments: [
+                    "bundles": payloads,
+                    "pageEpoch": pageEpoch,
+                ],
                 contentWorld: .page
             )
+            return Task.isCancelled == false
         } catch {
             domMutationPipelineLogger.error("send mutation bundles failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
     private func applyBundlesWithBufferIfNeeded(
         _ payloads: [[String: Any]],
-        on webView: InspectorWebView
+        on webView: InspectorWebView,
+        generation: Int,
+        pageEpoch: Int
     ) async -> Bool {
         guard session.bridgeMode == .privateFull else {
             return false
@@ -158,6 +359,9 @@ final class DOMMutationPipeline {
         guard WIJSBufferTransport.isAvailable(on: controller, runtime: bridgeRuntime) else {
             return false
         }
+        guard Task.isCancelled == false else {
+            return false
+        }
 
         let bufferName = nextBufferName()
         guard WIJSBufferTransport.addBuffer(
@@ -173,16 +377,23 @@ final class DOMMutationPipeline {
         defer {
             WIJSBufferTransport.removeBuffer(named: bufferName, from: controller, contentWorld: .page)
         }
+        guard Task.isCancelled == false else {
+            return false
+        }
 
         do {
+            activeDispatchGeneration = generation
             let rawResult = try await webView.callAsyncJavaScript(
                 """
                 if (!window.webInspectorDOMFrontend || typeof window.webInspectorDOMFrontend.applyMutationBuffer !== "function") {
                     return false;
                 }
-                return window.webInspectorDOMFrontend.applyMutationBuffer(bufferName);
+                return window.webInspectorDOMFrontend.applyMutationBuffer(bufferName, pageEpoch);
                 """,
-                arguments: ["bufferName": bufferName],
+                arguments: [
+                    "bufferName": bufferName,
+                    "pageEpoch": pageEpoch,
+                ],
                 in: nil,
                 contentWorld: .page
             )
@@ -200,7 +411,7 @@ final class DOMMutationPipeline {
     }
 }
 
-extension DOMMutationPipeline {
+extension DOMMutationSender {
     static func makeBufferTransportPayload(_ payloads: [[String: Any]]) -> [Any]? {
         makeBufferTransportValue(payloads) as? [Any]
     }
@@ -268,3 +479,5 @@ extension DOMMutationPipeline {
         return nil
     }
 }
+
+typealias DOMMutationPipeline = DOMMutationSender

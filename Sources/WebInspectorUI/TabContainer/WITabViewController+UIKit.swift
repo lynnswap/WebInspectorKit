@@ -97,12 +97,18 @@ public final class WITabViewController: UIViewController {
         case regular
     }
 
+    private struct PendingControllerSwap {
+        let controller: WIInspectorController
+        let hostKindAtRequest: HostKind
+    }
+
     public private(set) var inspectorController: WIInspectorController
 
     private var hostID: WIInspectorHostID
     private var requestedTabs: [WITab]
     private var requestedPageWebView: WKWebView?
     private let renderCache = WIUIKitTabRenderCache()
+    private var pendingControllerSwap: PendingControllerSwap?
     private var controllerSwapTask: Task<Void, Never>?
     private var needsHostStateSyncAfterSwap = false
 
@@ -147,64 +153,41 @@ public final class WITabViewController: UIViewController {
     }
 
     public func setInspectorController(_ inspectorController: WIInspectorController) {
-        guard self.inspectorController !== inspectorController || controllerSwapTask != nil else {
+        let hostKindAtRequest = activeHostKind
+            ?? (effectiveHorizontalSizeClass == .compact ? .compact : .regular)
+        if self.inspectorController === inspectorController {
+            if let pendingControllerSwap,
+               pendingControllerSwap.controller === inspectorController,
+               pendingControllerSwap.hostKindAtRequest == hostKindAtRequest {
+                return
+            }
+            guard pendingControllerSwap == nil, controllerSwapTask == nil else {
+                pendingControllerSwap = .init(
+                    controller: inspectorController,
+                    hostKindAtRequest: hostKindAtRequest
+                )
+                return
+            }
             syncRegisteredHostState()
             return
         }
-
-        let activeHostKindAtSwapStart = activeHostKind
-            ?? (effectiveHorizontalSizeClass == .compact ? .compact : .regular)
-        invalidatePresentationStateForControllerSwap()
-
-        let previousSwapTask = controllerSwapTask
-        controllerSwapTask = Task { [weak self] in
-            await previousSwapTask?.value
-            guard let self else {
-                return
-            }
-            guard self.inspectorController !== inspectorController else {
-                self.controllerSwapTask = nil
-                self.replayDeferredHostStateSyncAfterSwapIfNeeded()
-                return
-            }
-
-            let previousController = self.inspectorController
-            let previousHostID = self.hostID
-            let preferredRole = previousController.preferredRole(for: previousHostID)
-
-            await previousController.waitForRuntimeApplyForTesting()
-            let currentSelectedTab = previousController.selectedTab
-            let currentPreferredCompactSelectedTabIdentifier = previousController.preferredCompactSelectedTabIdentifier
-            let preservedCompactSelectedTabIdentifier: String?
-            if activeHostKindAtSwapStart == .compact {
-                preservedCompactSelectedTabIdentifier = currentSelectedTab?.identifier
-                    ?? currentPreferredCompactSelectedTabIdentifier
-            } else {
-                preservedCompactSelectedTabIdentifier = currentPreferredCompactSelectedTabIdentifier
-            }
-            previousController.unregisterHost(previousHostID)
-            previousController.finalizeForControllerSwap()
-            await previousController.waitForRuntimeApplyForTesting()
-
-            self.inspectorController = inspectorController
-            self.hostID = inspectorController.registerHost(preferredRole: preferredRole)
-            inspectorController.setTabsFromUI(self.requestedTabs)
-            if let preservedCompactSelectedTabIdentifier {
-                inspectorController.setPreferredCompactSelectedTabIdentifierFromUI(
-                    preservedCompactSelectedTabIdentifier
-                )
-            }
-            if let currentSelectedTab {
-                _ = inspectorController.projectSelectedTabFromUI(currentSelectedTab)
-            }
-            self.syncRegisteredHostState(allowDuringSwap: true)
-
-            if self.isViewLoaded {
-                self.rebuildLayout(forceHostReplacement: true)
-            }
-            self.controllerSwapTask = nil
-            self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+        if let pendingControllerSwap,
+           pendingControllerSwap.controller === inspectorController,
+           pendingControllerSwap.hostKindAtRequest == hostKindAtRequest {
+            return
         }
+        invalidatePresentationStateForControllerSwap()
+        pendingControllerSwap = .init(
+            controller: inspectorController,
+            hostKindAtRequest: hostKindAtRequest
+        )
+        startControllerSwapIfNeeded()
+    }
+
+    private func takePendingControllerSwap() -> PendingControllerSwap? {
+        let pending = pendingControllerSwap
+        pendingControllerSwap = nil
+        return pending
     }
 
     private func invalidatePresentationStateForControllerSwap() {
@@ -316,6 +299,87 @@ public final class WITabViewController: UIViewController {
         syncRegisteredHostState()
     }
 
+    private func restoreCurrentControllerPresentationAfterNoOpSwapIfNeeded() {
+        guard isViewLoaded else {
+            return
+        }
+        rebuildLayout(forceHostReplacement: activeHost == nil || activeHostKind == nil)
+    }
+
+    private func startControllerSwapIfNeeded() {
+        guard controllerSwapTask == nil else {
+            return
+        }
+        controllerSwapTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                self.controllerSwapTask = nil
+                let shouldRestartSwap = self.pendingControllerSwap != nil
+                if shouldRestartSwap {
+                    self.startControllerSwapIfNeeded()
+                } else {
+                    self.replayDeferredHostStateSyncAfterSwapIfNeeded()
+                }
+            }
+
+            while let requestedSwap = self.takePendingControllerSwap() {
+                guard self.inspectorController !== requestedSwap.controller else {
+                    self.syncRegisteredHostState(allowDuringSwap: true)
+                    self.restoreCurrentControllerPresentationAfterNoOpSwapIfNeeded()
+                    continue
+                }
+
+                let previousController = self.inspectorController
+                let previousHostID = self.hostID
+                let preferredRole = previousController.preferredRole(for: previousHostID)
+                await previousController.waitForRuntimeApplyForTesting()
+                let currentSelectedTab = previousController.selectedTab
+                let currentPreferredCompactSelectedTabIdentifier = previousController.preferredCompactSelectedTabIdentifier
+                if let pendingControllerSwap,
+                   (pendingControllerSwap.controller !== requestedSwap.controller
+                    || pendingControllerSwap.hostKindAtRequest != requestedSwap.hostKindAtRequest) {
+                    continue
+                }
+
+                previousController.unregisterHost(previousHostID)
+                previousController.finalizeForControllerSwap()
+                await previousController.waitForRuntimeApplyForTesting()
+                guard Task.isCancelled == false else {
+                    return
+                }
+
+                let preservedCompactSelectedTabIdentifier: String?
+                if requestedSwap.hostKindAtRequest == .compact {
+                    preservedCompactSelectedTabIdentifier = currentSelectedTab?.identifier
+                        ?? currentPreferredCompactSelectedTabIdentifier
+                } else {
+                    preservedCompactSelectedTabIdentifier = currentPreferredCompactSelectedTabIdentifier
+                }
+
+                let nextInspectorController = requestedSwap.controller
+                self.inspectorController = nextInspectorController
+                self.hostID = nextInspectorController.registerHost(preferredRole: preferredRole)
+                nextInspectorController.setTabsFromUI(self.requestedTabs)
+                if let preservedCompactSelectedTabIdentifier {
+                    nextInspectorController.setPreferredCompactSelectedTabIdentifierFromUI(
+                        preservedCompactSelectedTabIdentifier
+                    )
+                }
+                if let currentSelectedTab {
+                    _ = nextInspectorController.projectSelectedTabFromUI(currentSelectedTab)
+                }
+                self.syncRegisteredHostState(allowDuringSwap: true)
+
+                if self.isViewLoaded {
+                    self.invalidatePresentationStateForControllerSwap()
+                    self.rebuildLayout(forceHostReplacement: true)
+                }
+            }
+        }
+    }
+
     private func rebuildLayout(forceHostReplacement: Bool = false) {
         renderCache.prune(activeTabs: inspectorController.tabs)
 
@@ -421,7 +485,9 @@ import SwiftUI
 
 extension WITabViewController {
     func waitForRuntimeStateSyncForTesting() async {
-        await controllerSwapTask?.value
+        while let controllerSwapTask {
+            await controllerSwapTask.value
+        }
         await inspectorController.waitForRuntimeApplyForTesting()
     }
 }

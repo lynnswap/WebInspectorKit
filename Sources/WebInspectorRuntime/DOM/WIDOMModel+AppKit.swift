@@ -2,7 +2,7 @@
 import AppKit
 import WebInspectorBridge
 
-extension WIDOMModel {
+extension WIDOMInspector {
     func activatePageWindowForSelectionIfPossible() {
         guard
             let pageWebView = session.pageWebView,
@@ -16,9 +16,7 @@ extension WIDOMModel {
     }
 
     package func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
-        withFrontendStore { frontendStore in
-            frontendStore.setDOMContextMenuProvider(provider)
-        }
+        transport.setDOMContextMenuProvider(provider)
     }
 
     func copyToSystemPasteboard(_ text: String) {

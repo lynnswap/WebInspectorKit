@@ -591,6 +591,46 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func setInspectorControllerWithCurrentControllerOverridesPendingSwap() async {
+        let firstController = WIInspectorController()
+        let secondController = WIInspectorController()
+        let container = WITabViewController(
+            firstController,
+            webView: makeTestWebView(),
+            tabs: [.dom(), .network()]
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(firstController, .active)]
+        )
+
+        container.setInspectorController(secondController)
+        container.setInspectorController(firstController)
+
+        await waitForControllerLifecycles(
+            in: container,
+            states: [
+                (firstController, .active),
+                (secondController, .disconnected)
+            ]
+        )
+
+        #expect(container.inspectorController === firstController)
+        #expect(firstController.lifecycle == .active)
+        #expect(secondController.lifecycle == .disconnected)
+    }
+
+    @Test
     func compactToRegularDropCompactTabCacheWhilePreservingSharedRootCache() {
         var createdCount = 0
         let requestedTabs: [WITab] = [
@@ -702,6 +742,8 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.activeHostKindForTesting == "compact")
         #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
         #expect(compactColumn.topViewController is WIDOMTreeViewController)
+        let buttonIdentifiers = compactColumn.topViewController?.navigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
+        #expect(buttonIdentifiers == ["WI.DOM.MenuButton", "WI.DOM.PickButton"])
         if #available(iOS 26.0, *) {
             #expect(domViewController.primaryColumnViewControllerForTesting == nil)
             #expect(secondaryColumn.topViewController is WIDOMTreeViewController)
@@ -782,6 +824,116 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.compactColumnViewControllerForTesting is UINavigationController)
         #expect(domViewController.inspectorColumnViewControllerForTesting == nil)
         #expect(domViewController.isInspectorColumnVisibleForTesting == false)
+    }
+
+    @Test
+    func domHostMenuResolvesLatestSelectionStateOnDemand() {
+        let inspector = makeDOMInspectorWithSelection()
+        let viewController = WIDOMViewController(inspector: inspector)
+
+        viewController.loadViewIfNeeded()
+
+        #expect(viewController.usesDeferredSecondaryMenuForTesting)
+
+        let selectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
+        let selectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
+        #expect(selectedDeleteAction?.attributes.contains(.disabled) == false)
+        #expect(selectedHTMLAction?.attributes.contains(.disabled) == false)
+
+        inspector.document.applySelectionSnapshot(nil)
+
+        let unselectedDeleteAction = deleteAction(in: viewController.resolvedSecondaryMenuForTesting)
+        let unselectedHTMLAction = copyHTMLAction(in: viewController.resolvedSecondaryMenuForTesting)
+        #expect(unselectedDeleteAction?.attributes.contains(.disabled) == true)
+        #expect(unselectedHTMLAction?.attributes.contains(.disabled) == true)
+    }
+
+    @Test
+    func domHostDeleteCapturesSelectionBeforeAsyncTaskStarts() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 2,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: 42,
+                            backendNodeID: 42,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 42, name: "id", value: "first")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                        DOMGraphNodeDescriptor(
+                            localID: 43,
+                            backendNodeID: 43,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 43, name: "id", value: "second")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                    ]
+                ),
+                selectedLocalID: 42
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id=\"first\">",
+                attributes: [.init(nodeId: 42, name: "id", value: "first")],
+                path: ["html", "body", "div"],
+                selectorPath: "#first",
+                styleRevision: 0
+            )
+        )
+        let viewController = WIDOMViewController(inspector: inspector)
+        viewController.loadViewIfNeeded()
+
+        var deletedNodeIDs: [Int] = []
+        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
+            deletedNodeIDs.append(nodeId)
+            return .ignoredStaleContext
+        }
+
+        viewController.invokeDeleteSelectionForTesting()
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: 43,
+                preview: "<div id=\"second\">",
+                attributes: [.init(nodeId: 43, name: "id", value: "second")],
+                path: ["html", "body", "div"],
+                selectorPath: "#second",
+                styleRevision: 0
+            )
+        )
+
+        let didScheduleDelete = await waitForCondition {
+            deletedNodeIDs.count == 1
+        }
+
+        #expect(didScheduleDelete == true)
+        #expect(deletedNodeIDs == [42])
     }
 
     @Test
@@ -1047,6 +1199,70 @@ struct TabViewControllerUITabTests {
         return WKWebView(frame: .zero, configuration: configuration)
     }
 
+    private func makeDOMInspectorWithSelection() -> WIDOMInspector {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let selectedLocalID: UInt64 = 42
+        let attributes = [DOMAttribute(nodeId: Int(selectedLocalID), name: "id", value: "selected")]
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: Int(selectedLocalID),
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: attributes,
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                preview: "<div id=\"selected\"></div>",
+                attributes: attributes,
+                path: ["html", "body", "div"],
+                selectorPath: "#selected",
+                styleRevision: 0
+            )
+        )
+        return inspector
+    }
+
+    private func copyHTMLAction(in menu: UIMenu) -> UIAction? {
+        guard let copyMenu = menu.children.first as? UIMenu else {
+            return nil
+        }
+        return copyMenu.children.first as? UIAction
+    }
+
+    private func deleteAction(in menu: UIMenu) -> UIAction? {
+        guard let destructiveMenu = menu.children.last as? UIMenu else {
+            return nil
+        }
+        return destructiveMenu.children.first as? UIAction
+    }
+
     private func configureSizeClass(
         _ sizeClass: UIUserInterfaceSizeClass,
         for container: WITabViewController,
@@ -1101,6 +1317,20 @@ struct TabViewControllerUITabTests {
                 return
             }
         }
+    }
+
+    private func waitForCondition(
+        attempts: Int = 50,
+        intervalNanoseconds: UInt64 = 10_000_000,
+        condition: @escaping @MainActor () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if await condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: intervalNanoseconds)
+        }
+        return await condition()
     }
 }
 #endif
