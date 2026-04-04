@@ -495,8 +495,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 				XROS_DEPLOYMENT_TARGET = 26.1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 			};
 			name = Debug;
 		};
@@ -522,8 +522,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 				XROS_DEPLOYMENT_TARGET = 26.1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 			};
 			name = Release;
 		};
@@ -569,6 +569,7 @@
 /* Begin XCSwiftPackageProductDependency section */
 		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */;
 			productName = WebInspectorKit;
 		};
 		F0A100022F00000100000001 /* WKViewport */ = {

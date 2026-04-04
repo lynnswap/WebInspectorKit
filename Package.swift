@@ -57,6 +57,10 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/MachOKit.git",
             revision: "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
+        ),
+        .package(
+            url: "https://github.com/lynnswap/WKViewportCoordinator.git",
+            exact: "0.2.0"
         )
     ],
     targets: [
@@ -70,7 +74,13 @@ let package = Package(
         ),
         .target(
             name: "WKViewport",
-            dependencies: [],
+            dependencies: [
+                .product(
+                    name: "WKViewportCoordinator",
+                    package: "WKViewportCoordinator",
+                    condition: .when(platforms: [.iOS])
+                )
+            ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -182,14 +192,6 @@ let package = Package(
                 .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorTestSupport",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "WKViewportTests",
-            dependencies: [
-                "WKViewport"
-            ],
-            path: "Tests/WKViewportTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

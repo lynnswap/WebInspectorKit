@@ -93,6 +93,8 @@ final class BrowserPageViewController: UIViewController {
         configureViewHierarchy()
         configureChrome()
         viewportCoordinator = ViewportCoordinator(webView: store.webView)
+        (store.webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
 
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
@@ -122,9 +124,16 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.handleViewDidAppear()
         refreshChromeControls()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
     }
 
     @objc
