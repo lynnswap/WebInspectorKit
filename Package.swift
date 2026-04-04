@@ -21,10 +21,6 @@ let package = Package(
             targets: ["WebInspectorEngine"]
         ),
         .library(
-            name: "WKViewport",
-            targets: ["WKViewport"]
-        ),
-        .library(
             name: "WebInspectorRuntime",
             targets: ["WebInspectorRuntime"]
         ),
@@ -69,17 +65,6 @@ let package = Package(
             dependencies: [
                 "WebInspectorBridge",
                 "WebInspectorScripts",
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WKViewport",
-            dependencies: [
-                .product(
-                    name: "WKViewportCoordinator",
-                    package: "WKViewportCoordinator",
-                    condition: .when(platforms: [.iOS])
-                )
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -227,7 +212,11 @@ let package = Package(
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
-                "WKViewport",
+                .product(
+                    name: "WKViewportCoordinator",
+                    package: "WKViewportCoordinator",
+                    condition: .when(platforms: [.iOS])
+                ),
                 "WebInspectorUI",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",

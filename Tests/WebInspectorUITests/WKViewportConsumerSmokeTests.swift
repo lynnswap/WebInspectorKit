@@ -3,7 +3,7 @@ import SwiftUI
 import Testing
 import UIKit
 import WebKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 struct WKViewportConsumerSmokeTests {

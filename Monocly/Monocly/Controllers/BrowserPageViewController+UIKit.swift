@@ -2,7 +2,7 @@
 import OSLog
 import UIKit
 import WebInspectorKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 final class BrowserPageViewController: UIViewController {

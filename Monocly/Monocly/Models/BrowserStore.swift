@@ -6,7 +6,7 @@ import WebKit
 
 #if canImport(UIKit)
 import UIKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 final class BrowserViewportWebView: WKWebView {
