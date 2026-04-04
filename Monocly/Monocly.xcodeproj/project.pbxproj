@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
-		F0A100012F00000100000001 /* WKViewport in Frameworks */ = {isa = PBXBuildFile; productRef = F0A100022F00000100000001 /* WKViewport */; };
+		F0A100012F00000100000001 /* WKViewportCoordinator in Frameworks */ = {isa = PBXBuildFile; productRef = F0A100022F00000100000001 /* WKViewportCoordinator */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,7 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
-				F0A100012F00000100000001 /* WKViewport in Frameworks */,
+				F0A100012F00000100000001 /* WKViewportCoordinator in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -111,7 +111,7 @@
 			name = Monocly;
 			packageProductDependencies = (
 				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
-				F0A100022F00000100000001 /* WKViewport */,
+				F0A100022F00000100000001 /* WKViewportCoordinator */,
 			);
 			productName = Monocly;
 			productReference = ABA353C82EDFF1EC00489A00 /* Monocly.app */;
@@ -170,6 +170,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
+				F0A100032F00000100000001 /* XCRemoteSwiftPackageReference "WKViewportCoordinator" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ABA353C92EDFF1EC00489A00 /* Products */;
@@ -495,8 +496,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 				XROS_DEPLOYMENT_TARGET = 26.1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 			};
 			name = Debug;
 		};
@@ -522,8 +523,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 				XROS_DEPLOYMENT_TARGET = 26.1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
 			};
 			name = Release;
 		};
@@ -566,14 +567,27 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		F0A100032F00000100000001 /* XCRemoteSwiftPackageReference "WKViewportCoordinator" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lynnswap/WKViewportCoordinator.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */;
 			productName = WebInspectorKit;
 		};
-		F0A100022F00000100000001 /* WKViewport */ = {
+		F0A100022F00000100000001 /* WKViewportCoordinator */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = WKViewport;
+			package = F0A100032F00000100000001 /* XCRemoteSwiftPackageReference "WKViewportCoordinator" */;
+			productName = WKViewportCoordinator;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

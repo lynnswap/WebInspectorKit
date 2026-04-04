@@ -6,6 +6,27 @@ import WebKit
 
 #if canImport(UIKit)
 import UIKit
+import WKViewportCoordinator
+
+@MainActor
+final class BrowserViewportWebView: WKWebView {
+    weak var viewportCoordinator: ViewportCoordinator?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
+    }
+}
 typealias BrowserPlatformColor = UIColor
 #elseif canImport(AppKit)
 import AppKit
@@ -117,7 +138,11 @@ private enum BrowserStoreSPI {
 #endif
         configuration.allowsAirPlayForMediaPlayback = true
 
+#if canImport(UIKit)
+        webView = BrowserViewportWebView(frame: .zero, configuration: configuration)
+#else
         webView = WKWebView(frame: .zero, configuration: configuration)
+#endif
         webView.isInspectable = true
 #if canImport(UIKit)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1"
