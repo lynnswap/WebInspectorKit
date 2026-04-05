@@ -245,8 +245,19 @@ public final class WIDOMInspector {
         }
     }
 
+    package func copyNode(nodeID: DOMNodeModel.ID, kind: DOMSelectionCopyKind) async throws -> String {
+        guard let node = document.node(id: nodeID),
+              let target = nodeRequestTarget(for: node) else {
+            return ""
+        }
+        return try await session.selectionCopyText(target: target, kind: kind)
+    }
+
     package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        try await session.selectionCopyText(nodeId: nodeId, kind: kind)
+        guard let target = requestTarget(forRequestIdentifier: nodeId) else {
+            return ""
+        }
+        return try await session.selectionCopyText(target: target, kind: kind)
     }
 
     package func tearDownForDeinit() {
@@ -297,17 +308,22 @@ public final class WIDOMInspector {
     }
 
     public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async -> DOMMutationResult {
-        if let resolvedNodeID = nodeId.flatMap({ document.node(backendNodeID: $0)?.id }) {
+        if let resolvedNodeID = nodeId.flatMap({ documentNode(forRequestIdentifier: $0)?.id }) {
             return await deleteNodeImpl(
                 nodeID: resolvedNodeID,
                 undoManager: undoManager,
                 expectedContext: transport.currentMutationContext
             )
         }
-        return await deleteNodeImpl(
-            nodeId: nodeId,
-            undoManager: undoManager,
-            expectedContext: transport.currentMutationContext
+        guard let requestTarget = nodeId.flatMap(requestTarget(forRequestIdentifier:)) else {
+            return .failed
+        }
+        return publicMutationResult(
+            await session.removeNode(
+                target: requestTarget,
+                expectedPageEpoch: transport.currentPageEpoch,
+                expectedDocumentScopeID: transport.currentDocumentScopeID
+            )
         )
     }
 
@@ -434,7 +450,10 @@ private extension WIDOMInspector {
             return .failed
         }
         do {
-            let payload = try await session.captureSnapshotPayload(maxDepth: session.configuration.snapshotDepth)
+            let payload = try await session.captureSnapshotPayload(
+                maxDepth: session.configuration.snapshotDepth,
+                initialModeOwnership: .preservePendingInitialMode
+            )
             transport.handleDOMBundle(
                 .init(
                     objectEnvelope: [
@@ -447,6 +466,10 @@ private extension WIDOMInspector {
                     pageEpoch: transport.currentPageEpoch,
                     documentScopeID: transport.currentDocumentScopeID
                 )
+            )
+            await session.consumePendingInitialSnapshotMode(
+                expectedPageEpoch: transport.currentPageEpoch,
+                expectedDocumentScopeID: transport.currentDocumentScopeID
             )
             applyRecoverableError(nil)
             return .applied
@@ -461,7 +484,10 @@ private extension WIDOMInspector {
             return .failed
         }
         do {
-            let payload = try await session.captureSnapshotPayload(maxDepth: session.configuration.snapshotDepth)
+            let payload = try await session.captureSnapshotPayload(
+                maxDepth: session.configuration.snapshotDepth,
+                initialModeOwnership: .preservePendingInitialMode
+            )
             let didApplyReplacement = transport.applyReplacementDOMBundleAfterContextAdoption(
                 .init(
                     objectEnvelope: [
@@ -478,6 +504,10 @@ private extension WIDOMInspector {
             guard didApplyReplacement else {
                 return .failed
             }
+            await session.consumePendingInitialSnapshotMode(
+                expectedPageEpoch: transport.currentPageEpoch,
+                expectedDocumentScopeID: transport.currentDocumentScopeID
+            )
             applyRecoverableError(nil)
             return .applied
         } catch {
@@ -505,25 +535,29 @@ private extension WIDOMInspector {
     }
 
     func copySelectionImpl(_ kind: DOMSelectionCopyKind) async throws -> String {
-        guard let nodeId = document.selectedNode?.backendNodeID else {
+        guard let selectedNode = document.selectedNode,
+              let target = nodeRequestTarget(for: selectedNode) else {
             return ""
         }
-        return try await session.selectionCopyText(nodeId: nodeId, kind: kind)
+        return try await session.selectionCopyText(target: target, kind: kind)
     }
 
     private func deleteNodeImpl(
-        nodeId: Int?,
+        target: DOMRequestNodeTarget?,
+        nodeLocalID: UInt64? = nil,
         undoManager: UndoManager?,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async -> DOMMutationResult {
-        guard let nodeId else {
+        guard let target, let nodeId = target.jsIdentifier else {
             return .failed
         }
         guard transport.matchesCurrentMutationContext(expectedContext) else {
             return .ignoredStaleContext
         }
         return await enqueueDelete(
+            target: target,
             nodeId: nodeId,
+            nodeLocalID: nodeLocalID,
             undoManager: undoManager,
             expectedContext: expectedContext
         )
@@ -544,7 +578,8 @@ private extension WIDOMInspector {
             return .ignoredStaleContext
         }
         return await deleteNodeImpl(
-            nodeId: node.backendNodeID,
+            target: nodeRequestTarget(for: node),
+            nodeLocalID: node.localID,
             undoManager: undoManager,
             expectedContext: expectedContext
         )
@@ -562,7 +597,7 @@ private extension WIDOMInspector {
         guard let node = document.node(id: nodeID) else {
             return .ignoredStaleContext
         }
-        guard let backendNodeID = node.backendNodeID else {
+        guard let requestTarget = nodeRequestTarget(for: node) else {
             return .failed
         }
 
@@ -575,7 +610,7 @@ private extension WIDOMInspector {
         }
 
         let didUpdateAttribute = await session.setAttribute(
-            nodeId: backendNodeID,
+            target: requestTarget,
             name: name,
             value: value,
             expectedPageEpoch: expectedContext.pageEpoch,
@@ -588,7 +623,7 @@ private extension WIDOMInspector {
                     name: name,
                     value: value,
                     localID: node.localID,
-                    backendNodeID: backendNodeID
+                    backendNodeID: node.backendNodeID
                 )
             } else if session.hasPageWebView {
                 let reloadResult = await reloadDocumentPreservingInspectorState()
@@ -615,7 +650,7 @@ private extension WIDOMInspector {
         guard let node = document.node(id: nodeID) else {
             return .ignoredStaleContext
         }
-        guard let backendNodeID = node.backendNodeID else {
+        guard let requestTarget = nodeRequestTarget(for: node) else {
             return .failed
         }
 
@@ -628,7 +663,7 @@ private extension WIDOMInspector {
         }
 
         let didRemoveAttribute = await session.removeAttribute(
-            nodeId: backendNodeID,
+            target: requestTarget,
             name: name,
             expectedPageEpoch: expectedContext.pageEpoch,
             expectedDocumentScopeID: expectedContext.documentScopeID
@@ -639,7 +674,7 @@ private extension WIDOMInspector {
                 _ = document.removeAttribute(
                     name: name,
                     localID: node.localID,
-                    backendNodeID: backendNodeID
+                    backendNodeID: node.backendNodeID
                 )
             } else if session.hasPageWebView {
                 let reloadResult = await reloadDocumentPreservingInspectorState()
@@ -676,7 +711,9 @@ private extension WIDOMInspector {
     }
 
     private func enqueueDelete(
+        target: DOMRequestNodeTarget,
         nodeId: Int,
+        nodeLocalID: UInt64? = nil,
         undoManager: UndoManager?,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async -> DOMMutationResult {
@@ -709,7 +746,7 @@ private extension WIDOMInspector {
             guard let undoManager else {
                 mutationResult = self.publicMutationResult(
                     await self.session.removeNode(
-                        nodeId: nodeId,
+                        target: target,
                         expectedPageEpoch: expectedContext.pageEpoch,
                         expectedDocumentScopeID: expectedContext.documentScopeID
                     )
@@ -717,6 +754,7 @@ private extension WIDOMInspector {
                 if mutationResult == .applied {
                     await self.applyDeletedNodeMutationResult(
                         nodeId: nodeId,
+                        nodeLocalID: nodeLocalID,
                         expectedContext: expectedContext
                     )
                 }
@@ -724,7 +762,10 @@ private extension WIDOMInspector {
             }
 
             self.rememberDeleteUndoManager(undoManager)
-            let restoreSelectionPayload = self.selectionRestorePayload(for: nodeId)
+            let restoreSelectionPayload = self.selectionRestorePayload(
+                for: nodeId,
+                nodeLocalID: nodeLocalID
+            )
             let removeWithUndoResult = await self.session.removeNodeWithUndo(
                 nodeId: nodeId,
                 expectedPageEpoch: expectedContext.pageEpoch,
@@ -738,6 +779,7 @@ private extension WIDOMInspector {
                 }
                 await self.applyDeletedNodeMutationResult(
                     nodeId: nodeId,
+                    nodeLocalID: nodeLocalID,
                     expectedContext: expectedContext
                 )
                 if matchesCurrentContext {
@@ -758,7 +800,7 @@ private extension WIDOMInspector {
             case .failed:
                 mutationResult = self.publicMutationResult(
                     await self.session.removeNode(
-                        nodeId: nodeId,
+                        target: target,
                         expectedPageEpoch: expectedContext.pageEpoch,
                         expectedDocumentScopeID: expectedContext.documentScopeID
                     )
@@ -766,6 +808,7 @@ private extension WIDOMInspector {
                 if mutationResult == .applied {
                     await self.applyDeletedNodeMutationResult(
                         nodeId: nodeId,
+                        nodeLocalID: nodeLocalID,
                         expectedContext: expectedContext
                     )
                 } else {
@@ -794,6 +837,53 @@ private extension WIDOMInspector {
         case .failed:
             return .failed
         }
+    }
+
+    private func nodeRequestTarget(for node: DOMNodeModel) -> DOMRequestNodeTarget? {
+        if liveDocumentContains(node) {
+            return .local(node.localID)
+        }
+        if let backendNodeID = preferredBackendNodeID(forDetachedRequestTarget: node) {
+            return .backend(backendNodeID)
+        }
+        return .local(node.localID)
+    }
+
+    private func requestTarget(forRequestIdentifier nodeId: Int) -> DOMRequestNodeTarget? {
+        guard let node = documentNode(forRequestIdentifier: nodeId) else {
+            return nil
+        }
+        return nodeRequestTarget(for: node)
+    }
+
+    private func documentNode(forRequestIdentifier nodeId: Int) -> DOMNodeModel? {
+        if nodeId >= 0, let node = document.node(localID: UInt64(nodeId)) {
+            return node
+        }
+        return document.node(backendNodeID: nodeId)
+    }
+
+    private func preferredBackendNodeID(forDetachedRequestTarget node: DOMNodeModel) -> Int? {
+        guard let backendNodeID = node.backendNodeID,
+              backendNodeID > 0
+        else {
+            return nil
+        }
+        return backendNodeID
+    }
+
+    private func liveDocumentContains(_ node: DOMNodeModel) -> Bool {
+        if document.rootNode === node {
+            return true
+        }
+        var current = node.parent
+        while let currentNode = current {
+            if document.rootNode === currentNode {
+                return true
+            }
+            current = currentNode.parent
+        }
+        return false
     }
 
     private func registerUndoDelete(
@@ -951,11 +1041,23 @@ private extension WIDOMInspector {
                 self.clearDeleteUndoHistory(using: undoManager)
                 return
             }
-            if !self.transport.matchesCurrentMutationContext(context) {
+            self.transport.setPendingSelectionOverride(localID: nil)
+            let matchesCurrentContext = self.transport.matchesCurrentMutationContext(context)
+            if !matchesCurrentContext {
                 self.clearDeleteUndoHistory(using: undoManager)
+                let reloadResult = await self.reloadDocumentImpl(
+                    .fresh,
+                    expectedPageEpoch: self.transport.currentPageEpoch,
+                    pinDocumentScope: false
+                )
+                if reloadResult != .applied {
+                    _ = await self.resyncDocumentAfterContextLoss()
+                }
+                return
             }
             await self.applyDeletedNodeMutationResult(
                 nodeId: nodeId,
+                nodeLocalID: nodeId >= 0 ? UInt64(nodeId) : nil,
                 expectedContext: context
             )
         }
@@ -963,10 +1065,14 @@ private extension WIDOMInspector {
 
     private func applyDeletedNodeMutationResult(
         nodeId: Int,
+        nodeLocalID: UInt64? = nil,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async {
         if transport.matchesCurrentMutationContext(expectedContext) {
-            if let node = document.node(backendNodeID: nodeId) {
+            if let nodeLocalID,
+               let node = document.node(localID: nodeLocalID) {
+                document.removeNode(id: node.id)
+            } else if let node = document.node(backendNodeID: nodeId) {
                 document.removeNode(id: node.id)
             }
         } else if session.hasPageWebView {
@@ -974,12 +1080,23 @@ private extension WIDOMInspector {
         }
     }
 
-    private func selectionRestorePayload(for nodeId: Int) -> DOMSelectionSnapshotPayload? {
-        guard let selectedNode = document.selectedNode, selectedNode.backendNodeID == nodeId else {
+    private func selectionRestorePayload(
+        for nodeId: Int,
+        nodeLocalID: UInt64? = nil
+    ) -> DOMSelectionSnapshotPayload? {
+        guard let selectedNode = document.selectedNode else {
+            return nil
+        }
+        if let nodeLocalID {
+            guard selectedNode.localID == nodeLocalID else {
+                return nil
+            }
+        } else if selectedNode.backendNodeID != nodeId {
             return nil
         }
         return .init(
             localID: selectedNode.localID,
+            backendNodeID: selectedNode.backendNodeID,
             preview: selectedNode.preview,
             attributes: selectedNode.attributes,
             path: selectedNode.path,
@@ -1100,7 +1217,6 @@ private extension WIDOMInspector {
             applyRecoverableError(error.localizedDescription)
             throw error
         }
-
         try Task.checkCancellation()
         try ensureSelectionRequestIsCurrent(request)
         guard !result.cancelled else {
@@ -1119,10 +1235,14 @@ private extension WIDOMInspector {
             applyRecoverableError("Failed to resolve selected element.")
             return result
         }
+        let projectedSelectedNode = refreshSelectionNodeMetadata(
+            selectedNode,
+            from: result
+        )
 
         applyRecoverableError(nil)
         await applySelection(
-            selectedNode,
+            projectedSelectedNode,
             expectedContext: expectedContext
         )
         return result
@@ -1132,51 +1252,150 @@ private extension WIDOMInspector {
         _ result: DOMSelectionResult,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async -> DOMNodeModel? {
-        guard let selectedNodeID = selectedBackendNodeID(from: result) else {
-            if let selectedPath = result.selectedPath {
-                return documentNode(at: selectedPath, from: document.rootNode)
-            }
-            return nil
+        if let selectedLocalNode = selectedLocalNode(from: result),
+           node(selectedLocalNode, matches: result) {
+            return selectedLocalNode
         }
 
-        let existingNode = document.node(backendNodeID: selectedNodeID)
+        let selectedBackendNodeID = selectedBackendNodeID(from: result)
+        if let selectedBackendNodeID,
+           let existingNode = document.node(backendNodeID: selectedBackendNodeID) {
+            return existingNode
+        }
 
         if let materializedNode = await materializeSelectionNode(
-            selectedNodeID: selectedNodeID,
-            ancestorNodeIDs: result.ancestorNodeIds ?? [],
-            selectedHandleID: result.selectedHandleId,
-            ancestorHandleIDs: result.ancestorHandleIds ?? [],
+            selectedBackendNodeID: selectedBackendNodeID,
+            ancestorBackendNodeIDs: result.ancestorBackendNodeIds ?? [],
+            selectedLocalID: result.selectedLocalId,
+            ancestorLocalIDs: result.ancestorLocalIds ?? [],
             fallbackDepth: result.requiredDepth,
             expectedContext: expectedContext
         ) {
             return materializedNode
         }
 
-        if let selectedPath = result.selectedPath {
-            return documentNode(at: selectedPath, from: document.rootNode)
+        if let selectedLocalNode = selectedLocalNode(from: result),
+           node(selectedLocalNode, matches: result) {
+            return selectedLocalNode
         }
 
-        if let existingNode {
-            return existingNode
+        if let selectedPath = result.selectedPath,
+           let pathNode = documentNode(at: selectedPath, from: document.rootNode) {
+            return pathNode
+        }
+
+        if let placeholderNode = applySelectionPlaceholderIfPossible(from: result) {
+            return placeholderNode
         }
 
         return nil
     }
 
     private func selectedBackendNodeID(from result: DOMSelectionResult) -> Int? {
-        guard let selectedNodeId = result.selectedNodeId,
-              selectedNodeId <= UInt64(Int.max)
+        guard let selectedBackendNodeId = result.selectedBackendNodeId,
+              selectedBackendNodeId <= UInt64(Int.max)
         else {
             return nil
         }
-        return Int(selectedNodeId)
+        if result.selectedBackendNodeIdIsStable == false {
+            return nil
+        }
+        return Int(selectedBackendNodeId)
+    }
+
+    private func selectedLocalNode(from result: DOMSelectionResult) -> DOMNodeModel? {
+        guard let selectedLocalID = result.selectedLocalId else {
+            return nil
+        }
+        return document.node(localID: selectedLocalID)
+    }
+
+    private func applySelectionPlaceholderIfPossible(
+        from result: DOMSelectionResult
+    ) -> DOMNodeModel? {
+        guard let localID = result.selectedLocalId else {
+            return nil
+        }
+
+        let backendNodeID = selectedBackendNodeID(from: result)
+        let attributes = (result.selectedAttributes ?? []).map { attribute in
+            DOMAttribute(
+                nodeId: backendNodeID,
+                name: attribute.name,
+                value: attribute.value
+            )
+        }
+        let preview = result.selectedPreview ?? ""
+        let selectorPath = result.selectedSelectorPath
+        let path = selectionPathLabels(for: result.selectedPath)
+        document.applySelectionSnapshot(
+            .init(
+                localID: localID,
+                backendNodeID: backendNodeID,
+                preview: preview,
+                attributes: attributes,
+                path: path,
+                selectorPath: selectorPath,
+                styleRevision: 0
+            )
+        )
+        return document.selectedNode
+    }
+
+    private func refreshSelectionNodeMetadata(
+        _ node: DOMNodeModel,
+        from result: DOMSelectionResult
+    ) -> DOMNodeModel {
+        let preview = result.selectedPreview ?? selectionPreview(for: node)
+        let backendNodeID = node.backendNodeID
+        let path = selectionPathLabels(for: result.selectedPath)
+        let selectionAttributes = result.selectedAttributes?.map { attribute in
+            DOMAttribute(
+                nodeId: backendNodeID,
+                name: attribute.name,
+                value: attribute.value
+            )
+        }
+        let payload = DOMSelectionSnapshotPayload(
+            localID: node.localID,
+            backendNodeID: backendNodeID,
+            preview: preview,
+            attributes: selectionAttributes ?? node.attributes,
+            path: path.isEmpty ? selectionPathLabels(for: node) : path,
+            selectorPath: result.selectedSelectorPath,
+            styleRevision: node.styleRevision
+        )
+        document.applySelectionSnapshot(payload)
+        return document.selectedNode ?? node
+    }
+
+    private func node(
+        _ node: DOMNodeModel,
+        matches result: DOMSelectionResult
+    ) -> Bool {
+        if let expectedBackendNodeID = selectedBackendNodeID(from: result),
+           node.backendNodeID != expectedBackendNodeID {
+            return false
+        }
+        let selectedAttributes = result.selectedAttributes ?? []
+        guard !selectedAttributes.isEmpty else {
+            return true
+        }
+        for attribute in selectedAttributes {
+            guard node.attributes.contains(where: {
+                $0.name == attribute.name && $0.value == attribute.value
+            }) else {
+                return false
+            }
+        }
+        return true
     }
 
     private func materializeSelectionNode(
-        selectedNodeID: Int,
-        ancestorNodeIDs: [UInt64],
-        selectedHandleID: UInt64?,
-        ancestorHandleIDs: [UInt64],
+        selectedBackendNodeID: Int?,
+        ancestorBackendNodeIDs _: [UInt64],
+        selectedLocalID: UInt64?,
+        ancestorLocalIDs: [UInt64],
         fallbackDepth: Int,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async -> DOMNodeModel? {
@@ -1184,49 +1403,39 @@ private extension WIDOMInspector {
             return nil
         }
 
-        let normalizedAncestors = ancestorNodeIDs.compactMap { ancestorNodeID -> Int? in
-            guard ancestorNodeID <= UInt64(Int.max) else {
+        let normalizedAncestorLocalIDs = ancestorLocalIDs.compactMap { ancestorLocalID -> Int? in
+            guard ancestorLocalID <= UInt64(Int.max) else {
                 return nil
             }
-            return Int(ancestorNodeID)
+            return Int(ancestorLocalID)
         }
-        let normalizedAncestorHandleIDs = ancestorHandleIDs.compactMap { ancestorHandleID -> Int? in
-            guard ancestorHandleID <= UInt64(Int.max) else {
+        let normalizedSelectedLocalID: Int? = {
+            guard let selectedLocalID, selectedLocalID <= UInt64(Int.max) else {
                 return nil
             }
-            return Int(ancestorHandleID)
-        }
-        let normalizedSelectedHandleID: Int? = {
-            guard let selectedHandleID, selectedHandleID <= UInt64(Int.max) else {
-                return nil
-            }
-            return Int(selectedHandleID)
+            return Int(selectedLocalID)
         }()
 
         var fetchCandidates: [(nodeID: Int, depth: Int)] = []
-        for (index, ancestorNodeID) in normalizedAncestors.enumerated().reversed() {
-            guard document.node(backendNodeID: ancestorNodeID) != nil else {
+        for (index, ancestorLocalID) in normalizedAncestorLocalIDs.enumerated().reversed() {
+            guard document.node(localID: UInt64(ancestorLocalID)) != nil else {
                 continue
             }
-            let candidateHandleID =
-                index < normalizedAncestorHandleIDs.count
-                ? normalizedAncestorHandleIDs[index]
-                : ancestorNodeID
             fetchCandidates.append((
-                nodeID: candidateHandleID,
-                depth: max(1, normalizedAncestors.count - index)
+                nodeID: ancestorLocalID,
+                depth: max(1, normalizedAncestorLocalIDs.count - index)
             ))
             break
         }
 
-        if let fallbackHandleID = normalizedAncestorHandleIDs.first ?? normalizedSelectedHandleID {
+        if let fallbackLocalID = normalizedAncestorLocalIDs.first ?? normalizedSelectedLocalID {
             fetchCandidates.append((
-                nodeID: fallbackHandleID,
+                nodeID: fallbackLocalID,
                 depth: max(1, fallbackDepth)
             ))
-        } else if let rootBackendNodeID = document.rootNode?.backendNodeID {
+        } else if let rootLocalID = document.rootNode?.localID, rootLocalID <= UInt64(Int.max) {
             fetchCandidates.append((
-                nodeID: rootBackendNodeID,
+                nodeID: Int(rootLocalID),
                 depth: max(1, fallbackDepth)
             ))
         }
@@ -1246,7 +1455,12 @@ private extension WIDOMInspector {
             else {
                 continue
             }
-            if let materializedNode = document.node(backendNodeID: selectedNodeID) {
+            if let normalizedSelectedLocalID,
+               let materializedNode = document.node(localID: UInt64(normalizedSelectedLocalID)) {
+                return materializedNode
+            }
+            if let selectedBackendNodeID,
+               let materializedNode = document.node(backendNodeID: selectedBackendNodeID) {
                 return materializedNode
             }
         }
@@ -1274,9 +1488,22 @@ private extension WIDOMInspector {
         )
     }
 
+    private func selectionSnapshotPayload(for node: DOMNodeModel) -> DOMSelectionSnapshotPayload {
+        .init(
+            localID: node.localID,
+            backendNodeID: node.backendNodeID,
+            preview: selectionPreview(for: node),
+            attributes: node.attributes,
+            path: selectionPathLabels(for: node),
+            selectorPath: node.selectorPath,
+            styleRevision: node.styleRevision
+        )
+    }
+
     private func selectionPayloadDictionary(for node: DOMNodeModel) -> [String: Any] {
         [
             "id": node.localID,
+            "backendNodeId": node.backendNodeID as Any,
             "preview": selectionPreview(for: node),
             "attributes": node.attributes.map {
                 [
@@ -1320,6 +1547,24 @@ private extension WIDOMInspector {
         while let current = currentNode {
             labels.insert(selectionPreview(for: current), at: 0)
             currentNode = current.parent
+        }
+        return labels
+    }
+
+    private func selectionPathLabels(for path: [Int]?) -> [String] {
+        guard let path,
+              let rootNode = document.rootNode
+        else {
+            return []
+        }
+        var labels: [String] = [selectionPreview(for: rootNode)]
+        var current = rootNode
+        for index in path {
+            guard index >= 0, index < current.children.count else {
+                break
+            }
+            current = current.children[index]
+            labels.append(selectionPreview(for: current))
         }
         return labels
     }

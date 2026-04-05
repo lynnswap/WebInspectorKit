@@ -59,10 +59,6 @@ public final class DOMNodeModel: Equatable, Hashable {
     public var preview: String
     public var path: [String]
     public var selectorPath: String
-    public var matchedStyles: [DOMMatchedStyleRule]
-    public var isLoadingMatchedStyles: Bool
-    public var matchedStylesTruncated: Bool
-    public var blockedStylesheetCount: Int
 
     package init(
         id: ID,
@@ -79,11 +75,7 @@ public final class DOMNodeModel: Equatable, Hashable {
         styleRevision: Int = 0,
         preview: String = "",
         path: [String] = [],
-        selectorPath: String = "",
-        matchedStyles: [DOMMatchedStyleRule] = [],
-        isLoadingMatchedStyles: Bool = false,
-        matchedStylesTruncated: Bool = false,
-        blockedStylesheetCount: Int = 0
+        selectorPath: String = ""
     ) {
         self.id = id
         self.backendNodeID = backendNodeID
@@ -100,10 +92,6 @@ public final class DOMNodeModel: Equatable, Hashable {
         self.preview = preview
         self.path = path
         self.selectorPath = selectorPath
-        self.matchedStyles = matchedStyles
-        self.isLoadingMatchedStyles = isLoadingMatchedStyles
-        self.matchedStylesTruncated = matchedStylesTruncated
-        self.blockedStylesheetCount = blockedStylesheetCount
     }
 
     public var localID: UInt64 {
@@ -116,12 +104,5 @@ public final class DOMNodeModel: Equatable, Hashable {
 
     public nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(ObjectIdentifier(self))
-    }
-
-    func clearMatchedStyles() {
-        matchedStyles = []
-        matchedStylesTruncated = false
-        blockedStylesheetCount = 0
-        isLoadingMatchedStyles = false
     }
 }

@@ -90,8 +90,6 @@ package final class DOMInspectorRuntime: NSObject {
     private var pendingDocumentRequest: PendingDocumentRequest?
     private var bootstrapTask: Task<Void, Never>?
     private var bootstrapTaskID = 0
-    private var matchedStylesTask: Task<Void, Never>?
-    private var matchedStylesRequestCount = 0
     private var selectorPathTask: Task<Void, Never>?
     private var selectorPathRequestCount = 0
     private var enqueuedMutationGeneration = 0
@@ -123,7 +121,6 @@ package final class DOMInspectorRuntime: NSObject {
     private var pendingDocumentScopeRecoveryDocumentScopeID: UInt64?
 
 #if DEBUG
-    private var matchedStylesFetchOverride: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)?
     var testConfigurationApplyOverride: (@MainActor (DOMConfiguration) async -> Void)?
     var testPreferredDepthApplyOverride: (@MainActor (Int) async -> Void)?
     var testDocumentRequestApplyOverride: (@MainActor (_ depth: Int, _ mode: DOMDocumentReloadMode) async -> Void)?
@@ -247,7 +244,6 @@ package final class DOMInspectorRuntime: NSObject {
         cancelInFlightContextTasks()
         await drainTransitionFlushIfNeeded()
         deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         clearPendingMutationBundles()
         deferredFrontendDocumentRequestDrainScope = hasDeferredFrontendDocumentRequestDrain ? currentRequestScope : nil
@@ -350,7 +346,6 @@ package final class DOMInspectorRuntime: NSObject {
                 return false
             }
             clearPendingMutationBundles()
-            cancelMatchedStylesRequest()
             cancelSelectorPathRequest()
             moveReadySignal(
                 to: .init(
@@ -494,7 +489,6 @@ package final class DOMInspectorRuntime: NSObject {
         pendingDocumentScopeSyncDocumentScopeID = nil
         pendingDocumentScopeRecoveryPageEpoch = nil
         pendingDocumentScopeRecoveryDocumentScopeID = nil
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         mutationPipeline.reset()
         bridge.detachInspectorWebView()
@@ -760,7 +754,6 @@ extension DOMInspectorRuntime {
 
     private func replaceCurrentDocumentModel() {
         let nextScope = makeNextDocumentScope()
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         moveReadySignal(
             to: .init(
@@ -790,7 +783,6 @@ extension DOMInspectorRuntime {
         if clearCurrentContents {
             currentDocumentModel.clearDocument(isFreshDocument: true)
         }
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         bridge.refreshBootstrapPayloadIfPossible()
         syncCurrentDocumentScopeIDIfNeeded()
@@ -1204,7 +1196,6 @@ extension DOMInspectorRuntime {
         cancelInFlightContextTasks()
         let suspendedDeferredDOMBundles = deferredDOMBundlesDuringBootstrap
         deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         nextTransitionGeneration &+= 1
         let generation = nextTransitionGeneration
@@ -1347,7 +1338,6 @@ extension DOMInspectorRuntime {
         pendingDocumentScopeSyncDocumentScopeID = nil
         pendingDocumentScopeRecoveryPageEpoch = nil
         pendingDocumentScopeRecoveryDocumentScopeID = nil
-        cancelMatchedStylesRequest()
         cancelSelectorPathRequest()
         isReady = false
         configurationNeedsBootstrap = true
@@ -1423,7 +1413,10 @@ extension DOMInspectorRuntime {
         }
 #endif
         do {
-            let payload = try await session.captureSnapshotPayload(maxDepth: depth)
+            let payload = try await session.captureSnapshotPayload(
+                maxDepth: depth,
+                initialModeOwnership: .preservePendingInitialMode
+            )
             let (payloadForDispatch, appliedSelectionOverride) = payloadByApplyingPendingSelectionOverride(payload)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
                 setDeferredFrontendDocumentRequestDrainScope(requestScope)
@@ -1459,6 +1452,10 @@ extension DOMInspectorRuntime {
                 }
                 return true
             }
+            await session.consumePendingInitialSnapshotMode(
+                expectedPageEpoch: expectedPageEpoch,
+                expectedDocumentScopeID: requestDocumentScopeID
+            )
             currentDocumentModel.replaceDocument(
                 with: snapshot,
                 isFreshDocument: clearsReplacementFence
@@ -1484,17 +1481,20 @@ extension DOMInspectorRuntime {
         }
         if var dictionary = payload as? [String: Any] {
             dictionary["selectedNodeId"] = pendingSelectionOverrideLocalID
+            dictionary["selectedLocalId"] = pendingSelectionOverrideLocalID
             return (dictionary, true)
         }
         if let dictionary = payload as? NSDictionary {
             var copied = dictionary as? [String: Any] ?? [:]
             copied["selectedNodeId"] = pendingSelectionOverrideLocalID
+            copied["selectedLocalId"] = pendingSelectionOverrideLocalID
             return (copied, true)
         }
         if let json = payload as? String,
            let data = json.data(using: .utf8),
            var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             object["selectedNodeId"] = pendingSelectionOverrideLocalID
+            object["selectedLocalId"] = pendingSelectionOverrideLocalID
             return (object, true)
         }
         return (payload, false)
@@ -1557,84 +1557,7 @@ extension DOMInspectorRuntime {
         return payload
     }
 
-    func startMatchedStylesRequest(nodeID: Int, selectionEntry: DOMNodeModel) {
-        cancelMatchedStylesRequest()
-        matchedStylesRequestCount += 1
-        let requestGeneration = matchedStylesRequestCount
-        let requestScope = currentRequestScope
-        let selectionDocumentScopeID = currentDocumentScope.documentScopeID
-        currentDocumentModel.beginMatchedStylesLoading(for: selectionEntry)
-
-        matchedStylesTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                let payload = try await self.fetchMatchedStyles(nodeID: nodeID)
-                if Task.isCancelled {
-                    return
-                }
-                guard self.isCurrentMatchedStylesRequest(
-                    generation: requestGeneration,
-                    nodeID: nodeID,
-                    documentScopeID: selectionDocumentScopeID
-                ),
-                self.currentRequestScope === requestScope
-                else {
-                    return
-                }
-                guard let currentSelection = self.currentSelectedEntry(
-                    nodeID: nodeID,
-                    documentScopeID: selectionDocumentScopeID
-                ) else {
-                    return
-                }
-                self.currentDocumentModel.applyMatchedStyles(payload, for: currentSelection)
-            } catch is CancellationError {
-                return
-            } catch {
-                if Task.isCancelled {
-                    return
-                }
-                guard self.isCurrentMatchedStylesRequest(
-                    generation: requestGeneration,
-                    nodeID: nodeID,
-                    documentScopeID: selectionDocumentScopeID
-                ),
-                self.currentRequestScope === requestScope
-                else {
-                    return
-                }
-                guard let currentSelection = self.currentSelectedEntry(
-                    nodeID: nodeID,
-                    documentScopeID: selectionDocumentScopeID
-                ) else {
-                    return
-                }
-                self.currentDocumentModel.clearMatchedStyles(for: currentSelection)
-                inspectorLogger.debug("matched styles fetch failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-    }
-
-    func fetchMatchedStyles(nodeID: Int) async throws -> DOMMatchedStylesPayload {
-#if DEBUG
-        if let matchedStylesFetchOverride {
-            return try await matchedStylesFetchOverride(nodeID)
-        }
-#endif
-        return try await session.matchedStyles(nodeId: nodeID)
-    }
-
-    func isCurrentMatchedStylesRequest(generation: Int, nodeID: Int, documentScopeID: UInt64) -> Bool {
-        matchedStylesRequestCount == generation
-            && currentSelectedEntry(nodeID: nodeID, documentScopeID: documentScopeID) != nil
-    }
-
-    func cancelMatchedStylesRequest() {
-        matchedStylesTask?.cancel()
-        matchedStylesTask = nil
-    }
-
-    func startSelectorPathRequest(nodeID: Int, selectionEntry: DOMNodeModel) {
+    func startSelectorPathRequest(target: DOMRequestNodeTarget, selectionEntry: DOMNodeModel) {
         cancelSelectorPathRequest()
         selectorPathRequestCount += 1
         let requestGeneration = selectorPathRequestCount
@@ -1646,18 +1569,18 @@ extension DOMInspectorRuntime {
                 return
             }
             do {
-                let selectorPath = try await self.session.selectorPath(nodeId: nodeID)
+                let selectorPath = try await self.session.selectorPath(target: target)
                 guard Task.isCancelled == false else {
                     return
                 }
                 guard self.selectorPathRequestCount == requestGeneration,
                       self.currentRequestScope === requestScope,
-                      self.currentSelectedEntry(nodeID: nodeID, documentScopeID: selectionDocumentScopeID) != nil
+                      self.currentSelectedEntry(target: target, documentScopeID: selectionDocumentScopeID) != nil
                 else {
                     return
                 }
                 guard let currentSelection = self.currentSelectedEntry(
-                    nodeID: nodeID,
+                    target: target,
                     documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
@@ -1666,12 +1589,12 @@ extension DOMInspectorRuntime {
             } catch {
                 guard self.selectorPathRequestCount == requestGeneration,
                       self.currentRequestScope === requestScope,
-                      self.currentSelectedEntry(nodeID: nodeID, documentScopeID: selectionDocumentScopeID) != nil
+                      self.currentSelectedEntry(target: target, documentScopeID: selectionDocumentScopeID) != nil
                 else {
                     return
                 }
                 guard let currentSelection = self.currentSelectedEntry(
-                    nodeID: nodeID,
+                    target: target,
                     documentScopeID: selectionDocumentScopeID
                 ) else {
                     return
@@ -1689,14 +1612,11 @@ extension DOMInspectorRuntime {
 
     private func restartSelectionDependentRequestsIfNeeded() {
         guard let selected = currentDocumentModel.selectedNode,
-              let nodeID = selected.backendNodeID else {
+              let target = selectionRequestTarget(for: selected) else {
             return
         }
         if selected.selectorPath.isEmpty {
-            startSelectorPathRequest(nodeID: nodeID, selectionEntry: selected)
-        }
-        if selected.isLoadingMatchedStyles || selected.matchedStyles.isEmpty {
-            startMatchedStylesRequest(nodeID: nodeID, selectionEntry: selected)
+            startSelectorPathRequest(target: target, selectionEntry: selected)
         }
     }
 
@@ -1750,14 +1670,25 @@ extension DOMInspectorRuntime {
         return nil
     }
 
-    func currentSelectedEntry(nodeID: Int, documentScopeID: UInt64) -> DOMNodeModel? {
+    func currentSelectedEntry(target: DOMRequestNodeTarget, documentScopeID: UInt64) -> DOMNodeModel? {
         guard currentDocumentScope.documentScopeID == documentScopeID,
               let selectedEntry = currentDocumentModel.selectedNode,
-              selectedEntry.backendNodeID == nodeID
+              selectionRequestTarget(for: selectedEntry) == target
         else {
             return nil
         }
         return selectedEntry
+    }
+
+    func selectionRequestTarget(for node: DOMNodeModel) -> DOMRequestNodeTarget? {
+        if let backendNodeID = node.backendNodeID,
+           backendNodeID > 0 {
+            return .backend(backendNodeID)
+        }
+        guard node.localID <= UInt64(Int.max) else {
+            return nil
+        }
+        return .local(node.localID)
     }
 }
 
@@ -1877,7 +1808,10 @@ extension DOMInspectorRuntime {
         let requestDocumentScopeID = currentDocumentScope.documentScopeID
 
         do {
-            let payload = try await session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
+            let payload = try await session.captureSubtreePayload(
+                target: .local(UInt64(nodeID)),
+                maxDepth: depth
+            )
             guard matchesCurrentMutationContext(expectedContext),
                   currentRequestScope === requestScope
             else {
@@ -2215,7 +2149,10 @@ extension DOMInspectorRuntime {
                 return
             }
             do {
-                let payload = try await self.session.captureSubtreePayload(nodeId: nodeID, maxDepth: depth)
+                let payload = try await self.session.captureSubtreePayload(
+                    target: .local(UInt64(nodeID)),
+                    maxDepth: depth
+                )
                 guard self.pageEpoch == expectedPageEpoch, self.currentRequestScope === requestScope else {
                     self.setDeferredFrontendChildNodeRetryDrainScope(requestScope)
                     _ = await self.dispatchRejectChildNodeRequestToFrontend(
@@ -2342,8 +2279,8 @@ extension DOMInspectorRuntime {
             applyMutationBundleAcrossDocumentUpdates(bundle)
             if bundle.events.contains(where: Self.isStructuralMutationEvent),
                let selectedEntry = currentDocumentModel.selectedNode,
-               let nodeID = selectedEntry.backendNodeID {
-                startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
+               let target = selectionRequestTarget(for: selectedEntry) {
+                startSelectorPathRequest(target: target, selectionEntry: selectedEntry)
             }
             return !bundle.events.contains {
                 if case .documentUpdated = $0 {
@@ -2355,8 +2292,8 @@ extension DOMInspectorRuntime {
             inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=replaceSubtree rootLocalID=\(root.localID, privacy: .public)")
             currentDocumentModel.applyMutationBundle(.init(events: [.replaceSubtree(root: root)]))
             if let selectedEntry = currentDocumentModel.selectedNode,
-               let nodeID = selectedEntry.backendNodeID {
-                startSelectorPathRequest(nodeID: nodeID, selectionEntry: selectedEntry)
+               let target = selectionRequestTarget(for: selectedEntry) {
+                startSelectorPathRequest(target: target, selectionEntry: selectedEntry)
             }
             return true
         case let .selection(selection):
@@ -2780,25 +2717,22 @@ extension DOMInspectorRuntime {
             entry: DOMNodeModel,
             preview: String,
             path: [String],
-            attributes: [DOMAttribute],
-            styleRevision: Int
+            attributes: [DOMAttribute]
         )? = currentDocumentModel.selectedNode.map {
             (
                 entry: $0,
                 preview: $0.preview,
                 path: $0.path,
-                attributes: $0.attributes,
-                styleRevision: $0.styleRevision
+                attributes: $0.attributes
             )
         }
         applySelectionDelta(payloadNormalizer.normalizeSelectionPayload(payload))
         guard let selected = currentDocumentModel.selectedNode else {
-            cancelMatchedStylesRequest()
             cancelSelectorPathRequest()
             return
         }
 
-        guard let nodeID = selected.backendNodeID else {
+        guard let target = selectionRequestTarget(for: selected) else {
             return
         }
 
@@ -2807,16 +2741,10 @@ extension DOMInspectorRuntime {
             previousSelectedSnapshot?.preview != selected.preview
                 || previousSelectedSnapshot?.path != selected.path
                 || previousSelectedSnapshot?.attributes != selected.attributes
-                || previousSelectedSnapshot?.styleRevision != selected.styleRevision
         )
         let shouldRefetchSelectorPath = selected.selectorPath.isEmpty
-        let shouldRefetchMatchedStyles = !selected.isLoadingMatchedStyles
-            && selected.matchedStyles.isEmpty
         if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchSelectorPath {
-            startSelectorPathRequest(nodeID: nodeID, selectionEntry: selected)
-        }
-        if didSelectNewNode || didStyleRelevantSnapshotChange || shouldRefetchMatchedStyles {
-            startMatchedStylesRequest(nodeID: nodeID, selectionEntry: selected)
+            startSelectorPathRequest(target: target, selectionEntry: selected)
         }
     }
 
@@ -2862,10 +2790,6 @@ extension DOMInspectorRuntime {
         set { mutationPipeline.testBeforeBundleDispatchOverride = newValue }
     }
 
-    var testMatchedStylesRequestToken: Int {
-        matchedStylesRequestCount
-    }
-
     var testSelectorPathRequestToken: Int {
         selectorPathRequestCount
     }
@@ -2886,7 +2810,12 @@ extension DOMInspectorRuntime {
         handleDOMSelectionMessage(payload)
     }
 
-    func testWaitForReconcileForTesting() async {}
+    func testWaitForReconcileForTesting() async {
+        await bootstrapTask?.value
+        _ = await mutationPipeline.flushPendingBundlesNow()
+        await selectorPathTask?.value
+        _ = await mutationPipeline.flushPendingBundlesNow()
+    }
 
     func testResetInspectorStateForTesting() {
         resetInspectorState()
@@ -2914,11 +2843,6 @@ extension DOMInspectorRuntime {
             pageEpoch: pageEpoch,
             documentScopeID: currentDocumentScope.documentScopeID
         )
-    }
-
-    var testMatchedStylesFetcher: (@MainActor (Int) async throws -> DOMMatchedStylesPayload)? {
-        get { matchedStylesFetchOverride }
-        set { matchedStylesFetchOverride = newValue }
     }
 }
 #endif

@@ -142,6 +142,51 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func selectionSnapshotWithoutBackendNodeIDKeepsPlaceholderBackendNodeIDUnset() {
+        let model = DOMDocumentModel()
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id=\"target\">",
+                attributes: [],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let initialSelection = try! #require(model.selectedNode)
+        #expect(initialSelection.backendNodeID == nil)
+    }
+
+    @Test
+    func selectionSnapshotWithoutBackendNodeIDPreservesExistingLiveBackendNodeID() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 42, attributes: [.init(nodeId: 77, name: "id", value: "target")])]),
+                selectedLocalID: 42
+            )
+        )
+
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                backendNodeID: nil,
+                preview: "<div id=\"target\">",
+                attributes: [],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 1
+            )
+        )
+
+        let updatedSelection = try! #require(model.selectedNode)
+        #expect(updatedSelection.backendNodeID == 42)
+        #expect(updatedSelection.styleRevision == 1)
+    }
+
+    @Test
     func clearDocumentDropsRootAndSelection() {
         let model = DOMDocumentModel()
         model.replaceDocument(

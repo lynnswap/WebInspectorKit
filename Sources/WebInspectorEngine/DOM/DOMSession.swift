@@ -38,6 +38,8 @@ package final class DOMSession {
     private var preparedPageEpoch = 0
     private var preparedDocumentScopeID: DOMDocumentScopeID = 0
     private var preparedDocumentURL: String?
+    private var hasPreparedPageContext = false
+    private var hasPreparedDocumentScope = false
 
 #if DEBUG
     package var testRemoveNodeOverride: (@MainActor (
@@ -58,6 +60,10 @@ package final class DOMSession {
         _ expectedDocumentScopeID: DOMDocumentScopeID?,
         _ perform: @escaping @MainActor @Sendable () async -> DOMMutationExecutionResult<Void>
     ) async -> DOMMutationExecutionResult<Void>)?
+    package var testSelectionCopyTextOverride: (@MainActor (
+        _ nodeId: Int,
+        _ kind: DOMSelectionCopyKind
+    ) async throws -> String)?
     package var testHighlightOverride: (@MainActor (Int, Bool) async -> Void)?
     package var testHideHighlightOverride: (@MainActor () async -> Void)?
 #endif
@@ -116,9 +122,25 @@ package final class DOMSession {
         let shouldPreserveState = pageAgent.webView == nil && previousWebView === webView
         let shouldReload = shouldPreserveState || previousWebView !== webView
         pageAgent.attachPageWebView(webView)
-        await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
-        let existingPageContext = await pageAgent.readPageContext(on: webView)
-        if !shouldPreferObservedPageContextDuringAttach(existingPageContext) {
+        var existingPageContext = await pageAgent.readPageContext(on: webView)
+        if existingPageContext == nil {
+            await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
+            existingPageContext = await pageAgent.readPageContext(on: webView)
+        }
+        if !hasPreparedPageContext,
+           hasPreparedDocumentScope,
+           let pageEpochToApply = pageEpochToApplyForPreparedDocumentScopeAttach(
+                existingPageContext: existingPageContext
+           ) {
+            await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
+            await pageAgent.ensureDOMAgentScriptInstalled(
+                on: webView,
+                pageEpoch: pageEpochToApply,
+                documentScopeID: preparedDocumentScopeID
+            )
+            existingPageContext = await pageAgent.readPageContext(on: webView) ?? existingPageContext
+        } else if !shouldPreferObservedPageContextDuringAttach(existingPageContext) {
+            await pageAgent.ensureDOMAgentScriptInstalled(on: webView)
             await pageAgent.ensureDOMAgentScriptInstalled(
                 on: webView,
                 pageEpoch: preparedPageEpoch,
@@ -135,6 +157,23 @@ package final class DOMSession {
         return (shouldReload, shouldPreserveState, observedPageContext)
     }
 
+    private func pageEpochToApplyForPreparedDocumentScopeAttach(
+        existingPageContext: DOMPageContext?
+    ) -> Int? {
+        if let existingPageContext,
+           existingPageContext.pageEpoch != 0 {
+            return existingPageContext.pageEpoch
+        }
+        let cachedPageEpoch = pageAgent.currentPageContext.pageEpoch
+        if cachedPageEpoch != 0 {
+            return cachedPageEpoch
+        }
+        if preparedPageEpoch != 0 {
+            return preparedPageEpoch
+        }
+        return nil
+    }
+
     private func readObservedPageContextIfNewer(on webView: WKWebView) async -> DOMPageContext? {
         guard let refreshedPageContext = await pageAgent.readPageContext(on: webView),
               shouldAdoptObservedPageContext(refreshedPageContext),
@@ -147,6 +186,8 @@ package final class DOMSession {
         preparedPageEpoch = refreshedPageContext.pageEpoch
         preparedDocumentScopeID = refreshedPageContext.documentScopeID
         preparedDocumentURL = normalizedDocumentURL(refreshedPageContext.documentURL)
+        hasPreparedPageContext = true
+        hasPreparedDocumentScope = true
         return refreshedPageContext
     }
 
@@ -164,31 +205,33 @@ package final class DOMSession {
         guard let pageContext else {
             return false
         }
-        if preparedPageEpoch == nil
-            && preparedDocumentScopeID == nil
-            && preparedDocumentURL == nil
-        {
-            return true
+        if hasPreparedDocumentScope,
+           pageContext.documentScopeID != preparedDocumentScopeID {
+            return false
         }
-        let observedDocumentURL = normalizedDocumentURL(pageContext.documentURL)
-        if let observedDocumentURL,
-           let preparedDocumentURL,
-           observedDocumentURL != preparedDocumentURL {
+        guard hasPreparedPageContext else {
             return true
         }
         return pageContext.pageEpoch == preparedPageEpoch
             && pageContext.documentScopeID == preparedDocumentScopeID
-            && observedDocumentURL == preparedDocumentURL
+            && (
+                preparedDocumentURL == nil
+                || normalizedDocumentURL(pageContext.documentURL) == preparedDocumentURL
+            )
     }
 
     package func suspend() async {
         await pageAgent.detachPageWebViewAndWaitForCleanup()
+        hasPreparedPageContext = false
+        hasPreparedDocumentScope = false
     }
 
     package func detach() async {
         await suspend()
         lastPageWebView = nil
         preparedDocumentURL = nil
+        hasPreparedPageContext = false
+        hasPreparedDocumentScope = false
     }
 
     package func reloadPage() {
@@ -212,11 +255,13 @@ package final class DOMSession {
 
     package func preparePageEpoch(_ epoch: Int) {
         preparedPageEpoch = epoch
+        hasPreparedPageContext = true
         pageAgent.preparePageEpoch(epoch)
     }
 
     package func prepareDocumentScopeID(_ scopeID: DOMDocumentScopeID) {
         preparedDocumentScopeID = scopeID
+        hasPreparedDocumentScope = true
         pageAgent.prepareDocumentScopeID(scopeID)
     }
 
@@ -225,6 +270,7 @@ package final class DOMSession {
         expectedPageEpoch: Int? = nil
     ) async -> Bool {
         preparedDocumentScopeID = scopeID
+        hasPreparedDocumentScope = true
         guard let webView = pageAgent.webView else {
             return false
         }
@@ -241,6 +287,8 @@ package final class DOMSession {
         lastPageWebView = nil
         autoSnapshotEnabled = false
         preparedDocumentURL = nil
+        hasPreparedPageContext = false
+        hasPreparedDocumentScope = false
     }
 
     package var currentPageContext: DOMPageContext {
@@ -252,34 +300,57 @@ private func normalizedDocumentURL(_ documentURL: String?) -> String? {
     guard let documentURL, !documentURL.isEmpty else {
         return nil
     }
-    return documentURL
+    guard var components = URLComponents(string: documentURL) else {
+        return documentURL
+    }
+    components.fragment = nil
+    return components.string ?? documentURL
 }
 
 // MARK: - Snapshot API (for DOMTreeView)
 
 extension DOMSession {
-    package func captureSnapshot(maxDepth: Int) async throws -> String {
-        try await pageAgent.captureSnapshot(maxDepth: maxDepth)
+    package func captureSnapshot(
+        maxDepth: Int,
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+    ) async throws -> String {
+        try await pageAgent.captureSnapshot(
+            maxDepth: maxDepth,
+            initialModeOwnership: initialModeOwnership
+        )
     }
 
     package func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
         try await pageAgent.captureSubtree(nodeId: nodeId, maxDepth: maxDepth)
     }
 
-    package func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
-        try await pageAgent.matchedStyles(nodeId: nodeId, maxRules: maxRules)
-    }
 }
 
 // MARK: - Snapshot API (bridge/object)
 
 extension DOMSession {
-    package func captureSnapshotPayload(maxDepth: Int) async throws -> Any {
-        try await pageAgent.captureSnapshotEnvelope(maxDepth: maxDepth)
+    package func captureSnapshotPayload(
+        maxDepth: Int,
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+    ) async throws -> Any {
+        try await pageAgent.captureSnapshotEnvelope(
+            maxDepth: maxDepth,
+            initialModeOwnership: initialModeOwnership
+        )
     }
 
-    package func captureSubtreePayload(nodeId: Int, maxDepth: Int) async throws -> Any {
-        try await pageAgent.captureSubtreeEnvelope(nodeId: nodeId, maxDepth: maxDepth)
+    package func consumePendingInitialSnapshotMode(
+        expectedPageEpoch: Int,
+        expectedDocumentScopeID: DOMDocumentScopeID
+    ) async {
+        await pageAgent.consumePendingInitialSnapshotMode(
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
+        )
+    }
+
+    package func captureSubtreePayload(target: DOMRequestNodeTarget, maxDepth: Int) async throws -> Any {
+        try await pageAgent.captureSubtreeEnvelope(target: target, maxDepth: maxDepth)
     }
 }
 
@@ -323,17 +394,17 @@ extension DOMSession {
 
 extension DOMSession {
     package func removeNode(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Void> {
 #if DEBUG
         if let testRemoveNodeOverride {
-            return await testRemoveNodeOverride(nodeId, expectedPageEpoch, expectedDocumentScopeID)
+            return await testRemoveNodeOverride(target.jsIdentifier ?? -1, expectedPageEpoch, expectedDocumentScopeID)
         }
 #endif
         return await pageAgent.removeNode(
-            nodeId: nodeId,
+            target: target,
             expectedPageEpoch: expectedPageEpoch,
             expectedDocumentScopeID: expectedDocumentScopeID
         )
@@ -405,14 +476,14 @@ extension DOMSession {
     }
 
     package func setAttribute(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         name: String,
         value: String,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Void> {
         await pageAgent.setAttribute(
-            nodeId: nodeId,
+            target: target,
             name: name,
             value: value,
             expectedPageEpoch: expectedPageEpoch,
@@ -421,13 +492,13 @@ extension DOMSession {
     }
 
     package func removeAttribute(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         name: String,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Void> {
         await pageAgent.removeAttribute(
-            nodeId: nodeId,
+            target: target,
             name: name,
             expectedPageEpoch: expectedPageEpoch,
             expectedDocumentScopeID: expectedDocumentScopeID
@@ -466,11 +537,16 @@ extension DOMSession {
 // MARK: - Copy Helpers
 
 extension DOMSession {
-    package func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        try await pageAgent.selectionCopyText(nodeId: nodeId, kind: kind)
+    package func selectionCopyText(target: DOMRequestNodeTarget, kind: DOMSelectionCopyKind) async throws -> String {
+#if DEBUG
+        if let testSelectionCopyTextOverride {
+            return try await testSelectionCopyTextOverride(target.jsIdentifier ?? -1, kind)
+        }
+#endif
+        return try await pageAgent.selectionCopyText(target: target, kind: kind)
     }
 
-    package func selectorPath(nodeId: Int) async throws -> String {
-        try await selectionCopyText(nodeId: nodeId, kind: .selectorPath)
+    package func selectorPath(target: DOMRequestNodeTarget) async throws -> String {
+        try await selectionCopyText(target: target, kind: .selectorPath)
     }
 }

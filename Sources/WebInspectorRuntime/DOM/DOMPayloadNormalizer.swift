@@ -78,6 +78,8 @@ final class DOMPayloadNormalizer {
         }
 
         let localID = uint64Value(object["id"]) ?? uint64Value(object["nodeId"])
+        let backendNodeID = intValue(object["backendNodeId"])
+            ?? intValue(object["backendNodeID"])
         let preview = stringValue(object["preview"]) ?? ""
         let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
         let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
@@ -86,6 +88,7 @@ final class DOMPayloadNormalizer {
 
         let selection = DOMSelectionSnapshotPayload(
             localID: localID,
+            backendNodeID: backendNodeID,
             preview: preview,
             attributes: attributes,
             path: path,
@@ -201,6 +204,9 @@ private extension DOMPayloadNormalizer {
                     if resolved["selectedNodeId"] == nil {
                         resolved["selectedNodeId"] = nested["selectedNodeId"]
                     }
+                    if resolved["selectedLocalId"] == nil {
+                        resolved["selectedLocalId"] = nested["selectedLocalId"]
+                    }
                     if resolved["selectedNodePath"] == nil {
                         resolved["selectedNodePath"] = nested["selectedNodePath"]
                     }
@@ -233,7 +239,9 @@ private extension DOMPayloadNormalizer {
 
         let resolvedRoot: Any?
         if let rootFromNode, let rootFromFallback {
-            if nodeDescriptorHasStableIDs(rootFromNode) || !nodeDescriptorHasStableIDs(rootFromFallback) {
+            if nodeDescriptorHasLocalIDs(rootFromFallback) {
+                resolvedRoot = rootFromFallback
+            } else if nodeDescriptorHasStableIDs(rootFromNode) || !nodeDescriptorHasStableIDs(rootFromFallback) {
                 resolvedRoot = rootFromNode
             } else {
                 resolvedRoot = rootFromFallback
@@ -250,6 +258,9 @@ private extension DOMPayloadNormalizer {
         if let selectedNodeID = uint64Value(envelope["selectedNodeId"]) ?? uint64Value(fallbackSnapshot?["selectedNodeId"]) {
             resolved["selectedNodeId"] = selectedNodeID
         }
+        if let selectedLocalID = uint64Value(envelope["selectedLocalId"]) ?? uint64Value(fallbackSnapshot?["selectedLocalId"]) {
+            resolved["selectedLocalId"] = selectedLocalID
+        }
         if let selectedNodePath = normalizeNodePath(envelope["selectedNodePath"]) ?? normalizeNodePath(fallbackSnapshot?["selectedNodePath"]) {
             resolved["selectedNodePath"] = selectedNodePath
         }
@@ -257,8 +268,13 @@ private extension DOMPayloadNormalizer {
     }
 
     func resolveSelectedLocalID(_ snapshotObject: [String: Any], root: DOMGraphNodeDescriptor) -> UInt64? {
-        if let selectedLocalID = uint64Value(snapshotObject["selectedNodeId"]) {
+        if let selectedLocalID = uint64Value(snapshotObject["selectedLocalId"]) {
             return selectedLocalID
+        }
+        if let selectedNodeID = intValue(snapshotObject["selectedNodeId"]),
+           let resolvedNode = findNodeDescriptor(backendNodeID: selectedNodeID, in: root)
+        {
+            return resolvedNode.localID
         }
 
         guard let path = normalizeNodePath(snapshotObject["selectedNodePath"]) else {
@@ -304,8 +320,16 @@ private extension DOMPayloadNormalizer {
             return normalizeNodeDescriptor(root, fallbackState: &fallbackState)
         }
 
-        let backendNodeID = intValue(object["nodeId"]) ?? intValue(object["id"])
-        let localID = uint64Value(object["nodeId"]) ?? uint64Value(object["id"]) ?? fallbackState.allocate()
+        let backendNodeID = intValue(object["backendNodeId"])
+            ?? intValue(object["backendNodeID"])
+            ?? intValue(object["nodeId"])
+            ?? intValue(object["id"])
+        let localID = uint64Value(object["localId"])
+            ?? uint64Value(object["localID"])
+            ?? uint64Value(object["handleId"])
+            ?? uint64Value(object["nodeId"])
+            ?? uint64Value(object["id"])
+            ?? fallbackState.allocate()
         let nodeType = intValue(object["nodeType"]) ?? 0
         let nodeName = stringValue(object["nodeName"]) ?? ""
         let localName = stringValue(object["localName"]) ?? ""
@@ -553,7 +577,9 @@ private extension DOMPayloadNormalizer {
             return false
         }
 
-        guard uint64Value(object["nodeId"]) != nil || uint64Value(object["id"]) != nil else {
+        guard uint64Value(object["backendNodeId"]) != nil
+            || uint64Value(object["backendNodeID"]) != nil
+        else {
             return false
         }
 
@@ -567,6 +593,49 @@ private extension DOMPayloadNormalizer {
             }
         }
         return true
+    }
+
+    func nodeDescriptorHasLocalIDs(_ payload: Any) -> Bool {
+        guard let object = dictionaryValue(payload) else {
+            return false
+        }
+
+        guard uint64Value(object["localId"]) != nil
+            || uint64Value(object["localID"]) != nil
+            || uint64Value(object["handleId"]) != nil
+            || uint64Value(object["nodeId"]) != nil
+            || uint64Value(object["id"]) != nil
+        else {
+            return false
+        }
+
+        guard let children = arrayValue(object["children"]) else {
+            return true
+        }
+
+        for child in children {
+            guard nodeDescriptorHasLocalIDs(child) else {
+                return false
+            }
+        }
+        return true
+    }
+
+    func findNodeDescriptor(
+        backendNodeID: Int,
+        in root: DOMGraphNodeDescriptor
+    ) -> DOMGraphNodeDescriptor? {
+        if root.backendNodeID == backendNodeID {
+            return root
+        }
+
+        for child in root.children {
+            if let resolved = findNodeDescriptor(backendNodeID: backendNodeID, in: child) {
+                return resolved
+            }
+        }
+
+        return nil
     }
 
     func dictionaryValue(_ value: Any?) -> [String: Any]? {

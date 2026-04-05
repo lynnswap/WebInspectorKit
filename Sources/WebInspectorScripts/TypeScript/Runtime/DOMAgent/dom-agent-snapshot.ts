@@ -223,7 +223,7 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
         if (typeof maxDepthOverride === "number" && maxDepthOverride > 0) {
             maxDepth = Math.min(maxDepth, maxDepthOverride);
         }
-        var snapshot = captureDOMEnvelope(maxDepth);
+        var snapshot = captureDOMEnvelope(maxDepth, { consumeInitialSnapshotMode: false });
         var payload = {
             version: 1,
             kind: "snapshot",
@@ -240,10 +240,12 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             documentScopeID: inspector.documentScopeID,
             bundle: payload
         });
-        postDOMTrace(`sendFullSnapshot posted reason=${payload.reason} depth=${maxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
+        postDOMTrace(`sendFullSnapshot posted reason=${payload.reason} depth=${maxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID} documentURL=${document.URL || ""}`);
     } catch (error) {
         postDOMTrace(`sendFullSnapshot failed reason=${reason} error=${String(error)}`);
         console.error("auto snapshot failed", error);
+    } finally {
+        inspector.nextInitialSnapshotMode = null;
     }
 }
 
@@ -474,10 +476,14 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
     var overflow = inspector.snapshotAutoUpdateOverflow === true;
     inspector.snapshotAutoUpdateOverflow = false;
     var mapSize = inspector.map?.size || 0;
+    var initialSnapshotMode = inspector.nextInitialSnapshotMode;
     postDOMTrace(`sendAutoSnapshotUpdate reason=${reasonOverride || inspector.snapshotAutoUpdateReason} pending=${pending.length} overflow=${overflow} mapSize=${mapSize} enabled=${inspector.snapshotAutoUpdateEnabled} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
-    if (inspector.nextInitialSnapshotMode || !mapSize) {
+    if (initialSnapshotMode || !mapSize) {
         sendFullSnapshot("initial");
-        inspector.nextInitialSnapshotMode = null;
+        if (initialSnapshotMode === "fresh") {
+            pending = [];
+            return;
+        }
         mapSize = inspector.map?.size || 0;
         if (!pending.length) {
             return;

@@ -40,7 +40,11 @@ public final class WIDOMTreeViewController: NSViewController {
                 return nil
             }
             self.contextMenuNodeID = nodeID
-            self.contextMenuNodeIdentity = nodeID.flatMap { self.inspector.document.node(backendNodeID: $0)?.id }
+            self.contextMenuNodeIdentity = nodeID.flatMap {
+                $0 >= 0
+                    ? self.inspector.document.node(localID: UInt64($0))?.id
+                    : nil
+            } ?? nodeID.flatMap { self.inspector.document.node(backendNodeID: $0)?.id }
             return self.makeTreeContextMenu()
         }
 
@@ -191,6 +195,13 @@ public final class WIDOMTreeViewController: NSViewController {
             return await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
         }
         if let nodeID,
+           let resolvedIdentity = nodeID >= 0
+                ? inspector.document.node(localID: UInt64(nodeID))?.id
+                : nil
+        {
+            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+        }
+        if let nodeID,
            let resolvedIdentity = inspector.document.node(backendNodeID: nodeID)?.id
         {
             return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
@@ -208,14 +219,22 @@ public final class WIDOMTreeViewController: NSViewController {
 
     private func copyNodeForContextMenu(kind: DOMSelectionCopyKind) {
         let nodeID = contextActionNodeID
+        let nodeIdentity = contextActionNodeIdentity
         contextMenuNodeID = nil
         contextMenuNodeIdentity = nil
-        guard let nodeID else {
+        guard nodeID != nil || nodeIdentity != nil else {
             return
         }
         Task {
             do {
-                let text = try await inspector.copyNode(nodeId: nodeID, kind: kind)
+                let text: String
+                if let nodeIdentity {
+                    text = try await inspector.copyNode(nodeID: nodeIdentity, kind: kind)
+                } else if let nodeID {
+                    text = try await inspector.copyNode(nodeId: nodeID, kind: kind)
+                } else {
+                    return
+                }
                 guard !text.isEmpty else {
                     return
                 }

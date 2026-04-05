@@ -3,6 +3,7 @@ import {
     captureDOMEnvelope,
     captureDOMSubtree,
     captureDOMSubtreeEnvelope,
+    consumePendingInitialSnapshotMode,
     createNodeHandle
 } from "./DOMAgent/dom-agent-dom-core";
 import {clearHighlight, highlightDOMNode, highlightDOMNodeHandle} from "./DOMAgent/dom-agent-overlay";
@@ -33,7 +34,6 @@ import {
     undoRemoveNode,
     xpathForNode
 } from "./DOMAgent/dom-agent-dom-utils";
-import {matchedStylesForNode} from "./DOMAgent/dom-agent-styles";
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();
@@ -107,10 +107,45 @@ function bootstrapDOMAgent(bootstrap?: DOMAgentBootstrapState | null): boolean {
     return didApplyContext || hasAutoSnapshotBootstrap;
 }
 
+function scheduleInitialSnapshotIfNeededForCurrentDocument() {
+    const currentURL = document.URL || "";
+    const normalizedCurrentURL = normalizeNavigationURL(currentURL);
+    const normalizedDocumentURL = normalizeNavigationURL(inspector.documentURL || "");
+    const documentURLChanged = !!inspector.documentURL && normalizedDocumentURL !== normalizedCurrentURL;
+    const missingDOMMap = !(inspector.map && inspector.map.size);
+    if (documentURLChanged) {
+        inspector.nextInitialSnapshotMode = "fresh";
+    } else if (missingDOMMap && !inspector.nextInitialSnapshotMode) {
+        inspector.nextInitialSnapshotMode = "preserve-ui-state";
+    }
+    if (!inspector.snapshotAutoUpdateEnabled) {
+        return;
+    }
+    if (!inspector.nextInitialSnapshotMode && !documentURLChanged && !missingDOMMap) {
+        return;
+    }
+    triggerSnapshotUpdate("initial");
+}
+
+function normalizeNavigationURL(value: string): string {
+    if (!value) {
+        return "";
+    }
+    try {
+        const url = new URL(value, document.baseURI);
+        url.hash = "";
+        return url.toString();
+    } catch {
+        const hashIndex = value.indexOf("#");
+        return hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+    }
+}
+
 if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
     var webInspectorDOM = {
         captureSnapshot: captureDOM,
         captureSnapshotEnvelope: captureDOMEnvelope,
+        consumePendingInitialSnapshotMode: consumePendingInitialSnapshotMode,
         captureSubtree: captureDOMSubtree,
         captureSubtreeEnvelope: captureDOMSubtreeEnvelope,
         startSelection: startElementSelection,
@@ -129,7 +164,6 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         outerHTMLForNode: outerHTMLForNode,
         selectorPathForNode: selectorPathForNode,
         xpathForNode: xpathForNode,
-        matchedStylesForNode: matchedStylesForNode,
         createNodeHandle: createNodeHandle,
         removeNode: removeNode,
         removeNodeWithUndo: removeNodeWithUndo,
@@ -146,4 +180,7 @@ if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
         configurable: false
     });
     bootstrapDOMAgent();
+    window.addEventListener("pageshow", function() {
+        scheduleInitialSnapshotIfNeededForCurrentDocument();
+    });
 }

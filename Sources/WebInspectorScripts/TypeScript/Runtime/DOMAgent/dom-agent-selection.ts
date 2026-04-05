@@ -5,20 +5,62 @@ import {
     stableNodeIdentifier,
     INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
 } from "./dom-agent-dom-core";
+import {selectorPathForNode} from "./dom-agent-dom-utils";
 import {clearHighlight, highlightSelectionNode} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate} from "./dom-agent-snapshot";
+
+type SelectionAttribute = {
+    name: string;
+    value: string;
+};
 
 type SelectionResult = {
     cancelled: boolean;
     requiredDepth: number;
     selectedPath?: number[];
-    selectedNodeId?: number;
-    ancestorNodeIds?: number[];
-    selectedHandleId?: number;
-    ancestorHandleIds?: number[];
+    selectedLocalId?: number;
+    ancestorLocalIds?: number[];
+    selectedBackendNodeId?: number;
+    selectedBackendNodeIdIsStable?: boolean;
+    ancestorBackendNodeIds?: number[];
+    selectedAttributes?: SelectionAttribute[];
+    selectedPreview?: string;
+    selectedSelectorPath?: string;
 };
 
 type PointerLikeEvent = MouseEvent | PointerEvent | TouchEvent;
+
+const INLINE_LIKE_TAG_NAMES = new Set([
+    "A",
+    "ABBR",
+    "B",
+    "CITE",
+    "CODE",
+    "EM",
+    "I",
+    "LABEL",
+    "SMALL",
+    "SPAN",
+    "STRONG",
+    "SUB",
+    "SUP",
+    "TIME",
+]);
+
+const REPLACED_INLINE_TAG_NAMES = new Set([
+    "IMG",
+    "SVG",
+    "VIDEO",
+    "CANVAS",
+    "INPUT",
+    "TEXTAREA",
+    "SELECT",
+    "BUTTON",
+    "IFRAME",
+    "EMBED",
+    "OBJECT",
+    "AUDIO",
+]);
 
 function enableSelectionCursor() {
     if (!inspector.cursorBackup) {
@@ -125,7 +167,7 @@ function removeSelectionShield(shield: HTMLDivElement | null) {
     shield.parentNode.removeChild(shield);
 }
 
-function computeAncestorNodeIds(node: AnyNode | null): number[] {
+function computeAncestorBackendNodeIds(node: AnyNode | null): number[] {
     if (!node) {
         return [];
     }
@@ -136,8 +178,8 @@ function computeAncestorNodeIds(node: AnyNode | null): number[] {
     const ancestorNodeIds: number[] = [];
     let current = node.parentNode as AnyNode | null;
     while (current) {
-        const stableNodeId = stableNodeIdentifier(current);
-        if (stableNodeId) {
+        const stableNodeId = stableNodeIdentifier(current) || 0;
+        if (stableNodeId > 0) {
             ancestorNodeIds.unshift(stableNodeId);
         }
         if (current === root) {
@@ -148,7 +190,7 @@ function computeAncestorNodeIds(node: AnyNode | null): number[] {
     return ancestorNodeIds;
 }
 
-function computeAncestorHandleIds(node: AnyNode | null): number[] {
+function computeAncestorLocalIds(node: AnyNode | null): number[] {
     if (!node) {
         return [];
     }
@@ -169,6 +211,143 @@ function computeAncestorHandleIds(node: AnyNode | null): number[] {
         current = current.parentNode as AnyNode | null;
     }
     return ancestorHandleIds;
+}
+
+function isPromotableInlineLeaf(element: Element, display: string): boolean {
+    if (REPLACED_INLINE_TAG_NAMES.has(element.tagName)) {
+        return false;
+    }
+    if (element.tagName === "SPAN") {
+        return false;
+    }
+    if (!INLINE_LIKE_TAG_NAMES.has(element.tagName)) {
+        return false;
+    }
+    return display === "" || display === "inline" || display === "contents";
+}
+
+function isPromotableInlineWrapper(element: Element, display: string): boolean {
+    if (REPLACED_INLINE_TAG_NAMES.has(element.tagName)) {
+        return false;
+    }
+    if (element.tagName !== "SPAN" && !INLINE_LIKE_TAG_NAMES.has(element.tagName)) {
+        return false;
+    }
+    if (!(display === "" || display === "inline" || display === "contents")) {
+        return false;
+    }
+    return elementHasPromotableInlineContent(element);
+}
+
+function normalizedSelectionTarget(target: AnyNode | null): AnyNode | null {
+    if (!target) {
+        return null;
+    }
+    let element: Element | null = target.nodeType === Node.ELEMENT_NODE
+        ? target as Element
+        : target.parentElement;
+    if (!element) {
+        return target;
+    }
+
+    while (element && element.parentElement && element !== document.body && element !== document.documentElement) {
+        const currentElement: Element = element;
+        const parent = currentElement.parentElement;
+        if (!parent) {
+            break;
+        }
+        if (parent === document.body || parent === document.documentElement) {
+            break;
+        }
+        let display = "";
+        try {
+            display = window.getComputedStyle(currentElement).display || "";
+        } catch {
+            break;
+        }
+        const shouldPromote =
+            isPromotableInlineLeaf(currentElement, display)
+            || isPromotableInlineWrapper(currentElement, display);
+        if (!shouldPromote) {
+            break;
+        }
+        element = parent;
+    }
+
+    return element as AnyNode;
+}
+
+function elementHasPromotableInlineContent(element: Element): boolean {
+    let elementChildCount = 0;
+    let significantTextNodeCount = 0;
+    let soleElementChild: Element | null = null;
+    for (const childNode of Array.from(element.childNodes)) {
+        if (childNode.nodeType === Node.ELEMENT_NODE) {
+            elementChildCount += 1;
+            soleElementChild = childNode as Element;
+            continue;
+        }
+        if (childNode.nodeType === Node.TEXT_NODE) {
+            if ((childNode.textContent || "").trim().length === 0) {
+                continue;
+            }
+            significantTextNodeCount += 1;
+            continue;
+        }
+        if (childNode.nodeType === Node.COMMENT_NODE) {
+            continue;
+        }
+        return false;
+    }
+    if (elementChildCount === 1 && significantTextNodeCount === 0 && soleElementChild) {
+        let childDisplay = "";
+        try {
+            childDisplay = window.getComputedStyle(soleElementChild).display || "";
+        } catch {
+            return false;
+        }
+        const childIsInlineLike = isPromotableInlineLeaf(soleElementChild, childDisplay);
+        return childIsInlineLike;
+    }
+    if (elementChildCount === 0 && significantTextNodeCount === 1) {
+        return true;
+    }
+    return false;
+}
+
+function selectionPreviewForNode(node: AnyNode | null): string {
+    if (!node) {
+        return "";
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as Element;
+        let preview = `<${element.localName || element.nodeName.toLowerCase()}`;
+        if (element.id) {
+            preview += ` id="${element.id}"`;
+        }
+        preview += ">";
+        return preview;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+        return node.nodeValue || "#text";
+    }
+    return node.nodeName || "";
+}
+
+function selectionAttributesForNode(node: AnyNode | null): SelectionAttribute[] {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+        return [];
+    }
+    const element = node as Element;
+    const attributes: SelectionAttribute[] = [];
+    for (let index = 0; index < element.attributes.length; index += 1) {
+        const attribute = element.attributes[index];
+        attributes.push({
+            name: attribute.name,
+            value: attribute.value
+        });
+    }
+    return attributes;
 }
 
 export function startElementSelection() {
@@ -235,22 +414,27 @@ export function startElementSelection() {
                 cancelSelection();
                 return;
             }
-            const selectedHandleId = rememberNode(node);
-            if (!selectedHandleId) {
+            const selectedLocalId = rememberNode(node);
+            if (!selectedLocalId) {
                 cancelSelection();
                 return;
             }
-            const selectedNodeId = stableNodeIdentifier(node) || selectedHandleId;
+            const selectedBackendNodeId = stableNodeIdentifier(node) || undefined;
+            const selectedBackendNodeIdIsStable = typeof selectedBackendNodeId === "number" && selectedBackendNodeId > 0;
             var path = computeNodePath(node);
             highlightSelectionNode(node);
             finish({
                 cancelled: false,
-                requiredDepth: Array.isArray(path) ? path.length : computeAncestorNodeIds(node).length,
+                requiredDepth: Array.isArray(path) ? path.length : computeAncestorLocalIds(node).length,
                 selectedPath: path || undefined,
-                selectedNodeId,
-                ancestorNodeIds: computeAncestorNodeIds(node),
-                selectedHandleId,
-                ancestorHandleIds: computeAncestorHandleIds(node),
+                selectedLocalId,
+                ancestorLocalIds: computeAncestorLocalIds(node),
+                selectedBackendNodeId,
+                selectedBackendNodeIdIsStable,
+                ancestorBackendNodeIds: computeAncestorBackendNodeIds(node),
+                selectedAttributes: selectionAttributesForNode(node),
+                selectedPreview: selectionPreviewForNode(node),
+                selectedSelectorPath: selectorPathForNode(selectedLocalId) || undefined,
             });
         }
 
@@ -269,21 +453,21 @@ export function startElementSelection() {
             if ("touches" in event && (event as TouchEvent).touches && (event as TouchEvent).touches.length) {
                 var touch = (event as TouchEvent).touches[(event as TouchEvent).touches.length - 1];
                 var candidate = elementAtPoint(touch.clientX, touch.clientY);
-                return (candidate as AnyNode | null) || (event.target as AnyNode | null) || null;
+                return normalizedSelectionTarget((candidate as AnyNode | null) || (event.target as AnyNode | null) || null);
             }
             if ("changedTouches" in event && (event as TouchEvent).changedTouches && (event as TouchEvent).changedTouches.length) {
                 var changed = (event as TouchEvent).changedTouches[(event as TouchEvent).changedTouches.length - 1];
                 var fallback = elementAtPoint(changed.clientX, changed.clientY);
-                return (fallback as AnyNode | null) || (event.target as AnyNode | null) || null;
+                return normalizedSelectionTarget((fallback as AnyNode | null) || (event.target as AnyNode | null) || null);
             }
             if ("clientX" in event && "clientY" in event) {
                 const pointerEvent = event as MouseEvent | PointerEvent;
                 if (typeof pointerEvent.clientX === "number" && typeof pointerEvent.clientY === "number") {
                     var pointTarget = elementAtPoint(pointerEvent.clientX, pointerEvent.clientY);
-                    return (pointTarget as AnyNode | null) || (event.target as AnyNode | null) || null;
+                    return normalizedSelectionTarget((pointTarget as AnyNode | null) || (event.target as AnyNode | null) || null);
                 }
             }
-            return (event.target as AnyNode | null) || null;
+            return normalizedSelectionTarget((event.target as AnyNode | null) || null);
         }
 
         function updateLatestTarget(event: Event) {

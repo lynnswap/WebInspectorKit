@@ -219,6 +219,10 @@ function normalizeSnapshotEnvelopePayload(payload: unknown): DOMSnapshotEnvelope
         root: resolvedRoot,
         selectedNodeId:
             typeof snapshot.selectedNodeId === "number" ? snapshot.selectedNodeId : null,
+        selectedLocalId:
+            typeof (snapshot as DOMSnapshotEnvelopePayload).selectedLocalId === "number"
+                ? (snapshot as DOMSnapshotEnvelopePayload).selectedLocalId
+                : null,
         selectedNodePath: Array.isArray(snapshot.selectedNodePath) ? snapshot.selectedNodePath : null,
     };
 }
@@ -252,6 +256,10 @@ function resolveSerializedNodeEnvelope(envelope: SerializedNodeEnvelope): DOMSna
             typeof envelope.selectedNodeId === "number"
                 ? envelope.selectedNodeId
                 : fallbackSnapshot?.selectedNodeId ?? null,
+        selectedLocalId:
+            typeof envelope.selectedLocalId === "number"
+                ? envelope.selectedLocalId
+                : fallbackSnapshot?.selectedLocalId ?? null,
         selectedNodePath:
             Array.isArray(envelope.selectedNodePath)
                 ? envelope.selectedNodePath
@@ -314,6 +322,7 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
         return {
             root: (resolved.root as unknown as DOMNode) || null,
             selectedNodeId: resolved.selectedNodeId ?? undefined,
+            selectedLocalId: resolved.selectedLocalId ?? undefined,
             selectedNodePath: resolved.selectedNodePath ?? undefined,
         };
     }
@@ -323,6 +332,7 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
         return {
             root: (snapshotPayload.root as unknown as DOMNode) || null,
             selectedNodeId: snapshotPayload.selectedNodeId ?? undefined,
+            selectedLocalId: snapshotPayload.selectedLocalId ?? undefined,
             selectedNodePath: snapshotPayload.selectedNodePath ?? undefined,
         };
     }
@@ -838,8 +848,15 @@ export function setSnapshot(
             applyFilter();
         }
 
-        const snapshotData = snapshot as DOMSnapshot & { selectedNodeId?: number; selectedNodePath?: number[] };
+        const snapshotData = snapshot as DOMSnapshot & {
+            selectedNodeId?: number;
+            selectedLocalId?: number;
+            selectedNodePath?: number[];
+        };
         const selectionCandidateId =
+            typeof snapshotData.selectedLocalId === "number" && snapshotData.selectedLocalId > 0
+                ? snapshotData.selectedLocalId
+                :
             typeof snapshotData.selectedNodeId === "number" && snapshotData.selectedNodeId > 0
                 ? snapshotData.selectedNodeId
                 : null;

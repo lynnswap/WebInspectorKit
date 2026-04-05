@@ -11,6 +11,8 @@ const inspectorInternalAttributes = [
 
 type DOMNodeDescriptor = {
     nodeId?: number;
+    localId?: number;
+    backendNodeId?: number;
     children: DOMNodeDescriptor[];
     [key: string]: any;
 };
@@ -18,7 +20,19 @@ type DOMNodeDescriptor = {
 type SnapshotDescriptorPayload = {
     root: DOMNodeDescriptor | null;
     selectedNodeId: number | null;
+    selectedLocalId: number | null;
     selectedNodePath: number[] | null;
+};
+
+type SnapshotCaptureOptions = {
+    consumeInitialSnapshotMode?: boolean;
+};
+
+export type NodeTargetIdentifier = number | {
+    kind?: "local" | "backend";
+    value?: number;
+    localID?: number;
+    backendNodeID?: number;
 };
 
 type SerializedNodeEnvelope = {
@@ -27,6 +41,7 @@ type SerializedNodeEnvelope = {
     node: unknown;
     fallback: SnapshotDescriptorPayload | DOMNodeDescriptor | null;
     selectedNodeId?: number | null;
+    selectedLocalId?: number | null;
     selectedNodePath?: number[] | null;
 };
 
@@ -59,6 +74,20 @@ function serializeNodeIfSupported(node: Node | null): unknown | null {
     } catch {
     }
     return null;
+}
+
+function normalizeDocumentURL(value: string): string {
+    if (!value) {
+        return "";
+    }
+    try {
+        const url = new URL(value, document.baseURI);
+        url.hash = "";
+        return url.toString();
+    } catch {
+        const hashIndex = value.indexOf("#");
+        return hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+    }
 }
 
 function parseSerializedPayload(payload: unknown): unknown {
@@ -98,6 +127,7 @@ function makeSerializedEnvelope(
     node: Node | null,
     fallback: SnapshotDescriptorPayload | DOMNodeDescriptor | null,
     selectedNodeId?: number | null,
+    selectedLocalId?: number | null,
     selectedNodePath?: number[] | null
 ): SerializedNodeEnvelope | null {
     const serializedNode = serializeNodeIfSupported(node);
@@ -111,6 +141,7 @@ function makeSerializedEnvelope(
         node: serializedNode,
         fallback: fallback,
         selectedNodeId: selectedNodeId ?? null,
+        selectedLocalId: selectedLocalId ?? null,
         selectedNodePath: selectedNodePath ?? null
     };
     return envelope;
@@ -142,12 +173,100 @@ export function rememberNode(node: AnyNode | null) {
     return id;
 }
 
+function resetRememberedNodeHandles() {
+    inspector.map = new Map();
+    inspector.nodeMap = new WeakMap();
+    inspector.nextId = 1;
+}
+
+function rememberedNode(identifier: number): AnyNode | null {
+    const map = inspector.map;
+    if (!map || !map.size) {
+        return null;
+    }
+    return map.get(identifier) || null;
+}
+
+function targetValue(value: unknown): number | null {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return null;
+    }
+    return Math.floor(value);
+}
+
+function findNodeByStableIdentifier(identifier: number): AnyNode | null {
+    const stableIdentifier = targetValue(identifier);
+    if (!stableIdentifier) {
+        return null;
+    }
+    const root = (document.documentElement || document.body) as AnyNode | null;
+    if (!root) {
+        return null;
+    }
+    const queue: AnyNode[] = [root];
+    while (queue.length) {
+        const current = queue.shift() as AnyNode;
+        if (!isInspectorInternalNode(current) && stableNodeIdentifier(current) === stableIdentifier) {
+            return current;
+        }
+        const children = inspectableChildNodes(current);
+        for (let index = 0; index < children.length; index += 1) {
+            queue.push(children[index]);
+        }
+    }
+    return null;
+}
+
+export function resolveNodeTarget(identifier: NodeTargetIdentifier | null | undefined): AnyNode | null {
+    if (typeof identifier === "number") {
+        return rememberedNode(identifier) || findNodeByStableIdentifier(identifier);
+    }
+    if (!identifier || typeof identifier !== "object") {
+        return null;
+    }
+    if (identifier.kind === "local") {
+        const localID = targetValue(identifier.value ?? identifier.localID);
+        return localID ? rememberedNode(localID) : null;
+    }
+    if (identifier.kind === "backend") {
+        const backendNodeID = targetValue(identifier.value ?? identifier.backendNodeID);
+        return backendNodeID ? findNodeByStableIdentifier(backendNodeID) : null;
+    }
+
+    const localID = targetValue(identifier.localID ?? identifier.value);
+    if (localID) {
+        const localNode = rememberedNode(localID);
+        if (localNode) {
+            return localNode;
+        }
+    }
+    const backendNodeID = targetValue(identifier.backendNodeID ?? identifier.value);
+    if (backendNodeID) {
+        return findNodeByStableIdentifier(backendNodeID);
+    }
+    return null;
+}
+
+export function forgetRemovedNodeHandles(node: AnyNode | null): void {
+    if (!node) {
+        return;
+    }
+    const rememberedID = inspector.nodeMap?.get(node);
+    if (typeof rememberedID === "number") {
+        inspector.map?.delete(rememberedID);
+    }
+    const children = Array.from(node.childNodes || []);
+    for (let index = 0; index < children.length; index += 1) {
+        forgetRemovedNodeHandles(children[index] as AnyNode);
+    }
+}
+
 export function stableNodeIdentifier(node: AnyNode | null) {
     const serializedNodeId = serializedNodeIdentifierFromPayload(serializeNodeIfSupported(node));
     if (typeof serializedNodeId === "number" && Number.isFinite(serializedNodeId) && serializedNodeId > 0) {
         return serializedNodeId;
     }
-    return rememberNode(node);
+    return 0;
 }
 
 export function layoutInfoForNode(node: AnyNode | null) {
@@ -342,13 +461,15 @@ export function describe(node: AnyNode | null, depth: number, maxDepth: number, 
         return null;
     }
 
-    var identifier = rememberNode(node);
-    if (!identifier) {
+    var localIdentifier = rememberNode(node);
+    if (!localIdentifier) {
         return null;
     }
+    var stableIdentifier = stableNodeIdentifier(node) || 0;
 
     var descriptor: DOMNodeDescriptor = {
-        nodeId: identifier,
+        nodeId: localIdentifier,
+        localId: localIdentifier,
         nodeType: node.nodeType || 0,
         nodeName: node.nodeName || "",
         localName: node.localName || (node.nodeName || "").toLowerCase(),
@@ -356,6 +477,9 @@ export function describe(node: AnyNode | null, depth: number, maxDepth: number, 
         childNodeCount: inspectableChildCount(node),
         children: []
     };
+    if (stableIdentifier && stableIdentifier !== localIdentifier) {
+        descriptor.backendNodeId = stableIdentifier;
+    }
     var layoutInfo = layoutInfoForNode(node);
     descriptor.layoutFlags = layoutInfo.layoutFlags;
     descriptor.isRendered = layoutInfo.isRendered;
@@ -478,19 +602,16 @@ export function rectForNode(node: AnyNode | null) {
     return null;
 }
 
-export function captureDOMPayload(maxDepth?: number): SnapshotDescriptorPayload {
+export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOptions): SnapshotDescriptorPayload {
     var currentURL = document.URL || "";
-    var shouldReset = inspector.documentURL && inspector.documentURL !== currentURL;
-    if (!inspector.map || shouldReset) {
-        inspector.map = new Map();
+    var normalizedCurrentURL = normalizeDocumentURL(currentURL);
+    var normalizedPreviousURL = normalizeDocumentURL(inspector.documentURL || "");
+    var shouldResetForURLChange = !!inspector.documentURL && normalizedPreviousURL !== normalizedCurrentURL;
+    var shouldReset = inspector.nextInitialSnapshotMode === "fresh" || shouldResetForURLChange;
+    if (shouldReset || !inspector.map || !inspector.nodeMap || typeof inspector.nextId !== "number" || inspector.nextId < 1) {
+        resetRememberedNodeHandles();
     }
-    if (!inspector.nodeMap || shouldReset) {
-        inspector.nodeMap = new WeakMap();
-    }
-    if (typeof inspector.nextId !== "number" || inspector.nextId < 1 || shouldReset) {
-        inspector.nextId = 1;
-    }
-    if (shouldReset) {
+    if (shouldResetForURLChange) {
         inspector.nextInitialSnapshotMode = "fresh";
     }
     inspector.documentURL = currentURL;
@@ -502,31 +623,38 @@ export function captureDOMPayload(maxDepth?: number): SnapshotDescriptorPayload 
     var rootCandidate = document.documentElement || document.body;
     var tree = rootCandidate ? describe(rootCandidate, 0, effectiveDepth, selectionPath) : null;
     var selectedNodeId: number | null = null;
+    var selectedLocalId: number | null = null;
     if (tree && Array.isArray(selectionPath)) {
         var selectedNode = findNodeByPath(tree, selectionPath);
-        selectedNodeId = selectedNode ? (selectedNode.nodeId || null) : null;
+        selectedNodeId = selectedNode ? (selectedNode.backendNodeId || null) : null;
+        selectedLocalId = selectedNode ? (selectedNode.localId || null) : null;
     }
     var selectedNodePath: number[] | null = Array.isArray(selectionPath) ? selectionPath : null;
     inspector.pendingSelectionPath = null;
+    if (options?.consumeInitialSnapshotMode !== false) {
+        inspector.nextInitialSnapshotMode = null;
+    }
 
     return {
         root: tree,
         selectedNodeId: selectedNodeId,
+        selectedLocalId: selectedLocalId,
         selectedNodePath: selectedNodePath
     };
 }
 
-export function captureDOM(maxDepth?: number) {
-    return JSON.stringify(captureDOMPayload(maxDepth));
+export function captureDOM(maxDepth?: number, options?: SnapshotCaptureOptions) {
+    return JSON.stringify(captureDOMPayload(maxDepth, options));
 }
 
-export function captureDOMEnvelope(maxDepth?: number) {
-    const snapshot = captureDOMPayload(maxDepth);
+export function captureDOMEnvelope(maxDepth?: number, options?: SnapshotCaptureOptions) {
+    const snapshot = captureDOMPayload(maxDepth, options);
     const rootCandidate = document.documentElement || document.body;
     const serializedEnvelope = makeSerializedEnvelope(
         rootCandidate,
         snapshot,
         snapshot.selectedNodeId,
+        snapshot.selectedLocalId,
         snapshot.selectedNodePath
     );
     if (serializedEnvelope) {
@@ -535,7 +663,18 @@ export function captureDOMEnvelope(maxDepth?: number) {
     return snapshot;
 }
 
-export function captureDOMSubtree(identifier: number, maxDepth?: number) {
+export function consumePendingInitialSnapshotMode(expectedPageEpoch?: number, expectedDocumentScopeID?: number) {
+    if (typeof expectedPageEpoch === "number" && inspector.pageEpoch !== expectedPageEpoch) {
+        return false;
+    }
+    if (typeof expectedDocumentScopeID === "number" && inspector.documentScopeID !== expectedDocumentScopeID) {
+        return false;
+    }
+    inspector.nextInitialSnapshotMode = null;
+    return true;
+}
+
+export function captureDOMSubtree(identifier: NodeTargetIdentifier, maxDepth?: number) {
     const payload = captureDOMSubtreePayload(identifier, maxDepth);
     if (!payload) {
         return "";
@@ -543,24 +682,20 @@ export function captureDOMSubtree(identifier: number, maxDepth?: number) {
     return JSON.stringify(payload);
 }
 
-export function captureDOMSubtreePayload(identifier: number, maxDepth?: number): DOMNodeDescriptor | null {
-    var map = inspector.map;
-    if (!map || !map.size) {
-        return null;
-    }
-    var node = map.get(identifier);
+export function captureDOMSubtreePayload(identifier: NodeTargetIdentifier, maxDepth?: number): DOMNodeDescriptor | null {
+    var node = resolveNodeTarget(identifier);
     if (!node) {
         return null;
     }
     return describe(node, 0, maxDepth || 4, null, Number.MAX_SAFE_INTEGER);
 }
 
-export function captureDOMSubtreeEnvelope(identifier: number, maxDepth?: number) {
+export function captureDOMSubtreeEnvelope(identifier: NodeTargetIdentifier, maxDepth?: number) {
     const subtree = captureDOMSubtreePayload(identifier, maxDepth);
     if (!subtree) {
         return "";
     }
-    const node = inspector.map?.get(identifier) || null;
+    const node = resolveNodeTarget(identifier);
     const serializedEnvelope = makeSerializedEnvelope(node as Node | null, subtree);
     if (serializedEnvelope) {
         return serializedEnvelope;
@@ -568,12 +703,8 @@ export function captureDOMSubtreeEnvelope(identifier: number, maxDepth?: number)
     return subtree;
 }
 
-export function createNodeHandle(identifier: number): unknown | null {
-    const map = inspector.map;
-    if (!map || !map.size) {
-        return null;
-    }
-    const node = map.get(identifier) || null;
+export function createNodeHandle(identifier: NodeTargetIdentifier): unknown | null {
+    const node = resolveNodeTarget(identifier);
     if (!node) {
         return null;
     }

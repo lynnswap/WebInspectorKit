@@ -1578,6 +1578,7 @@
     },
     "dom.element.section.styles" : {
       "comment" : "Section title for matched CSS styles.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -1863,6 +1864,7 @@
     },
     "dom.element.styles.blocked_stylesheets" : {
       "comment" : "Suffix label for the number of blocked stylesheets.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2006,6 +2008,7 @@
     },
     "dom.element.styles.empty" : {
       "comment" : "Empty state when no styles matched the selected element.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2149,6 +2152,7 @@
     },
     "dom.element.styles.loading" : {
       "comment" : "Loading indicator label while matched styles are fetched.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -2292,6 +2296,7 @@
     },
     "dom.element.styles.truncated" : {
       "comment" : "Notice shown when matched styles are truncated due to limits.",
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

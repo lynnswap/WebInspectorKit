@@ -43,23 +43,6 @@ enum WIDOMPreviewFixtures {
                     styleRevision: 0
                 )
             )
-            let rules = [
-                DOMMatchedStyleRule(
-                    origin: .author,
-                    selectorText: ".logo span[aria-label]",
-                    declarations: [
-                        DOMMatchedStyleDeclaration(name: "display", value: "inline-block", important: false),
-                        DOMMatchedStyleDeclaration(name: "max-width", value: "100%", important: false)
-                    ],
-                    sourceLabel: "styles.css:120"
-                )
-            ]
-            if let selectedEntry = graphStore.selectedNode {
-                graphStore.applyMatchedStyles(
-                    .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                    for: selectedEntry
-                )
-            }
         case .selectedEditableAttributes:
             let localID: UInt64 = 101
             let attributes = [
@@ -91,24 +74,6 @@ enum WIDOMPreviewFixtures {
                     styleRevision: 0
                 )
             )
-            let rules = [
-                DOMMatchedStyleRule(
-                    origin: .author,
-                    selectorText: ".logo img[alt]",
-                    declarations: [
-                        DOMMatchedStyleDeclaration(name: "display", value: "inline-block", important: false),
-                        DOMMatchedStyleDeclaration(name: "max-width", value: "100%", important: false),
-                        DOMMatchedStyleDeclaration(name: "height", value: "auto", important: false)
-                    ],
-                    sourceLabel: "styles.css:188"
-                )
-            ]
-            if let selectedEntry = graphStore.selectedNode {
-                graphStore.applyMatchedStyles(
-                    .init(nodeId: Int(localID), rules: rules, truncated: false, blockedStylesheetCount: 0),
-                    for: selectedEntry
-                )
-            }
         }
     }
 

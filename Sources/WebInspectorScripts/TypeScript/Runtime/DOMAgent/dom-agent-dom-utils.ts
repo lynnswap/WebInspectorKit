@@ -1,4 +1,5 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
+import {forgetRemovedNodeHandles, resolveNodeTarget, type NodeTargetIdentifier} from "./dom-agent-dom-core";
 import {clearHighlight} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./dom-agent-snapshot";
 
@@ -31,12 +32,8 @@ function mutationResult(
     return result;
 }
 
-function resolveNode(identifier: number) {
-    var map = inspector.map;
-    if (!map || !map.size) {
-        return null;
-    }
-    return map.get(identifier) || null;
+function resolveNode(identifier: NodeTargetIdentifier) {
+    return resolveNodeTarget(identifier);
 }
 
 function resolveHandleNode(handle: unknown): AnyNode | null {
@@ -323,7 +320,7 @@ function serializedDoctype(doctype: DocumentType | null) {
     return "<!DOCTYPE " + (doctype.name || "html") + publicId + systemId + ">";
 }
 
-export function outerHTMLForNode(identifier: number) {
+export function outerHTMLForNode(identifier: NodeTargetIdentifier) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -353,7 +350,7 @@ export function outerHTMLForNode(identifier: number) {
     }
 }
 
-export function selectorPathForNode(identifier: number) {
+export function selectorPathForNode(identifier: NodeTargetIdentifier) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -361,7 +358,7 @@ export function selectorPathForNode(identifier: number) {
     return cssPath(node);
 }
 
-export function xpathForNode(identifier: number) {
+export function xpathForNode(identifier: NodeTargetIdentifier) {
     var node = resolveNode(identifier);
     if (!node) {
         return "";
@@ -370,7 +367,7 @@ export function xpathForNode(identifier: number) {
 }
 
 export function removeNode(
-    identifier: number,
+    identifier: NodeTargetIdentifier,
     expectedPageEpoch?: number | null,
     expectedDocumentScopeID?: number | null
 ) {
@@ -382,7 +379,7 @@ export function removeNode(
 }
 
 export function removeNodeWithUndo(
-    identifier: number,
+    identifier: NodeTargetIdentifier,
     expectedPageEpoch?: number | null,
     expectedDocumentScopeID?: number | null
 ) {
@@ -534,6 +531,7 @@ function performNodeRemoval(node: AnyNode | null, reason: string) {
     }
 
     if (removed) {
+        forgetRemovedNodeHandles(node);
         clearHighlight();
         triggerSnapshotUpdate(reason);
     }
@@ -567,7 +565,7 @@ function normalizeUndoToken(token: number | null | undefined) {
 }
 
 export function setAttributeForNode(
-    identifier: number,
+    identifier: NodeTargetIdentifier,
     name: string | null | undefined,
     value: string | null | undefined,
     expectedPageEpoch?: number | null,
@@ -600,7 +598,7 @@ function setAttributeForResolvedNode(node: AnyNode | null, name: string | null |
 }
 
 export function removeAttributeForNode(
-    identifier: number,
+    identifier: NodeTargetIdentifier,
     name: string | null | undefined,
     expectedPageEpoch?: number | null,
     expectedDocumentScopeID?: number | null

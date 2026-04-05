@@ -75,6 +75,7 @@ export interface SerializedNodeEnvelope {
     node?: unknown;
     fallback?: RawNodeDescriptor | DOMSnapshotEnvelopePayload | null;
     selectedNodeId?: number | null;
+    selectedLocalId?: number | null;
     selectedNodePath?: number[] | null;
 }
 
@@ -82,6 +83,7 @@ export interface SerializedNodeEnvelope {
 export interface DOMSnapshotEnvelopePayload {
     root?: RawNodeDescriptor | SerializedNodeEnvelope | null;
     selectedNodeId?: number | null;
+    selectedLocalId?: number | null;
     selectedNodePath?: number[] | null;
 }
 
@@ -89,6 +91,7 @@ export interface DOMSnapshotEnvelopePayload {
 export interface DOMSnapshot {
     root: DOMNode | null;
     selectedNodeId?: number;
+    selectedLocalId?: number;
     selectedNodePath?: number[];
 }
 

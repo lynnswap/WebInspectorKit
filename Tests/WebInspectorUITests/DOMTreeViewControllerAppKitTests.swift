@@ -59,6 +59,77 @@ struct DOMTreeViewControllerAppKitTests {
         #expect(deletedNodeIDs == [42])
     }
 
+    @Test
+    func contextMenuDeleteDoesNotGuessRawNodeIDWhenLiveLookupIsUnavailable() async {
+        let inspector = makeInspector(children: [])
+        let viewController = WIDOMTreeViewController(inspector: inspector)
+        var deletedNodeIDs: [Int] = []
+        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
+            deletedNodeIDs.append(nodeId)
+            return .applied(())
+        }
+
+        let result = await viewController.invokeContextMenuDeleteForTesting(
+            nodeID: 42,
+            nodeIdentity: nil
+        )
+
+        #expect(result == .failed)
+        #expect(deletedNodeIDs.isEmpty)
+    }
+
+    @Test
+    func deleteNodePrefersLocalIDResolutionBeforeBackendNodeID() async {
+        let inspector = makeInspector(
+            children: [
+                makeNode(localID: 42, backendNodeID: 77),
+                makeNode(localID: 77, backendNodeID: 42),
+            ]
+        )
+        var deletedNodeIDs: [Int] = []
+        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
+            deletedNodeIDs.append(nodeId)
+            return .applied(())
+        }
+
+        let result = await inspector.deleteNode(nodeId: 42, undoManager: nil)
+
+        #expect(result == .applied)
+        #expect(deletedNodeIDs == [42])
+    }
+
+    @Test
+    func copyNodeFallsBackToLiveBackendLookupWhenLocalHandleIsUnavailable() async throws {
+        let inspector = makeInspector(
+            children: [makeNode(localID: 77, backendNodeID: 42)]
+        )
+        var copiedNodeIDs: [Int] = []
+        inspector.session.testSelectionCopyTextOverride = { nodeId, _ in
+            copiedNodeIDs.append(nodeId)
+            return "copied"
+        }
+
+        let text = try await inspector.copyNode(nodeId: 42, kind: .html)
+
+        #expect(text == "copied")
+        #expect(copiedNodeIDs == [77])
+    }
+
+    @Test
+    func copyNodeDoesNotGuessRawNodeIDWhenLiveLookupIsUnavailable() async throws {
+        let inspector = makeInspector(children: [])
+        var copiedNodeIDs: [Int] = []
+        inspector.session.testSelectionCopyTextOverride = { nodeId, _ in
+            copiedNodeIDs.append(nodeId)
+            return "copied"
+        }
+
+        let text = try await inspector.copyNode(nodeId: 42, kind: .html)
+
+        #expect(text.isEmpty)
+        #expect(copiedNodeIDs.isEmpty)
+    }
+
     private func makeInspector(children: [DOMGraphNodeDescriptor]) -> WIDOMInspector {
         let inspector = WIInspectorController().dom
         inspector.document.replaceDocument(

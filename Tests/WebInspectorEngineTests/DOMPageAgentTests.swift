@@ -52,19 +52,48 @@ struct DOMSessionTests {
     }
 
     @Test
-    func matchedStylesWithoutWebViewThrows() async {
-        let session = DOMSession(configuration: .init())
-        do {
-            _ = try await session.matchedStyles(nodeId: 1)
-            #expect(Bool(false))
-        } catch let error as WebInspectorCoreError {
-            guard case .scriptUnavailable = error else {
-                #expect(Bool(false))
-                return
-            }
-        } catch {
-            #expect(Bool(false))
-        }
+    func captureSnapshotPreservesPendingInitialSnapshotMode() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 2))
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            "window.webInspectorDOM.nextInitialSnapshotMode = 'fresh';",
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        _ = try await session.captureSnapshot(maxDepth: 2)
+
+        let status = await autoSnapshotStatus(on: webView)
+        let nextInitialSnapshotMode =
+            (status?["nextInitialSnapshotMode"] as? String)
+            ?? (status?["nextInitialSnapshotMode"] as? NSString as String?)
+        #expect(nextInitialSnapshotMode == "fresh")
+    }
+
+    @Test
+    func captureSnapshotConsumesPendingInitialSnapshotModeWhenRequested() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 2))
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            "window.webInspectorDOM.nextInitialSnapshotMode = 'fresh';",
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        _ = try await session.captureSnapshot(
+            maxDepth: 2,
+            initialModeOwnership: .consumePendingInitialMode
+        )
+
+        let status = await autoSnapshotStatus(on: webView)
+        let nextInitialSnapshotMode =
+            (status?["nextInitialSnapshotMode"] as? String)
+            ?? (status?["nextInitialSnapshotMode"] as? NSString as String?)
+        #expect(nextInitialSnapshotMode == nil)
     }
 
     @Test
@@ -585,6 +614,40 @@ struct DOMSessionTests {
     }
 
     @Test
+    func attachReappliesPreparedDocumentScopeUsingObservedPageEpochWhenPreparedPageEpochIsUnset() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+        let session = DOMSession(configuration: .init())
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 1)
+
+        let seeded = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 4 && jsScope == 1
+        }
+        #expect(seeded == true)
+
+        session.prepareDocumentScopeID(6)
+
+        _ = await session.attach(to: webView)
+
+        #expect(session.testCachedPageEpoch == 4)
+        #expect(session.testCachedDocumentScopeID == 6)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 4)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 6)
+    }
+
+    @Test
     func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() async {
         let firstSession = DOMSession(configuration: .init())
         let secondSession = DOMSession(configuration: .init())
@@ -843,39 +906,6 @@ struct DOMSessionTests {
             ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
 
         #expect(debounce == 50)
-    }
-
-    @Test
-    func matchedStylesReturnsInlineAndMatchedRules() async throws {
-        let session = DOMSession(configuration: .init(snapshotDepth: 6, subtreeDepth: 4))
-        let (webView, _) = makeTestWebView()
-        let html = """
-        <html>
-            <head>
-                <style>
-                    .match-target { color: rgb(255, 0, 0); }
-                    div { margin: 0; }
-                </style>
-            </head>
-            <body>
-                <div id="target" class="match-target" style="display: inline; color: blue !important;">Hello</div>
-            </body>
-        </html>
-        """
-
-        _ = await session.attach(to: webView)
-        await loadHTML(html, in: webView)
-        let snapshot = try await session.captureSnapshot(maxDepth: 6)
-        guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
-            Issue.record("target nodeId was not found in snapshot")
-            return
-        }
-
-        let payload = try await session.matchedStyles(nodeId: nodeId)
-
-        #expect(payload.nodeId == nodeId)
-        #expect(payload.rules.contains(where: { $0.origin == .inline && $0.selectorText == "element.style" }))
-        #expect(payload.rules.contains(where: { $0.selectorText == ".match-target" }))
     }
 
     @Test

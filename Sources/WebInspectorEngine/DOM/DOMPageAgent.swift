@@ -70,13 +70,22 @@ private struct DOMBootstrapConfiguration {
 @MainActor
 public final class DOMPageAgent: NSObject, PageAgent {
     public struct SelectionModeResult: Decodable, Sendable {
+        public struct SelectedAttribute: Decodable, Sendable {
+            public let name: String
+            public let value: String
+        }
+
         public let cancelled: Bool
         public let requiredDepth: Int
         public let selectedPath: [Int]?
-        public let selectedNodeId: UInt64?
-        public let ancestorNodeIds: [UInt64]?
-        public let selectedHandleId: UInt64?
-        public let ancestorHandleIds: [UInt64]?
+        public let selectedLocalId: UInt64?
+        public let ancestorLocalIds: [UInt64]?
+        public let selectedBackendNodeId: UInt64?
+        public let selectedBackendNodeIdIsStable: Bool?
+        public let ancestorBackendNodeIds: [UInt64]?
+        public let selectedAttributes: [SelectedAttribute]?
+        public let selectedPreview: String?
+        public let selectedSelectorPath: String?
     }
 
     private enum HandlerName: String, CaseIterable {
@@ -114,6 +123,8 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private var pageEpochApplyGeneration: UInt64 = 0
     private var pageEpochSyncTask: Task<Void, Never>?
     private var pageEpochSyncTaskGeneration: UInt64?
+    private var pageNavigationObservations: [NSKeyValueObservation] = []
+    private var navigationRefreshTask: Task<Void, Never>?
 #if DEBUG
     package var testSetAttributeInterposer: (@MainActor (
         Int,
@@ -321,14 +332,30 @@ extension DOMPageAgent {
 
 // MARK: - DOM Snapshot
 
+package enum DOMSnapshotInitialModeOwnership: Sendable {
+    case preservePendingInitialMode
+    case consumePendingInitialMode
+}
+
 extension DOMPageAgent {
-    package func captureSnapshot(maxDepth: Int) async throws -> String {
-        let payload = try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: false)
+    package func captureSnapshot(
+        maxDepth: Int,
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+    ) async throws -> String {
+        let payload = try await snapshotPayload(
+            maxDepth: maxDepth,
+            preferEnvelope: false,
+            initialModeOwnership: initialModeOwnership
+        )
         return try jsonString(from: payload)
     }
 
     package func captureSubtree(nodeId: Int, maxDepth: Int) async throws -> String {
-        let payload = try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: false)
+        let payload = try await subtreePayload(
+            target: .local(UInt64(nodeId)),
+            maxDepth: maxDepth,
+            preferEnvelope: false
+        )
         let json = try jsonString(from: payload)
         guard !json.isEmpty else {
             throw WebInspectorCoreError.subtreeUnavailable
@@ -336,29 +363,19 @@ extension DOMPageAgent {
         return json
     }
 
-    package func matchedStyles(nodeId: Int, maxRules: Int = 0) async throws -> DOMMatchedStylesPayload {
-        guard let webView else {
-            throw WebInspectorCoreError.scriptUnavailable
-        }
-        let rawResult = try await webView.callAsyncJavaScript(
-            "return window.webInspectorDOM.matchedStylesForNode(identifier, options)",
-            arguments: [
-                "identifier": nodeId,
-                "options": ["maxRules": maxRules],
-            ],
-            in: nil,
-            contentWorld: bridgeWorld
+    package func captureSnapshotEnvelope(
+        maxDepth: Int,
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+    ) async throws -> Any {
+        try await snapshotPayload(
+            maxDepth: maxDepth,
+            preferEnvelope: bridgeMode != .legacyJSON,
+            initialModeOwnership: initialModeOwnership
         )
-        let data = try serializePayload(rawResult)
-        return try JSONDecoder().decode(DOMMatchedStylesPayload.self, from: data)
     }
 
-    package func captureSnapshotEnvelope(maxDepth: Int) async throws -> Any {
-        try await snapshotPayload(maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
-    }
-
-    package func captureSubtreeEnvelope(nodeId: Int, maxDepth: Int) async throws -> Any {
-        try await subtreePayload(nodeId: nodeId, maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
+    package func captureSubtreeEnvelope(target: DOMRequestNodeTarget, maxDepth: Int) async throws -> Any {
+        try await subtreePayload(target: target, maxDepth: maxDepth, preferEnvelope: bridgeMode != .legacyJSON)
     }
 }
 
@@ -366,19 +383,22 @@ extension DOMPageAgent {
 
 extension DOMPageAgent {
     package func removeNode(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Void> {
         guard let webView else {
             return .failed
         }
+        guard let targetArgument = javascriptTargetArgument(for: target) else {
+            return .failed
+        }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
             let rawResult = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOM.removeNode(identifier, expectedPageEpoch, expectedDocumentScopeID)",
+                "return window.webInspectorDOM.removeNode(target, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
-                    "identifier": nodeId,
+                    "target": targetArgument,
                     "expectedPageEpoch": expectedPageEpoch as Any,
                     "expectedDocumentScopeID": expectedDocumentScopeID as Any,
                 ],
@@ -387,7 +407,12 @@ extension DOMPageAgent {
             )
             let result = parseMutationExecutionResult(rawResult)
             if case .applied = result {
-                handleCache.removeHandle(for: nodeId)
+                if let localID = target.localID, localID <= UInt64(Int.max) {
+                    handleCache.removeHandle(for: Int(localID))
+                }
+                if let backendNodeID = target.backendNodeID {
+                    handleCache.removeHandle(for: backendNodeID)
+                }
             }
             return result
         } catch {
@@ -487,7 +512,7 @@ extension DOMPageAgent {
     }
 
     package func setAttribute(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         name: String,
         value: String,
         expectedPageEpoch: Int? = nil,
@@ -504,11 +529,14 @@ extension DOMPageAgent {
             guard Task.isCancelled == false else {
                 return .ignoredStaleContext
             }
+            guard let targetArgument = self.javascriptTargetArgument(for: target) else {
+                return .failed
+            }
             do {
                 let rawValue = try await webView.callAsyncJavaScript(
-                    "return window.webInspectorDOM.setAttributeForNode(identifier, name, value, expectedPageEpoch, expectedDocumentScopeID)",
+                    "return window.webInspectorDOM.setAttributeForNode(target, name, value, expectedPageEpoch, expectedDocumentScopeID)",
                     arguments: [
-                        "identifier": nodeId,
+                        "target": targetArgument,
                         "name": name,
                         "value": value,
                         "expectedPageEpoch": expectedPageEpoch as Any,
@@ -526,7 +554,7 @@ extension DOMPageAgent {
 #if DEBUG
         if let testSetAttributeInterposer {
             return await testSetAttributeInterposer(
-                nodeId,
+                target.jsIdentifier ?? -1,
                 name,
                 value,
                 expectedPageEpoch,
@@ -539,7 +567,7 @@ extension DOMPageAgent {
     }
 
     package func removeAttribute(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         name: String,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
@@ -547,12 +575,15 @@ extension DOMPageAgent {
         guard let webView else {
             return .failed
         }
+        guard let targetArgument = javascriptTargetArgument(for: target) else {
+            return .failed
+        }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
             let rawValue = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOM.removeAttributeForNode(identifier, name, expectedPageEpoch, expectedDocumentScopeID)",
+                "return window.webInspectorDOM.removeAttributeForNode(target, name, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
-                    "identifier": nodeId,
+                    "target": targetArgument,
                     "name": name,
                     "expectedPageEpoch": expectedPageEpoch as Any,
                     "expectedDocumentScopeID": expectedDocumentScopeID as Any,
@@ -567,12 +598,22 @@ extension DOMPageAgent {
         }
     }
 
-    package func selectionCopyText(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        try await evaluateStringScript(
+    package func selectionCopyText(target: DOMRequestNodeTarget, kind: DOMSelectionCopyKind) async throws -> String {
+        return try await evaluateStringScript(
             """
-            return window.webInspectorDOM?.\(kind.jsFunction)(identifier) ?? ""
+            return window.webInspectorDOM?.\(kind.jsFunction)(target) ?? ""
             """,
-            nodeId: nodeId
+            target: target
+        )
+    }
+
+    package func consumePendingInitialSnapshotMode(
+        expectedPageEpoch: Int,
+        expectedDocumentScopeID: DOMDocumentScopeID
+    ) async {
+        await consumePendingInitialSnapshotModeImpl(
+            expectedPageEpoch: expectedPageEpoch,
+            expectedDocumentScopeID: expectedDocumentScopeID
         )
     }
 }
@@ -830,16 +871,23 @@ extension DOMPageAgent {
     }
 
     func willDetachPageWebView(_ webView: WKWebView) {
+        navigationRefreshTask?.cancel()
+        navigationRefreshTask = nil
+        pageNavigationObservations.removeAll()
         detachMessageHandlers(from: webView)
     }
 
     func didAttachPageWebView(_ webView: WKWebView, previousWebView: WKWebView?) {
         resolveBridgeModeIfNeeded(with: webView)
         registerMessageHandlers(on: webView)
+        observePageNavigationState(on: webView)
     }
 
     func didClearPageWebView() {
         _ = beginPageEpochApplyGeneration()
+        navigationRefreshTask?.cancel()
+        navigationRefreshTask = nil
+        pageNavigationObservations.removeAll()
         handleCache.clear()
         documentURL = nil
     }
@@ -848,6 +896,115 @@ extension DOMPageAgent {
 // MARK: - Private helpers
 
 private extension DOMPageAgent {
+    func observePageNavigationState(on webView: WKWebView) {
+        pageNavigationObservations.removeAll()
+        let urlObservation = webView.observe(\.url, options: [.new]) { [weak self, weak webView] observedWebView, _ in
+            guard let self, let webView, self.webView === webView else {
+                return
+            }
+            guard !observedWebView.isLoading else {
+                return
+            }
+            guard self.shouldScheduleNavigationRefresh(for: observedWebView.url) else {
+                return
+            }
+            self.scheduleNavigationRefreshIfNeeded(on: webView)
+        }
+        let loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self, weak webView] observedWebView, _ in
+            guard let self, let webView else {
+                return
+            }
+            guard observedWebView.isLoading == false else {
+                return
+            }
+            Task { @MainActor [weak self, weak webView] in
+                guard let self, let webView, self.webView === webView else {
+                    return
+                }
+                if self.shouldScheduleNavigationRefresh(for: observedWebView.url) {
+                    self.scheduleNavigationRefreshIfNeeded(on: webView)
+                    return
+                }
+                guard let pageContext = await self.readPageContext(on: webView) else {
+                    return
+                }
+                let normalizedCurrentDocumentURL = self.documentURL.map(self.navigationComparableURLString)
+                let normalizedObservedDocumentURL = pageContext.documentURL.map(self.navigationComparableURLString)
+                if pageContext.pageEpoch != self.pageEpoch
+                    || pageContext.documentScopeID != self.documentScopeID
+                    || normalizedObservedDocumentURL != normalizedCurrentDocumentURL
+                {
+                    self.scheduleNavigationRefreshIfNeeded(on: webView, force: true)
+                }
+            }
+        }
+        pageNavigationObservations = [urlObservation, loadingObservation]
+    }
+
+    func shouldScheduleNavigationRefresh(for url: URL?) -> Bool {
+        guard let currentURLString = url?.absoluteString, !currentURLString.isEmpty else {
+            return false
+        }
+        guard let documentURL else {
+            return false
+        }
+        return navigationComparableURLString(currentURLString) != navigationComparableURLString(documentURL)
+    }
+
+    func navigationComparableURLString(_ value: String) -> String {
+        guard var components = URLComponents(string: value) else {
+            return value
+        }
+        components.fragment = nil
+        return components.string ?? value
+    }
+
+    func scheduleNavigationRefreshIfNeeded(on webView: WKWebView, force: Bool = false) {
+        guard self.webView === webView else {
+            return
+        }
+        navigationRefreshTask?.cancel()
+        navigationRefreshTask = Task { @MainActor [weak self, weak webView] in
+            guard let self, let webView, self.webView === webView else {
+                return
+            }
+            do {
+                try await Task.sleep(nanoseconds: pageEpochApplyRetryDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard self.webView === webView else {
+                return
+            }
+            guard force || self.shouldScheduleNavigationRefresh(for: webView.url) else {
+                return
+            }
+            await self.ensureDOMAgentScriptInstalled(on: webView)
+            guard self.autoSnapshotEnabled else {
+                return
+            }
+            await self.setAutoSnapshot(enabled: true)
+            guard self.autoSnapshotEnabled else {
+                return
+            }
+            await self.triggerInitialSnapshotUpdate(on: webView)
+        }
+    }
+
+    func triggerInitialSnapshotUpdate(on webView: WKWebView) async {
+        guard self.webView === webView else {
+            return
+        }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                "window.webInspectorDOM?.triggerSnapshotUpdate?.('initial')",
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            domLogger.debug("trigger initial snapshot skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     func scheduleBootstrapRefreshIfAttached() {
         guard let webView else {
             return
@@ -1324,32 +1481,53 @@ private extension DOMPageAgent {
         }
     }
 
-    func evaluateStringScript(_ script: String, nodeId: Int) async throws -> String {
+    func evaluateStringScript(_ script: String, target: DOMRequestNodeTarget) async throws -> String {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
+        guard let targetArgument = javascriptTargetArgument(for: target) else {
+            return ""
+        }
         let rawResult = try await webView.callAsyncJavaScript(
             script,
-            arguments: ["identifier": nodeId],
+            arguments: ["target": targetArgument],
             in: nil,
             contentWorld: bridgeWorld
         )
         return rawResult as? String ?? ""
     }
 
-    func snapshotPayload(maxDepth: Int, preferEnvelope: Bool) async throws -> Any {
+    private func javascriptTargetArgument(for target: DOMRequestNodeTarget) -> Any? {
+        target.jsArgument
+    }
+
+    func snapshotPayload(
+        maxDepth: Int,
+        preferEnvelope: Bool,
+        initialModeOwnership: DOMSnapshotInitialModeOwnership
+    ) async throws -> Any {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
+        }
+        let captureExpression: String
+        let captureEnvelopeExpression: String
+        switch initialModeOwnership {
+        case .preservePendingInitialMode:
+            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth, { consumeInitialSnapshotMode: false })"
+            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth, { consumeInitialSnapshotMode: false })"
+        case .consumePendingInitialMode:
+            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth)"
+            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth)"
         }
         let rawResult = try await webView.callAsyncJavaScript(
             preferEnvelope
                 ? """
                 if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSnapshotEnvelope === "function") {
-                    return window.webInspectorDOM.captureSnapshotEnvelope(maxDepth);
+                    return \(captureEnvelopeExpression);
                 }
-                return window.webInspectorDOM.captureSnapshot(maxDepth);
+                return \(captureExpression);
                 """
-                : "return window.webInspectorDOM.captureSnapshot(maxDepth)",
+                : "return \(captureExpression)",
             arguments: ["maxDepth": max(1, maxDepth)],
             in: nil,
             contentWorld: bridgeWorld
@@ -1357,21 +1535,50 @@ private extension DOMPageAgent {
         return unwrapOptionalPayload(rawResult) as Any
     }
 
-    func subtreePayload(nodeId: Int, maxDepth: Int, preferEnvelope: Bool) async throws -> Any {
+    func consumePendingInitialSnapshotModeImpl(
+        expectedPageEpoch: Int,
+        expectedDocumentScopeID: DOMDocumentScopeID
+    ) async {
+        guard let webView else {
+            return
+        }
+        do {
+            try await webView.callAsyncVoidJavaScript(
+                """
+                if (window.webInspectorDOM && typeof window.webInspectorDOM.consumePendingInitialSnapshotMode === "function") {
+                    window.webInspectorDOM.consumePendingInitialSnapshotMode(expectedPageEpoch, expectedDocumentScopeID);
+                }
+                """,
+                arguments: [
+                    "expectedPageEpoch": expectedPageEpoch,
+                    "expectedDocumentScopeID": expectedDocumentScopeID,
+                ],
+                in: nil,
+                contentWorld: bridgeWorld
+            )
+        } catch {
+            domLogger.debug("consume pending initial snapshot mode failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func subtreePayload(target: DOMRequestNodeTarget, maxDepth: Int, preferEnvelope: Bool) async throws -> Any {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
+        }
+        guard let targetArgument = javascriptTargetArgument(for: target) else {
+            throw WebInspectorCoreError.subtreeUnavailable
         }
         let rawResult = try await webView.callAsyncJavaScript(
             preferEnvelope
                 ? """
                 if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSubtreeEnvelope === "function") {
-                    return window.webInspectorDOM.captureSubtreeEnvelope(identifier, maxDepth);
+                    return window.webInspectorDOM.captureSubtreeEnvelope(target, maxDepth);
                 }
-                return window.webInspectorDOM.captureSubtree(identifier, maxDepth);
+                return window.webInspectorDOM.captureSubtree(target, maxDepth);
                 """
-                : "return window.webInspectorDOM.captureSubtree(identifier, maxDepth)",
+                : "return window.webInspectorDOM.captureSubtree(target, maxDepth)",
             arguments: [
-                "identifier": nodeId,
+                "target": targetArgument,
                 "maxDepth": max(1, maxDepth),
             ],
             in: nil,

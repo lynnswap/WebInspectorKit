@@ -10,7 +10,8 @@ import {
     captureDOMPayload,
     computeNodePath,
     INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
-    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
+    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE,
+    rememberNode
 } from "../Runtime/DOMAgent/dom-agent-dom-core";
 import { inspector } from "../Runtime/DOMAgent/dom-agent-state";
 
@@ -234,6 +235,152 @@ describe("dom-agent-snapshot", () => {
         expect(bodyDescriptor?.children?.[0]?.attributes).toEqual(["id", "target"]);
     });
 
+    it("manual snapshot capture clears the pending initial snapshot mode", () => {
+        inspector.nextInitialSnapshotMode = "fresh";
+
+        const payload = captureDOMPayload(4);
+
+        expect(payload.root).not.toBeNull();
+        expect(inspector.nextInitialSnapshotMode).toBeNull();
+    });
+
+    it("does not promote fragment-only URL changes to a fresh manual snapshot reset", () => {
+        const currentURL = document.URL || "about:blank";
+        inspector.documentURL = `${currentURL}#before`;
+        window.location.hash = "#after";
+
+        const payload = captureDOMPayload(4, { consumeInitialSnapshotMode: false });
+
+        expect(payload.root).not.toBeNull();
+        expect(inspector.nextInitialSnapshotMode).toBeNull();
+    });
+
+    it("captures stable node ids separately from local handle ids", () => {
+        document.body.innerHTML = "<main id=\"root\"><section id=\"target-parent\"><div id=\"target\"></div></section></main>";
+        const target = document.getElementById("target");
+        expect(target).not.toBeNull();
+        inspector.pendingSelectionPath = computeNodePath(target);
+
+        const webkit = window.webkit as unknown as {
+            serializeNode?: (node: Node) => unknown;
+        };
+        webkit.serializeNode = vi.fn((node: Node) => {
+            const element = node as Element;
+            switch (element.id || element.localName || element.nodeName.toLowerCase()) {
+            case "html":
+                return { nodeId: 100, children: [] };
+            case "body":
+                return { nodeId: 101, children: [] };
+            case "root":
+                return { nodeId: 102, children: [] };
+            case "target-parent":
+                return { nodeId: 103, children: [] };
+            case "target":
+                return { nodeId: 104, children: [] };
+            default:
+                return null;
+            }
+        });
+
+        const payload = captureDOMPayload(5);
+        const bodyDescriptor = payload.root?.children?.find((child) => child.localName === "body") ?? null;
+        const mainDescriptor = bodyDescriptor?.children?.find((child) =>
+            Array.isArray(child.attributes) && child.attributes[1] === "root"
+        ) ?? null;
+
+        expect(payload.selectedNodeId).toBe(104);
+        expect(payload.selectedLocalId).toBeTypeOf("number");
+        expect(payload.selectedLocalId).not.toBe(payload.selectedNodeId);
+        expect(mainDescriptor?.backendNodeId).toBe(102);
+        expect(mainDescriptor?.localId).toBeTypeOf("number");
+        expect(mainDescriptor?.localId).not.toBe(mainDescriptor?.backendNodeId);
+    });
+
+    it("clears the pending initial snapshot mode even when snapshot posting throws", () => {
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.nextInitialSnapshotMode = "fresh";
+        snapshotHandler().postMessage.mockImplementationOnce(() => {
+            throw new Error("bridge failure");
+        });
+
+        triggerSnapshotUpdate("mutation");
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(inspector.nextInitialSnapshotMode).toBeNull();
+    });
+
+    it("promotes document URL changes to a fresh initial snapshot without losing the mode", () => {
+        const originalURLDescriptor = Object.getOwnPropertyDescriptor(document, "URL");
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.documentURL = "https://example.com/page-one";
+
+        Object.defineProperty(document, "URL", {
+            configurable: true,
+            value: "https://example.com/page-two"
+        });
+
+        try {
+            triggerSnapshotUpdate("mutation");
+            vi.advanceTimersByTime(66);
+
+            expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+            const payload = parseBundleCall(snapshotHandler());
+            expect(payload.kind).toBe("snapshot");
+            expect(payload.reason).toBe("initial");
+            expect(payload.snapshotMode).toBe("fresh");
+            expect(inspector.nextInitialSnapshotMode).toBeNull();
+        } finally {
+            if (originalURLDescriptor) {
+                Object.defineProperty(document, "URL", originalURLDescriptor);
+            }
+        }
+    });
+
+    it("resets remembered node handles for same-url fresh snapshots", () => {
+        document.body.innerHTML = "<main id=\"before\"></main>";
+        const staleNode = document.getElementById("before");
+        expect(staleNode).not.toBeNull();
+        expect(rememberNode(staleNode)).toBe(1);
+
+        inspector.documentURL = document.URL || "about:blank";
+        inspector.nextInitialSnapshotMode = "fresh";
+
+        document.body.innerHTML = "<main id=\"after\"></main>";
+
+        const payload = captureDOMPayload(4, { consumeInitialSnapshotMode: false });
+
+        expect(payload.root?.localId).toBe(1);
+        expect((inspector.map?.get(1) as Element | undefined)?.id).not.toBe("before");
+        expect((inspector.map?.get(1) as Element | undefined)?.localName).toBe("html");
+    });
+
+    it("drops queued mutations after an initial full snapshot reset", () => {
+        const node = document.createElement("div");
+        node.setAttribute("class", "ready");
+        document.body.appendChild(node);
+
+        inspector.map = new Map([[1, document.documentElement]]);
+        inspector.snapshotAutoUpdateDebounce = 50;
+        inspector.nextInitialSnapshotMode = "fresh";
+        inspector.pendingMutations = [{
+            type: "attributes",
+            target: node,
+            attributeName: "class",
+            addedNodes: [] as unknown as NodeList,
+            removedNodes: [] as unknown as NodeList,
+            previousSibling: null
+        } as unknown as MutationRecord];
+
+        triggerSnapshotUpdate("mutation");
+        vi.advanceTimersByTime(66);
+
+        expect(snapshotHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(mutationHandler().postMessage).not.toHaveBeenCalled();
+        expect(parseBundleCall(snapshotHandler()).reason).toBe("initial");
+    });
+
     it("emits initial full snapshot when auto updates are re-enabled with no pending mutations", () => {
         inspector.map = new Map([[1, document.documentElement]]);
         inspector.snapshotAutoUpdateDebounce = 50;
@@ -399,6 +546,62 @@ describe("dom-agent bootstrap", () => {
 
         debugStatus = api?.debugStatus?.() ?? {};
         expect(debugStatus.nextInitialSnapshotMode).toBe(initialMode);
+    });
+
+    it("pageshow promotes document URL changes to a fresh snapshot reset", async () => {
+        await import("../Runtime/dom-agent");
+        const stateModule = await import("../Runtime/DOMAgent/dom-agent-state");
+        const originalURLDescriptor = Object.getOwnPropertyDescriptor(document, "URL");
+
+        stateModule.inspector.snapshotAutoUpdateEnabled = true;
+        stateModule.inspector.snapshotAutoUpdateDebounce = 50;
+        stateModule.inspector.documentURL = "https://example.com/page-one";
+        stateModule.inspector.map = new Map([[1, document.documentElement]]);
+
+        Object.defineProperty(document, "URL", {
+            configurable: true,
+            value: "https://example.com/page-two"
+        });
+
+        try {
+            const pageShow = new Event("pageshow");
+            Object.defineProperty(pageShow, "persisted", { value: false });
+            window.dispatchEvent(pageShow);
+
+            expect(stateModule.inspector.nextInitialSnapshotMode).toBe("fresh");
+        } finally {
+            if (originalURLDescriptor) {
+                Object.defineProperty(document, "URL", originalURLDescriptor);
+            }
+        }
+    });
+
+    it("pageshow ignores fragment-only URL changes for fresh snapshot promotion", async () => {
+        await import("../Runtime/dom-agent");
+        const stateModule = await import("../Runtime/DOMAgent/dom-agent-state");
+        const originalURLDescriptor = Object.getOwnPropertyDescriptor(document, "URL");
+
+        stateModule.inspector.snapshotAutoUpdateEnabled = true;
+        stateModule.inspector.documentURL = "https://example.com/page#before";
+        stateModule.inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        stateModule.inspector.map = new Map([[1, document.documentElement]]);
+
+        Object.defineProperty(document, "URL", {
+            configurable: true,
+            value: "https://example.com/page#after"
+        });
+
+        try {
+            const pageShow = new Event("pageshow");
+            Object.defineProperty(pageShow, "persisted", { value: false });
+            window.dispatchEvent(pageShow);
+
+            expect(stateModule.inspector.nextInitialSnapshotMode).toBe("preserve-ui-state");
+        } finally {
+            if (originalURLDescriptor) {
+                Object.defineProperty(document, "URL", originalURLDescriptor);
+            }
+        }
     });
 
     it("pagehide does not mark the current context for a fresh snapshot", async () => {

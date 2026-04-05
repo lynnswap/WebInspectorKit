@@ -78,10 +78,6 @@ private struct ElementDetailsMacRootView: View {
                         selectorRow(selectedNode: selectedNode)
                     }
 
-                    Section(LocalizedStringResource("dom.element.section.styles", bundle: .module)) {
-                        stylesSection(selectedNode: selectedNode)
-                    }
-
                     Section(LocalizedStringResource("dom.element.section.attributes", bundle: .module)) {
                         attributesSection(selectedNode: selectedNode)
                     }
@@ -157,37 +153,6 @@ private struct ElementDetailsMacRootView: View {
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
             .lineLimit(4)
-    }
-
-    @ViewBuilder
-    private func stylesSection(selectedNode: DOMNodeModel) -> some View {
-        if selectedNode.isLoadingMatchedStyles {
-            infoRow(message: wiLocalized("dom.element.styles.loading"), color: .secondary)
-        } else if selectedNode.matchedStyles.isEmpty {
-            infoRow(message: wiLocalized("dom.element.styles.empty"), color: .secondary)
-        } else {
-            ForEach(Array(selectedNode.matchedStyles.enumerated()), id: \.offset) { _, rule in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(rule.selectorText)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(styleRuleDetail(rule))
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(12)
-                }
-            }
-
-            if selectedNode.matchedStylesTruncated {
-                infoRow(message: wiLocalized("dom.element.styles.truncated"), color: .secondary)
-            }
-            if selectedNode.blockedStylesheetCount > 0 {
-                infoRow(
-                    message: "\(selectedNode.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))",
-                    color: .secondary
-                )
-            }
-        }
     }
 
     @ViewBuilder
@@ -326,24 +291,6 @@ private struct ElementDetailsMacRootView: View {
             return attribute.value
         }
         return draftSession?.draftValue ?? attribute.value
-    }
-
-    private func styleRuleDetail(_ rule: DOMMatchedStyleRule) -> String {
-        var parts: [String] = []
-        if !rule.sourceLabel.isEmpty {
-            parts.append(rule.sourceLabel)
-        }
-        if !rule.atRuleContext.isEmpty {
-            parts.append(contentsOf: rule.atRuleContext)
-        }
-        let declarations = rule.declarations.map { declaration in
-            let importantSuffix = declaration.important ? " !important" : ""
-            return "\(declaration.name): \(declaration.value)\(importantSuffix);"
-        }.joined(separator: "\n")
-        if !declarations.isEmpty {
-            parts.append(declarations)
-        }
-        return parts.joined(separator: "\n")
     }
 
     private func infoRow(message: String, color: Color) -> some View {

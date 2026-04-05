@@ -3,7 +3,9 @@ import {
     INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
     mutationTouchesInspectableDOM,
     nodeIsRendered,
-    rectForNode
+    rectForNode,
+    resolveNodeTarget,
+    type NodeTargetIdentifier
 } from "./dom-agent-dom-core";
 
 function matchesPageEpoch(expectedPageEpoch?: number) {
@@ -187,15 +189,11 @@ function scrollRectIntoViewIfNeeded(rect: DOMRect | null) {
     return true;
 }
 
-export function highlightDOMNode(identifier: number, expectedPageEpoch?: number, reveal = true) {
+export function highlightDOMNode(identifier: NodeTargetIdentifier, expectedPageEpoch?: number, reveal = true) {
     if (!matchesPageEpoch(expectedPageEpoch)) {
         return false;
     }
-    var map = inspector.map;
-    if (!map || !map.size) {
-        return false;
-    }
-    var node = map.get(identifier);
+    var node = resolveNodeTarget(identifier);
     return highlightResolvedNode(node as AnyNode | null, expectedPageEpoch, reveal);
 }
 

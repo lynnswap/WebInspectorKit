@@ -13,6 +13,7 @@ import AppKit
 #endif
 
 @MainActor
+@Suite(.serialized)
 struct ControllerActivationTests {
     @Test
     func connectWithNoNetworkTabsDoesNotAttachNetworkSession() async {
@@ -221,7 +222,7 @@ struct ControllerActivationTests {
         controller.setTabs([.dom(title: "DOM"), domSecondaryTab(title: "Elements")])
         await controller.reapplyCurrentHostState()
 
-        #expect(controller.dom.document.selectedNode?.backendNodeID == 42)
+        #expect(controller.dom.document.selectedNode?.localID == 42)
         #expect(controller.dom.document.selectedNode?.preview == "<div id='selected'>")
     }
 
@@ -646,7 +647,10 @@ struct ControllerActivationTests {
         in inspector: WIDOMInspector,
         depth: Int
     ) async throws {
-        let payload = try await inspector.session.captureSnapshotPayload(maxDepth: depth)
+        let payload = try await inspector.session.captureSnapshotPayload(
+            maxDepth: depth,
+            initialModeOwnership: .consumePendingInitialMode
+        )
         inspector.transport.handleDOMBundle(
             .init(
                 objectEnvelope: [
