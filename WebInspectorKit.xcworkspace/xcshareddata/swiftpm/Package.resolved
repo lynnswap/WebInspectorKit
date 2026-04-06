@@ -77,8 +77,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "b19a1872971fee2ecc71fac3ee6487242d37d74d",
-        "version" : "0.3.0"
+        "revision" : "230b9b9b8651f5a368ecca126768f28455598f49",
+        "version" : "0.4.0"
       }
     }
   ],
