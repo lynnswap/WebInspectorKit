@@ -58,6 +58,7 @@ export type DOMAgentAutoSnapshotBootstrap = {
 export type DOMAgentBootstrapState = {
     pageEpoch?: number;
     documentScopeID?: number;
+    traceEnabled?: boolean;
     autoSnapshot?: DOMAgentAutoSnapshotBootstrap;
 };
 
@@ -155,4 +156,11 @@ export function applyDOMAgentBootstrapContext(bootstrap: DOMAgentBootstrapState 
         didApply = true;
     }
     return didApply;
+}
+
+export function domTraceEnabled(): boolean {
+    if (window.__wiDOMTraceEnabled === true) {
+        return true;
+    }
+    return readDOMAgentBootstrap().traceEnabled === true;
 }

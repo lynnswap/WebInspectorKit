@@ -778,6 +778,7 @@ private extension WIDOMInspector {
                     self.registerUndoDelete(
                         undoToken: undoToken,
                         nodeId: nodeId,
+                        nodeLocalID: nodeLocalID,
                         context: expectedContext,
                         undoManager: undoManager,
                         restoreSelectionPayload: restoreSelectionPayload
@@ -881,6 +882,7 @@ private extension WIDOMInspector {
     private func registerUndoDelete(
         undoToken: Int,
         nodeId: Int,
+        nodeLocalID: UInt64?,
         context: DOMInspectorRuntime.MutationContext,
         undoManager: UndoManager,
         restoreSelectionPayload: DOMSelectionSnapshotPayload?
@@ -890,6 +892,7 @@ private extension WIDOMInspector {
             target.performUndoDelete(
                 undoToken: undoToken,
                 nodeId: nodeId,
+                nodeLocalID: nodeLocalID,
                 context: context,
                 undoManager: undoManager,
                 restoreSelectionPayload: restoreSelectionPayload
@@ -901,6 +904,7 @@ private extension WIDOMInspector {
     private func performUndoDelete(
         undoToken: Int,
         nodeId: Int,
+        nodeLocalID: UInt64?,
         context: DOMInspectorRuntime.MutationContext,
         undoManager: UndoManager,
         restoreSelectionPayload: DOMSelectionSnapshotPayload?
@@ -912,6 +916,7 @@ private extension WIDOMInspector {
         registerRedoDelete(
             undoToken: undoToken,
             nodeId: nodeId,
+            nodeLocalID: nodeLocalID,
             context: context,
             undoManager: undoManager,
             restoreSelectionPayload: restoreSelectionPayload
@@ -971,6 +976,7 @@ private extension WIDOMInspector {
     private func registerRedoDelete(
         undoToken: Int,
         nodeId: Int,
+        nodeLocalID: UInt64?,
         context: DOMInspectorRuntime.MutationContext,
         undoManager: UndoManager,
         restoreSelectionPayload: DOMSelectionSnapshotPayload?
@@ -980,6 +986,7 @@ private extension WIDOMInspector {
             target.performRedoDelete(
                 undoToken: undoToken,
                 nodeId: nodeId,
+                nodeLocalID: nodeLocalID,
                 context: context,
                 undoManager: undoManager,
                 restoreSelectionPayload: restoreSelectionPayload
@@ -991,6 +998,7 @@ private extension WIDOMInspector {
     private func performRedoDelete(
         undoToken: Int,
         nodeId: Int,
+        nodeLocalID: UInt64?,
         context: DOMInspectorRuntime.MutationContext,
         undoManager: UndoManager,
         restoreSelectionPayload: DOMSelectionSnapshotPayload?
@@ -1002,6 +1010,7 @@ private extension WIDOMInspector {
         registerUndoDelete(
             undoToken: undoToken,
             nodeId: nodeId,
+            nodeLocalID: nodeLocalID,
             context: context,
             undoManager: undoManager,
             restoreSelectionPayload: restoreSelectionPayload
@@ -1049,7 +1058,7 @@ private extension WIDOMInspector {
             }
             await self.applyDeletedNodeMutationResult(
                 nodeId: nodeId,
-                nodeLocalID: nodeId >= 0 ? UInt64(nodeId) : nil,
+                nodeLocalID: nodeLocalID,
                 expectedContext: context
             )
         }

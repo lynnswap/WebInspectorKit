@@ -1,4 +1,4 @@
-import {inspector, type AnyNode} from "./dom-agent-state";
+import {domTraceEnabled, inspector, type AnyNode} from "./dom-agent-state";
 import {
     captureDOMEnvelope,
     describe,
@@ -46,6 +46,9 @@ function domLogHandler(): MessageHandler | null {
 }
 
 function postDOMTrace(message: string): void {
+    if (!domTraceEnabled()) {
+        return;
+    }
     try {
         domLogHandler()?.postMessage({message});
     } catch {

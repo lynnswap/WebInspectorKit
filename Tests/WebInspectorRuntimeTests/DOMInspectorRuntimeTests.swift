@@ -2268,6 +2268,99 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func redoDeleteUsesOriginalLocalIDForDetachedSelectionPlaceholder() async {
+        let inspector = WIInspectorController().dom
+        let undoManager = UndoManager()
+        let removedLocalID: UInt64 = 7
+        let removedBackendNodeID = 42
+        let decoyLocalID: UInt64 = 42
+        let undoToken = 99
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: decoyLocalID,
+                            backendNodeID: 9001,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 9001, name: "id", value: "decoy")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: removedLocalID,
+                backendNodeID: removedBackendNodeID,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: removedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        inspector.session.testRemoveNodeWithUndoOverride = { nodeId, _, _ in
+            #expect(nodeId == removedBackendNodeID)
+            return .applied(undoToken)
+        }
+        inspector.session.testUndoRemoveNodeInterposer = { receivedUndoToken, _, _, _ in
+            #expect(receivedUndoToken == undoToken)
+            return .applied(())
+        }
+        inspector.session.testRedoRemoveNodeInterposer = { receivedUndoToken, nodeId, _, _, _ in
+            #expect(receivedUndoToken == undoToken)
+            #expect(nodeId == removedBackendNodeID)
+            return .applied(())
+        }
+
+        let deleteResult = await inspector.deleteSelection(undoManager: undoManager)
+
+        #expect(deleteResult == .applied)
+        #expect(inspector.document.node(localID: removedLocalID) == nil)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+
+        undoManager.undo()
+
+        let didRestoreRemovedSelection = await waitForCondition {
+            inspector.document.selectedNode?.localID == removedLocalID
+        }
+
+        #expect(didRestoreRemovedSelection == true)
+        #expect(inspector.document.node(localID: removedLocalID)?.backendNodeID == removedBackendNodeID)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+
+        undoManager.redo()
+
+        let didRemoveRestoredSelection = await waitForCondition {
+            inspector.document.node(localID: removedLocalID) == nil
+        }
+
+        #expect(didRemoveRestoredSelection == true)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+        #expect(inspector.document.selectedNode == nil)
+    }
+
+    @Test
     func staleReloadClearsPendingSelectionOverride() async {
         let inspector = WIInspectorController().dom
         let webView = makeTestWebView()

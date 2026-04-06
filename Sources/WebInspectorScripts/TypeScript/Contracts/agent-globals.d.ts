@@ -7,9 +7,11 @@ type WebKitMessageHandler = {
 declare global {
     interface Window {
         __wiDOMFrontendInitialPageEpoch?: number;
+        __wiDOMTraceEnabled?: boolean;
         __wiDOMAgentBootstrap?: {
             pageEpoch?: number;
             documentScopeID?: number;
+            traceEnabled?: boolean;
             autoSnapshot?: {
                 enabled?: boolean;
                 maxDepth?: number;

@@ -47,6 +47,11 @@ package final class DOMSession {
         _ expectedPageEpoch: Int?,
         _ expectedDocumentScopeID: DOMDocumentScopeID?
     ) async -> DOMMutationExecutionResult<Void>)?
+    package var testRemoveNodeWithUndoOverride: (@MainActor (
+        _ nodeId: Int,
+        _ expectedPageEpoch: Int?,
+        _ expectedDocumentScopeID: DOMDocumentScopeID?
+    ) async -> DOMMutationExecutionResult<Int>)?
     package var testUndoRemoveNodeInterposer: (@MainActor (
         _ undoToken: Int,
         _ expectedPageEpoch: Int?,
@@ -415,7 +420,12 @@ extension DOMSession {
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Int> {
-        await pageAgent.removeNodeWithUndo(
+#if DEBUG
+        if let testRemoveNodeWithUndoOverride {
+            return await testRemoveNodeWithUndoOverride(nodeId, expectedPageEpoch, expectedDocumentScopeID)
+        }
+#endif
+        return await pageAgent.removeNodeWithUndo(
             nodeId: nodeId,
             expectedPageEpoch: expectedPageEpoch,
             expectedDocumentScopeID: expectedDocumentScopeID

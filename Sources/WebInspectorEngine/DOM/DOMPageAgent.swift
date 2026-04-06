@@ -20,12 +20,13 @@ private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKCo
 private struct DOMBootstrapConfiguration {
     let pageEpoch: Int
     let documentScopeID: DOMDocumentScopeID
+    let traceEnabled: Bool
     let autoSnapshotEnabled: Bool
     let autoSnapshotMaxDepth: Int
     let autoSnapshotDebounce: Int
 
     var signature: String {
-        "\(pageEpoch)|\(documentScopeID)|\(autoSnapshotEnabled ? 1 : 0)|\(autoSnapshotMaxDepth)|\(autoSnapshotDebounce)"
+        "\(pageEpoch)|\(documentScopeID)|\(traceEnabled ? 1 : 0)|\(autoSnapshotEnabled ? 1 : 0)|\(autoSnapshotMaxDepth)|\(autoSnapshotDebounce)"
     }
 
     var autoSnapshotOptions: NSDictionary {
@@ -37,6 +38,7 @@ private struct DOMBootstrapConfiguration {
     }
 
     var scriptSource: String {
+        let traceEnabledLiteral = traceEnabled ? "true" : "false"
         let enabledLiteral = autoSnapshotEnabled ? "true" : "false"
         return """
         (function() {
@@ -44,6 +46,7 @@ private struct DOMBootstrapConfiguration {
             const bootstrap = {
                 pageEpoch: \(pageEpoch),
                 documentScopeID: \(documentScopeID),
+                traceEnabled: \(traceEnabledLiteral),
                 autoSnapshot: {
                     enabled: \(enabledLiteral),
                     maxDepth: \(autoSnapshotMaxDepth),
@@ -1018,9 +1021,15 @@ private extension DOMPageAgent {
     }
 
     func currentBootstrapConfiguration() -> DOMBootstrapConfiguration {
-        DOMBootstrapConfiguration(
+#if DEBUG
+        let traceEnabled = true
+#else
+        let traceEnabled = false
+#endif
+        return DOMBootstrapConfiguration(
             pageEpoch: pageEpoch,
             documentScopeID: documentScopeID,
+            traceEnabled: traceEnabled,
             autoSnapshotEnabled: autoSnapshotEnabled,
             autoSnapshotMaxDepth: max(1, configuration.snapshotDepth),
             autoSnapshotDebounce: max(50, Int(configuration.autoUpdateDebounce * 1000))

@@ -17,6 +17,7 @@ import {
 } from "./DOMAgent/dom-agent-snapshot";
 import {
     applyDOMAgentBootstrapContext,
+    domTraceEnabled,
     inspector,
     readDOMAgentBootstrap,
     type DOMAgentAutoSnapshotBootstrap,
@@ -63,6 +64,9 @@ function setDocumentScopeID(documentScopeID: number): boolean {
 }
 
 function postDOMAgentTrace(message: string): void {
+    if (!domTraceEnabled()) {
+        return;
+    }
     try {
         window.webkit?.messageHandlers?.webInspectorDOMLog?.postMessage({message});
     } catch {
