@@ -7,7 +7,11 @@
  * - Triggers the initial document request on DOMContentLoaded
  */
 
-import { DOMFrontendBootstrapState, WebInspectorDOMFrontend } from "./dom-tree-types";
+import {
+    DOMFrontendBootstrapState,
+    DOMSelectionSyncPayload,
+    WebInspectorDOMFrontend,
+} from "./dom-tree-types";
 import {
     adoptDocumentContext,
     canAdoptDocumentContext,
@@ -32,7 +36,7 @@ import {
     registerTreeHandlers,
     setPreferredDepth,
 } from "./dom-tree-snapshot";
-import { selectNode, setSearchTerm } from "./dom-tree-view-support";
+import { selectNode, selectNodeByPath, setSearchTerm } from "./dom-tree-view-support";
 
 // =============================================================================
 // Event Handlers
@@ -71,6 +75,42 @@ function readBootstrap(): DOMFrontendBootstrapState {
     const bootstrap: DOMFrontendBootstrapState = {};
     (window as Window & { __wiDOMFrontendBootstrap?: DOMFrontendBootstrapState }).__wiDOMFrontendBootstrap = bootstrap;
     return bootstrap;
+}
+
+function normalizeSelectionSyncPayload(
+    payload: number | DOMSelectionSyncPayload
+): { nodeId: number | null; selectedNodePath: number[] | null } {
+    if (typeof payload === "number" && Number.isFinite(payload)) {
+        return {
+            nodeId: payload > 0 ? payload : null,
+            selectedNodePath: null,
+        };
+    }
+    if (!payload || typeof payload !== "object") {
+        return {
+            nodeId: null,
+            selectedNodePath: null,
+        };
+    }
+
+    const candidateNodeIDs = [
+        payload.selectedLocalId,
+        payload.localID,
+        payload.localId,
+        payload.nodeId,
+        payload.id,
+    ];
+    const nodeId =
+        candidateNodeIDs.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
+        ?? null;
+    const selectedNodePath = Array.isArray(payload.selectedNodePath)
+        && payload.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment))
+        ? payload.selectedNodePath
+        : null;
+    return {
+        nodeId,
+        selectedNodePath,
+    };
 }
 
 // =============================================================================
@@ -126,18 +166,26 @@ function installWebInspectorKit(): void {
             }
         },
         applySelectionPayload: (
-            nodeId,
+            payload,
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
             if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return false;
             }
-            return selectNode(nodeId, {
+            const selection = normalizeSelectionSyncPayload(payload);
+            const selectionOptions = {
                 shouldHighlight: false,
                 autoScroll: true,
                 notifyNative: false,
-            });
+            };
+            if (typeof selection.nodeId === "number" && selectNode(selection.nodeId, selectionOptions)) {
+                return true;
+            }
+            if (Array.isArray(selection.selectedNodePath)) {
+                return selectNodeByPath(selection.selectedNodePath, selectionOptions);
+            }
+            return false;
         },
         completeChildNodeRequest: (
             nodeId,

@@ -1861,7 +1861,7 @@ extension DOMInspectorRuntime {
 
     @discardableResult
     func dispatchSelectionToFrontend(
-        localID: UInt64,
+        payload: [String: Any],
         expectedContext: MutationContext
     ) async -> Bool {
         guard matchesCurrentMutationContext(expectedContext) else {
@@ -1869,12 +1869,11 @@ extension DOMInspectorRuntime {
         }
 #if DEBUG
         if let testFrontendDispatchOverride {
-            return await testFrontendDispatchOverride([
-                "kind": "selection",
-                "localID": localID,
-                "pageEpoch": expectedContext.pageEpoch,
-                "documentScopeID": expectedContext.documentScopeID,
-            ])
+            var frontendPayload = payload
+            frontendPayload["kind"] = "selection"
+            frontendPayload["pageEpoch"] = expectedContext.pageEpoch
+            frontendPayload["documentScopeID"] = expectedContext.documentScopeID
+            return await testFrontendDispatchOverride(frontendPayload)
         }
 #endif
         guard let webView else {
@@ -1882,9 +1881,9 @@ extension DOMInspectorRuntime {
         }
         do {
             let rawResult = try await webView.callAsyncJavaScript(
-                "return window.webInspectorDOMFrontend?.applySelectionPayload?.(nodeId, pageEpoch, documentScopeID) ?? false",
+                "return window.webInspectorDOMFrontend?.applySelectionPayload?.(selectionPayload, pageEpoch, documentScopeID) ?? false",
                 arguments: [
-                    "nodeId": localID,
+                    "selectionPayload": payload,
                     "pageEpoch": expectedContext.pageEpoch,
                     "documentScopeID": expectedContext.documentScopeID,
                 ],

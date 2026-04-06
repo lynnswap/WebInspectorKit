@@ -95,6 +95,15 @@ export interface DOMSnapshot {
     selectedNodePath?: number[];
 }
 
+export interface DOMSelectionSyncPayload {
+    id?: number;
+    nodeId?: number;
+    localId?: number;
+    localID?: number;
+    selectedLocalId?: number;
+    selectedNodePath?: number[] | null;
+}
+
 // =============================================================================
 // Protocol Types
 // =============================================================================
@@ -346,7 +355,11 @@ export interface WebInspectorDOMFrontend {
         pageEpoch?: number,
         documentScopeID?: number
     ): void;
-    applySelectionPayload(nodeId: number, pageEpoch?: number, documentScopeID?: number): boolean;
+    applySelectionPayload(
+        payload: number | DOMSelectionSyncPayload,
+        pageEpoch?: number,
+        documentScopeID?: number
+    ): boolean;
     applySubtreePayload(payload: unknown, pageEpoch?: number, documentScopeID?: number): void;
     completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
     rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;

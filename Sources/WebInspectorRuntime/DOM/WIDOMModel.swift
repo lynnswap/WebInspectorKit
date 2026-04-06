@@ -1524,7 +1524,7 @@ private extension WIDOMInspector {
         }
 
         _ = await transport.dispatchSelectionToFrontend(
-            localID: node.localID,
+            payload: selectionPayload,
             expectedContext: expectedContext
         )
     }
@@ -1542,8 +1542,10 @@ private extension WIDOMInspector {
     }
 
     private func selectionPayloadDictionary(for node: DOMNodeModel) -> [String: Any] {
-        [
+        let selectedNodePath = selectionNodePath(for: node)
+        return [
             "id": node.localID,
+            "selectedLocalId": node.localID,
             "backendNodeId": node.backendNodeID as Any,
             "preview": selectionPreview(for: node),
             "attributes": node.attributes.map {
@@ -1554,6 +1556,7 @@ private extension WIDOMInspector {
                 ]
             },
             "path": selectionPathLabels(for: node),
+            "selectedNodePath": selectedNodePath as Any,
             "selectorPath": node.selectorPath,
             "styleRevision": node.styleRevision,
         ]
@@ -1590,6 +1593,22 @@ private extension WIDOMInspector {
             currentNode = current.parent
         }
         return labels
+    }
+
+    private func selectionNodePath(for node: DOMNodeModel) -> [Int]? {
+        var indices: [Int] = []
+        var currentNode: DOMNodeModel? = node
+        while let current = currentNode, let parent = current.parent {
+            guard let childIndex = parent.children.firstIndex(where: { $0 === current }) else {
+                return nil
+            }
+            indices.insert(childIndex, at: 0)
+            currentNode = parent
+        }
+        guard currentNode === document.rootNode else {
+            return nil
+        }
+        return indices
     }
 
     private func selectionPathLabels(for path: [Int]?) -> [String] {

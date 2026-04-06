@@ -122,4 +122,43 @@ describe("dom-tree-view", () => {
             ).postMessage
         ).toHaveBeenCalled();
     });
+
+    it("falls back to selectedNodePath when the payload node id is not indexed", () => {
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
+            {
+                root: {
+                    nodeId: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["id", "root"],
+                    children: [
+                        {
+                            nodeId: 2,
+                            nodeType: 1,
+                            nodeName: "SPAN",
+                            localName: "span",
+                            attributes: ["id", "target"],
+                            children: [],
+                        },
+                    ],
+                },
+            },
+            "fresh",
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+
+        const didSelect = window.webInspectorDOMFrontend?.applySelectionPayload?.(
+            {
+                selectedLocalId: 999,
+                selectedNodePath: [0],
+            },
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+
+        expect(didSelect).toBe(true);
+        expect(treeState.selectedNodeId).toBe(2);
+    });
 });
