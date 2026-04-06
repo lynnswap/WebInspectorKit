@@ -10,6 +10,8 @@
 import { DOMFrontendBootstrapState, WebInspectorDOMFrontend } from "./dom-tree-types";
 import {
     adoptDocumentContext,
+    canAdoptDocumentContext,
+    restoreDocumentContext,
     updateConfig,
     completeChildNodeRequest,
     rejectChildNodeRequest,
@@ -98,12 +100,15 @@ function installWebInspectorKit(): void {
                 pageEpoch: protocolState.pageEpoch,
                 documentScopeID: protocolState.documentScopeID,
             };
+            if (mode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
+                return;
+            }
             if (mode === "fresh") {
                 adoptDocumentContext(incomingContext);
             }
             if (!setSnapshot(snapshot as never, { mode })) {
                 if (mode === "fresh") {
-                    adoptDocumentContext(previousContext);
+                    restoreDocumentContext(previousContext);
                 }
                 return;
             }

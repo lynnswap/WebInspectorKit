@@ -187,6 +187,36 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func clearingSelectionDropsSelectionProjectionStateFromPreviouslySelectedNode() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
+                selectedLocalID: 42
+            )
+        )
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: 42, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 3
+            )
+        )
+
+        let selectedNode = try! #require(model.selectedNode)
+        model.applySelectionSnapshot(nil)
+
+        #expect(model.selectedNode == nil)
+        #expect(selectedNode.preview.isEmpty)
+        #expect(selectedNode.path.isEmpty)
+        #expect(selectedNode.selectorPath.isEmpty)
+        #expect(selectedNode.styleRevision == 0)
+    }
+
+    @Test
     func clearDocumentDropsRootAndSelection() {
         let model = DOMDocumentModel()
         model.replaceDocument(

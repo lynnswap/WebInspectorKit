@@ -99,7 +99,14 @@ export function updateConfig(partial: ProtocolConfig | null | undefined): void {
     }
 }
 
-export function adoptDocumentContext(context: DOMDocumentContext | null | undefined): boolean {
+type AdoptDocumentContextOptions = {
+    allowOutOfOrder?: boolean;
+};
+
+export function adoptDocumentContext(
+    context: DOMDocumentContext | null | undefined,
+    options: AdoptDocumentContextOptions = {}
+): boolean {
     if (typeof context !== "object" || context === null) {
         return false;
     }
@@ -112,6 +119,10 @@ export function adoptDocumentContext(context: DOMDocumentContext | null | undefi
         typeof context.documentScopeID === "number" && Number.isFinite(context.documentScopeID)
             ? context.documentScopeID
             : protocolState.documentScopeID;
+
+    if (!options.allowOutOfOrder && !canAdoptResolvedDocumentContext(nextPageEpoch, nextDocumentScopeID)) {
+        return false;
+    }
 
     const didChange =
         nextPageEpoch !== protocolState.pageEpoch
@@ -129,6 +140,49 @@ export function adoptDocumentContext(context: DOMDocumentContext | null | undefi
         handler();
     });
     return true;
+}
+
+export function canAdoptDocumentContext(context: DOMDocumentContext | null | undefined): boolean {
+    if (typeof context !== "object" || context === null) {
+        return false;
+    }
+
+    const nextPageEpoch =
+        typeof context.pageEpoch === "number" && Number.isFinite(context.pageEpoch)
+            ? context.pageEpoch
+            : protocolState.pageEpoch;
+    const nextDocumentScopeID =
+        typeof context.documentScopeID === "number" && Number.isFinite(context.documentScopeID)
+            ? context.documentScopeID
+            : protocolState.documentScopeID;
+    return canAdoptResolvedDocumentContext(nextPageEpoch, nextDocumentScopeID);
+}
+
+export function restoreDocumentContext(context: DOMDocumentContext | null | undefined): boolean {
+    if (typeof context !== "object" || context === null) {
+        return false;
+    }
+
+    const nextPageEpoch =
+        typeof context.pageEpoch === "number" && Number.isFinite(context.pageEpoch)
+            ? context.pageEpoch
+            : protocolState.pageEpoch;
+    const nextDocumentScopeID =
+        typeof context.documentScopeID === "number" && Number.isFinite(context.documentScopeID)
+            ? context.documentScopeID
+            : protocolState.documentScopeID;
+
+    protocolState.pageEpoch = nextPageEpoch;
+    protocolState.documentScopeID = nextDocumentScopeID;
+    return true;
+}
+
+function canAdoptResolvedDocumentContext(nextPageEpoch: number, nextDocumentScopeID: number): boolean {
+    const isOlderPageEpoch = nextPageEpoch < protocolState.pageEpoch;
+    const isOlderDocumentScopeID =
+        nextPageEpoch === protocolState.pageEpoch
+        && nextDocumentScopeID < protocolState.documentScopeID;
+    return !(isOlderPageEpoch || isOlderDocumentScopeID);
 }
 
 export function matchesCurrentDocumentContext(

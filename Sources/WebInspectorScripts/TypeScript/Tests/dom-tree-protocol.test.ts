@@ -143,14 +143,24 @@ describe("dom-tree typed backend bridge", () => {
         expect(latestPostedPayload(documentHandler())?.depth).toBe(7);
     });
 
-    it("adopts lower page epochs exactly when the document context changes", () => {
+    it("rejects out-of-order document contexts", () => {
         adoptDocumentContext({ pageEpoch: 3, documentScopeID: 9 });
 
         const didAdopt = adoptDocumentContext({ pageEpoch: 1, documentScopeID: 4 });
 
+        expect(didAdopt).toBe(false);
+        expect(protocolState.pageEpoch).toBe(3);
+        expect(protocolState.documentScopeID).toBe(9);
+    });
+
+    it("adopts newer document scopes for the current page epoch", () => {
+        adoptDocumentContext({ pageEpoch: 3, documentScopeID: 4 });
+
+        const didAdopt = adoptDocumentContext({ pageEpoch: 3, documentScopeID: 9 });
+
         expect(didAdopt).toBe(true);
-        expect(protocolState.pageEpoch).toBe(1);
-        expect(protocolState.documentScopeID).toBe(4);
+        expect(protocolState.pageEpoch).toBe(3);
+        expect(protocolState.documentScopeID).toBe(9);
     });
 
     it("ignores stale document request callbacks after documentScopeID changes", async () => {
@@ -479,7 +489,7 @@ describe("dom-tree typed backend bridge", () => {
         expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("after");
     });
 
-    it("adopts a fresh snapshot that carries a lower documentScopeID", () => {
+    it("rejects a stale fresh snapshot that carries a lower documentScopeID", () => {
         setSnapshot({
             root: {
                 nodeId: 1,
@@ -510,8 +520,8 @@ describe("dom-tree typed backend bridge", () => {
             },
         });
 
-        expect(protocolState.documentScopeID).toBe(1);
-        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "id")?.value).toBe("page-one");
+        expect(protocolState.documentScopeID).toBe(2);
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "id")?.value).toBe("page-two");
     });
 
     it("drops preserve-ui-state snapshots whose context no longer matches", () => {

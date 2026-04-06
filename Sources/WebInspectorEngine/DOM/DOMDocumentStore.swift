@@ -116,12 +116,16 @@ public final class DOMDocumentModel {
     }
 
     package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
+        if let previousSelectedNode = selectedNode, payload?.localID == nil {
+            previousSelectedNode.clearSelectionProjectionState()
+        }
         guard let payload, let localID = payload.localID else {
             selectedNode = nil
             return
         }
 
-        let node = node(forLocalID: localID) ?? makePlaceholderNode(
+        let existingNode = node(forLocalID: localID)
+        let node = existingNode ?? makePlaceholderNode(
             localID: localID,
             backendNodeID: payload.backendNodeID,
             synthesizeBackendNodeID: false
@@ -129,6 +133,10 @@ public final class DOMDocumentModel {
         if let payloadBackendNodeID = payload.backendNodeID,
            node.backendNodeID != payloadBackendNodeID {
             node.backendNodeID = payloadBackendNodeID
+        } else if existingNode == nil, node.backendNodeID != nil {
+            node.backendNodeID = nil
+        } else if existingNode == nil, payload.backendNodeID == nil {
+            node.backendNodeID = payload.backendNodeID
         }
         node.preview = payload.preview
         node.path = payload.path

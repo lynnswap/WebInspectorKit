@@ -1016,7 +1016,7 @@ struct DOMInspectorTests {
 
         undoManager.undo()
 
-        let restored = await waitForCondition {
+        let restored = await waitForCondition(maxAttempts: 400) {
             let exists = await domNodeExists(withID: "target", in: webView)
             let selectedBackendNodeID = inspector.document.selectedNode?.backendNodeID
             return exists && selectedBackendNodeID == targetNodeID
@@ -1121,7 +1121,7 @@ struct DOMInspectorTests {
         #expect(deleted == true)
 
         undoManager.undo()
-        let restored = await waitForCondition {
+        let restored = await waitForCondition(maxAttempts: 400) {
             let exists = await domNodeExists(withID: "target", in: webView)
             return exists && inspector.document.node(backendNodeID: targetNodeID) != nil
         }

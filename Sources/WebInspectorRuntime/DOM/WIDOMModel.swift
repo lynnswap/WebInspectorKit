@@ -963,12 +963,12 @@ private extension WIDOMInspector {
             }
             let reloadResult: DOMMutationResult
             if matchesCurrentContext {
-                reloadResult = await self.reloadDocumentPreservingInspectorState()
-                if reloadResult == .ignoredStaleContext {
-                    _ = await self.resyncDocumentAfterContextLoss()
-                }
+                reloadResult = await self.resyncDocumentAfterContextLoss()
             } else {
                 reloadResult = await self.resyncDocumentAfterContextLoss()
+            }
+            if matchesCurrentContext, reloadResult == .applied {
+                self.reconcileSelectionAfterUndoRestore(restoreSelectionPayload)
             }
             if matchesCurrentContext, reloadResult != .applied {
                 self.transport.setPendingSelectionOverride(localID: nil)
@@ -1103,6 +1103,38 @@ private extension WIDOMInspector {
             selectorPath: selectedNode.selectorPath,
             styleRevision: selectedNode.styleRevision
         )
+    }
+
+    private func reconcileSelectionAfterUndoRestore(_ payload: DOMSelectionSnapshotPayload?) {
+        guard let payload else {
+            return
+        }
+
+        let resolvedNode: DOMNodeModel?
+        if let backendNodeID = payload.backendNodeID {
+            resolvedNode = document.node(backendNodeID: backendNodeID)
+        } else if let localID = payload.localID {
+            resolvedNode = document.node(localID: localID)
+        } else {
+            resolvedNode = nil
+        }
+
+        guard let resolvedNode else {
+            return
+        }
+
+        document.applySelectionSnapshot(
+            .init(
+                localID: resolvedNode.localID,
+                backendNodeID: resolvedNode.backendNodeID ?? payload.backendNodeID,
+                preview: payload.preview,
+                attributes: resolvedNode.attributes,
+                path: payload.path,
+                selectorPath: payload.selectorPath,
+                styleRevision: payload.styleRevision
+            )
+        )
+        transport.setPendingSelectionOverride(localID: resolvedNode.localID)
     }
 
     func rememberDeleteUndoManager(_ undoManager: UndoManager) {

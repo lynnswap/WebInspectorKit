@@ -105,4 +105,11 @@ public final class DOMNodeModel: Equatable, Hashable {
     public nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(ObjectIdentifier(self))
     }
+
+    package func clearSelectionProjectionState() {
+        preview = ""
+        path = []
+        selectorPath = ""
+        styleRevision = 0
+    }
 }

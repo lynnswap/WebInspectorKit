@@ -29,12 +29,14 @@ import {
 import { safeParseJSON } from "./dom-tree-utilities";
 import {
     adoptDocumentContext,
+    canAdoptDocumentContext,
     isExpectedStaleProtocolResponseError,
     matchesCurrentDocumentContext,
     markChildNodesRequestCompleted,
     onChildNodeRequestCompleted,
     onPageEpochDidChange,
     resetChildNodeRequests,
+    restoreDocumentContext,
     reportInspectorError,
     requestDocumentFromBackend,
 } from "./dom-tree-protocol";
@@ -649,6 +651,9 @@ export function applyMutationBundle(
         }
         postDOMFrontendTrace(`apply snapshot bundle mode=${snapshotMode}`);
         if (parsed.snapshot) {
+            if (snapshotMode === "fresh" && !canAdoptDocumentContext(effectiveContext)) {
+                return;
+            }
             const previousContext = {
                 pageEpoch: protocolState.pageEpoch,
                 documentScopeID: protocolState.documentScopeID,
@@ -662,7 +667,7 @@ export function applyMutationBundle(
             );
             if (!didApplySnapshot) {
                 if (snapshotMode === "fresh") {
-                    adoptDocumentContext(previousContext);
+                    restoreDocumentContext(previousContext);
                 }
                 return;
             }
