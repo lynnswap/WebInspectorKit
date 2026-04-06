@@ -40,6 +40,11 @@ private protocol ElementAttributeEditorCellDelegate: AnyObject {
 
 @MainActor
 public final class WIDOMDetailViewController: UICollectionViewController {
+    private struct PendingInlineCommitMarker: Equatable {
+        let key: ElementAttributeEditingKey
+        let generation: UInt64
+    }
+
     private struct SectionIdentifier: Hashable, Sendable {
         let index: Int
         let title: String
@@ -112,11 +117,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var attributeDraftSession: WIDOMAttributeDraftSession?
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var suppressedInlineCommitKey: ElementAttributeEditingKey?
+    private var pendingInlineCommitMarker: PendingInlineCommitMarker?
+    private var nextInlineCommitGeneration: UInt64 = 0
     private var isInlineEditingActive = false
     private var pendingInlineSelectionClearTask: Task<Void, Never>?
     private var pendingInlineEditingRefreshTask: Task<Void, Never>?
     private var pendingForcedProjectionRefresh = false
     private var pendingFocusRestoreKey: ElementAttributeEditingKey?
+    private var pendingFocusRestoreGeneration: UInt64?
     private var pendingFocusRestoreFromModelUpdate = false
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
@@ -871,7 +879,11 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         editingAttributeKey = nil
         if pendingFocusRestoreKey == clearedKey {
             pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
             pendingFocusRestoreFromModelUpdate = false
+        }
+        if pendingInlineCommitMarker?.key == clearedKey {
+            pendingInlineCommitMarker = nil
         }
         if suppressedInlineCommitKey == clearedKey,
            let clearedKey,
@@ -1024,10 +1036,10 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         key: ElementAttributeEditingKey,
         value: String
     ) {
-        if pendingFocusRestoreKey == key {
-            pendingFocusRestoreKey = nil
-            pendingFocusRestoreFromModelUpdate = false
-        }
+        pendingInlineCommitMarker = nil
+        pendingFocusRestoreKey = nil
+        pendingFocusRestoreGeneration = nil
+        pendingFocusRestoreFromModelUpdate = false
         if suppressedInlineCommitKey == key {
             suppressedInlineCommitKey = nil
         }
@@ -1060,6 +1072,12 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         guard isAttributeDraftDirty(for: key) else {
             return
         }
+        nextInlineCommitGeneration &+= 1
+        let commitMarker = PendingInlineCommitMarker(
+            key: key,
+            generation: nextInlineCommitGeneration
+        )
+        pendingInlineCommitMarker = commitMarker
         let inspector = inspector
         let submittedValue = value
         Task {
@@ -1068,16 +1086,46 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
                 name: key.name,
                 value: submittedValue
             )
-            guard result == .applied else {
-                return
-            }
             await MainActor.run {
-                self.attributeDraftSession = resolveInlineAttributeDraftSessionAfterSuccessfulSave(
+                guard result == .applied else {
+                    if self.pendingInlineCommitMarker == commitMarker {
+                        self.pendingInlineCommitMarker = nil
+                    }
+                    if self.pendingFocusRestoreKey == key {
+                        if self.pendingFocusRestoreGeneration == commitMarker.generation {
+                            self.pendingFocusRestoreKey = nil
+                            self.pendingFocusRestoreGeneration = nil
+                            self.pendingFocusRestoreFromModelUpdate = false
+                        }
+                    }
+                    return
+                }
+                let resolvedSession = resolveInlineAttributeDraftSessionAfterSuccessfulSave(
                     currentSession: self.currentAttributeDraftSession(for: key),
                     key: .init(nodeID: key.nodeID, attributeName: key.name),
                     submittedValue: submittedValue,
                     previousValue: previousValue
                 )
+                self.attributeDraftSession = resolvedSession
+                let shouldDeferFocusRestore =
+                    self.isInlineEditingActive && self.editingAttributeKey == key
+                if resolvedSession?.isAwaitingModelEcho == true,
+                   self.pendingInlineCommitMarker == commitMarker,
+                   shouldDeferFocusRestore {
+                    self.pendingFocusRestoreKey = key
+                    self.pendingFocusRestoreGeneration = commitMarker.generation
+                    self.pendingFocusRestoreFromModelUpdate = true
+                } else if self.pendingFocusRestoreKey == key {
+                    if self.pendingFocusRestoreGeneration == commitMarker.generation {
+                        self.pendingFocusRestoreKey = nil
+                        self.pendingFocusRestoreGeneration = nil
+                        self.pendingFocusRestoreFromModelUpdate = false
+                    }
+                }
+                if self.pendingInlineCommitMarker == commitMarker {
+                    self.pendingInlineCommitMarker = nil
+                }
+                self.reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: false)
             }
         }
     }
@@ -1095,6 +1143,7 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
                 pendingFocusRestoreFromModelUpdate = false
             } else {
                 pendingFocusRestoreKey = nil
+                pendingFocusRestoreGeneration = nil
             }
         }
         if suppressingInlineCommit {
@@ -1185,6 +1234,10 @@ private extension WIDOMDetailViewController {
         }
 
         guard selectedNode.id == attributeDraftSession.key.nodeID else {
+            pendingInlineCommitMarker = nil
+            pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
+            pendingFocusRestoreFromModelUpdate = false
             self.attributeDraftSession = nil
             return
         }
@@ -1195,6 +1248,7 @@ private extension WIDOMDetailViewController {
         case .refreshClean:
             self.attributeDraftSession = attributeDraftSession
             pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
             pendingFocusRestoreFromModelUpdate = false
         case .preserveDirty:
             self.attributeDraftSession = attributeDraftSession
@@ -1202,7 +1256,16 @@ private extension WIDOMDetailViewController {
                 nodeID: attributeDraftSession.key.nodeID,
                 name: attributeDraftSession.key.attributeName
             )
-            let shouldRestoreFocus = isInlineEditingActive && editingAttributeKey == restoreKey
+            let existingRestoreKey = pendingFocusRestoreKey
+            let existingRestoreGeneration = pendingFocusRestoreGeneration
+            let wasRestoringFromModelUpdate = pendingFocusRestoreFromModelUpdate
+            let shouldRestoreFocus: Bool
+            if isInlineEditingActive {
+                shouldRestoreFocus = editingAttributeKey == restoreKey
+            } else {
+                shouldRestoreFocus = pendingFocusRestoreKey == restoreKey
+                    && attributeDraftSession.isAwaitingModelEcho
+            }
             if let selectedEntry = inspector.document.selectedNode,
                let editorCell = visibleAttributeEditorCell(for: restoreKey) {
                 editorCell.configure(
@@ -1215,13 +1278,22 @@ private extension WIDOMDetailViewController {
             }
             if shouldRestoreFocus {
                 pendingFocusRestoreKey = restoreKey
+                if let pendingInlineCommitMarker, pendingInlineCommitMarker.key == restoreKey {
+                    pendingFocusRestoreGeneration = pendingInlineCommitMarker.generation
+                } else if wasRestoringFromModelUpdate, existingRestoreKey == restoreKey {
+                    pendingFocusRestoreGeneration = existingRestoreGeneration
+                } else {
+                    pendingFocusRestoreGeneration = nil
+                }
                 pendingFocusRestoreFromModelUpdate = true
             } else {
                 pendingFocusRestoreKey = nil
+                pendingFocusRestoreGeneration = nil
                 pendingFocusRestoreFromModelUpdate = false
             }
         case .clear:
             pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
             pendingFocusRestoreFromModelUpdate = false
             self.attributeDraftSession = nil
         }

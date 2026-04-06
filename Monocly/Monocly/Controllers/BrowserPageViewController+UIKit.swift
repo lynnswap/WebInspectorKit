@@ -2,7 +2,6 @@
 import OSLog
 import UIKit
 import WebInspectorKit
-import WKViewport
 
 @MainActor
 final class BrowserPageViewController: UIViewController {
@@ -45,7 +44,7 @@ final class BrowserPageViewController: UIViewController {
     }
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
-    private var viewportCoordinator: ViewportCoordinator?
+    private var viewportCoordinator: BrowserViewportCoordinator?
     private var storeObserverID: UUID?
     private var historyObserverID: UUID?
     private var inspectorWindowObserverID: UUID?
@@ -92,7 +91,10 @@ final class BrowserPageViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        viewportCoordinator = ViewportCoordinator(webView: store.webView)
+        viewportCoordinator = BrowserViewportCoordinator(webView: store.webView)
+        viewportCoordinator?.hostViewController = self
+        (store.webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
 
         storeObserverID = store.addStateObserver { [weak self] in
             self?.renderState()
@@ -122,9 +124,16 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        viewportCoordinator?.handleWebViewHierarchyDidChange()
+        viewportCoordinator?.handleViewDidAppear()
         refreshChromeControls()
         store.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
     }
 
     @objc

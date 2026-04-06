@@ -1,9 +1,9 @@
-#if canImport(UIKit)
+#if os(iOS)
 import SwiftUI
 import Testing
 import UIKit
 import WebKit
-import WKViewport
+import WKViewportCoordinator
 
 @MainActor
 struct WKViewportConsumerSmokeTests {
@@ -30,6 +30,11 @@ struct WKViewportConsumerSmokeTests {
         }
 
         let coordinator = ViewportCoordinator(webView: webView)
+        window.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+        hostViewController.view.layoutIfNeeded()
+        coordinator.handleWebViewHierarchyDidChange()
+        coordinator.handleViewDidAppear()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         coordinator.invalidate()
@@ -133,6 +138,10 @@ struct WKViewportConsumerSmokeTests {
             webView.bottomAnchor.constraint(equalTo: hostViewController.view.bottomAnchor),
         ])
         hostViewController.view.layoutIfNeeded()
+        window.layoutIfNeeded()
+        navigationController.view.layoutIfNeeded()
+        coordinator.handleWebViewHierarchyDidChange()
+        coordinator.handleViewDidAppear()
 
         #expect(hostViewController.contentScrollView(for: .top) === webView.scrollView)
         #expect(containsViewportObservationView(in: hostViewController.view))

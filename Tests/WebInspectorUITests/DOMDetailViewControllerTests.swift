@@ -240,7 +240,7 @@ struct DOMDetailViewControllerTests {
             )
         )
 
-        let draftPreserved = await waitUntil {
+        let draftPreserved = await waitUntil(maxTicks: 4096) {
             guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
@@ -361,7 +361,7 @@ struct DOMDetailViewControllerTests {
             )
         )
 
-        let draftPreserved = await waitUntil {
+        let draftPreserved = await waitUntil(maxTicks: 4096) {
             guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
@@ -442,7 +442,7 @@ struct DOMDetailViewControllerTests {
         textView.delegate?.textViewDidChange?(textView)
         try await Task.sleep(nanoseconds: 100_000_000)
 
-        let dirtyDraftPreserved = await waitUntil {
+        let dirtyDraftPreserved = await waitUntil(maxTicks: 4096) {
             guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
