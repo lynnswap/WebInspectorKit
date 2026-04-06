@@ -1,5 +1,5 @@
 {
-  "originHash" : "8961f37b5b4281cb67e90ac2060eab75105088c3df3a8ab8b092053ae01cfa8e",
+  "originHash" : "7f78598663ca5d784049b3e1f8c5f411a153f573ccc8c8f9454685440c1c0a43",
   "pins" : [
     {
       "identity" : "machokit",
@@ -77,8 +77,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "3a9699130e1db1e1fb1d4d316cb5d2278bf01761",
-        "version" : "0.2.0"
+        "revision" : "b19a1872971fee2ecc71fac3ee6487242d37d74d",
+        "version" : "0.3.0"
       }
     }
   ],

@@ -53,10 +53,6 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/MachOKit.git",
             revision: "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
-        ),
-        .package(
-            url: "https://github.com/lynnswap/WKViewportCoordinator.git",
-            exact: "0.2.0"
         )
     ],
     targets: [
@@ -212,11 +208,6 @@ let package = Package(
         .testTarget(
             name: "WebInspectorUITests",
             dependencies: [
-                .product(
-                    name: "WKViewportCoordinator",
-                    package: "WKViewportCoordinator",
-                    condition: .when(platforms: [.iOS])
-                ),
                 "WebInspectorUI",
                 "WebInspectorRuntime",
                 "WebInspectorEngine",

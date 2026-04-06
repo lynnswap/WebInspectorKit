@@ -133,9 +133,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
+        drainMainQueue()
 
+        let adjustedBottomInset = rootViewController.store.webView.scrollView.adjustedContentInset.bottom
+        let pageSafeAreaBottom = pageViewController.view.safeAreaInsets.bottom
         let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
+
+        XCTAssertEqual(adjustedBottomInset, pageSafeAreaBottom, accuracy: 0.5)
         XCTAssertGreaterThan(pageViewController.view.safeAreaInsets.bottom, windowSafeAreaBottom)
+        XCTAssertGreaterThan(adjustedBottomInset, windowSafeAreaBottom)
     }
 
     @MainActor

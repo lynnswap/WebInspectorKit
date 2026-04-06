@@ -496,8 +496,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
+				XROS_DEPLOYMENT_TARGET = 26.1;
 			};
 			name = Debug;
 		};
@@ -523,8 +523,8 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				XROS_DEPLOYMENT_TARGET = 26.1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Monocly.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Monocly";
+				XROS_DEPLOYMENT_TARGET = 26.1;
 			};
 			name = Release;
 		};
@@ -572,8 +572,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/lynnswap/WKViewportCoordinator.git";
 			requirement = {
-				kind = exactVersion;
-				version = 0.2.0;
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.3.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
