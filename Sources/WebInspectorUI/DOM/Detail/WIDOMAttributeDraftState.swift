@@ -304,6 +304,10 @@ private func resolveAttributeDraftSessionAfterSuccessfulSave(
     if dismissOnSuccessfulSave {
         return nil
     }
+    if submittedValue == previousValue {
+        session.markCommitted()
+        return session
+    }
     session.markAwaitingModelEcho(
         submittedValue: submittedValue,
         previousValue: previousValue

@@ -2777,7 +2777,7 @@ struct DOMInspectorRuntimeTests {
         }
         #expect(didReject == true)
 
-        store.clearDocumentReplacementAfterContextAdoptionRequirement()
+        await store.clearDocumentReplacementAfterContextAdoptionRequirement()
         store.restartSelectionDependentRequestsAfterResync()
 
         let didDrain = await waitForCondition {
@@ -2803,7 +2803,7 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.documentIdentity == initialDocumentIdentity)
         #expect(store.currentDocumentModel.node(id: initialSelectedNodeID) != nil)
 
-        let didApplyReplacement = store.applyReplacementDOMBundleAfterContextAdoption(
+        let didApplyReplacement = await store.applyReplacementDOMBundleAfterContextAdoption(
             .init(
                 objectEnvelope: [
                     "version": 1,

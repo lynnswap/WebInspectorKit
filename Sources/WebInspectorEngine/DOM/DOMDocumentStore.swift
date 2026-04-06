@@ -133,10 +133,6 @@ public final class DOMDocumentModel {
         if let payloadBackendNodeID = payload.backendNodeID,
            node.backendNodeID != payloadBackendNodeID {
             node.backendNodeID = payloadBackendNodeID
-        } else if existingNode == nil, node.backendNodeID != nil {
-            node.backendNodeID = nil
-        } else if existingNode == nil, payload.backendNodeID == nil {
-            node.backendNodeID = payload.backendNodeID
         }
         node.preview = payload.preview
         node.path = payload.path

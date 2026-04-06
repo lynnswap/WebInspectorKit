@@ -452,7 +452,7 @@ private extension WIDOMInspector {
         do {
             let payload = try await session.captureSnapshotPayload(
                 maxDepth: session.configuration.snapshotDepth,
-                initialModeOwnership: .preservePendingInitialMode
+                initialModeOwnership: .consumePendingInitialMode
             )
             transport.handleDOMBundle(
                 .init(
@@ -466,10 +466,6 @@ private extension WIDOMInspector {
                     pageEpoch: transport.currentPageEpoch,
                     documentScopeID: transport.currentDocumentScopeID
                 )
-            )
-            await session.consumePendingInitialSnapshotMode(
-                expectedPageEpoch: transport.currentPageEpoch,
-                expectedDocumentScopeID: transport.currentDocumentScopeID
             )
             applyRecoverableError(nil)
             return .applied
@@ -486,9 +482,9 @@ private extension WIDOMInspector {
         do {
             let payload = try await session.captureSnapshotPayload(
                 maxDepth: session.configuration.snapshotDepth,
-                initialModeOwnership: .preservePendingInitialMode
+                initialModeOwnership: .consumePendingInitialMode
             )
-            let didApplyReplacement = transport.applyReplacementDOMBundleAfterContextAdoption(
+            let didApplyReplacement = await transport.applyReplacementDOMBundleAfterContextAdoption(
                 .init(
                     objectEnvelope: [
                         "version": 1,
@@ -504,10 +500,6 @@ private extension WIDOMInspector {
             guard didApplyReplacement else {
                 return .failed
             }
-            await session.consumePendingInitialSnapshotMode(
-                expectedPageEpoch: transport.currentPageEpoch,
-                expectedDocumentScopeID: transport.currentDocumentScopeID
-            )
             applyRecoverableError(nil)
             return .applied
         } catch {
@@ -1425,7 +1417,7 @@ private extension WIDOMInspector {
 
     private func materializeSelectionNode(
         selectedBackendNodeID: Int?,
-        ancestorBackendNodeIDs _: [UInt64],
+        ancestorBackendNodeIDs: [UInt64],
         selectedLocalID: UInt64?,
         ancestorLocalIDs: [UInt64],
         fallbackDepth: Int,
@@ -1448,37 +1440,54 @@ private extension WIDOMInspector {
             return Int(selectedLocalID)
         }()
 
-        var fetchCandidates: [(nodeID: Int, depth: Int)] = []
+        var fetchCandidates: [(target: DOMRequestNodeTarget, depth: Int)] = []
         for (index, ancestorLocalID) in normalizedAncestorLocalIDs.enumerated().reversed() {
             guard document.node(localID: UInt64(ancestorLocalID)) != nil else {
                 continue
             }
             fetchCandidates.append((
-                nodeID: ancestorLocalID,
+                target: .local(UInt64(ancestorLocalID)),
                 depth: max(1, normalizedAncestorLocalIDs.count - index)
             ))
             break
         }
 
-        if let fallbackLocalID = normalizedAncestorLocalIDs.first ?? normalizedSelectedLocalID {
+        if let selectedBackendNodeID {
             fetchCandidates.append((
-                nodeID: fallbackLocalID,
-                depth: max(1, fallbackDepth)
-            ))
-        } else if let rootLocalID = document.rootNode?.localID, rootLocalID <= UInt64(Int.max) {
-            fetchCandidates.append((
-                nodeID: Int(rootLocalID),
+                target: .backend(selectedBackendNodeID),
                 depth: max(1, fallbackDepth)
             ))
         }
 
-        var attemptedNodeIDs = Set<Int>()
+        for ancestorBackendNodeID in ancestorBackendNodeIDs.reversed() {
+            guard ancestorBackendNodeID <= UInt64(Int.max) else {
+                continue
+            }
+            fetchCandidates.append((
+                target: .backend(Int(ancestorBackendNodeID)),
+                depth: max(1, fallbackDepth)
+            ))
+        }
+
+        if let fallbackLocalID = normalizedAncestorLocalIDs.first ?? normalizedSelectedLocalID {
+            fetchCandidates.append((
+                target: .local(UInt64(fallbackLocalID)),
+                depth: max(1, fallbackDepth)
+            ))
+        } else if let rootLocalID = document.rootNode?.localID, rootLocalID <= UInt64(Int.max) {
+            fetchCandidates.append((
+                target: .local(rootLocalID),
+                depth: max(1, fallbackDepth)
+            ))
+        }
+
+        var attemptedTargets = Set<DOMRequestNodeTarget>()
         for candidate in fetchCandidates {
-            guard attemptedNodeIDs.insert(candidate.nodeID).inserted else {
+            guard attemptedTargets.insert(candidate.target).inserted else {
                 continue
             }
             let didMaterialize = await transport.materializeSubtree(
-                nodeID: candidate.nodeID,
+                target: candidate.target,
                 depth: candidate.depth,
                 expectedContext: expectedContext
             )

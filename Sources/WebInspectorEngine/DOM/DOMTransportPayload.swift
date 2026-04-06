@@ -50,7 +50,7 @@ package struct DOMGraphSnapshot: Sendable {
     }
 }
 
-package enum DOMRequestNodeTarget: Sendable, Equatable {
+package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
     case local(UInt64)
     case backend(Int)
 

@@ -849,8 +849,8 @@ extension DOMInspectorRuntime {
         mutationPipeline.setReady(isReady && phase.allowsFrontendTraffic && bootstrapTask == nil && !hasPendingBootstrapWork)
     }
 
-    func clearDocumentReplacementAfterContextAdoptionRequirement() {
-        clearDocumentReplacementAfterContextAdoptionRequirement(
+    func clearDocumentReplacementAfterContextAdoptionRequirement() async {
+        await clearDocumentReplacementAfterContextAdoptionRequirement(
             pageEpoch: pageEpoch,
             documentScopeID: currentDocumentScope.documentScopeID
         )
@@ -859,15 +859,18 @@ extension DOMInspectorRuntime {
     private func clearDocumentReplacementAfterContextAdoptionRequirement(
         pageEpoch: Int,
         documentScopeID: UInt64
-    ) {
+    ) async {
+        guard replacementFenceContext == .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID) else {
+            return
+        }
+        if bootstrapTask == nil {
+            await applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: pageEpoch)
+        }
         guard replacementFenceContext == .init(pageEpoch: pageEpoch, documentScopeID: documentScopeID) else {
             return
         }
         replacementFenceContext = nil
         activateDeferredReadyMessageIfMatchingCurrentContext()
-        if bootstrapTask == nil {
-            applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: pageEpoch)
-        }
         drainDeferredFrontendDocumentRequestIfNeeded()
         drainDeferredFrontendChildNodeRetryIfNeeded()
     }
@@ -1146,7 +1149,7 @@ extension DOMInspectorRuntime {
         guard Task.isCancelled == false else {
             return true
         }
-        applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: expectedPageEpoch)
+        await applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: expectedPageEpoch)
 
         publishRecoverableError(nil)
         return true
@@ -1408,7 +1411,7 @@ extension DOMInspectorRuntime {
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
                 return true
             }
-            clearDocumentReplacementAfterContextAdoptionRequirement()
+            await clearDocumentReplacementAfterContextAdoptionRequirement()
             return true
         }
 #endif
@@ -1436,7 +1439,7 @@ extension DOMInspectorRuntime {
                 return false
             }
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
-                clearDocumentReplacementAfterContextAdoptionRequirement(
+                await clearDocumentReplacementAfterContextAdoptionRequirement(
                     pageEpoch: expectedPageEpoch,
                     documentScopeID: requestDocumentScopeID
                 )
@@ -1446,7 +1449,7 @@ extension DOMInspectorRuntime {
             guard let snapshot = payloadNormalizer.normalizeSnapshot(payloadForDispatch) else {
                 publishRecoverableError("Snapshot normalization failed")
                 inspectorLogger.error("normalize snapshot failed after frontend dispatch")
-                clearDocumentReplacementAfterContextAdoptionRequirement()
+                await clearDocumentReplacementAfterContextAdoptionRequirement()
                 if clearsReplacementFence {
                     restartSelectionDependentRequestsAfterResync()
                 }
@@ -1463,7 +1466,7 @@ extension DOMInspectorRuntime {
             if appliedSelectionOverride {
                 pendingSelectionOverrideLocalID = nil
             }
-            clearDocumentReplacementAfterContextAdoptionRequirement()
+            await clearDocumentReplacementAfterContextAdoptionRequirement()
             if clearsReplacementFence {
                 restartSelectionDependentRequestsAfterResync()
             }
@@ -1796,7 +1799,7 @@ extension DOMInspectorRuntime {
 
     @discardableResult
     func materializeSubtree(
-        nodeID: Int,
+        target: DOMRequestNodeTarget,
         depth: Int,
         expectedContext: MutationContext
     ) async -> Bool {
@@ -1809,7 +1812,7 @@ extension DOMInspectorRuntime {
 
         do {
             let payload = try await session.captureSubtreePayload(
-                target: .local(UInt64(nodeID)),
+                target: target,
                 maxDepth: depth
             )
             guard matchesCurrentMutationContext(expectedContext),
@@ -2373,24 +2376,37 @@ extension DOMInspectorRuntime {
         enqueueMutationPayload(bundle, preservingInspectorState: preservesInspectorState)
     }
 
-    private func applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: Int) {
-        guard pageEpoch == expectedPageEpoch else {
-            deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
-            return
-        }
-        guard !deferredDOMBundlesDuringBootstrap.isEmpty else {
-            return
-        }
-        let bundles = deferredDOMBundlesDuringBootstrap
-        deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
-        // Transition/reset clears this queue, so the remaining entries all belong to the
-        // current bootstrap session and must replay in-order even if one bundle replaces the document.
-        for entry in bundles {
-            guard acceptsDOMBundle(documentScopeID: entry.bundle.documentScopeID) else {
-                continue
+    private func applyDeferredDOMBundlesIfNeeded(expectedPageEpoch: Int) async {
+        while true {
+            guard pageEpoch == expectedPageEpoch else {
+                deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
+                return
             }
-            let preservesInspectorState = applyDOMBundleToCurrentDocumentStore(entry.bundle)
-            enqueueMutationPayload(entry.bundle, preservingInspectorState: preservesInspectorState)
+            guard !deferredDOMBundlesDuringBootstrap.isEmpty else {
+                return
+            }
+            let expectedRequestScope = currentRequestScope
+            let expectedDocumentScopeID = currentDocumentScope.documentScopeID
+            let bundles = deferredDOMBundlesDuringBootstrap
+            deferredDOMBundlesDuringBootstrap.removeAll(keepingCapacity: true)
+            // Transition/reset clears this queue, so the remaining entries all belong to the
+            // current bootstrap session and must replay in-order even if one bundle replaces the document.
+            for entry in bundles {
+                guard pageEpoch == expectedPageEpoch else {
+                    return
+                }
+                guard acceptsDOMBundle(documentScopeID: entry.bundle.documentScopeID) else {
+                    continue
+                }
+                let preservesInspectorState = applyDOMBundleToCurrentDocumentStore(entry.bundle)
+                enqueueMutationPayload(entry.bundle, preservingInspectorState: preservesInspectorState)
+                guard pageEpoch == expectedPageEpoch,
+                      currentRequestScope === expectedRequestScope,
+                      currentDocumentScope.documentScopeID == expectedDocumentScopeID
+                else {
+                    return
+                }
+            }
         }
     }
 
@@ -2480,7 +2496,7 @@ extension DOMInspectorRuntime {
         return documentURL
     }
 
-    func applyReplacementDOMBundleAfterContextAdoption(_ bundle: DOMBundle) -> Bool {
+    func applyReplacementDOMBundleAfterContextAdoption(_ bundle: DOMBundle) async -> Bool {
         guard bundle.pageEpoch == pageEpoch,
               bundle.documentScopeID == currentDocumentScope.documentScopeID
         else {
@@ -2542,7 +2558,7 @@ extension DOMInspectorRuntime {
             pendingSelectionOverrideLocalID = nil
         }
         enqueueMutationPayload(adjustedBundle, preservingInspectorState: !clearsReplacementFence)
-        clearDocumentReplacementAfterContextAdoptionRequirement()
+        await clearDocumentReplacementAfterContextAdoptionRequirement()
         if clearsReplacementFence {
             restartSelectionDependentRequestsAfterResync()
         }

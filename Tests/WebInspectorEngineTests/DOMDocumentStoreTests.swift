@@ -160,6 +160,25 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func selectionSnapshotPlaceholderPreservesProvidedBackendNodeID() {
+        let model = DOMDocumentModel()
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                backendNodeID: 77,
+                preview: "<div id=\"target\">",
+                attributes: [],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let selectedNode = try! #require(model.selectedNode)
+        #expect(selectedNode.backendNodeID == 77)
+    }
+
+    @Test
     func selectionSnapshotWithoutBackendNodeIDPreservesExistingLiveBackendNodeID() {
         let model = DOMDocumentModel()
         model.replaceDocument(
