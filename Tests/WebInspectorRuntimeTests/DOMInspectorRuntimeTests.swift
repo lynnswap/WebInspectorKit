@@ -1621,6 +1621,56 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func staleInitialSnapshotScopeDoesNotRewindCurrentDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        store.currentDocumentModel.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 101,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [.init(nodeId: 101, name: "class", value: "current")],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        let currentScopeID = store.currentDocumentScopeID
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshotMode": "fresh",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 7,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": ["class", "stale"],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: currentScopeID - 1
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == currentScopeID)
+        #expect(store.currentDocumentModel.rootNode?.backendNodeID == 101)
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "current")
+    }
+
+    @Test
     func freshRequestDocumentPreservesProjectedContextUntilScopeSyncCompletes() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let syncHarness = BootstrapHarness()

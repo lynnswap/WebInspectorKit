@@ -2329,13 +2329,8 @@ extension DOMInspectorRuntime {
 
     func handleDOMBundle(_ bundle: DOMBundle) {
         let payloadKind = switch bundle.payload {
-        case let .jsonString(rawJSON):
-            if let data = rawJSON.data(using: .utf8),
-               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-                object["kind"] as? String ?? "raw"
-            } else {
-                "raw"
-            }
+        case .jsonString:
+            "raw"
         case let .objectEnvelope(object):
             if let dictionary = object as? [String: Any] {
                 dictionary["kind"] as? String ?? "object"
@@ -2428,7 +2423,9 @@ extension DOMInspectorRuntime {
         guard let bundleDocumentScopeID = bundle.documentScopeID,
               let initialSnapshotMetadata = initialSnapshotMetadata(for: bundle),
               initialSnapshotMetadata.shouldAdopt,
-              (bundle.pageEpoch ?? pageEpoch) == pageEpoch
+              (bundle.pageEpoch ?? pageEpoch) == pageEpoch,
+              initialSnapshotMetadata.didChangeDocument
+                || currentDocumentScope.documentScopeID < bundleDocumentScopeID
         else {
             return false
         }
@@ -2445,7 +2442,7 @@ extension DOMInspectorRuntime {
 
     private func initialSnapshotMetadata(
         for bundle: DOMBundle
-    ) -> (documentURL: String?, shouldAdopt: Bool)? {
+    ) -> (documentURL: String?, shouldAdopt: Bool, didChangeDocument: Bool)? {
         let payload: Any = switch bundle.payload {
         case let .jsonString(rawJSON):
             rawJSON
@@ -2459,17 +2456,19 @@ extension DOMInspectorRuntime {
         }
         let snapshotMode = object["snapshotMode"] as? String
         let documentURL = normalizedDocumentURL(object["documentURL"] as? String)
+        let didChangeDocument = documentURLChanged(documentURL)
         let shouldAdopt = switch snapshotMode {
         case "fresh":
             true
         case "preserve-ui-state":
             false
         default:
-            documentURLChanged(documentURL)
+            didChangeDocument
         }
         return (
             documentURL: documentURL,
-            shouldAdopt: shouldAdopt
+            shouldAdopt: shouldAdopt,
+            didChangeDocument: didChangeDocument
         )
     }
 
