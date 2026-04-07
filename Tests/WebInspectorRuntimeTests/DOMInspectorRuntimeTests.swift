@@ -301,6 +301,51 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func payloadNormalizerPrefersFallbackRootWhenItCarriesLocalIDsAlongsideStableIDs() {
+        let normalizer = DOMPayloadNormalizer()
+        let payload: [String: Any] = [
+            "version": 1,
+            "kind": "snapshot",
+            "snapshot": [
+                "type": "serialized-node-envelope",
+                "node": [
+                    "nodeId": 901,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "attributes": [],
+                    "children": [],
+                ],
+                "fallback": [
+                    "root": [
+                        "nodeId": 901,
+                        "localId": 77,
+                        "nodeType": 1,
+                        "nodeName": "DIV",
+                        "localName": "div",
+                        "nodeValue": "",
+                        "attributes": [],
+                        "children": [],
+                    ],
+                    "selectedNodeId": 901,
+                    "selectedLocalId": 77,
+                ],
+                "selectedNodeId": 901,
+                "selectedLocalId": 77,
+            ],
+        ]
+
+        guard case let .snapshot(snapshot, _) = normalizer.normalizeBundlePayload(payload) else {
+            Issue.record("Failed to normalize serialized-node envelope snapshot with local IDs")
+            return
+        }
+        #expect(snapshot.root.backendNodeID == 901)
+        #expect(snapshot.root.localID == 77)
+        #expect(snapshot.selectedLocalID == 77)
+    }
+
+    @Test
     func mutationPipelineBuildsJSONSafeBufferPayloadFromSerializedNodeEnvelopeFallback() throws {
         let payloads: [[String: Any]] = [[
             "bundle": [
@@ -946,6 +991,138 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func preserveSnapshotDoesNotAdvanceDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": [],
+                            "children": [],
+                        ],
+                    ],
+                ]
+            )
+        )
+
+        let initialDocumentScopeID = store.currentDocumentScopeID
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "manual",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": ["class", "updated"],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialDocumentScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialDocumentScopeID)
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.name == "class")
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "updated")
+    }
+
+    @Test
+    func mutationFlushRebasesObjectEnvelopeToCurrentContextAndDropsPostDocumentUpdatedEvents() async {
+        let store = makeStore(autoUpdateDebounce: 0.01)
+        let initialPageEpoch = store.currentPageEpoch
+        let initialScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+
+        let rebasedBundle = store.testBundleForFrontend(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "pageEpoch": initialPageEpoch,
+                    "documentScopeID": initialScopeID,
+                    "events": [
+                        [
+                            "method": "DOM.documentUpdated",
+                            "params": [:],
+                        ],
+                        [
+                            "method": "DOM.attributeModified",
+                            "params": [
+                                "nodeId": 1,
+                                "name": "class",
+                                "value": "after",
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: initialPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+        #expect(store.currentDocumentScopeID > initialScopeID)
+        #expect(rebasedBundle.pageEpoch == store.currentPageEpoch)
+        #expect(rebasedBundle.documentScopeID == store.currentDocumentScopeID)
+        let embeddedPayload = rebasedBundle.objectEnvelope as? [String: Any]
+        #expect(embeddedPayload?["pageEpoch"] as? Int == store.currentPageEpoch)
+        #expect(embeddedPayload?["documentScopeID"] as? UInt64 == store.currentDocumentScopeID)
+        let events = embeddedPayload?["events"] as? [[String: Any]]
+        #expect(events?.count == 1)
+        #expect(events?.first?["method"] as? String == "DOM.documentUpdated")
+    }
+
+    @Test
+    func mutationFlushRebasesRawJSONPayloadToCurrentContext() async {
+        let store = makeStore(autoUpdateDebounce: 0.01)
+        let initialPageEpoch = store.currentPageEpoch
+        let initialScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        let rawPayload = """
+        {
+          "version": 1,
+          "kind": "mutation",
+          "pageEpoch": \(initialPageEpoch),
+          "documentScopeID": \(initialScopeID),
+          "events": [
+            {
+              "method": "DOM.documentUpdated",
+              "params": {}
+            }
+          ]
+        }
+        """
+        let rebasedBundle = store.testBundleForFrontend(
+            .init(
+                rawJSON: rawPayload,
+                pageEpoch: initialPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+        #expect(store.currentDocumentScopeID > initialScopeID)
+        let embeddedPayload = rebasedBundle.objectEnvelope as? [String: Any]
+        #expect(rebasedBundle.pageEpoch == store.currentPageEpoch)
+        #expect(rebasedBundle.documentScopeID == store.currentDocumentScopeID)
+        #expect(embeddedPayload?["pageEpoch"] as? Int == store.currentPageEpoch)
+        #expect(embeddedPayload?["documentScopeID"] as? UInt64 == store.currentDocumentScopeID)
+    }
+
+    @Test
     func resetMarkedSnapshotClearsPreviousProjectionBeforeApply() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         seedSelection(
@@ -987,66 +1164,6 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.errorMessage == nil)
     }
 
-    @Test
-    func resetMarkedSnapshotInvalidatesInFlightMatchedStylesForReusedSelectionID() async {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let harness = MatchedStylesFetcherHarness()
-        store.testMatchedStylesFetcher = { nodeID in
-            try await harness.fetch(nodeID: nodeID)
-        }
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
-        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
-        guard let firstRequestID = initialRequestIDs.first else {
-            Issue.record("Expected first matched styles request to be pending")
-            return
-        }
-
-        store.handleDOMBundle(
-            .init(
-                objectEnvelope: [
-                    "version": 1,
-                    "kind": "snapshot",
-                    "reason": "initial",
-                    "snapshot": [
-                        "root": [
-                            "nodeId": 42,
-                            "nodeType": 1,
-                            "nodeName": "DIV",
-                            "localName": "div",
-                            "attributes": [],
-                            "children": [],
-                        ],
-                    ],
-                ],
-                pageEpoch: store.currentPageEpoch
-            )
-        )
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
-
-        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
-        guard restartedRequestIDs.count >= 2 else {
-            Issue.record("Expected restarted matched styles request to be pending")
-            return
-        }
-        let secondRequestID = restartedRequestIDs[1]
-
-        #expect(harness.resolve(firstRequestID, selectorText: ".stale") == true)
-
-        let staleDidNotApply = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles.isEmpty == true
-                && store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true
-        }
-        #expect(staleDidNotApply == true)
-
-        #expect(harness.resolve(secondRequestID, selectorText: ".fresh") == true)
-
-        let appliedFresh = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles == [matchedStylesRule(selectorText: ".fresh")]
-                && store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == false
-        }
-        #expect(appliedFresh == true)
-    }
 
     @Test
     func requestDocumentWithoutPreserveStateClearsExistingProjection() async {
@@ -1446,35 +1563,6 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.rootNode?.children.map(\.backendNodeID) == [2])
     }
 
-    @Test
-    func freshRequestDocumentAbortRestartsSelectorAndMatchedStylesFetchesForCurrentSelection() async {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        store.testFrontendDispatchOverride = { payload in
-            let body = (payload as? [String: Any]) ?? [:]
-            return body["kind"] as? String != "resetChildNodeRequests"
-        }
-        seedSelection(
-            store,
-            localID: 42,
-            preview: "<div id=\"target\">",
-            attributes: [.init(nodeId: 42, name: "id", value: "target")],
-            path: ["html", "body", "div"],
-            selectorPath: "",
-            styleRevision: 1,
-            matchedStyles: [],
-            isLoading: true
-        )
-
-        let selectorTokenBefore = store.testSelectorPathRequestToken
-        let matchedStylesTokenBefore = store.testMatchedStylesRequestToken
-
-        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
-
-        #expect(didRequestDocument == false)
-        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 42)
-        #expect(store.testSelectorPathRequestToken > selectorTokenBefore)
-        #expect(store.testMatchedStylesRequestToken > matchedStylesTokenBefore)
-    }
 
     @Test
     func documentRequestFailureRejectsFrontendRequest() async {
@@ -1533,6 +1621,56 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func staleInitialSnapshotScopeDoesNotRewindCurrentDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        store.currentDocumentModel.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 101,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    nodeValue: "",
+                    attributes: [.init(nodeId: 101, name: "class", value: "current")],
+                    childCount: 0,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: []
+                )
+            )
+        )
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        let currentScopeID = store.currentDocumentScopeID
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshotMode": "fresh",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 7,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "attributes": ["class", "stale"],
+                            "children": [],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: currentScopeID - 1
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == currentScopeID)
+        #expect(store.currentDocumentModel.rootNode?.backendNodeID == 101)
+        #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "current")
+    }
+
+    @Test
     func freshRequestDocumentPreservesProjectedContextUntilScopeSyncCompletes() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let syncHarness = BootstrapHarness()
@@ -1569,7 +1707,7 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
-    func commitCurrentDocumentScopeClearsPendingUndoSelectionOverride() async {
+    func initialSnapshotClearsPendingUndoSelectionOverride() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.setPendingSelectionOverride(localID: 42)
         store.handleDOMBundle(
@@ -1577,7 +1715,7 @@ struct DOMInspectorRuntimeTests {
                 objectEnvelope: [
                     "version": 1,
                     "kind": "snapshot",
-                    "reason": "documentUpdated",
+                    "reason": "initial",
                     "snapshot": [
                         "root": [
                             "nodeId": 1,
@@ -1595,6 +1733,502 @@ struct DOMInspectorRuntimeTests {
         )
 
         #expect(store.testPendingSelectionOverrideLocalID == nil)
+    }
+
+    @Test
+    func initialSnapshotWithExistingDocumentPreservesDocumentScopeWithoutReplacementFence() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "body")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "body", "class", "same-page"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 2)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "same-page"
+            } == true
+        )
+    }
+
+    @Test
+    func sameDocumentInitialSnapshotDoesNotAdvanceScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "page-one")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one", "class", "preserved"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "preserved"
+            } == true
+        )
+    }
+
+    @Test
+    func adoptPageContextIgnoresHashOnlyDocumentURLChanges() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one#first",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID,
+                documentURL: "https://example.com/page-one#second"
+            )
+        )
+
+        #expect(didAdopt == false)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 2)
+    }
+
+    @Test
+    func sameContextFreshSnapshotDoesNotAdvanceDocumentScope() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "page-one")]
+                    ),
+                ]
+            ),
+            selectedLocalID: 2
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "snapshotMode": "fresh",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one", "class", "fresh-same-context"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.selectedNode?.attributes.contains {
+                $0.name == "class" && $0.value == "fresh-same-context"
+            } == true
+        )
+    }
+
+    @Test
+    func selectionSnapshotModePreservesCurrentDocumentContext() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        replaceDocument(
+            in: store,
+            root: makeNode(
+                localID: 1,
+                nodeName: "HTML",
+                localName: "html",
+                children: [
+                    makeNode(
+                        localID: 2,
+                        nodeName: "BODY",
+                        localName: "body",
+                        attributes: [.init(nodeId: 2, name: "id", value: "before")]
+                    ),
+                ]
+            )
+        )
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "selection",
+                    "snapshotMode": "preserve-ui-state",
+                    "snapshot": [
+                        "selectedNodeId": 3,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "before"],
+                                    "children": [
+                                        [
+                                            "nodeId": 3,
+                                            "nodeType": 1,
+                                            "nodeName": "DIV",
+                                            "localName": "div",
+                                            "attributes": ["id", "target"],
+                                            "children": [],
+                                        ],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 3)
+    }
+
+    @Test
+    func runtimeDoesNotDropSelectionFollowupMutationsForSameContext() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        let initialScopeID = store.currentDocumentScopeID
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "selection",
+                    "snapshotMode": "preserve-ui-state",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "body"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "mutation",
+                    "events": [
+                        [
+                            "method": "DOM.childNodeInserted",
+                            "params": [
+                                "parentNodeId": 2,
+                                "previousNodeId": 0,
+                                "node": [
+                                    "nodeId": 3,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "after-selection"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: initialScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == initialScopeID)
+        #expect(
+            store.currentDocumentModel.rootNode?.children.first?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "after-selection" })
+            } == true
+        )
+    }
+
+    @Test
+    func initialSnapshotWithDifferentDocumentURLAndOlderScopeReplacesCurrentTree() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-two",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-two"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let staleDocumentScopeID = store.currentDocumentScopeID
+        store.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 10,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 11,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: staleDocumentScopeID
+            )
+        )
+
+        #expect(store.currentDocumentScopeID == staleDocumentScopeID)
+        #expect(
+            store.currentDocumentModel.rootNode?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "page-one" })
+            } == true
+        )
+        #expect(
+            store.currentDocumentModel.rootNode?.children.contains {
+                $0.attributes.contains(where: { $0.name == "id" && $0.value == "page-two" })
+            } == false
+        )
     }
 
     @Test
@@ -1651,6 +2285,451 @@ struct DOMInspectorRuntimeTests {
 
         #expect(didAdopt == true)
         #expect(store.currentBootstrapPayload["pendingDocumentRequest"] == nil)
+    }
+
+    @Test
+    func undoSelectionRestoreUsesSelectedNodeLocalID() {
+        let inspector = WIInspectorController().dom
+        let selectedLocalID: UInt64 = 42
+        let selectedBackendNodeID = 77
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: selectedBackendNodeID,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: selectedBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                ),
+                selectedLocalID: selectedLocalID
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: selectedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let payload = inspector.testSelectionRestorePayload(for: selectedBackendNodeID)
+        inspector.transport.setPendingSelectionOverride(localID: payload?.localID)
+
+        #expect(payload?.localID == selectedLocalID)
+        #expect(inspector.transport.testPendingSelectionOverrideLocalID == selectedLocalID)
+    }
+
+    @Test
+    func undoSelectionRestorePreservesBackendIDStabilityFlag() {
+        let inspector = WIInspectorController().dom
+        let selectedLocalID: UInt64 = 42
+        let synthesizedBackendNodeID = 42
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: synthesizedBackendNodeID,
+                            backendNodeIDIsStable: false,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                ),
+                selectedLocalID: selectedLocalID
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                backendNodeID: synthesizedBackendNodeID,
+                backendNodeIDIsStable: false,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let payload = inspector.testSelectionRestorePayload(for: synthesizedBackendNodeID)
+
+        #expect(inspector.document.selectedNode?.backendNodeIDIsStable == false)
+        #expect(payload?.backendNodeID == synthesizedBackendNodeID)
+        #expect(payload?.backendNodeIDIsStable == false)
+    }
+
+    @Test
+    func undoSelectionReconcilePreservesBackendIDStabilityFlag() {
+        let inspector = WIInspectorController().dom
+        let selectedLocalID: UInt64 = 42
+        let synthesizedBackendNodeID = 42
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: synthesizedBackendNodeID,
+                            backendNodeIDIsStable: false,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                ),
+                selectedLocalID: selectedLocalID
+            )
+        )
+
+        inspector.testReconcileSelectionAfterUndoRestore(
+            .init(
+                localID: selectedLocalID,
+                backendNodeID: synthesizedBackendNodeID,
+                backendNodeIDIsStable: false,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        #expect(inspector.document.selectedNode?.localID == selectedLocalID)
+        #expect(inspector.document.selectedNode?.backendNodeID == synthesizedBackendNodeID)
+        #expect(inspector.document.selectedNode?.backendNodeIDIsStable == false)
+    }
+
+    @Test
+    func undoSelectionReconcilePrefersStableBackendIDOverReusedLocalID() {
+        let inspector = WIInspectorController().dom
+        let currentLocalID: UInt64 = 77
+        let reusedLocalID: UInt64 = 42
+        let stableBackendNodeID = 9001
+        let decoyBackendNodeID = 7
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: reusedLocalID,
+                            backendNodeID: decoyBackendNodeID,
+                            backendNodeIDIsStable: true,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: decoyBackendNodeID, name: "id", value: "decoy")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        ),
+                        DOMGraphNodeDescriptor(
+                            localID: currentLocalID,
+                            backendNodeID: stableBackendNodeID,
+                            backendNodeIDIsStable: true,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: stableBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+
+        inspector.testReconcileSelectionAfterUndoRestore(
+            .init(
+                localID: reusedLocalID,
+                backendNodeID: stableBackendNodeID,
+                backendNodeIDIsStable: true,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: stableBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        #expect(inspector.document.selectedNode?.localID == currentLocalID)
+        #expect(inspector.document.selectedNode?.backendNodeID == stableBackendNodeID)
+        #expect(inspector.document.selectedNode?.backendNodeIDIsStable == true)
+    }
+
+    @Test
+    func undoSelectionReconcileDoesNotFallbackToReusedLocalIDWhenStableBackendLookupMisses() {
+        let inspector = WIInspectorController().dom
+        let reusedLocalID: UInt64 = 42
+        let stableBackendNodeID = 9001
+        let decoyBackendNodeID = 7
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: reusedLocalID,
+                            backendNodeID: decoyBackendNodeID,
+                            backendNodeIDIsStable: true,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: decoyBackendNodeID, name: "id", value: "decoy")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+
+        inspector.testReconcileSelectionAfterUndoRestore(
+            .init(
+                localID: reusedLocalID,
+                backendNodeID: stableBackendNodeID,
+                backendNodeIDIsStable: true,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: stableBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        #expect(inspector.document.selectedNode?.localID == nil)
+        #expect(inspector.document.selectedNode?.backendNodeID == nil)
+    }
+
+    @Test
+    func deleteSelectionDoesNotPruneModelAfterMutationContextChangesMidFlight() async {
+        let inspector = WIInspectorController().dom
+        inspector.document.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [makeNode(localID: 7, attributes: [.init(nodeId: 7, name: "id", value: "target")])]
+                ),
+                selectedLocalID: 7
+            )
+        )
+        inspector.session.testRemoveNodeOverride = { _, _, _ in
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+            return .applied(())
+        }
+
+        let result = await inspector.deleteSelection()
+
+        #expect(result == .applied)
+        #expect(inspector.document.selectedNode?.backendNodeID == 7)
+        #expect(inspector.document.node(backendNodeID: 7) != nil)
+    }
+
+    @Test
+    func redoDeleteUsesOriginalLocalIDForDetachedSelectionPlaceholder() async {
+        let inspector = WIInspectorController().dom
+        let undoManager = UndoManager()
+        let removedLocalID: UInt64 = 7
+        let removedBackendNodeID = 42
+        let decoyLocalID: UInt64 = 42
+        let undoToken = 99
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: decoyLocalID,
+                            backendNodeID: 9001,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: 9001, name: "id", value: "decoy")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                )
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: removedLocalID,
+                backendNodeID: removedBackendNodeID,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: removedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        inspector.session.testRemoveNodeWithUndoOverride = { target, _, _ in
+            #expect(target == .backend(removedBackendNodeID))
+            return .applied(undoToken)
+        }
+        inspector.session.testUndoRemoveNodeInterposer = { receivedUndoToken, _, _, _ in
+            #expect(receivedUndoToken == undoToken)
+            return .applied(())
+        }
+        inspector.session.testRedoRemoveNodeInterposer = { receivedUndoToken, nodeId, _, _, _ in
+            #expect(receivedUndoToken == undoToken)
+            #expect(nodeId == removedBackendNodeID)
+            return .applied(())
+        }
+
+        let deleteResult = await inspector.deleteSelection(undoManager: undoManager)
+
+        #expect(deleteResult == .applied)
+        #expect(inspector.document.node(localID: removedLocalID) == nil)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+
+        undoManager.undo()
+
+        let didRestoreRemovedSelection = await waitForCondition {
+            inspector.document.selectedNode?.localID == removedLocalID
+        }
+
+        #expect(didRestoreRemovedSelection == true)
+        #expect(inspector.document.node(localID: removedLocalID)?.backendNodeID == removedBackendNodeID)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+
+        undoManager.redo()
+
+        let didRemoveRestoredSelection = await waitForCondition {
+            inspector.document.node(localID: removedLocalID) == nil
+        }
+
+        #expect(didRemoveRestoredSelection == true)
+        #expect(inspector.document.node(localID: decoyLocalID)?.backendNodeID == 9001)
+        #expect(inspector.document.selectedNode == nil)
+    }
+
+    @Test
+    func staleReloadClearsPendingSelectionOverride() async {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+        await inspector.attach(to: webView)
+        var didRequestDocument = false
+        inspector.transport.testConfigurationApplyOverride = { _ in }
+        inspector.transport.testPreferredDepthApplyOverride = { _ in
+            inspector.transport.testAdvanceCurrentDocumentScopeWithoutClearingModel()
+        }
+        inspector.transport.testDocumentRequestApplyOverride = { _, _ in
+            didRequestDocument = true
+        }
+        inspector.transport.testSetReady(true)
+        await inspector.transport.testWaitForBootstrapForTesting()
+        didRequestDocument = false
+
+        inspector.transport.setPendingSelectionOverride(localID: 42)
+
+        let result = await inspector.reloadDocumentPreservingInspectorState()
+
+        #expect(result == .ignoredStaleContext)
+        #expect(didRequestDocument == false)
+        #expect(inspector.transport.testPendingSelectionOverrideLocalID == nil)
     }
 
     @Test
@@ -1756,7 +2835,7 @@ struct DOMInspectorRuntimeTests {
         var highlightedNodeIDs: [Int] = []
         store.testConfigurationApplyOverride = { _ in }
         store.testDocumentRequestApplyOverride = { _, _ in }
-        store.session.testHighlightOverride = { nodeID in
+        store.session.testHighlightOverride = { nodeID, _ in
             highlightedNodeIDs.append(nodeID)
         }
         await drainInitialBootstrapWork(store)
@@ -1807,6 +2886,34 @@ struct DOMInspectorRuntimeTests {
             highlightedNodeIDs == [42]
         }
         #expect(didHighlightAfterReplacement == true)
+    }
+
+    @Test
+    func highlightMessagePreservesRevealIntentFromFrontendPayload() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+        var highlightedRequests: [(nodeID: Int, reveal: Bool)] = []
+        store.session.testHighlightOverride = { nodeID, reveal in
+            highlightedRequests.append((nodeID, reveal))
+        }
+        await drainInitialBootstrapWork(store)
+
+        store.bridge.testHandleMessage(
+            named: "webInspectorDomHighlight",
+            body: [
+                "nodeId": 42,
+                "reveal": false,
+                "pageEpoch": store.currentPageEpoch,
+                "documentScopeID": store.currentDocumentScopeID,
+            ]
+        )
+
+        let didReceiveHighlight = await waitForCondition(maxAttempts: 5) {
+            highlightedRequests.count == 1
+        }
+
+        #expect(didReceiveHighlight == true)
+        #expect(highlightedRequests.map(\.nodeID) == [42])
+        #expect(highlightedRequests.map(\.reveal) == [false])
     }
 
     @Test
@@ -2109,7 +3216,7 @@ struct DOMInspectorRuntimeTests {
         }
         #expect(didReject == true)
 
-        store.clearDocumentReplacementAfterContextAdoptionRequirement()
+        await store.clearDocumentReplacementAfterContextAdoptionRequirement()
         store.restartSelectionDependentRequestsAfterResync()
 
         let didDrain = await waitForCondition {
@@ -2135,7 +3242,7 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.documentIdentity == initialDocumentIdentity)
         #expect(store.currentDocumentModel.node(id: initialSelectedNodeID) != nil)
 
-        let didApplyReplacement = store.applyReplacementDOMBundleAfterContextAdoption(
+        let didApplyReplacement = await store.applyReplacementDOMBundleAfterContextAdoption(
             .init(
                 objectEnvelope: [
                     "version": 1,
@@ -2449,44 +3556,6 @@ struct DOMInspectorRuntimeTests {
         #expect(documentRequests.isEmpty)
     }
 
-    @Test
-    func selectionUpdateWithSameNodeDoesNotRestartMatchedStylesFetch() {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let existingRule = DOMMatchedStyleRule(
-            origin: .author,
-            selectorText: ".same-node",
-            declarations: [
-                .init(name: "color", value: "red", important: false)
-            ],
-            sourceLabel: "<style>"
-        )
-
-        seedSelection(
-            store,
-            localID: 42,
-            preview: "<div class=\"same-node\">",
-            attributes: [.init(nodeId: 42, name: "class", value: "same-node")],
-            path: ["html", "body", "div"],
-            selectorPath: "div.same-node",
-            styleRevision: 1,
-            matchedStyles: [existingRule],
-            isLoading: false
-        )
-
-        let tokenBefore = store.testMatchedStylesRequestToken
-        store.testHandleDOMSelectionMessage([
-            "id": 42,
-            "preview": "<div class=\"same-node\">",
-            "attributes": [["name": "class", "value": "same-node"]],
-            "path": ["html", "body", "div"],
-            "selectorPath": "div.same-node",
-            "styleRevision": 1,
-        ])
-
-        #expect(store.testMatchedStylesRequestToken == tokenBefore)
-        #expect(store.currentDocumentModel.selectedNode?.matchedStyles == [existingRule])
-        #expect(store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == false)
-    }
 
     @Test
     func structuralMutationRestartsSelectorPathFetchForCurrentSelection() {
@@ -2529,7 +3598,6 @@ struct DOMInspectorRuntimeTests {
     @Test
     func selectionUpdateAcceptsNSNumberAndDictionaryPayloads() {
         let store = makeStore(autoUpdateDebounce: 0.4)
-        let tokenBefore = store.testMatchedStylesRequestToken
 
         let nsDictionaryPayload: NSDictionary = [
             "id": NSNumber(value: 77),
@@ -2549,7 +3617,6 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 77)
         #expect(store.currentDocumentModel.selectedNode?.selectorPath == "div#target")
         #expect(store.currentDocumentModel.selectedNode?.styleRevision == 2)
-        #expect(store.testMatchedStylesRequestToken > tokenBefore)
 
         let swiftDictionaryPayload: [String: Any] = [
             "id": 78,
@@ -2569,6 +3636,90 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 78)
         #expect(store.currentDocumentModel.selectedNode?.selectorPath == "div#swift-target")
         #expect(store.currentDocumentModel.selectedNode?.styleRevision == 3)
+    }
+
+    @Test
+    func legacySnapshotSelectionPrefersLocalTargetForSelectorPathRequests() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 42,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "target"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                        "selectedLocalId": 42,
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let selected = try! #require(store.currentDocumentModel.selectedNode)
+        #expect(selected.backendNodeID == 42)
+        #expect(selected.backendNodeIDIsStable == false)
+        #expect(store.selectionRequestTarget(for: selected) == .local(42))
+    }
+
+    @Test
+    func stableBackendSnapshotSelectionKeepsBackendTargetForSelectorPathRequests() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "backendNodeId": 900,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 42,
+                                    "backendNodeId": 9001,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "target"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                        "selectedLocalId": 42,
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let selected = try! #require(store.currentDocumentModel.selectedNode)
+        #expect(selected.backendNodeID == 9001)
+        #expect(selected.backendNodeIDIsStable == true)
+        #expect(store.selectionRequestTarget(for: selected) == .backend(9001))
     }
 
     @Test
@@ -2626,251 +3777,11 @@ struct DOMInspectorRuntimeTests {
         #expect(didClear == true)
     }
 
-    @Test
-    func selectionUpdateWithSameNodeAndChangedAttributesRestartsMatchedStylesFetch() {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let existingRule = DOMMatchedStyleRule(
-            origin: .author,
-            selectorText: ".same-node",
-            declarations: [
-                .init(name: "color", value: "red", important: false)
-            ],
-            sourceLabel: "<style>"
-        )
 
-        seedSelection(
-            store,
-            localID: 42,
-            preview: "<div class=\"same-node\">",
-            attributes: [.init(nodeId: 42, name: "class", value: "same-node")],
-            path: ["html", "body", "div"],
-            selectorPath: "div.same-node",
-            styleRevision: 1,
-            matchedStyles: [existingRule],
-            isLoading: false
-        )
 
-        let tokenBefore = store.testMatchedStylesRequestToken
-        store.testHandleDOMSelectionMessage([
-            "id": 42,
-            "preview": "<div class=\"same-node changed\">",
-            "attributes": [["name": "class", "value": "same-node changed"]],
-            "path": ["html", "body", "div"],
-            "selectorPath": "div.same-node.changed",
-            "styleRevision": 1,
-        ])
 
-        #expect(store.testMatchedStylesRequestToken > tokenBefore)
-        #expect(store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true)
-        #expect(store.currentDocumentModel.selectedNode?.matchedStyles.isEmpty == true)
-    }
 
-    @Test
-    func selectionUpdateWithSameNodeAndChangedAttributesWhileLoadingRestartsMatchedStylesFetch() {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let existingRule = DOMMatchedStyleRule(
-            origin: .author,
-            selectorText: ".same-node",
-            declarations: [
-                .init(name: "color", value: "red", important: false)
-            ],
-            sourceLabel: "<style>"
-        )
 
-        seedSelection(
-            store,
-            localID: 42,
-            preview: "<div class=\"same-node\">",
-            attributes: [.init(nodeId: 42, name: "class", value: "same-node")],
-            path: ["html", "body", "div"],
-            selectorPath: "div.same-node",
-            styleRevision: 1,
-            matchedStyles: [existingRule],
-            isLoading: true
-        )
-
-        let tokenBefore = store.testMatchedStylesRequestToken
-        store.testHandleDOMSelectionMessage([
-            "id": 42,
-            "preview": "<div class=\"same-node changed\">",
-            "attributes": [["name": "class", "value": "same-node changed"]],
-            "path": ["html", "body", "div"],
-            "selectorPath": "div.same-node.changed",
-            "styleRevision": 1,
-        ])
-
-        #expect(store.testMatchedStylesRequestToken > tokenBefore)
-        #expect(store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true)
-        #expect(store.currentDocumentModel.selectedNode?.matchedStyles.isEmpty == true)
-    }
-
-    @Test
-    func selectionUpdateWithSameNodeAndChangedStyleRevisionRestartsMatchedStylesFetch() {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let existingRule = DOMMatchedStyleRule(
-            origin: .author,
-            selectorText: ".same-node",
-            declarations: [
-                .init(name: "color", value: "red", important: false)
-            ],
-            sourceLabel: "<style>"
-        )
-
-        seedSelection(
-            store,
-            localID: 42,
-            preview: "<div class=\"same-node\">",
-            attributes: [.init(nodeId: 42, name: "class", value: "same-node")],
-            path: ["html", "body", "div"],
-            selectorPath: "div.same-node",
-            styleRevision: 1,
-            matchedStyles: [existingRule],
-            isLoading: false
-        )
-
-        let tokenBefore = store.testMatchedStylesRequestToken
-        store.testHandleDOMSelectionMessage([
-            "id": 42,
-            "preview": "<div class=\"same-node\">",
-            "attributes": [["name": "class", "value": "same-node"]],
-            "path": ["html", "body", "div"],
-            "selectorPath": "div.same-node",
-            "styleRevision": 2,
-        ])
-
-        #expect(store.testMatchedStylesRequestToken > tokenBefore)
-        #expect(store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true)
-        #expect(store.currentDocumentModel.selectedNode?.matchedStyles.isEmpty == true)
-    }
-
-    @Test
-    func cancelledMatchedStylesSuccessDoesNotOverwriteNewerResult() async {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let harness = MatchedStylesFetcherHarness()
-        store.testMatchedStylesFetcher = { nodeID in
-            try await harness.fetch(nodeID: nodeID)
-        }
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
-        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
-        guard let firstRequestID = initialRequestIDs.first else {
-            Issue.record("Expected first matched styles request to be pending")
-            return
-        }
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
-        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
-        guard restartedRequestIDs.count >= 2 else {
-            Issue.record("Expected restarted matched styles request to be pending")
-            return
-        }
-        let secondRequestID = restartedRequestIDs[1]
-
-        #expect(firstRequestID != secondRequestID)
-        #expect(harness.resolve(secondRequestID, selectorText: ".latest") == true)
-
-        let appliedLatest = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
-                && store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == false
-        }
-        #expect(appliedLatest == true)
-
-        #expect(harness.resolve(firstRequestID, selectorText: ".stale") == true)
-
-        let staleDidNotOverwrite = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
-                && store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == false
-        }
-        #expect(staleDidNotOverwrite == true)
-    }
-
-    @Test
-    func cancelledMatchedStylesFailureDoesNotClearNewerLoadingStateOrResult() async {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let harness = MatchedStylesFetcherHarness()
-        store.testMatchedStylesFetcher = { nodeID in
-            try await harness.fetch(nodeID: nodeID)
-        }
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
-        let initialRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
-        guard let firstRequestID = initialRequestIDs.first else {
-            Issue.record("Expected first matched styles request to be pending")
-            return
-        }
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 2))
-        let restartedRequestIDs = await waitForPendingMatchedStylesRequestIDs(count: 2, harness: harness)
-        guard restartedRequestIDs.count >= 2 else {
-            Issue.record("Expected restarted matched styles request to be pending")
-            return
-        }
-        let secondRequestID = restartedRequestIDs[1]
-
-        let restartedLoading = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true
-        }
-        #expect(restartedLoading == true)
-
-        #expect(harness.reject(firstRequestID, message: "cancelled stale request") == true)
-
-        let staleFailureDidNotClearLoading = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == true
-                && store.currentDocumentModel.selectedNode?.matchedStyles.isEmpty == true
-        }
-        #expect(staleFailureDidNotClearLoading == true)
-
-        #expect(harness.resolve(secondRequestID, selectorText: ".latest") == true)
-
-        let appliedLatest = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles == [matchedStylesRule(selectorText: ".latest")]
-                && store.currentDocumentModel.selectedNode?.isLoadingMatchedStyles == false
-        }
-        #expect(appliedLatest == true)
-    }
-
-    @Test
-    func matchedStylesLookupAppliesToRebuiltSelectedEntryWithSameBackendNodeID() async {
-        let store = makeStore(autoUpdateDebounce: 0.4)
-        let harness = MatchedStylesFetcherHarness()
-        store.testMatchedStylesFetcher = { nodeID in
-            try await harness.fetch(nodeID: nodeID)
-        }
-
-        replaceDocument(
-            in: store,
-            root: makeNode(localID: 1, children: [makeNode(localID: 42)]),
-            selectedLocalID: 42
-        )
-
-        store.testHandleDOMSelectionMessage(matchedStylesSelectionPayload(styleRevision: 1))
-        let requestIDs = await waitForPendingMatchedStylesRequestIDs(count: 1, harness: harness)
-        guard let requestID = requestIDs.first else {
-            Issue.record("Expected matched styles request to be pending")
-            return
-        }
-
-        let originalSelection = store.currentDocumentModel.selectedNode
-        replaceDocument(
-            in: store,
-            root: makeNode(
-                localID: 1,
-                children: [
-                    makeNode(localID: 42, attributes: [.init(name: "id", value: "target")]),
-                ]
-            ),
-            selectedLocalID: 42
-        )
-
-        #expect(store.currentDocumentModel.selectedNode !== originalSelection)
-        #expect(harness.resolve(requestID, selectorText: ".rebuilt") == true)
-
-        let appliedToRebuiltSelection = await waitForCondition {
-            store.currentDocumentModel.selectedNode?.matchedStyles == [matchedStylesRule(selectorText: ".rebuilt")]
-                && store.currentDocumentModel.selectedNode !== originalSelection
-        }
-        #expect(appliedToRebuiltSelection == true)
-    }
 
     private func makeStore(autoUpdateDebounce: TimeInterval) -> DOMInspectorRuntime {
         let session = DOMSession(
@@ -2887,43 +3798,6 @@ struct DOMInspectorRuntimeTests {
         store.testSetReady(true)
         await store.testWaitForBootstrapForTesting()
         store.testSetReady(false)
-    }
-
-    private func waitForPendingMatchedStylesRequestIDs(
-        count: Int,
-        harness: MatchedStylesFetcherHarness
-    ) async -> [Int] {
-        var latestIDs: [Int] = []
-        for _ in 0..<100 {
-            latestIDs = harness.pendingRequestIDs
-            if latestIDs.count >= count {
-                return latestIDs
-            }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-        return latestIDs
-    }
-
-    private func matchedStylesSelectionPayload(styleRevision: Int) -> [String: Any] {
-        [
-            "id": 42,
-            "preview": "<div id=\"target\">",
-            "attributes": [["name": "id", "value": "target"]],
-            "path": ["html", "body", "div"],
-            "selectorPath": "div#target",
-            "styleRevision": styleRevision,
-        ]
-    }
-
-    private func matchedStylesRule(selectorText: String) -> DOMMatchedStyleRule {
-        DOMMatchedStyleRule(
-            origin: .author,
-            selectorText: selectorText,
-            declarations: [
-                .init(name: "color", value: selectorText, important: false)
-            ],
-            sourceLabel: "<style>"
-        )
     }
 
     private func replaceDocument(
@@ -2971,8 +3845,8 @@ struct DOMInspectorRuntimeTests {
         path: [String],
         selectorPath: String,
         styleRevision: Int,
-        matchedStyles: [DOMMatchedStyleRule],
-        isLoading: Bool
+        matchedStyles _: [DOMMatchedStyleRule],
+        isLoading _: Bool
     ) {
         store.currentDocumentModel.applySelectionSnapshot(
             .init(
@@ -2984,24 +3858,6 @@ struct DOMInspectorRuntimeTests {
                 styleRevision: styleRevision
             )
         )
-        if !matchedStyles.isEmpty {
-            if let selectedNode = store.currentDocumentModel.selectedNode {
-                store.currentDocumentModel.applyMatchedStyles(
-                    .init(
-                        nodeId: Int(localID),
-                        rules: matchedStyles,
-                        truncated: false,
-                        blockedStylesheetCount: 0
-                    ),
-                    for: selectedNode
-                )
-            }
-        }
-        if isLoading {
-            if let selectedNode = store.currentDocumentModel.selectedNode {
-                store.currentDocumentModel.beginMatchedStylesLoading(for: selectedNode)
-            }
-        }
     }
 
     private func rootLocalID(from delta: DOMGraphDelta?) -> UInt64? {
@@ -3020,6 +3876,13 @@ struct DOMInspectorRuntimeTests {
             "attributes": [],
             "children": [],
         ]
+    }
+
+    private func makeTestWebView() -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        return WKWebView(frame: .zero, configuration: configuration)
     }
 
     private func waitForCondition(
@@ -3054,75 +3917,4 @@ private struct DOMConfigurationSummary: Equatable {
 private enum ReconcileEvent: Equatable {
     case configuration(DOMConfigurationSummary)
     case preferredDepth(Int)
-}
-
-@MainActor
-private final class MatchedStylesFetcherHarness {
-    private var nextRequestID = 0
-    private var pendingByID: [Int: PendingRequest] = [:]
-    private var pendingOrder: [Int] = []
-
-    var pendingRequestIDs: [Int] {
-        pendingOrder.filter { pendingByID[$0] != nil }
-    }
-
-    func fetch(nodeID: Int) async throws -> DOMMatchedStylesPayload {
-        try await withCheckedThrowingContinuation { continuation in
-            nextRequestID += 1
-            let requestID = nextRequestID
-            pendingByID[requestID] = PendingRequest(
-                nodeID: nodeID,
-                continuation: continuation
-            )
-            pendingOrder.append(requestID)
-        }
-    }
-
-    func resolve(_ requestID: Int, selectorText: String) -> Bool {
-        guard let pending = takePendingRequest(id: requestID) else {
-            return false
-        }
-        pending.continuation.resume(
-            returning: DOMMatchedStylesPayload(
-                nodeId: pending.nodeID,
-                rules: [
-                    DOMMatchedStyleRule(
-                        origin: .author,
-                        selectorText: selectorText,
-                        declarations: [
-                            .init(name: "color", value: selectorText, important: false)
-                        ],
-                        sourceLabel: "<style>"
-                    )
-                ],
-                truncated: false,
-                blockedStylesheetCount: 0
-            )
-        )
-        return true
-    }
-
-    func reject(_ requestID: Int, message: String) -> Bool {
-        guard let pending = takePendingRequest(id: requestID) else {
-            return false
-        }
-        pending.continuation.resume(
-            throwing: NSError(
-                domain: "MatchedStylesFetcherHarness",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: message]
-            )
-        )
-        return true
-    }
-
-    private func takePendingRequest(id requestID: Int) -> PendingRequest? {
-        pendingOrder.removeAll { $0 == requestID }
-        return pendingByID.removeValue(forKey: requestID)
-    }
-
-    private struct PendingRequest {
-        let nodeID: Int
-        let continuation: CheckedContinuation<DOMMatchedStylesPayload, Error>
-    }
 }

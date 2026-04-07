@@ -11,6 +11,7 @@ public final class WIDOMTreeViewController: NSViewController {
     private let inspector: WIDOMInspector
     private var contextMenuNodeID: Int?
     private var contextMenuNodeIdentity: DOMNodeModel.ID?
+    private var contextMenuBackendNodeID: Int?
     private var observationHandles: Set<ObservationHandle> = []
     private var documentStoreObservationHandles: Set<ObservationHandle> = []
 
@@ -40,7 +41,19 @@ public final class WIDOMTreeViewController: NSViewController {
                 return nil
             }
             self.contextMenuNodeID = nodeID
-            self.contextMenuNodeIdentity = nodeID.flatMap { self.inspector.document.node(backendNodeID: $0)?.id }
+            if let nodeID,
+               nodeID >= 0,
+               let node = self.inspector.document.node(localID: UInt64(nodeID)) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeIDIsStable ? node.backendNodeID : nil
+            } else if let nodeID,
+                      let node = self.inspector.document.node(stableBackendNodeID: nodeID) {
+                self.contextMenuNodeIdentity = node.id
+                self.contextMenuBackendNodeID = node.backendNodeID
+            } else {
+                self.contextMenuNodeIdentity = nil
+                self.contextMenuBackendNodeID = nil
+            }
             return self.makeTreeContextMenu()
         }
 
@@ -155,8 +168,10 @@ public final class WIDOMTreeViewController: NSViewController {
     private func deleteNode() {
         let nodeID = contextActionNodeID
         let nodeIdentity = contextActionNodeIdentity
+        let backendNodeID = contextMenuBackendNodeID
         contextMenuNodeID = nil
         contextMenuNodeIdentity = nil
+        contextMenuBackendNodeID = nil
         guard nodeID != nil || nodeIdentity != nil else {
             return
         }
@@ -165,6 +180,7 @@ public final class WIDOMTreeViewController: NSViewController {
             _ = await deleteContextMenuNode(
                 nodeID: nodeID,
                 nodeIdentity: nodeIdentity,
+                backendNodeID: backendNodeID,
                 undoManager: undoManager
             )
         }
@@ -173,11 +189,13 @@ public final class WIDOMTreeViewController: NSViewController {
     func invokeContextMenuDeleteForTesting(
         nodeID: Int?,
         nodeIdentity: DOMNodeModel.ID?,
+        backendNodeID: Int? = nil,
         undoManager: UndoManager? = nil
     ) async -> DOMMutationResult {
         await deleteContextMenuNode(
             nodeID: nodeID,
             nodeIdentity: nodeIdentity,
+            backendNodeID: backendNodeID,
             undoManager: undoManager
         )
     }
@@ -185,17 +203,32 @@ public final class WIDOMTreeViewController: NSViewController {
     private func deleteContextMenuNode(
         nodeID: Int?,
         nodeIdentity: DOMNodeModel.ID?,
+        backendNodeID: Int?,
         undoManager: UndoManager?
     ) async -> DOMMutationResult {
         if let nodeIdentity {
-            return await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+            let result = await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+            guard result == .ignoredStaleContext, let backendNodeID else {
+                return result
+            }
+            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+        }
+        if let backendNodeID {
+            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
         }
         if let nodeID,
-           let resolvedIdentity = inspector.document.node(backendNodeID: nodeID)?.id
+           let resolvedIdentity = nodeID >= 0
+                ? inspector.document.node(localID: UInt64(nodeID))?.id
+                : nil
         {
             return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
         }
-        return await inspector.deleteNode(nodeId: nodeID, undoManager: undoManager)
+        if let nodeID,
+           let resolvedIdentity = inspector.document.node(stableBackendNodeID: nodeID)?.id
+        {
+            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+        }
+        return .failed
     }
 
     private var contextActionNodeID: Int? {
@@ -206,16 +239,38 @@ public final class WIDOMTreeViewController: NSViewController {
         contextMenuNodeIdentity
     }
 
+    func invokeContextMenuCopyForTesting(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        backendNodeID: Int? = nil,
+        kind: DOMSelectionCopyKind = .html
+    ) async throws -> String {
+        try await copyContextMenuNode(
+            nodeID: nodeID,
+            nodeIdentity: nodeIdentity,
+            backendNodeID: backendNodeID,
+            kind: kind
+        )
+    }
+
     private func copyNodeForContextMenu(kind: DOMSelectionCopyKind) {
         let nodeID = contextActionNodeID
+        let nodeIdentity = contextActionNodeIdentity
+        let backendNodeID = contextMenuBackendNodeID
         contextMenuNodeID = nil
         contextMenuNodeIdentity = nil
-        guard let nodeID else {
+        contextMenuBackendNodeID = nil
+        guard nodeID != nil || nodeIdentity != nil else {
             return
         }
         Task {
             do {
-                let text = try await inspector.copyNode(nodeId: nodeID, kind: kind)
+                let text = try await copyContextMenuNode(
+                    nodeID: nodeID,
+                    nodeIdentity: nodeIdentity,
+                    backendNodeID: backendNodeID,
+                    kind: kind
+                )
                 guard !text.isEmpty else {
                     return
                 }
@@ -226,6 +281,35 @@ public final class WIDOMTreeViewController: NSViewController {
                 return
             }
         }
+    }
+
+    private func copyContextMenuNode(
+        nodeID: Int?,
+        nodeIdentity: DOMNodeModel.ID?,
+        backendNodeID: Int?,
+        kind: DOMSelectionCopyKind
+    ) async throws -> String {
+        if let nodeIdentity {
+            let text = try await inspector.copyNode(nodeID: nodeIdentity, kind: kind)
+            guard text.isEmpty, let backendNodeID else {
+                return text
+            }
+            return try await inspector.copyNode(nodeId: backendNodeID, kind: kind)
+        }
+        if let backendNodeID {
+            return try await inspector.copyNode(nodeId: backendNodeID, kind: kind)
+        }
+        if let nodeID,
+           let resolvedIdentity = nodeID >= 0
+                ? inspector.document.node(localID: UInt64(nodeID))?.id
+                : nil {
+            return try await inspector.copyNode(nodeID: resolvedIdentity, kind: kind)
+        }
+        if let nodeID,
+           let resolvedIdentity = inspector.document.node(stableBackendNodeID: nodeID)?.id {
+            return try await inspector.copyNode(nodeID: resolvedIdentity, kind: kind)
+        }
+        return ""
     }
 }
 

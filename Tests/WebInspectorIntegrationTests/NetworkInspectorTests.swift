@@ -197,10 +197,17 @@ struct NetworkInspectorTests {
 
     @Test
     func selectingNewEntryCancelsPreviousSelectionFetch() async {
+        let slowFetchGate = NetworkFetchGate()
         let fetcher = StubNetworkBodyFetcher { ref, _, role in
             if ref == "slow-ref" {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                return self.makeFetchedBody(full: "slow body", reference: ref, role: role)
+                await slowFetchGate.markStarted()
+                while true {
+                    if Task.isCancelled {
+                        await slowFetchGate.markCancelled()
+                        return nil
+                    }
+                    await Task.yield()
+                }
             }
             return self.makeFetchedBody(full: "fast body", reference: ref, role: role)
         }
@@ -217,10 +224,8 @@ struct NetworkInspectorTests {
         secondEntry.responseBody = secondBody
 
         inspector.selectEntry(firstEntry)
-        let firstStarted = await waitUntil {
-            firstBody.fetchState == .fetching
-        }
-        #expect(firstStarted)
+        await slowFetchGate.waitUntilStarted()
+        #expect(firstBody.fetchState == .fetching)
 
         inspector.selectEntry(secondEntry)
 
@@ -229,10 +234,12 @@ struct NetworkInspectorTests {
         }
         #expect(secondFetched)
 
-        try? await Task.sleep(nanoseconds: 180_000_000)
+        await slowFetchGate.waitUntilCancelled()
 
-        #expect(firstBody.fetchState == .inline)
-        #expect(firstBody.full == nil)
+        let firstCancelled = await waitUntil {
+            firstBody.fetchState == .inline && firstBody.full == nil
+        }
+        #expect(firstCancelled)
         #expect(secondBody.fetchState == .full)
     }
 
@@ -721,6 +728,51 @@ struct NetworkInspectorTests {
             await Task.yield()
         }
         return condition()
+    }
+}
+
+private actor NetworkFetchGate {
+    private var didStart = false
+    private var didCancel = false
+    private var startContinuations: [CheckedContinuation<Void, Never>] = []
+    private var cancelContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        guard !didStart else {
+            return
+        }
+        didStart = true
+        let continuations = startContinuations
+        startContinuations.removeAll(keepingCapacity: false)
+        continuations.forEach { $0.resume() }
+    }
+
+    func waitUntilStarted() async {
+        guard !didStart else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startContinuations.append(continuation)
+        }
+    }
+
+    func markCancelled() {
+        guard !didCancel else {
+            return
+        }
+        didCancel = true
+        let continuations = cancelContinuations
+        cancelContinuations.removeAll(keepingCapacity: false)
+        continuations.forEach { $0.resume() }
+    }
+
+    func waitUntilCancelled() async {
+        guard !didCancel else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancelContinuations.append(continuation)
+        }
     }
 }
 

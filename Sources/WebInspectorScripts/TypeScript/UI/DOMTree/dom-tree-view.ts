@@ -7,15 +7,23 @@
  * - Triggers the initial document request on DOMContentLoaded
  */
 
-import { DOMFrontendBootstrapState, WebInspectorDOMFrontend } from "./dom-tree-types";
 import {
+    DOMFrontendBootstrapState,
+    DOMSelectionSyncPayload,
+    WebInspectorDOMFrontend,
+} from "./dom-tree-types";
+import {
+    adoptDocumentContext,
+    canAdoptDocumentContext,
+    restoreDocumentContext,
     updateConfig,
     completeChildNodeRequest,
     rejectChildNodeRequest,
     retryQueuedChildNodeRequests,
     resetChildNodeRequests,
+    matchesCurrentDocumentContext,
 } from "./dom-tree-protocol";
-import { protocolState } from "./dom-tree-state";
+import { protocolState, transitionState } from "./dom-tree-state";
 import {
     applySubtree,
     completeDocumentRequest,
@@ -28,7 +36,7 @@ import {
     registerTreeHandlers,
     setPreferredDepth,
 } from "./dom-tree-snapshot";
-import { setSearchTerm } from "./dom-tree-view-support";
+import { selectNode, selectNodeByPath, setSearchTerm } from "./dom-tree-view-support";
 
 // =============================================================================
 // Event Handlers
@@ -39,6 +47,9 @@ function attachEventListeners(): void {
     const bootstrap = readBootstrap();
     if (bootstrap.config) {
         updateConfig(bootstrap.config);
+    }
+    if (bootstrap.context) {
+        adoptDocumentContext(bootstrap.context);
     }
     if (typeof bootstrap.preferredDepth === "number") {
         setPreferredDepth(bootstrap.preferredDepth, protocolState.pageEpoch);
@@ -66,6 +77,42 @@ function readBootstrap(): DOMFrontendBootstrapState {
     return bootstrap;
 }
 
+function normalizeSelectionSyncPayload(
+    payload: number | DOMSelectionSyncPayload
+): { nodeId: number | null; selectedNodePath: number[] | null } {
+    if (typeof payload === "number" && Number.isFinite(payload)) {
+        return {
+            nodeId: payload > 0 ? payload : null,
+            selectedNodePath: null,
+        };
+    }
+    if (!payload || typeof payload !== "object") {
+        return {
+            nodeId: null,
+            selectedNodePath: null,
+        };
+    }
+
+    const candidateNodeIDs = [
+        payload.selectedLocalId,
+        payload.localID,
+        payload.localId,
+        payload.nodeId,
+        payload.id,
+    ];
+    const nodeId =
+        candidateNodeIDs.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
+        ?? null;
+    const selectedNodePath = Array.isArray(payload.selectedNodePath)
+        && payload.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment))
+        ? payload.selectedNodePath
+        : null;
+    return {
+        nodeId,
+        selectedNodePath,
+    };
+}
+
 // =============================================================================
 // Installation
 // =============================================================================
@@ -85,27 +132,79 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            const incomingContext = { pageEpoch, documentScopeID };
+            const shouldForceFreshSnapshot =
+                transitionState.pendingFreshSnapshotContext?.pageEpoch === pageEpoch
+                && transitionState.pendingFreshSnapshotContext?.documentScopeID === documentScopeID;
+            const snapshotMode = shouldForceFreshSnapshot ? "fresh" : mode;
+            if (snapshotMode === "preserve-ui-state" && !matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
-            setSnapshot(snapshot as never, { mode });
+            const previousContext = {
+                pageEpoch: protocolState.pageEpoch,
+                documentScopeID: protocolState.documentScopeID,
+            };
+            const previousPendingFreshSnapshotContext = transitionState.pendingFreshSnapshotContext
+                ? { ...transitionState.pendingFreshSnapshotContext }
+                : null;
+            if (snapshotMode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
+                return;
+            }
+            if (snapshotMode === "fresh") {
+                adoptDocumentContext(incomingContext);
+            }
+            if (!setSnapshot(snapshot as never, { mode: snapshotMode })) {
+                if (snapshotMode === "fresh") {
+                    restoreDocumentContext(previousContext, {
+                        pendingFreshSnapshotContext: previousPendingFreshSnapshotContext,
+                    });
+                }
+                return;
+            }
+            if (snapshotMode === "fresh") {
+                transitionState.pendingFreshSnapshotContext = null;
+            }
         },
         applySubtreePayload: (
             payload,
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
-            applySubtree(payload as never);
+            if (!applySubtree(payload as never)) {
+                return;
+            }
+        },
+        applySelectionPayload: (
+            payload,
+            pageEpoch = protocolState.pageEpoch,
+            documentScopeID = protocolState.documentScopeID
+        ) => {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+                return false;
+            }
+            const selection = normalizeSelectionSyncPayload(payload);
+            const selectionOptions = {
+                shouldHighlight: false,
+                autoScroll: true,
+                notifyNative: false,
+            };
+            if (typeof selection.nodeId === "number" && selectNode(selection.nodeId, selectionOptions)) {
+                return true;
+            }
+            if (Array.isArray(selection.selectedNodePath)) {
+                return selectNodeByPath(selection.selectedNodePath, selectionOptions);
+            }
+            return false;
         },
         completeChildNodeRequest: (
             nodeId,
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             completeChildNodeRequest(nodeId, pageEpoch, documentScopeID);
@@ -115,7 +214,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             rejectChildNodeRequest(nodeId, pageEpoch, documentScopeID);
@@ -124,7 +223,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             retryQueuedChildNodeRequests();
@@ -133,7 +232,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             resetChildNodeRequests(pageEpoch, documentScopeID);
@@ -142,7 +241,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             resetDocumentRequestStateForPageEpoch(pageEpoch, documentScopeID);
@@ -151,7 +250,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             rejectDocumentRequest(pageEpoch, documentScopeID);
@@ -160,7 +259,7 @@ function installWebInspectorKit(): void {
             pageEpoch = protocolState.pageEpoch,
             documentScopeID = protocolState.documentScopeID
         ) => {
-            if (pageEpoch !== protocolState.pageEpoch || documentScopeID !== protocolState.documentScopeID) {
+            if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             completeDocumentRequest(pageEpoch, documentScopeID);
@@ -171,6 +270,7 @@ function installWebInspectorKit(): void {
         setSearchTerm,
         setPreferredDepth,
         updateConfig,
+        adoptDocumentContext,
         __installed: true,
     };
 

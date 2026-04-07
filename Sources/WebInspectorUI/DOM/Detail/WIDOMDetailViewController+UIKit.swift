@@ -40,6 +40,11 @@ private protocol ElementAttributeEditorCellDelegate: AnyObject {
 
 @MainActor
 public final class WIDOMDetailViewController: UICollectionViewController {
+    private struct PendingInlineCommitMarker: Equatable {
+        let key: ElementAttributeEditingKey
+        let generation: UInt64
+    }
+
     private struct SectionIdentifier: Hashable, Sendable {
         let index: Int
         let title: String
@@ -48,7 +53,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private enum SectionKey: String, Hashable, Sendable {
         case element
         case selector
-        case styles
         case attributes
     }
 
@@ -57,23 +61,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         case attributeEditor
     }
 
-    fileprivate enum StyleMetaKind: String, Hashable, Sendable {
-        case loading
-        case empty
-        case truncated
-        case blockedStylesheets
-    }
-
-    fileprivate struct StyleRuleSignature: Hashable, Sendable {
-        let selectorText: String
-        let sourceLabel: String
-    }
-
     fileprivate enum ItemStableKey: DiffableStableID {
         case element
         case selector
-        case styleRule(signature: StyleRuleSignature, ordinal: Int)
-        case styleMeta(kind: StyleMetaKind)
         case attribute(nodeID: DOMNodeModel.ID, name: String)
         case emptyAttribute
     }
@@ -97,8 +87,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private enum DetailRow {
         case element
         case selector
-        case styleRule(signature: StyleRuleSignature)
-        case styleMeta(kind: StyleMetaKind)
         case attribute(nodeID: DOMNodeModel.ID, name: String)
         case emptyAttribute
     }
@@ -106,8 +94,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     fileprivate enum ItemPayload {
         case element(preview: String)
         case selector(path: String)
-        case styleRule(selector: String, detail: String)
-        case styleMeta(message: String)
         case attribute(nodeID: DOMNodeModel.ID, name: String, value: String)
         case emptyAttribute
     }
@@ -131,10 +117,15 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private var attributeDraftSession: WIDOMAttributeDraftSession?
     private var editingAttributeKey: ElementAttributeEditingKey?
     private var suppressedInlineCommitKey: ElementAttributeEditingKey?
+    private var pendingInlineCommitMarker: PendingInlineCommitMarker?
+    private var nextInlineCommitGeneration: UInt64 = 0
     private var isInlineEditingActive = false
     private var pendingInlineSelectionClearTask: Task<Void, Never>?
     private var pendingInlineEditingRefreshTask: Task<Void, Never>?
     private var pendingForcedProjectionRefresh = false
+    private var pendingFocusRestoreKey: ElementAttributeEditingKey?
+    private var pendingFocusRestoreGeneration: UInt64?
+    private var pendingFocusRestoreFromModelUpdate = false
     private var attributeRelayoutCoordinator = AttributeEditorRelayoutCoordinator()
     private var needsSnapshotReloadOnNextAppearance = false
     private var pendingReloadDataTask: Task<Void, Never>?
@@ -400,7 +391,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         // Element/selector rows observe preview-like payloads inside DOMObservingListCell.
         // This controller-level observer only tracks fields that can change section structure.
         entry.observe(
-            [\.attributes, \.matchedStyles, \.isLoadingMatchedStyles, \.matchedStylesTruncated, \.blockedStylesheetCount],
+            [\.attributes],
             onChange: { [weak self, weak entry] in
                 guard let self, let entry else {
                     return
@@ -474,36 +465,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             rows: [.selector]
         )
 
-        var styleRows: [DetailRow] = []
-        if selected.isLoadingMatchedStyles {
-            styleRows.append(.styleMeta(kind: .loading))
-        } else if selected.matchedStyles.isEmpty {
-            styleRows.append(.styleMeta(kind: .empty))
-        } else {
-            for rule in selected.matchedStyles {
-                styleRows.append(
-                    .styleRule(
-                        signature: StyleRuleSignature(
-                            selectorText: rule.selectorText,
-                            sourceLabel: rule.sourceLabel
-                        )
-                    )
-                )
-            }
-        }
-        if selected.matchedStylesTruncated {
-            styleRows.append(.styleMeta(kind: .truncated))
-        }
-        if selected.blockedStylesheetCount > 0 {
-            styleRows.append(.styleMeta(kind: .blockedStylesheets))
-        }
-
-        let styleSection = DetailSection(
-            key: .styles,
-            title: wiLocalized("dom.element.section.styles"),
-            rows: styleRows
-        )
-
         var attributeRows = selected.attributes.map { attribute in
             DetailRow.attribute(nodeID: selected.id, name: attribute.name)
         }
@@ -523,7 +484,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             rows: attributeRows
         )
 
-        return [elementSection, selectorSection, styleSection, attributeSection]
+        return [elementSection, selectorSection, attributeSection]
     }
 
     private func defaultPreview(for entry: DOMNodeModel) -> String {
@@ -708,15 +669,9 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     }
 
     private func makeRenderSections(for sections: [DetailSection]) -> [RenderSection] {
-        var styleRuleOccurrences: [StyleRuleSignature: Int] = [:]
         return sections.enumerated().map { sectionIndex, section in
             let sectionIdentifier = SectionIdentifier(index: sectionIndex, title: section.title)
-            let stableIDs = section.rows.map { row in
-                itemStableID(
-                    for: row,
-                    styleRuleOccurrences: &styleRuleOccurrences
-                )
-            }
+            let stableIDs = section.rows.map { row in itemStableID(for: row) }
             return RenderSection(sectionIdentifier: sectionIdentifier, stableIDs: stableIDs)
         }
     }
@@ -747,24 +702,12 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         ItemIdentifier(stableID: stableID, selectionGeneration: selectionGeneration)
     }
 
-    private func itemStableID(
-        for row: DetailRow,
-        styleRuleOccurrences: inout [StyleRuleSignature: Int]
-    ) -> ItemStableID {
+    private func itemStableID(for row: DetailRow) -> ItemStableID {
         switch row {
         case .element:
             return ItemStableID(key: .element, cellKind: .list)
         case .selector:
             return ItemStableID(key: .selector, cellKind: .list)
-        case let .styleRule(signature):
-            let ordinal = styleRuleOccurrences[signature, default: 0]
-            styleRuleOccurrences[signature] = ordinal + 1
-            return ItemStableID(
-                key: .styleRule(signature: signature, ordinal: ordinal),
-                cellKind: .list
-            )
-        case let .styleMeta(kind):
-            return ItemStableID(key: .styleMeta(kind: kind), cellKind: .list)
         case let .attribute(nodeID, name):
             return ItemStableID(key: .attribute(nodeID: nodeID, name: name), cellKind: .attributeEditor)
         case .emptyAttribute:
@@ -783,16 +726,6 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             return .element(preview: previewText)
         case .selector:
             return .selector(path: selectedEntry.selectorPath)
-        case let .styleRule(signature, ordinal):
-            guard let rule = matchedStyleRule(signature: signature, ordinal: ordinal, in: selectedEntry) else {
-                return nil
-            }
-            return .styleRule(
-                selector: rule.selectorText,
-                detail: styleRuleDetail(for: rule)
-            )
-        case let .styleMeta(kind):
-            return styleMetaPayload(for: kind, in: selectedEntry)
         case let .attribute(nodeID, name):
             let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
             guard let value = attributeValue(for: key, in: selectedEntry) else {
@@ -836,7 +769,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             name: name,
             value: attributeValue(for: key) ?? "",
             entry: inspector.document.selectedNode,
-            activateEditor: isInlineEditingActive && editingAttributeKey == key
+            activateEditor: (isInlineEditingActive && editingAttributeKey == key) || pendingFocusRestoreKey == key
         )
     }
 
@@ -944,7 +877,19 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func clearInlineEditingState() {
         let clearedKey = editingAttributeKey
         editingAttributeKey = nil
-        if suppressedInlineCommitKey == clearedKey {
+        if pendingFocusRestoreKey == clearedKey {
+            pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
+            pendingFocusRestoreFromModelUpdate = false
+        }
+        if pendingInlineCommitMarker?.key == clearedKey {
+            pendingInlineCommitMarker = nil
+        }
+        if suppressedInlineCommitKey == clearedKey,
+           let clearedKey,
+           visibleAttributeEditorCell(for: clearedKey)?.isEditorFirstResponder == true {
+            // Keep the suppression token armed until the editor's end-editing callbacks consume it.
+        } else if suppressedInlineCommitKey == clearedKey {
             suppressedInlineCommitKey = nil
         }
         isInlineEditingActive = false
@@ -999,7 +944,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             }
             return didDismissEditor
         }
-        let didDismissEditor = view.endEditing(true)
+        var didDismissEditor = view.endEditing(true)
+        if !didDismissEditor {
+            didDismissEditor = view.window?.endEditing(true) == true
+        }
+        if !didDismissEditor,
+           let editorCell = visibleAttributeEditorCell(for: key) {
+            didDismissEditor = editorCell.suppressNextCommitAndEndEditing()
+        }
         if didDismissEditor {
             suppressedInlineCommitKey = key
         } else if suppressedInlineCommitKey == key {
@@ -1084,6 +1036,10 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         key: ElementAttributeEditingKey,
         value: String
     ) {
+        pendingInlineCommitMarker = nil
+        pendingFocusRestoreKey = nil
+        pendingFocusRestoreGeneration = nil
+        pendingFocusRestoreFromModelUpdate = false
         if suppressedInlineCommitKey == key {
             suppressedInlineCommitKey = nil
         }
@@ -1111,10 +1067,17 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
             return
         }
         editingAttributeKey = key
+        let previousValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == key.name })?.value
         updateAttributeDraftSession(for: key, value: value)
         guard isAttributeDraftDirty(for: key) else {
             return
         }
+        nextInlineCommitGeneration &+= 1
+        let commitMarker = PendingInlineCommitMarker(
+            key: key,
+            generation: nextInlineCommitGeneration
+        )
+        pendingInlineCommitMarker = commitMarker
         let inspector = inspector
         let submittedValue = value
         Task {
@@ -1123,17 +1086,46 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
                 name: key.name,
                 value: submittedValue
             )
-            guard result == .applied else {
-                return
-            }
             await MainActor.run {
-                guard var draftSession = self.currentAttributeDraftSession(for: key),
-                      draftSession.draftValue == submittedValue
-                else {
+                guard result == .applied else {
+                    if self.pendingInlineCommitMarker == commitMarker {
+                        self.pendingInlineCommitMarker = nil
+                    }
+                    if self.pendingFocusRestoreKey == key {
+                        if self.pendingFocusRestoreGeneration == commitMarker.generation {
+                            self.pendingFocusRestoreKey = nil
+                            self.pendingFocusRestoreGeneration = nil
+                            self.pendingFocusRestoreFromModelUpdate = false
+                        }
+                    }
                     return
                 }
-                draftSession.markCommitted()
-                self.attributeDraftSession = draftSession
+                let resolvedSession = resolveInlineAttributeDraftSessionAfterSuccessfulSave(
+                    currentSession: self.currentAttributeDraftSession(for: key),
+                    key: .init(nodeID: key.nodeID, attributeName: key.name),
+                    submittedValue: submittedValue,
+                    previousValue: previousValue
+                )
+                self.attributeDraftSession = resolvedSession
+                let shouldDeferFocusRestore =
+                    self.isInlineEditingActive && self.editingAttributeKey == key
+                if resolvedSession?.isAwaitingModelEcho == true,
+                   self.pendingInlineCommitMarker == commitMarker,
+                   shouldDeferFocusRestore {
+                    self.pendingFocusRestoreKey = key
+                    self.pendingFocusRestoreGeneration = commitMarker.generation
+                    self.pendingFocusRestoreFromModelUpdate = true
+                } else if self.pendingFocusRestoreKey == key {
+                    if self.pendingFocusRestoreGeneration == commitMarker.generation {
+                        self.pendingFocusRestoreKey = nil
+                        self.pendingFocusRestoreGeneration = nil
+                        self.pendingFocusRestoreFromModelUpdate = false
+                    }
+                }
+                if self.pendingInlineCommitMarker == commitMarker {
+                    self.pendingInlineCommitMarker = nil
+                }
+                self.reconcileAttributeDraftSessionIfNeeded(allowTransientDeselection: false)
             }
         }
     }
@@ -1143,14 +1135,25 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         key: ElementAttributeEditingKey,
         value: String
     ) {
+        let suppressingInlineCommit = suppressedInlineCommitKey == key
+        let currentDraftSession = currentAttributeDraftSession(for: key)
         isInlineEditingActive = false
-        if suppressedInlineCommitKey == key {
+        if pendingFocusRestoreKey == key {
+            if pendingFocusRestoreFromModelUpdate {
+                pendingFocusRestoreFromModelUpdate = false
+            } else {
+                pendingFocusRestoreKey = nil
+                pendingFocusRestoreGeneration = nil
+            }
+        }
+        if suppressingInlineCommit {
             suppressedInlineCommitKey = nil
         }
         if editingAttributeKey == key {
             editingAttributeKey = nil
         }
-        if let draftSession = currentAttributeDraftSession(for: key), !draftSession.isDirty {
+        if let draftSession = currentDraftSession,
+           !draftSession.isDirty {
             attributeDraftSession = nil
         }
         sections = makeSections()
@@ -1198,6 +1201,10 @@ private extension WIDOMDetailViewController {
         guard var attributeDraftSession else {
             return
         }
+        let externalValue = inspector.document.selectedNode?.id == key.nodeID
+            ? inspector.document.selectedNode?.attributes.first(where: { $0.name == key.name })?.value
+            : nil
+        _ = attributeDraftSession.reconcile(externalValue: externalValue)
         attributeDraftSession.updateDraft(value)
         self.attributeDraftSession = attributeDraftSession
     }
@@ -1227,15 +1234,67 @@ private extension WIDOMDetailViewController {
         }
 
         guard selectedNode.id == attributeDraftSession.key.nodeID else {
+            pendingInlineCommitMarker = nil
+            pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
+            pendingFocusRestoreFromModelUpdate = false
             self.attributeDraftSession = nil
             return
         }
 
         let externalValue = selectedNode.attributes.first(where: { $0.name == attributeDraftSession.key.attributeName })?.value
-        switch attributeDraftSession.reconcile(externalValue: externalValue) {
-        case .refreshClean, .preserveDirty:
+        let reconcileResult = attributeDraftSession.reconcile(externalValue: externalValue)
+        switch reconcileResult {
+        case .refreshClean:
             self.attributeDraftSession = attributeDraftSession
+            pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
+            pendingFocusRestoreFromModelUpdate = false
+        case .preserveDirty:
+            self.attributeDraftSession = attributeDraftSession
+            let restoreKey = ElementAttributeEditingKey(
+                nodeID: attributeDraftSession.key.nodeID,
+                name: attributeDraftSession.key.attributeName
+            )
+            let existingRestoreKey = pendingFocusRestoreKey
+            let existingRestoreGeneration = pendingFocusRestoreGeneration
+            let wasRestoringFromModelUpdate = pendingFocusRestoreFromModelUpdate
+            let shouldRestoreFocus: Bool
+            if isInlineEditingActive {
+                shouldRestoreFocus = editingAttributeKey == restoreKey
+            } else {
+                shouldRestoreFocus = pendingFocusRestoreKey == restoreKey
+                    && attributeDraftSession.isAwaitingModelEcho
+            }
+            if let selectedEntry = inspector.document.selectedNode,
+               let editorCell = visibleAttributeEditorCell(for: restoreKey) {
+                editorCell.configure(
+                    key: restoreKey,
+                    name: restoreKey.name,
+                    value: attributeDraftSession.draftValue,
+                    entry: selectedEntry,
+                    activateEditor: shouldRestoreFocus
+                )
+            }
+            if shouldRestoreFocus {
+                pendingFocusRestoreKey = restoreKey
+                if let pendingInlineCommitMarker, pendingInlineCommitMarker.key == restoreKey {
+                    pendingFocusRestoreGeneration = pendingInlineCommitMarker.generation
+                } else if wasRestoringFromModelUpdate, existingRestoreKey == restoreKey {
+                    pendingFocusRestoreGeneration = existingRestoreGeneration
+                } else {
+                    pendingFocusRestoreGeneration = nil
+                }
+                pendingFocusRestoreFromModelUpdate = true
+            } else {
+                pendingFocusRestoreKey = nil
+                pendingFocusRestoreGeneration = nil
+                pendingFocusRestoreFromModelUpdate = false
+            }
         case .clear:
+            pendingFocusRestoreKey = nil
+            pendingFocusRestoreGeneration = nil
+            pendingFocusRestoreFromModelUpdate = false
             self.attributeDraftSession = nil
         }
     }
@@ -1253,67 +1312,6 @@ private extension WIDOMDetailViewController {
             return attributeDraftSession.isDirty ? attributeDraftSession.draftValue : nil
         }
         return entry.attributes.first(where: { $0.name == key.name })?.value
-    }
-
-    func matchedStyleRule(
-        signature: StyleRuleSignature,
-        ordinal: Int,
-        in entry: DOMNodeModel
-    ) -> DOMMatchedStyleRule? {
-        var currentOrdinal = 0
-        for rule in entry.matchedStyles {
-            let currentSignature = StyleRuleSignature(
-                selectorText: rule.selectorText,
-                sourceLabel: rule.sourceLabel
-            )
-            guard currentSignature == signature else {
-                continue
-            }
-            if currentOrdinal == ordinal {
-                return rule
-            }
-            currentOrdinal += 1
-        }
-        return nil
-    }
-
-    func styleRuleDetail(for rule: DOMMatchedStyleRule) -> String {
-        let declarations = rule.declarations.map { declaration in
-            let importantSuffix = declaration.important ? " !important" : ""
-            return "\(declaration.name): \(declaration.value)\(importantSuffix);"
-        }
-        var details = declarations.joined(separator: "\n")
-        if !rule.sourceLabel.isEmpty {
-            details = "\(rule.sourceLabel)\n\(details)"
-        }
-        return details
-    }
-
-    func styleMetaPayload(for kind: StyleMetaKind, in entry: DOMNodeModel) -> ItemPayload? {
-        switch kind {
-        case .loading:
-            guard entry.isLoadingMatchedStyles else {
-                return nil
-            }
-            return .styleMeta(message: wiLocalized("dom.element.styles.loading"))
-        case .empty:
-            guard !entry.isLoadingMatchedStyles, entry.matchedStyles.isEmpty else {
-                return nil
-            }
-            return .styleMeta(message: wiLocalized("dom.element.styles.empty"))
-        case .truncated:
-            guard entry.matchedStylesTruncated else {
-                return nil
-            }
-            return .styleMeta(message: wiLocalized("dom.element.styles.truncated"))
-        case .blockedStylesheets:
-            guard entry.blockedStylesheetCount > 0 else {
-                return nil
-            }
-            return .styleMeta(
-                message: "\(entry.blockedStylesheetCount) \(wiLocalized("dom.element.styles.blocked_stylesheets"))"
-            )
-        }
     }
 }
 
@@ -1359,42 +1357,6 @@ private final class DOMObservingListCell: UICollectionViewListCell {
         case .selector:
             entry.observe(
                 \.selectorPath,
-                onChange: { [weak self] _ in
-                    self?.applyCurrentPayload()
-                },
-                isolation: MainActor.shared
-            )
-            .store(in: &observationHandles)
-        case .styleRule:
-            entry.observe(
-                \.matchedStyles,
-                onChange: { [weak self] _ in
-                    self?.applyCurrentPayload()
-                },
-                isolation: MainActor.shared
-            )
-            .store(in: &observationHandles)
-        case .styleMeta(.loading), .styleMeta(.empty):
-            entry.observe(
-                [\.isLoadingMatchedStyles, \.matchedStyles],
-                onChange: { [weak self] in
-                    self?.applyCurrentPayload()
-                },
-                isolation: MainActor.shared
-            )
-            .store(in: &observationHandles)
-        case .styleMeta(.truncated):
-            entry.observe(
-                \.matchedStylesTruncated,
-                onChange: { [weak self] _ in
-                    self?.applyCurrentPayload()
-                },
-                isolation: MainActor.shared
-            )
-            .store(in: &observationHandles)
-        case .styleMeta(.blockedStylesheets):
-            entry.observe(
-                \.blockedStylesheetCount,
                 onChange: { [weak self] _ in
                     self?.applyCurrentPayload()
                 },
@@ -1449,31 +1411,6 @@ private final class DOMObservingListCell: UICollectionViewListCell {
                 )
             )
             configuration.textProperties.color = .label
-        case let .styleRule(selector, detail):
-            configuration = UIListContentConfiguration.subtitleCell()
-            configuration.text = selector
-            configuration.secondaryText = detail
-            configuration.textProperties.numberOfLines = 1
-            configuration.textToSecondaryTextVerticalPadding = 8
-            configuration.secondaryTextProperties.numberOfLines = 0
-            configuration.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-                for: .systemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                    weight: .semibold
-                )
-            )
-            configuration.textProperties.color = .secondaryLabel
-            configuration.secondaryTextProperties.color = .label
-            configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
-                for: .monospacedSystemFont(
-                    ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize,
-                    weight: .regular
-                )
-            )
-        case let .styleMeta(message):
-            configuration.text = message
-            configuration.textProperties.color = .secondaryLabel
-            configuration.textProperties.font = .preferredFont(forTextStyle: .subheadline)
         case .emptyAttribute:
             configuration.text = wiLocalized("dom.element.attributes.empty")
             configuration.textProperties.color = .secondaryLabel
@@ -1495,9 +1432,55 @@ extension WIDOMDetailViewController {
         guard let editingAttributeKey else {
             return
         }
+        let cachedEditingKey = editingAttributeKey
         pendingForcedProjectionRefresh = true
-        suppressInlineCommitAndEndEditing(for: editingAttributeKey, forceViewFallback: true)
+        _ = suppressInlineCommitAndEndEditing(for: cachedEditingKey, forceViewFallback: true)
+        if let editorCell = visibleAttributeEditorCell(for: cachedEditingKey) {
+            _ = editorCell.suppressNextCommitAndEndEditing()
+            suppressedInlineCommitKey = cachedEditingKey
+        }
         attributeDraftSession = nil
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else {
+                return
+            }
+            self.pendingInlineEditingRefreshTask?.cancel()
+            self.pendingInlineEditingRefreshTask = nil
+            self.clearInlineEditingState()
+            self.suppressedInlineCommitKey = cachedEditingKey
+            self.pendingFocusRestoreKey = nil
+            self.pendingFocusRestoreFromModelUpdate = false
+            if let liveValue = self.attributeValue(for: cachedEditingKey),
+               let selectedEntry = self.inspector.document.selectedNode,
+               let editorCell = self.visibleAttributeEditorCell(for: cachedEditingKey)
+            {
+                editorCell.configure(
+                    key: cachedEditingKey,
+                    name: cachedEditingKey.name,
+                    value: liveValue,
+                    entry: selectedEntry,
+                    activateEditor: false
+                )
+                _ = editorCell.suppressNextCommitAndEndEditing()
+            }
+            self.pendingForcedProjectionRefresh = false
+            self.collectionView?.layoutIfNeeded()
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self else { return }
+                self.pendingFocusRestoreKey = nil
+                self.pendingFocusRestoreFromModelUpdate = false
+                _ = self.visibleAttributeEditorCell(for: cachedEditingKey)?.suppressNextCommitAndEndEditing()
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                guard let self else { return }
+                self.pendingFocusRestoreKey = nil
+                self.pendingFocusRestoreFromModelUpdate = false
+                _ = self.visibleAttributeEditorCell(for: cachedEditingKey)?.suppressNextCommitAndEndEditing()
+            }
+        }
     }
 }
 #endif
@@ -1525,6 +1508,10 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
 
     var currentEditingKey: ElementAttributeEditingKey? {
         editingKey
+    }
+
+    var isEditorFirstResponder: Bool {
+        valueTextView.isFirstResponder
     }
 
     override init(frame: CGRect) {
@@ -1618,6 +1605,13 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
             _ = window?.endEditing(true)
         }
         return true
+    }
+
+    func activateEditorIfNeeded() {
+        guard !valueTextView.isFirstResponder else {
+            return
+        }
+        valueTextView.becomeFirstResponder()
     }
 
     override func layoutSubviews() {

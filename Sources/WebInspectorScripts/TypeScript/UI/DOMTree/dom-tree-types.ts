@@ -75,6 +75,7 @@ export interface SerializedNodeEnvelope {
     node?: unknown;
     fallback?: RawNodeDescriptor | DOMSnapshotEnvelopePayload | null;
     selectedNodeId?: number | null;
+    selectedLocalId?: number | null;
     selectedNodePath?: number[] | null;
 }
 
@@ -82,6 +83,7 @@ export interface SerializedNodeEnvelope {
 export interface DOMSnapshotEnvelopePayload {
     root?: RawNodeDescriptor | SerializedNodeEnvelope | null;
     selectedNodeId?: number | null;
+    selectedLocalId?: number | null;
     selectedNodePath?: number[] | null;
 }
 
@@ -89,7 +91,17 @@ export interface DOMSnapshotEnvelopePayload {
 export interface DOMSnapshot {
     root: DOMNode | null;
     selectedNodeId?: number;
+    selectedLocalId?: number;
     selectedNodePath?: number[];
+}
+
+export interface DOMSelectionSyncPayload {
+    id?: number;
+    nodeId?: number;
+    localId?: number;
+    localID?: number;
+    selectedLocalId?: number;
+    selectedNodePath?: number[] | null;
 }
 
 // =============================================================================
@@ -104,17 +116,21 @@ export interface ProtocolState {
     documentScopeID: number;
 }
 
+export interface DOMDocumentContext {
+    pageEpoch?: number;
+    documentScopeID?: number;
+}
+
 /** Protocol configuration options */
 export interface ProtocolConfig {
     snapshotDepth?: number;
     subtreeDepth?: number;
     autoUpdateDebounce?: number;
-    pageEpoch?: number;
-    documentScopeID?: number;
 }
 
 export interface DOMFrontendBootstrapState {
     config?: ProtocolConfig;
+    context?: DOMDocumentContext;
     preferredDepth?: number;
     pendingDocumentRequest?: RequestDocumentOptions | null;
 }
@@ -233,6 +249,7 @@ export interface NodeRefreshOptions {
 export interface SelectionOptions {
     shouldHighlight?: boolean;
     autoScroll?: boolean;
+    notifyNative?: boolean;
 }
 
 /** Scroll position capture */
@@ -291,6 +308,7 @@ export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
     snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
+    snapshotMode?: RequestDocumentMode;
     events?: DOMEventEntry[];
     bundle?: string | MutationBundle;
     mode?: RequestDocumentMode;
@@ -337,6 +355,11 @@ export interface WebInspectorDOMFrontend {
         pageEpoch?: number,
         documentScopeID?: number
     ): void;
+    applySelectionPayload(
+        payload: number | DOMSelectionSyncPayload,
+        pageEpoch?: number,
+        documentScopeID?: number
+    ): boolean;
     applySubtreePayload(payload: unknown, pageEpoch?: number, documentScopeID?: number): void;
     completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
     rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
@@ -345,11 +368,12 @@ export interface WebInspectorDOMFrontend {
     resetDocumentRequestState(pageEpoch?: number, documentScopeID?: number): void;
     rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
     completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
-    applyMutationBundle(bundle: string | MutationBundle): void;
+    applyMutationBundle(bundle: string | MutationBundle, pageEpoch?: number): void;
     applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], pageEpoch?: number): void;
     applyMutationBuffer(bufferName: string, pageEpoch?: number): boolean;
     setSearchTerm(value: string): void;
     setPreferredDepth(depth: number, pageEpoch?: number): void;
     updateConfig(partial: ProtocolConfig): void;
+    adoptDocumentContext(context: DOMDocumentContext): boolean;
     __installed?: boolean;
 }

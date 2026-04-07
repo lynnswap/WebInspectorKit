@@ -369,6 +369,11 @@ export async function requestNodeRefresh(
     const targetNodeId =
         typeof options.parentId === "number" && options.parentId > 0 ? options.parentId : nodeId;
 
+    if (!treeState.nodes.has(targetNodeId)) {
+        console.debug("[WebInspectorKit] skip refresh for missing target:", targetNodeId);
+        return;
+    }
+
     if (treeState.pendingRefreshRequests.has(targetNodeId)) {
         return;
     }
@@ -562,6 +567,12 @@ export class DOMTreeUpdater {
         this.debouncer.schedule();
     }
 
+    /** Flush enqueued events immediately */
+    flushPendingEvents(): void {
+        this.debouncer.cancel();
+        this.processPendingEvents(true);
+    }
+
     /** Record a single event */
     private recordEvent(event: DOMEventEntry): void {
         if (!event || typeof event.method !== "string") {
@@ -649,7 +660,7 @@ export class DOMTreeUpdater {
     }
 
     /** Process pending events */
-    private processPendingEvents(): void {
+    private processPendingEvents(ignoreBudget = false): void {
         if (!treeState.snapshot || !treeState.snapshot.root) {
             this.reset();
             return;
@@ -681,7 +692,7 @@ export class DOMTreeUpdater {
             }
             processed += 1;
             const elapsed = timeNow() - startedAt;
-            if (processed >= DOM_EVENT_BATCH_LIMIT || elapsed >= DOM_EVENT_TIME_BUDGET) {
+            if (!ignoreBudget && (processed >= DOM_EVENT_BATCH_LIMIT || elapsed >= DOM_EVENT_TIME_BUDGET)) {
                 break;
             }
         }

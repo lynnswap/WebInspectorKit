@@ -117,15 +117,29 @@ public final class DOMDocumentModel {
 
     package func applySelectionSnapshot(_ payload: DOMSelectionSnapshotPayload?) {
         if let previousSelectedNode = selectedNode, payload?.localID == nil {
-            previousSelectedNode.clearMatchedStyles()
+            previousSelectedNode.clearSelectionProjectionState()
         }
-
         guard let payload, let localID = payload.localID else {
             selectedNode = nil
             return
         }
 
-        let node = node(forLocalID: localID) ?? makePlaceholderNode(localID: localID)
+        let existingNode = node(forLocalID: localID)
+        let node = existingNode ?? makePlaceholderNode(
+            localID: localID,
+            backendNodeID: payload.backendNodeID,
+            backendNodeIDIsStable: payload.backendNodeIDIsStable,
+            synthesizeBackendNodeID: false
+        )
+        if let payloadBackendNodeID = payload.backendNodeID,
+           node.backendNodeID != payloadBackendNodeID {
+            node.backendNodeID = payloadBackendNodeID
+        }
+        if let payloadBackendNodeID = payload.backendNodeID,
+           node.backendNodeIDIsStable != payload.backendNodeIDIsStable,
+           node.backendNodeID == payloadBackendNodeID {
+            node.backendNodeIDIsStable = payload.backendNodeIDIsStable
+        }
         node.preview = payload.preview
         node.path = payload.path
         if let selectorPath = payload.selectorPath {
@@ -162,40 +176,6 @@ public final class DOMDocumentModel {
         }
     }
 
-    package func beginMatchedStylesLoading(for node: DOMNodeModel) {
-        guard selectedNode === node, contains(node) else {
-            return
-        }
-
-        node.isLoadingMatchedStyles = true
-        node.matchedStyles = []
-        node.matchedStylesTruncated = false
-        node.blockedStylesheetCount = 0
-    }
-
-    package func applyMatchedStyles(_ payload: DOMMatchedStylesPayload, for node: DOMNodeModel) {
-        guard selectedNode === node, contains(node) else {
-            return
-        }
-
-        if let backendNodeID = node.backendNodeID, backendNodeID != payload.nodeId {
-            return
-        }
-
-        node.matchedStyles = payload.rules
-        node.matchedStylesTruncated = payload.truncated
-        node.blockedStylesheetCount = payload.blockedStylesheetCount
-        node.isLoadingMatchedStyles = false
-    }
-
-    package func clearMatchedStyles(for node: DOMNodeModel? = nil) {
-        let resolvedNode = node ?? selectedNode
-        guard let resolvedNode, contains(resolvedNode) else {
-            return
-        }
-        resolvedNode.clearMatchedStyles()
-    }
-
     package func updateSelectedAttribute(name: String, value: String) {
         guard let node = selectedNode, contains(node) else {
             return
@@ -226,6 +206,16 @@ public final class DOMDocumentModel {
 
     package func node(backendNodeID: Int) -> DOMNodeModel? {
         nodesByLocalID.values.first(where: { $0.backendNodeID == backendNodeID })
+    }
+
+    package func node(stableBackendNodeID: Int) -> DOMNodeModel? {
+        nodesByLocalID.values.first {
+            $0.backendNodeIDIsStable && $0.backendNodeID == stableBackendNodeID
+        }
+    }
+
+    package func node(localID: UInt64) -> DOMNodeModel? {
+        node(forLocalID: localID)
     }
 
     package func contains(_ node: DOMNodeModel) -> Bool {
@@ -373,17 +363,36 @@ private extension DOMDocumentModel {
         node.attributes = newAttributes
     }
 
-    func makePlaceholderNode(localID: UInt64) -> DOMNodeModel {
-        let backendNodeID: Int?
-        if localID <= UInt64(Int.max) {
-            backendNodeID = Int(localID)
-        } else {
-            backendNodeID = nil
+    func placeholderNode(backendNodeID: Int) -> DOMNodeModel? {
+        nodesByLocalID.values.first {
+            $0.backendNodeID == backendNodeID
+                && $0.nodeName.isEmpty
+                && $0.localName.isEmpty
         }
+    }
 
+    func makePlaceholderNode(
+        localID: UInt64,
+        backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
+        synthesizeBackendNodeID: Bool = true
+    ) -> DOMNodeModel {
+        let resolvedBackendNodeID: Int?
+        let resolvedBackendNodeIDIsStable: Bool
+        if let backendNodeID {
+            resolvedBackendNodeID = backendNodeID
+            resolvedBackendNodeIDIsStable = backendNodeIDIsStable ?? true
+        } else if synthesizeBackendNodeID, localID <= UInt64(Int.max) {
+            resolvedBackendNodeID = Int(localID)
+            resolvedBackendNodeIDIsStable = false
+        } else {
+            resolvedBackendNodeID = nil
+            resolvedBackendNodeIDIsStable = false
+        }
         let node = DOMNodeModel(
             id: .init(documentIdentity: documentIdentity, localID: localID),
-            backendNodeID: backendNodeID,
+            backendNodeID: resolvedBackendNodeID,
+            backendNodeIDIsStable: resolvedBackendNodeIDIsStable,
             nodeType: 1,
             nodeName: "",
             localName: "",
@@ -404,6 +413,7 @@ private extension DOMDocumentModel {
         let node = DOMNodeModel(
             id: .init(documentIdentity: documentIdentity, localID: descriptor.localID),
             backendNodeID: descriptor.backendNodeID,
+            backendNodeIDIsStable: descriptor.backendNodeIDIsStable,
             nodeType: descriptor.nodeType,
             nodeName: descriptor.nodeName,
             localName: descriptor.localName,
@@ -578,7 +588,13 @@ private extension DOMDocumentModel {
             return
         }
 
-        if let existing = node(forLocalID: root.localID) {
+        let existingNode = node(forLocalID: root.localID)
+            ?? (root.backendNodeIDIsStable
+                    ? root.backendNodeID.flatMap {
+                        node(stableBackendNodeID: $0) ?? placeholderNode(backendNodeID: $0)
+                    }
+                    : nil)
+        if let existing = existingNode {
             let parent = existing.parent
             let previousIndex = parent?.children.firstIndex(where: { $0 === existing })
             let previousParentChildCount = parent.map { max($0.childCount, $0.children.count) }

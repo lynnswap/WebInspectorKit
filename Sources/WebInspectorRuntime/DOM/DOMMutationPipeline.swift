@@ -48,7 +48,7 @@ final class DOMMutationSender {
     private var jsBufferSequence = 0
 #if DEBUG
     var testBeforeBundleDispatchOverride: (@MainActor () async -> Void)?
-    var testApplyBundlesOverride: (@MainActor ([Any]) async -> Void)?
+    var testApplyBundlesOverride: (@MainActor ([[String: Any]]) async -> Void)?
 #endif
 
     init(
@@ -281,13 +281,7 @@ final class DOMMutationSender {
             return false
         }
 
-        let payloads: [[String: Any]] = bundles.map {
-            [
-                "bundle": $0.bundle,
-                "mode": $0.preservesInspectorState ? "preserve-ui-state" : "fresh",
-                "documentScopeID": $0.documentScopeID,
-            ]
-        }
+        let payloads = bundles.map(Self.makeFrontendTransportPayload(for:))
 
         guard Task.isCancelled == false else {
             return false
@@ -301,7 +295,7 @@ final class DOMMutationSender {
         }
         if let testApplyBundlesOverride {
             activeDispatchGeneration = generation
-            await testApplyBundlesOverride(bundles.map(\.bundle))
+            await testApplyBundlesOverride(payloads)
             return Task.isCancelled == false
         }
 #endif
@@ -412,6 +406,15 @@ final class DOMMutationSender {
 }
 
 extension DOMMutationSender {
+    private static func makeFrontendTransportPayload(for bundle: PendingBundle) -> [String: Any] {
+        [
+            "bundle": bundle.bundle,
+            "mode": bundle.preservesInspectorState ? "preserve-ui-state" : "fresh",
+            "pageEpoch": bundle.pageEpoch,
+            "documentScopeID": bundle.documentScopeID,
+        ]
+    }
+
     static func makeBufferTransportPayload(_ payloads: [[String: Any]]) -> [Any]? {
         makeBufferTransportValue(payloads) as? [Any]
     }

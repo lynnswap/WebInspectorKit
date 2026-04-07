@@ -1,6 +1,9 @@
+import Foundation
+
 package struct DOMGraphNodeDescriptor: Sendable {
     package var localID: UInt64
     package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     package var nodeType: Int
     package var nodeName: String
     package var localName: String
@@ -14,6 +17,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package init(
         localID: UInt64,
         backendNodeID: Int?,
+        backendNodeIDIsStable: Bool? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
@@ -26,6 +30,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     ) {
         self.localID = localID
         self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.nodeType = nodeType
         self.nodeName = nodeName
         self.localName = localName
@@ -48,8 +53,63 @@ package struct DOMGraphSnapshot: Sendable {
     }
 }
 
+package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
+    case local(UInt64)
+    case backend(Int)
+
+    package var jsArgument: NSDictionary? {
+        switch self {
+        case let .local(localID):
+            guard localID <= UInt64(Int.max) else {
+                return nil
+            }
+            return NSDictionary(dictionary: [
+                "kind": "local",
+                "value": NSNumber(value: Int(localID)),
+            ])
+        case let .backend(backendNodeID):
+            return NSDictionary(dictionary: [
+                "kind": "backend",
+                "value": NSNumber(value: backendNodeID),
+            ])
+        }
+    }
+
+    package var jsIdentifier: Int? {
+        switch self {
+        case let .local(localID):
+            guard localID <= UInt64(Int.max) else {
+                return nil
+            }
+            return Int(localID)
+        case let .backend(backendNodeID):
+            return backendNodeID
+        }
+    }
+
+    package var localID: UInt64? {
+        switch self {
+        case let .local(localID):
+            return localID
+        case .backend:
+            return nil
+        }
+    }
+
+    package var backendNodeID: Int? {
+        switch self {
+        case .local:
+            return nil
+        case let .backend(backendNodeID):
+            return backendNodeID
+        }
+    }
+}
+
 package struct DOMSelectionSnapshotPayload: Sendable {
     package var localID: UInt64?
+    package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     package var preview: String
     package var attributes: [DOMAttribute]
     package var path: [String]
@@ -58,6 +118,8 @@ package struct DOMSelectionSnapshotPayload: Sendable {
 
     package init(
         localID: UInt64?,
+        backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         preview: String,
         attributes: [DOMAttribute],
         path: [String],
@@ -65,6 +127,8 @@ package struct DOMSelectionSnapshotPayload: Sendable {
         styleRevision: Int
     ) {
         self.localID = localID
+        self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.preview = preview
         self.attributes = attributes
         self.path = path

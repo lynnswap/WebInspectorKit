@@ -41,6 +41,7 @@ public final class DOMNodeModel: Equatable, Hashable {
 
     public let id: ID
     package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     public var nodeType: Int
     public var nodeName: String
     public var localName: String
@@ -59,14 +60,11 @@ public final class DOMNodeModel: Equatable, Hashable {
     public var preview: String
     public var path: [String]
     public var selectorPath: String
-    public var matchedStyles: [DOMMatchedStyleRule]
-    public var isLoadingMatchedStyles: Bool
-    public var matchedStylesTruncated: Bool
-    public var blockedStylesheetCount: Int
 
     package init(
         id: ID,
         backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
@@ -79,14 +77,11 @@ public final class DOMNodeModel: Equatable, Hashable {
         styleRevision: Int = 0,
         preview: String = "",
         path: [String] = [],
-        selectorPath: String = "",
-        matchedStyles: [DOMMatchedStyleRule] = [],
-        isLoadingMatchedStyles: Bool = false,
-        matchedStylesTruncated: Bool = false,
-        blockedStylesheetCount: Int = 0
+        selectorPath: String = ""
     ) {
         self.id = id
         self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.nodeType = nodeType
         self.nodeName = nodeName
         self.localName = localName
@@ -100,10 +95,6 @@ public final class DOMNodeModel: Equatable, Hashable {
         self.preview = preview
         self.path = path
         self.selectorPath = selectorPath
-        self.matchedStyles = matchedStyles
-        self.isLoadingMatchedStyles = isLoadingMatchedStyles
-        self.matchedStylesTruncated = matchedStylesTruncated
-        self.blockedStylesheetCount = blockedStylesheetCount
     }
 
     public var localID: UInt64 {
@@ -118,10 +109,10 @@ public final class DOMNodeModel: Equatable, Hashable {
         hasher.combine(ObjectIdentifier(self))
     }
 
-    func clearMatchedStyles() {
-        matchedStyles = []
-        matchedStylesTruncated = false
-        blockedStylesheetCount = 0
-        isLoadingMatchedStyles = false
+    package func clearSelectionProjectionState() {
+        preview = ""
+        path = []
+        selectorPath = ""
+        styleRevision = 0
     }
 }

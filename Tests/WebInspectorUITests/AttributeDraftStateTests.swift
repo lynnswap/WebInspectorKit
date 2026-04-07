@@ -47,6 +47,33 @@ struct AttributeDraftStateTests {
     }
 
     @Test
+    func reconcilePreservesCommittedInlineDraftUntilMutationEchoMatches() {
+        var state = WIDOMAttributeDraftState()
+        state.begin(value: "before")
+        state.updateDraft("after")
+        state.markAwaitingModelEcho(
+            submittedValue: "after",
+            previousValue: "before"
+        )
+
+        let staleResult = state.reconcile(externalValue: "before")
+
+        #expect(staleResult == .preserveDirty)
+        #expect(state.baselineValue == "before")
+        #expect(state.draftValue == "after")
+        #expect(state.isDirty == true)
+        #expect(state.isAwaitingModelEcho == true)
+
+        let echoedResult = state.reconcile(externalValue: "after")
+
+        #expect(echoedResult == .refreshClean)
+        #expect(state.baselineValue == "after")
+        #expect(state.draftValue == "after")
+        #expect(state.isDirty == false)
+        #expect(state.phase == .clean)
+    }
+
+    @Test
     func reconcileTracksLatestBaselineWhilePreservingDirtyDraft() {
         var state = WIDOMAttributeDraftState()
         state.begin(value: "before")
@@ -203,6 +230,43 @@ struct AttributeDraftStateTests {
         #expect(resolvedSession?.key == key)
         #expect(resolvedSession?.draftValue == "newer")
         #expect(resolvedSession?.isDirty == true)
+    }
+
+    @Test
+    func inlineSaveTransitionsMatchingDraftToAwaitingModelEcho() {
+        let key = WIDOMAttributeDraftKey(
+            nodeID: .init(documentIdentity: UUID(), localID: 42),
+            attributeName: "class"
+        )
+        var session = WIDOMAttributeDraftSession(key: key, value: "before")
+        session.updateDraft("draft")
+
+        let resolvedSession = resolveInlineAttributeDraftSessionAfterSuccessfulSave(
+            currentSession: session,
+            key: key,
+            submittedValue: "draft",
+            previousValue: "before"
+        )
+
+        #expect(resolvedSession?.draftValue == "draft")
+        #expect(resolvedSession?.isAwaitingModelEcho == true)
+    }
+
+    @Test
+    func inlineSaveDoesNotRecreateClearedSessionAfterModelEcho() {
+        let key = WIDOMAttributeDraftKey(
+            nodeID: .init(documentIdentity: UUID(), localID: 42),
+            attributeName: "class"
+        )
+
+        let resolvedSession = resolveInlineAttributeDraftSessionAfterSuccessfulSave(
+            currentSession: nil,
+            key: key,
+            submittedValue: "draft",
+            previousValue: "before"
+        )
+
+        #expect(resolvedSession == nil)
     }
 }
 #endif

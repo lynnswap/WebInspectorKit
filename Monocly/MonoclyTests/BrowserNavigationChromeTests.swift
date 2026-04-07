@@ -60,6 +60,48 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
+    func testViewportChromeTopOverlapRequiresHostTopEdgeIntersection() {
+        let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
+        let chromeBelowHost = CGRect(x: 40, y: 620, width: 320, height: 44)
+        let chromeCoveringTopEdge = CGRect(x: 40, y: 76, width: 320, height: 88)
+
+        XCTAssertEqual(
+            BrowserViewportChromeGeometry.topEdgeOverlapHeight(
+                hostFrame: hostFrame,
+                chromeFrame: chromeBelowHost
+            ),
+            0
+        )
+        XCTAssertEqual(
+            BrowserViewportChromeGeometry.topEdgeOverlapHeight(
+                hostFrame: hostFrame,
+                chromeFrame: chromeCoveringTopEdge
+            ),
+            44
+        )
+    }
+
+    func testViewportChromeBottomOverlapRequiresFrameIntersection() {
+        let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
+        let chromeInDifferentColumn = CGRect(x: 420, y: 560, width: 320, height: 88)
+        let chromeCoveringBottomEdge = CGRect(x: 40, y: 560, width: 320, height: 88)
+
+        XCTAssertEqual(
+            BrowserViewportChromeGeometry.bottomEdgeOverlapHeight(
+                hostFrame: hostFrame,
+                chromeFrame: chromeInDifferentColumn
+            ),
+            0
+        )
+        XCTAssertEqual(
+            BrowserViewportChromeGeometry.bottomEdgeOverlapHeight(
+                hostFrame: hostFrame,
+                chromeFrame: chromeCoveringBottomEdge
+            ),
+            40
+        )
+    }
+
     @MainActor
     func testRegularSizeClassUsesNavigationBarItems() throws {
         let fixture = try makeHostedRootViewController()
@@ -133,9 +175,15 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         pageViewController.setSupportsMultipleScenesForTesting(false)
         applyHorizontalSizeClass(.compact, to: rootViewController)
+        drainMainQueue()
 
+        let adjustedBottomInset = rootViewController.store.webView.scrollView.adjustedContentInset.bottom
+        let pageSafeAreaBottom = pageViewController.view.safeAreaInsets.bottom
         let windowSafeAreaBottom = rootViewController.view.window?.safeAreaInsets.bottom ?? 0
+
+        XCTAssertEqual(adjustedBottomInset, pageSafeAreaBottom, accuracy: 0.5)
         XCTAssertGreaterThan(pageViewController.view.safeAreaInsets.bottom, windowSafeAreaBottom)
+        XCTAssertGreaterThan(adjustedBottomInset, windowSafeAreaBottom)
     }
 
     @MainActor

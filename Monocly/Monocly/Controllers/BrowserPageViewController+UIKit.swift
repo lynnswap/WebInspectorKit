@@ -2,7 +2,9 @@
 import OSLog
 import UIKit
 import WebInspectorKit
+#if os(iOS)
 import WKViewportCoordinator
+#endif
 
 @MainActor
 final class BrowserPageViewController: UIViewController {
@@ -45,7 +47,7 @@ final class BrowserPageViewController: UIViewController {
     }
     private lazy var diagnosticsPanel = BrowserDiagnosticsOverlayView()
 
-    private var viewportCoordinator: ViewportCoordinator?
+    private var viewportCoordinator: BrowserViewportCoordinator?
     private var storeObserverID: UUID?
     private var historyObserverID: UUID?
     private var inspectorWindowObserverID: UUID?
@@ -92,7 +94,8 @@ final class BrowserPageViewController: UIViewController {
         super.viewDidLoad()
         configureViewHierarchy()
         configureChrome()
-        viewportCoordinator = ViewportCoordinator(webView: store.webView)
+        viewportCoordinator = BrowserViewportCoordinator(webView: store.webView)
+        viewportCoordinator?.hostViewController = self
         (store.webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
         viewportCoordinator?.handleWebViewHierarchyDidChange()
 

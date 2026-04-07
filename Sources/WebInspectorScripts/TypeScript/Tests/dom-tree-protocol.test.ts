@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+    adoptDocumentContext,
     completeChildNodeRequest,
     markChildNodesRequestCompleted,
     rejectChildNodeRequest,
     requestChildNodes,
+    requestHighlightNode,
     resetChildNodeRequests,
     updateConfig,
 } from "../UI/DOMTree/dom-tree-protocol";
@@ -17,7 +19,7 @@ import {
     requestSnapshotReload,
     setSnapshot
 } from "../UI/DOMTree/dom-tree-snapshot";
-import { dom, protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
+import { dom, protocolState, renderState, transitionState, treeState } from "../UI/DOMTree/dom-tree-state";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
@@ -47,7 +49,7 @@ function resetDOMTreeState() {
     protocolState.subtreeDepth = 3;
     protocolState.pageEpoch = -1;
     protocolState.documentScopeID = 0;
-    updateConfig({ pageEpoch: 0 });
+    adoptDocumentContext({ pageEpoch: 0, documentScopeID: 0 });
     dom.tree = null;
     dom.empty = null;
     if (renderState.frameId !== null) {
@@ -55,6 +57,7 @@ function resetDOMTreeState() {
     }
     renderState.frameId = null;
     renderState.pendingNodes.clear();
+    transitionState.pendingFreshSnapshotContext = null;
 }
 
 function latestPostedPayload(handler: WebKitMockHandler, index = -1): Record<string, unknown> | undefined {
@@ -101,6 +104,13 @@ describe("dom-tree typed backend bridge", () => {
         expect(latestPostedPayload(documentHandler())?.mode).toBe("preserve-ui-state");
     });
 
+    it("sends hover highlights without reveal requests", () => {
+        requestHighlightNode(42, { reveal: false });
+
+        expect(latestPostedPayload(window.webkit?.messageHandlers?.webInspectorDomHighlight as WebKitMockHandler)?.nodeId).toBe(42);
+        expect(latestPostedPayload(window.webkit?.messageHandlers?.webInspectorDomHighlight as WebKitMockHandler)?.reveal).toBe(false);
+    });
+
     it("coalesces identical document requests while a request is in flight", async () => {
         await requestDocument({ depth: 2, mode: "fresh" });
         await requestDocument({ depth: 2, mode: "fresh" });
@@ -126,7 +136,7 @@ describe("dom-tree typed backend bridge", () => {
         await requestDocument({ depth: 2, mode: "fresh" });
         expect(documentHandler().postMessage).toHaveBeenCalledTimes(1);
 
-        updateConfig({ pageEpoch: 1 });
+        adoptDocumentContext({ pageEpoch: 1 });
         await requestDocument({ depth: 7, mode: "fresh", pageEpoch: 1 });
 
         expect(documentHandler().postMessage).toHaveBeenCalledTimes(2);
@@ -134,9 +144,29 @@ describe("dom-tree typed backend bridge", () => {
         expect(latestPostedPayload(documentHandler())?.depth).toBe(7);
     });
 
+    it("rejects out-of-order document contexts", () => {
+        adoptDocumentContext({ pageEpoch: 3, documentScopeID: 9 });
+
+        const didAdopt = adoptDocumentContext({ pageEpoch: 1, documentScopeID: 4 });
+
+        expect(didAdopt).toBe(false);
+        expect(protocolState.pageEpoch).toBe(3);
+        expect(protocolState.documentScopeID).toBe(9);
+    });
+
+    it("adopts newer document scopes for the current page epoch", () => {
+        adoptDocumentContext({ pageEpoch: 3, documentScopeID: 4 });
+
+        const didAdopt = adoptDocumentContext({ pageEpoch: 3, documentScopeID: 9 });
+
+        expect(didAdopt).toBe(true);
+        expect(protocolState.pageEpoch).toBe(3);
+        expect(protocolState.documentScopeID).toBe(9);
+    });
+
     it("ignores stale document request callbacks after documentScopeID changes", async () => {
         await requestDocument({ depth: 2, mode: "fresh" });
-        updateConfig({ documentScopeID: 1 });
+        adoptDocumentContext({ documentScopeID: 1 });
         await requestDocument({ depth: 2, mode: "fresh" });
 
         expect(documentHandler().postMessage).toHaveBeenCalledTimes(2);
@@ -147,14 +177,15 @@ describe("dom-tree typed backend bridge", () => {
         expect(documentHandler().postMessage).toHaveBeenCalledTimes(2);
     });
 
-    it("ignores stale config payloads before mutating depth state", () => {
-        updateConfig({ pageEpoch: 1, snapshotDepth: 7, subtreeDepth: 5 });
+    it("updateConfig mutates only static depth state", () => {
+        updateConfig({ snapshotDepth: 7, subtreeDepth: 5 });
+        adoptDocumentContext({ pageEpoch: 1 });
 
-        updateConfig({ pageEpoch: 0, snapshotDepth: 99, subtreeDepth: 88 });
+        updateConfig({ snapshotDepth: 99, subtreeDepth: 88 });
 
         expect(protocolState.pageEpoch).toBe(1);
-        expect(protocolState.snapshotDepth).toBe(7);
-        expect(protocolState.subtreeDepth).toBe(5);
+        expect(protocolState.snapshotDepth).toBe(99);
+        expect(protocolState.subtreeDepth).toBe(88);
     });
 
     it("documentUpdated queues a fresh document request behind an in-flight request", async () => {
@@ -231,7 +262,7 @@ describe("dom-tree typed backend bridge", () => {
         expect(latestPostedPayload(documentHandler())?.mode).toBe("fresh");
     });
 
-    it("documentUpdated preserves follow-up mutation events in the same batch", async () => {
+    it("documentUpdated drops follow-up mutation events in the same batch and invalidates the tree", async () => {
         setSnapshot({
             root: {
                 nodeId: 1,
@@ -266,6 +297,123 @@ describe("dom-tree typed backend bridge", () => {
         await Promise.resolve();
 
         expect(documentHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(latestPostedPayload(documentHandler())?.mode).toBe("fresh");
+        expect(treeState.snapshot).toBeNull();
+        expect(treeState.selectedNodeId).toBeNull();
+    });
+
+    it("documentUpdated drains queued pre-update mutations before resetting the document", async () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "before"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+
+        const events: Array<{ method: string; params: Record<string, unknown> }> = Array.from({ length: 130 }, () => ({
+            method: "DOM.attributeModified",
+            params: {
+                nodeId: 1,
+                name: "class",
+                value: "stale",
+            },
+        }));
+        events.push({
+            method: "DOM.documentUpdated",
+            params: {},
+        });
+
+        applyMutationBundle({
+            version: 1,
+            kind: "mutation",
+            events,
+            pageEpoch: protocolState.pageEpoch,
+        });
+
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "fresh"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+
+        vi.advanceTimersByTime(16);
+        await Promise.resolve();
+
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("fresh");
+    });
+
+    it("fresh snapshots reset active child-node request bookkeeping", async () => {
+        await requestChildNodes(11, 2);
+        expect(childNodesHandler().postMessage).toHaveBeenCalledTimes(1);
+
+        setSnapshot({
+            root: {
+                nodeId: 2,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: [],
+                children: [],
+            }
+        }, { mode: "fresh" });
+
+        await requestChildNodes(11, 2);
+        expect(childNodesHandler().postMessage).toHaveBeenCalledTimes(2);
+    });
+
+    it("requestSnapshotReload always requests a fresh document", async () => {
+        requestSnapshotReload("refresh-missing-target");
+        await Promise.resolve();
+
+        expect(documentHandler().postMessage).toHaveBeenCalledTimes(1);
+        expect(latestPostedPayload(documentHandler())?.mode).toBe("fresh");
+    });
+
+    it("rebuilds an empty rendered tree from the current snapshot before applying mutations", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "before"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+
+        const treeElement = document.getElementById("dom-tree");
+        expect(treeElement?.childElementCount).toBe(1);
+        treeElement?.replaceChildren();
+        treeState.elements.clear();
+
+        applyMutationBundle({
+            version: 1,
+            kind: "mutation",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: protocolState.documentScopeID,
+            events: [
+                {
+                    method: "DOM.attributeModified",
+                    params: {
+                        nodeId: 1,
+                        name: "class",
+                        value: "after",
+                    },
+                },
+            ],
+        });
+        vi.advanceTimersByTime(16);
+
+        expect(treeElement?.childElementCount).toBe(1);
         expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("after");
     });
 
@@ -280,7 +428,7 @@ describe("dom-tree typed backend bridge", () => {
                 children: [],
             }
         }, { mode: "fresh" });
-        updateConfig({ documentScopeID: 2 });
+        adoptDocumentContext({ documentScopeID: 2 });
 
         applyMutationBundle({
             version: 1,
@@ -301,6 +449,199 @@ describe("dom-tree typed backend bridge", () => {
         vi.advanceTimersByTime(16);
 
         expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("before");
+    });
+
+    it("prefers wrapper context over stale embedded mutation metadata", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "before"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+        adoptDocumentContext({ documentScopeID: 2 });
+
+        applyMutationBundle({
+            bundle: {
+                version: 1,
+                kind: "mutation",
+                pageEpoch: protocolState.pageEpoch,
+                documentScopeID: 1,
+                events: [
+                    {
+                        method: "DOM.attributeModified",
+                        params: {
+                            nodeId: 1,
+                            name: "class",
+                            value: "after",
+                        },
+                    },
+                ],
+            },
+            mode: "preserve-ui-state",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: protocolState.documentScopeID,
+        });
+        vi.advanceTimersByTime(16);
+
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("after");
+    });
+
+    it("rejects a stale fresh snapshot that carries a lower documentScopeID", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["id", "page-two"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+        adoptDocumentContext({ documentScopeID: 2 });
+
+        applyMutationBundle({
+            version: 1,
+            kind: "snapshot",
+            snapshotMode: "fresh",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: 1,
+            snapshot: {
+                root: {
+                    nodeId: 10,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["id", "page-one"],
+                    children: [],
+                }
+            },
+        });
+
+        expect(protocolState.documentScopeID).toBe(2);
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "id")?.value).toBe("page-two");
+    });
+
+    it("restores the previous pending fresh marker when a fresh snapshot is rejected", () => {
+        adoptDocumentContext({ documentScopeID: 1 });
+
+        applyMutationBundle({
+            version: 1,
+            kind: "snapshot",
+            snapshotMode: "fresh",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: 2,
+            snapshot: "{",
+        });
+
+        expect(protocolState.documentScopeID).toBe(1);
+        expect(transitionState.pendingFreshSnapshotContext).toEqual({
+            pageEpoch: 0,
+            documentScopeID: 1,
+        });
+    });
+
+    it("drops preserve-ui-state snapshots whose context no longer matches", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["id", "page-two"],
+                children: [],
+            }
+        }, { mode: "fresh" });
+        adoptDocumentContext({ documentScopeID: 2 });
+
+        applyMutationBundle({
+            version: 1,
+            kind: "snapshot",
+            snapshotMode: "preserve-ui-state",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: 1,
+            snapshot: {
+                root: {
+                    nodeId: 10,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["id", "page-one"],
+                    children: [],
+                }
+            },
+        });
+
+        expect(protocolState.documentScopeID).toBe(2);
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "id")?.value).toBe("page-two");
+    });
+
+    it("rejects unsupported mutation bundle versions before mutating protocol context", () => {
+        adoptDocumentContext({ pageEpoch: 2, documentScopeID: 7 });
+
+        applyMutationBundle({
+            version: 99,
+            kind: "mutation",
+            pageEpoch: 3,
+            documentScopeID: 9,
+            events: [],
+        });
+
+        expect(protocolState.pageEpoch).toBe(2);
+        expect(protocolState.documentScopeID).toBe(7);
+    });
+
+    it("preserve-ui-state snapshots reuse the existing root element", () => {
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "before"],
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "SPAN",
+                        localName: "span",
+                        attributes: [],
+                        children: [],
+                    },
+                ],
+            },
+        }, { mode: "fresh" });
+        treeState.openState.set(1, true);
+        const initialRootElement = dom.tree?.firstElementChild;
+
+        setSnapshot({
+            root: {
+                nodeId: 1,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["class", "after"],
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "SPAN",
+                        localName: "span",
+                        attributes: ["data-state", "updated"],
+                        children: [],
+                    },
+                ],
+            },
+        }, { mode: "preserve-ui-state" });
+        vi.advanceTimersByTime(16);
+
+        expect(dom.tree?.firstElementChild).toBe(initialRootElement);
+        expect(treeState.openState.get(1)).toBe(true);
+        expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "class")?.value).toBe("after");
+        expect(treeState.snapshot?.root?.children?.[0]?.attributes?.find((attribute) => attribute.name === "data-state")?.value).toBe("updated");
     });
 
     it("snapshot normalization failure still completes the in-flight document request", async () => {
@@ -333,7 +674,7 @@ describe("dom-tree typed backend bridge", () => {
         treeState.pendingRefreshRequests.add(11);
         treeState.refreshAttempts.set(11, { count: 2, lastRequested: 123 });
 
-        updateConfig({ pageEpoch: 1 });
+        adoptDocumentContext({ pageEpoch: 1 });
 
         expect(treeState.pendingRefreshRequests.size).toBe(0);
         expect(treeState.refreshAttempts.size).toBe(0);
@@ -411,7 +752,7 @@ describe("dom-tree typed backend bridge", () => {
 
     it("ignores stale child-node completion callbacks after documentScopeID changes", async () => {
         await requestChildNodes(11, 2);
-        updateConfig({ documentScopeID: 1 });
+        adoptDocumentContext({ documentScopeID: 1 });
         await requestChildNodes(11, 2);
 
         expect(childNodesHandler().postMessage).toHaveBeenCalledTimes(2);
@@ -458,7 +799,7 @@ describe("dom-tree typed backend bridge", () => {
 
     it("ignores stale child-node reset callbacks after documentScopeID changes", async () => {
         await requestChildNodes(11, 2);
-        updateConfig({ documentScopeID: 1 });
+        adoptDocumentContext({ documentScopeID: 1 });
         await requestChildNodes(11, 2);
 
         expect(childNodesHandler().postMessage).toHaveBeenCalledTimes(2);

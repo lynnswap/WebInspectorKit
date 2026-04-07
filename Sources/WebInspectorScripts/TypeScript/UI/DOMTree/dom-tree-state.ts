@@ -40,6 +40,9 @@ const initialBootstrap =
 const initialConfig = typeof initialBootstrap.config === "object" && initialBootstrap.config !== null
     ? initialBootstrap.config
     : {};
+const initialContext = typeof initialBootstrap.context === "object" && initialBootstrap.context !== null
+    ? initialBootstrap.context
+    : {};
 
 // Re-export constants for convenience
 export {
@@ -83,8 +86,14 @@ export function ensureDomElements(): void {
 export const protocolState: ProtocolState = {
     snapshotDepth: typeof initialConfig.snapshotDepth === "number" ? initialConfig.snapshotDepth : 4,
     subtreeDepth: typeof initialConfig.subtreeDepth === "number" ? initialConfig.subtreeDepth : 3,
-    pageEpoch: typeof initialConfig.pageEpoch === "number" ? initialConfig.pageEpoch : initialPageEpoch,
-    documentScopeID: typeof initialConfig.documentScopeID === "number" ? initialConfig.documentScopeID : 0,
+    pageEpoch: typeof initialContext.pageEpoch === "number" ? initialContext.pageEpoch : initialPageEpoch,
+    documentScopeID: typeof initialContext.documentScopeID === "number" ? initialContext.documentScopeID : 0,
+};
+
+export const transitionState: {
+    pendingFreshSnapshotContext: { pageEpoch: number; documentScopeID: number } | null;
+} = {
+    pendingFreshSnapshotContext: null,
 };
 
 // =============================================================================

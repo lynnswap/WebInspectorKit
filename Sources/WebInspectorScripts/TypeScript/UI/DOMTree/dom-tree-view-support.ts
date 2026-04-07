@@ -650,7 +650,7 @@ function handleRowClick(event: MouseEvent, node: DOMNode): void {
 }
 
 /** Send highlight command to backend */
-async function sendHighlight(nodeId: number): Promise<void> {
+async function sendHighlight(nodeId: number, options: { reveal?: boolean } = {}): Promise<void> {
     if (!nodeId || nodeId <= 0) {
         return;
     }
@@ -660,7 +660,7 @@ async function sendHighlight(nodeId: number): Promise<void> {
         return;
     }
     try {
-        requestHighlightNode(nodeId);
+        requestHighlightNode(nodeId, options);
     } catch {
         // noop
     }
@@ -683,7 +683,7 @@ async function hideHighlight(): Promise<void> {
 /** Handle row hover */
 function handleRowHover(node: DOMNode): void {
     if (node.id > 0) {
-        sendHighlight(node.id);
+        sendHighlight(node.id, { reveal: false });
     }
 }
 
@@ -798,7 +798,7 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
         return false;
     }
 
-    const { shouldHighlight = true, autoScroll = false } = options;
+    const { shouldHighlight = true, autoScroll = false, notifyNative = true } = options;
     revealAncestors(nodeId);
 
     const previous = treeState.elements.get(treeState.selectedNodeId ?? -1);
@@ -814,7 +814,9 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     treeState.selectedNodeId = nodeId;
     setNodeExpanded(nodeId, true);
     const node = treeState.nodes.get(nodeId);
-    updateDetails(node ?? null);
+    if (notifyNative) {
+        updateDetails(node ?? null);
+    }
     updateSelectionChain(nodeId);
 
     if (nodeId > 0 && shouldHighlight) {

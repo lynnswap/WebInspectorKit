@@ -23,16 +23,21 @@ import {
     dom,
     protocolState,
     treeState,
+    transitionState,
     ensureDomElements,
     clearRenderState,
 } from "./dom-tree-state";
 import { safeParseJSON } from "./dom-tree-utilities";
 import {
+    adoptDocumentContext,
+    canAdoptDocumentContext,
     isExpectedStaleProtocolResponseError,
+    matchesCurrentDocumentContext,
     markChildNodesRequestCompleted,
     onChildNodeRequestCompleted,
     onPageEpochDidChange,
     resetChildNodeRequests,
+    restoreDocumentContext,
     reportInspectorError,
     requestDocumentFromBackend,
 } from "./dom-tree-protocol";
@@ -217,6 +222,10 @@ function normalizeSnapshotEnvelopePayload(payload: unknown): DOMSnapshotEnvelope
         root: resolvedRoot,
         selectedNodeId:
             typeof snapshot.selectedNodeId === "number" ? snapshot.selectedNodeId : null,
+        selectedLocalId:
+            typeof (snapshot as DOMSnapshotEnvelopePayload).selectedLocalId === "number"
+                ? (snapshot as DOMSnapshotEnvelopePayload).selectedLocalId
+                : null,
         selectedNodePath: Array.isArray(snapshot.selectedNodePath) ? snapshot.selectedNodePath : null,
     };
 }
@@ -250,6 +259,10 @@ function resolveSerializedNodeEnvelope(envelope: SerializedNodeEnvelope): DOMSna
             typeof envelope.selectedNodeId === "number"
                 ? envelope.selectedNodeId
                 : fallbackSnapshot?.selectedNodeId ?? null,
+        selectedLocalId:
+            typeof envelope.selectedLocalId === "number"
+                ? envelope.selectedLocalId
+                : fallbackSnapshot?.selectedLocalId ?? null,
         selectedNodePath:
             Array.isArray(envelope.selectedNodePath)
                 ? envelope.selectedNodePath
@@ -312,6 +325,7 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
         return {
             root: (resolved.root as unknown as DOMNode) || null,
             selectedNodeId: resolved.selectedNodeId ?? undefined,
+            selectedLocalId: resolved.selectedLocalId ?? undefined,
             selectedNodePath: resolved.selectedNodePath ?? undefined,
         };
     }
@@ -321,6 +335,7 @@ function resolveSnapshotPayload(payload: unknown): DOMSnapshot | null {
         return {
             root: (snapshotPayload.root as unknown as DOMNode) || null,
             selectedNodeId: snapshotPayload.selectedNodeId ?? undefined,
+            selectedLocalId: snapshotPayload.selectedLocalId ?? undefined,
             selectedNodePath: snapshotPayload.selectedNodePath ?? undefined,
         };
     }
@@ -336,6 +351,33 @@ let pendingDocumentRequest: Required<RequestDocumentOptions> | null = null;
 let documentRequestInFlightEpoch: number | null = null;
 let documentRequestInFlight: Required<RequestDocumentOptions> | null = null;
 
+interface ResolvedMutationBundleInput {
+    payload: string | MutationBundle;
+    mode: "fresh" | "preserve-ui-state";
+    pageEpoch?: number;
+    documentScopeID?: number;
+}
+
+function ensureRenderedSnapshotIfNeeded(): void {
+    ensureDomElements();
+    const root = treeState.snapshot?.root;
+    if (!dom.tree || !root) {
+        return;
+    }
+    if (dom.tree.childElementCount > 0) {
+        return;
+    }
+    if (!treeState.nodes.has(root.id)) {
+        treeState.nodes.clear();
+        indexNode(root, 0, null);
+    }
+    const rootElement = treeState.elements.get(root.id) ?? buildNode(root);
+    dom.tree.appendChild(rootElement);
+    if (dom.empty) {
+        dom.empty.hidden = true;
+    }
+}
+
 function resetDocumentRequestState(): void {
     pendingDocumentRequest = null;
     documentRequestInFlightEpoch = null;
@@ -343,20 +385,14 @@ function resetDocumentRequestState(): void {
 }
 
 export function resetDocumentRequestStateForPageEpoch(pageEpoch?: number, documentScopeID?: number): void {
-    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
-        return;
-    }
-    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+    if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
         return;
     }
     resetDocumentRequestState();
 }
 
 export function completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void {
-    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
-        return;
-    }
-    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+    if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
         return;
     }
     markDocumentRequestCompleted();
@@ -364,10 +400,7 @@ export function completeDocumentRequest(pageEpoch?: number, documentScopeID?: nu
 }
 
 export function rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void {
-    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
-        return;
-    }
-    if (typeof documentScopeID === "number" && documentScopeID !== protocolState.documentScopeID) {
+    if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
         return;
     }
     const currentPageEpoch = protocolState.pageEpoch;
@@ -428,9 +461,26 @@ function queueDocumentRequest(
 }
 
 function handleDocumentUpdated(): void {
+    treeState.snapshot = null;
+    treeState.nodes.clear();
+    treeState.elements.clear();
+    treeState.deferredChildRenders.clear();
+    treeState.openState.clear();
+    treeState.selectionChain = [];
+    treeState.selectedNodeId = null;
     resetChildNodeRequests(protocolState.pageEpoch, protocolState.documentScopeID);
     treeState.pendingRefreshRequests.clear();
     treeState.refreshAttempts.clear();
+    clearRenderState();
+    if (dom.tree) {
+        dom.tree.innerHTML = "";
+        dom.tree.scrollTop = 0;
+        dom.tree.scrollLeft = 0;
+    }
+    if (dom.empty) {
+        dom.empty.hidden = false;
+    }
+    updateDetails(null);
     const normalizedFreshRequest = normalizeDocumentRequestOptions({ mode: "fresh" });
     if (!normalizedFreshRequest) {
         return;
@@ -503,46 +553,150 @@ onChildNodeRequestCompleted((nodeId) => {
 // Mutation Bundles
 // =============================================================================
 
-/** Apply a single mutation bundle */
-export function applyMutationBundle(bundle: string | MutationBundle | null | undefined): void {
+function resolveMutationBundleInput(
+    bundle: string | MutationBundle | null | undefined,
+    fallbackPageEpoch?: number
+): ResolvedMutationBundleInput | null {
     if (!bundle) {
-        return;
+        return null;
     }
 
     let mode: "fresh" | "preserve-ui-state" = "preserve-ui-state";
     let payload: string | MutationBundle = bundle;
+    let pageEpoch = fallbackPageEpoch;
+    let documentScopeID: number | undefined;
 
     if (typeof bundle === "object" && bundle.bundle !== undefined) {
         mode = bundle.mode === "fresh" ? "fresh" : "preserve-ui-state";
         payload = bundle.bundle;
+        if (typeof bundle.pageEpoch === "number" && Number.isFinite(bundle.pageEpoch)) {
+            pageEpoch = bundle.pageEpoch;
+        }
+        if (typeof bundle.documentScopeID === "number" && Number.isFinite(bundle.documentScopeID)) {
+            documentScopeID = bundle.documentScopeID;
+        }
     }
 
-    const parsed = safeParseJSON<MutationBundle>(payload);
+    return {
+        payload,
+        mode,
+        pageEpoch,
+        documentScopeID,
+    };
+}
+
+function resolveMutationBundleContext(
+    bundle: MutationBundle,
+    resolvedBundle: ResolvedMutationBundleInput
+): { pageEpoch: number; documentScopeID: number } {
+    const pageEpoch =
+        typeof resolvedBundle.pageEpoch === "number" && Number.isFinite(resolvedBundle.pageEpoch)
+            ? resolvedBundle.pageEpoch
+            : typeof bundle.pageEpoch === "number" && Number.isFinite(bundle.pageEpoch)
+                ? bundle.pageEpoch
+                : protocolState.pageEpoch;
+    const documentScopeID =
+        typeof resolvedBundle.documentScopeID === "number" && Number.isFinite(resolvedBundle.documentScopeID)
+            ? resolvedBundle.documentScopeID
+            : typeof bundle.documentScopeID === "number" && Number.isFinite(bundle.documentScopeID)
+                ? bundle.documentScopeID
+                : protocolState.documentScopeID;
+
+    return { pageEpoch, documentScopeID };
+}
+
+function resolveSnapshotMode(
+    bundle: MutationBundle,
+    resolvedBundle: ResolvedMutationBundleInput,
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
+): "fresh" | "preserve-ui-state" {
+    if (shouldForceFreshSnapshot(effectiveContext)) {
+        return "fresh";
+    }
+    if (bundle.snapshotMode === "fresh" || bundle.snapshotMode === "preserve-ui-state") {
+        return bundle.snapshotMode;
+    }
+    return resolvedBundle.mode;
+}
+
+function shouldForceFreshSnapshot(
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
+): boolean {
+    const pendingContext = transitionState.pendingFreshSnapshotContext;
+    return !!pendingContext
+        && pendingContext.pageEpoch === effectiveContext.pageEpoch
+        && pendingContext.documentScopeID === effectiveContext.documentScopeID;
+}
+
+function clearPendingFreshSnapshotContext(
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
+): void {
+    if (shouldForceFreshSnapshot(effectiveContext)) {
+        transitionState.pendingFreshSnapshotContext = null;
+    }
+}
+
+/** Apply a single mutation bundle */
+export function applyMutationBundle(
+    bundle: string | MutationBundle | null | undefined,
+    pageEpoch?: number
+): void {
+    const resolvedBundle = resolveMutationBundleInput(bundle, pageEpoch);
+    if (!resolvedBundle) {
+        return;
+    }
+
+    const parsed = safeParseJSON<MutationBundle>(resolvedBundle.payload);
     if (!parsed || typeof parsed !== "object") {
         return;
     }
-    if (typeof parsed.pageEpoch === "number" && parsed.pageEpoch !== protocolState.pageEpoch) {
-        return;
-    }
-    if (typeof parsed.documentScopeID === "number" && parsed.documentScopeID !== protocolState.documentScopeID) {
-        return;
-    }
-
     if (typeof parsed.version === "number" && parsed.version !== 1) {
         return;
     }
+    const effectiveContext = resolveMutationBundleContext(parsed, resolvedBundle);
 
-        if (parsed.kind === "snapshot") {
-            if (parsed.snapshot) {
-                setSnapshot(
-                    parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string,
-                    { mode }
-                );
-            }
+    if (parsed.kind === "snapshot") {
+        const snapshotMode = resolveSnapshotMode(parsed, resolvedBundle, effectiveContext);
+        if (snapshotMode === "preserve-ui-state"
+            && !matchesCurrentDocumentContext(effectiveContext.pageEpoch, effectiveContext.documentScopeID)) {
             return;
         }
+        if (parsed.snapshot) {
+            if (snapshotMode === "fresh" && !canAdoptDocumentContext(effectiveContext)) {
+                return;
+            }
+            const previousContext = {
+                pageEpoch: protocolState.pageEpoch,
+                documentScopeID: protocolState.documentScopeID,
+            };
+            const previousPendingFreshSnapshotContext = transitionState.pendingFreshSnapshotContext
+                ? { ...transitionState.pendingFreshSnapshotContext }
+                : null;
+            if (snapshotMode === "fresh") {
+                adoptDocumentContext(effectiveContext);
+            }
+            const didApplySnapshot = setSnapshot(
+                parsed.snapshot as unknown as DOMSnapshotEnvelopePayload | SerializedNodeEnvelope | string,
+                { mode: snapshotMode }
+            );
+            if (!didApplySnapshot) {
+                if (snapshotMode === "fresh") {
+                    restoreDocumentContext(previousContext, {
+                        pendingFreshSnapshotContext: previousPendingFreshSnapshotContext,
+                    });
+                }
+                return;
+            }
+            clearPendingFreshSnapshotContext(effectiveContext);
+        }
+        return;
+    }
 
     if (parsed.kind === "mutation") {
+        if (!matchesCurrentDocumentContext(effectiveContext.pageEpoch, effectiveContext.documentScopeID)) {
+            return;
+        }
+        ensureRenderedSnapshotIfNeeded();
         const events = Array.isArray(parsed.events) ? parsed.events : [];
         if (events.length) {
             let bufferedEvents: DOMEventEntry[] = [];
@@ -550,10 +704,10 @@ export function applyMutationBundle(bundle: string | MutationBundle | null | und
                 if (event?.method === "DOM.documentUpdated") {
                     if (bufferedEvents.length) {
                         domTreeUpdater.enqueueEvents(bufferedEvents);
-                        bufferedEvents = [];
+                        domTreeUpdater.flushPendingEvents();
                     }
                     handleDocumentUpdated();
-                    continue;
+                    return;
                 }
                 bufferedEvents.push(event);
             }
@@ -572,15 +726,12 @@ export function applyMutationBundles(
     if (!bundles) {
         return;
     }
-    if (typeof pageEpoch === "number" && pageEpoch !== protocolState.pageEpoch) {
-        return;
-    }
     if (!Array.isArray(bundles)) {
-        applyMutationBundle(bundles);
+        applyMutationBundle(bundles, pageEpoch);
         return;
     }
     for (const entry of bundles) {
-        applyMutationBundle(entry);
+        applyMutationBundle(entry, pageEpoch);
     }
 }
 
@@ -605,45 +756,46 @@ export function applyMutationBuffer(bufferName: string, pageEpoch?: number): boo
 export function setSnapshot(
     payload: { root?: RawNodeDescriptor } | string | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null | undefined,
     options: { mode?: "fresh" | "preserve-ui-state" } = {}
-): void {
+): boolean {
     try {
         ensureDomElements();
         ensureTreeEventHandlers();
         const snapshot = resolveSnapshotPayload(payload);
+        if (snapshot === null && payload != null) {
+            return false;
+        }
 
         const preserveState = options.mode === "preserve-ui-state" && !!treeState.snapshot;
+        const previousSnapshotRoot = preserveState ? treeState.snapshot?.root ?? null : null;
         const previousSelectionId = treeState.selectedNodeId;
         const previousFilter = treeState.filter;
         const preservedOpenState = preserveState ? new Map(treeState.openState) : new Map();
         const preservedScrollPosition = preserveState ? captureTreeScrollPosition() : null;
 
         domTreeUpdater.reset();
-        treeState.snapshot = snapshot;
-        treeState.nodes.clear();
-        treeState.elements.clear();
-        treeState.deferredChildRenders.clear();
-        if (!preserveState) {
+
+        if (!snapshot || !snapshot.root) {
+            treeState.snapshot = snapshot;
+            treeState.nodes.clear();
+            treeState.elements.clear();
+            treeState.deferredChildRenders.clear();
             treeState.openState.clear();
             treeState.selectionChain = [];
-        }
-        treeState.pendingRefreshRequests.clear();
-        treeState.refreshAttempts.clear();
-        treeState.selectedNodeId = preserveState ? treeState.selectedNodeId : null;
-        clearRenderState();
-        if (dom.tree) {
-            dom.tree.innerHTML = "";
-            if (!preserveState) {
+            treeState.pendingRefreshRequests.clear();
+            treeState.refreshAttempts.clear();
+            treeState.selectedNodeId = null;
+            resetChildNodeRequests(protocolState.pageEpoch, protocolState.documentScopeID);
+            clearRenderState();
+            if (dom.tree) {
+                dom.tree.innerHTML = "";
                 dom.tree.scrollTop = 0;
                 dom.tree.scrollLeft = 0;
             }
-        }
-
-        if (!snapshot || !snapshot.root) {
             if (dom.empty) {
                 dom.empty.hidden = false;
             }
             updateDetails(null);
-            return;
+            return true;
         }
 
         if (dom.empty) {
@@ -652,12 +804,53 @@ export function setSnapshot(
 
         const normalizedRoot = normalizeNodeDescriptor(snapshot.root as unknown as RawNodeDescriptor);
         if (!normalizedRoot) {
-            return;
+            return false;
         }
-        snapshot.root = normalizedRoot;
-        indexNode(normalizedRoot, 0, null);
-        if (dom.tree) {
-            dom.tree.appendChild(buildNode(normalizedRoot));
+        const existingRoot = previousSnapshotRoot;
+        const canReuseRoot = !!existingRoot && existingRoot.id === normalizedRoot.id;
+
+        if (preserveState && canReuseRoot && existingRoot) {
+            clearRenderState();
+            treeState.pendingRefreshRequests.clear();
+            treeState.refreshAttempts.clear();
+            treeState.selectedNodeId = previousSelectionId;
+            mergeNodeWithSource(existingRoot, normalizedRoot, 0);
+            treeState.snapshot = {
+                ...snapshot,
+                root: existingRoot,
+            };
+            scheduleNodeRender(existingRoot, { updateChildren: true });
+            ensureRenderedSnapshotIfNeeded();
+        } else {
+            treeState.snapshot = snapshot;
+            treeState.nodes.clear();
+            treeState.elements.clear();
+            treeState.deferredChildRenders.clear();
+            if (!preserveState) {
+                treeState.openState.clear();
+                treeState.selectionChain = [];
+            }
+            treeState.pendingRefreshRequests.clear();
+            treeState.refreshAttempts.clear();
+            treeState.selectedNodeId = preserveState ? previousSelectionId : null;
+            if (!preserveState || !canReuseRoot) {
+                resetChildNodeRequests(protocolState.pageEpoch, protocolState.documentScopeID);
+            }
+            clearRenderState();
+            if (dom.tree) {
+                dom.tree.innerHTML = "";
+                if (!preserveState) {
+                    dom.tree.scrollTop = 0;
+                    dom.tree.scrollLeft = 0;
+                }
+            }
+            treeState.snapshot = snapshot;
+            snapshot.root = normalizedRoot;
+            indexNode(normalizedRoot, 0, null);
+            if (dom.tree) {
+                dom.tree.appendChild(buildNode(normalizedRoot));
+            }
+            ensureRenderedSnapshotIfNeeded();
         }
 
         if (preserveState && preservedOpenState.size) {
@@ -671,8 +864,15 @@ export function setSnapshot(
             applyFilter();
         }
 
-        const snapshotData = snapshot as DOMSnapshot & { selectedNodeId?: number; selectedNodePath?: number[] };
+        const snapshotData = snapshot as DOMSnapshot & {
+            selectedNodeId?: number;
+            selectedLocalId?: number;
+            selectedNodePath?: number[];
+        };
         const selectionCandidateId =
+            typeof snapshotData.selectedLocalId === "number" && snapshotData.selectedLocalId > 0
+                ? snapshotData.selectedLocalId
+                :
             typeof snapshotData.selectedNodeId === "number" && snapshotData.selectedNodeId > 0
                 ? snapshotData.selectedNodeId
                 : null;
@@ -718,6 +918,7 @@ export function setSnapshot(
         if (preservedScrollPosition) {
             restoreTreeScrollPosition(preservedScrollPosition);
         }
+        return true;
     } catch (error) {
         reportInspectorError("setSnapshot", error);
         throw error;
@@ -733,11 +934,11 @@ export function setSnapshot(
 /** Apply a subtree update */
 export function applySubtree(
     payload: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null | undefined
-): void {
+): boolean {
     try {
         ensureDomElements();
         if (!payload) {
-            return;
+            return false;
         }
 
         const targetId = resolveSubtreeTargetId(payload);
@@ -746,7 +947,7 @@ export function applySubtree(
             if (typeof targetId === "number") {
                 markChildNodesRequestCompleted(targetId);
             }
-            return;
+            return false;
         }
 
         const parentRendered = ((): boolean => {
@@ -766,13 +967,13 @@ export function applySubtree(
             if (typeof targetId === "number") {
                 markChildNodesRequestCompleted(targetId);
             }
-            return;
+            return false;
         }
 
         const target = treeState.nodes.get(normalized.id);
         if (!target) {
             markChildNodesRequestCompleted(normalized.id);
-            return;
+            return false;
         }
 
         if (treeState.pendingRefreshRequests.has(normalized.id)) {
@@ -806,6 +1007,7 @@ export function applySubtree(
             applyFilter();
         }
         markChildNodesRequestCompleted(normalized.id);
+        return true;
     } catch (error) {
         reportInspectorError("applySubtree", error);
         throw error;
@@ -891,7 +1093,7 @@ function applySetChildNodes(params: {
 export function requestSnapshotReload(reason?: string): void {
     const reloadReason = reason || "dom-sync";
     console.debug("[WebInspectorKit] request reload:", reloadReason);
-    requestDocumentSafely({ mode: "preserve-ui-state" });
+    requestDocumentSafely({ mode: "fresh" });
 }
 
 // =============================================================================
@@ -915,4 +1117,5 @@ export function setPreferredDepth(depth: number, pageEpoch?: number): void {
 /** Register tree-side reload handlers */
 export function registerTreeHandlers(): void {
     setReloadHandler(requestSnapshotReload);
+    ensureRenderedSnapshotIfNeeded();
 }

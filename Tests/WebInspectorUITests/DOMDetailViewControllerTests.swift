@@ -119,7 +119,7 @@ struct DOMDetailViewControllerTests {
         let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "before"
+                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "before"
         }
         #expect(initialReady)
 
@@ -127,7 +127,7 @@ struct DOMDetailViewControllerTests {
         inspector.document.updateSelectedAttribute(name: "class", value: "after")
 
         let valueUpdated = await waitUntil {
-            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "after"
+            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "after"
         }
         #expect(valueUpdated)
         #expect(viewController.snapshotApplyCountForTesting == initialSnapshotCount)
@@ -147,8 +147,8 @@ struct DOMDetailViewControllerTests {
         let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && collectionView.numberOfSections > 3
-                && collectionView.numberOfItems(inSection: 3) == 1
+                && collectionView.numberOfSections > 2
+                && collectionView.numberOfItems(inSection: 2) == 1
         }
         #expect(initialReady)
 
@@ -156,8 +156,8 @@ struct DOMDetailViewControllerTests {
         inspector.document.updateSelectedAttribute(name: "id", value: "target")
 
         let structureUpdated = await waitUntil {
-            collectionView.numberOfSections > 3
-                && collectionView.numberOfItems(inSection: 3) == 2
+            collectionView.numberOfSections > 2
+                && collectionView.numberOfItems(inSection: 2) == 2
                 && viewController.snapshotApplyCountForTesting > initialSnapshotCount
         }
         #expect(structureUpdated)
@@ -179,7 +179,7 @@ struct DOMDetailViewControllerTests {
         let collectionView = try #require(viewController.collectionView)
         let initialReady = await waitUntil {
             viewController.snapshotApplyCountForTesting > 0
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "before"
+                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "before"
         }
         #expect(initialReady)
 
@@ -200,9 +200,9 @@ struct DOMDetailViewControllerTests {
 
         let replacementTracked = await waitUntil {
             inspector.document.selectedNode !== originalSelection
-                && collectionView.numberOfSections > 3
-                && collectionView.numberOfItems(inSection: 3) == 1
-                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "replaced"
+                && collectionView.numberOfSections > 2
+                && collectionView.numberOfItems(inSection: 2) == 1
+                && self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "replaced"
         }
         #expect(replacementTracked)
     }
@@ -219,7 +219,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -241,7 +241,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let draftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.isFirstResponder && currentTextView.text == "draft"
@@ -261,7 +261,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -280,7 +280,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let refreshed = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.text == "replaced" && currentTextView.isFirstResponder == false
@@ -300,7 +300,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -319,7 +319,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let editingCleared = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.text == "after" && currentTextView.isFirstResponder == false
@@ -339,7 +339,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -362,7 +362,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let draftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.isFirstResponder && currentTextView.text == "draft"
@@ -382,7 +382,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -408,7 +408,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let replacementApplied = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.isFirstResponder == false && currentTextView.text == "replaced"
@@ -428,7 +428,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -443,7 +443,7 @@ struct DOMDetailViewControllerTests {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         let dirtyDraftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
@@ -464,7 +464,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -493,7 +493,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let draftCleared = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.text == "other"
@@ -513,7 +513,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -531,7 +531,7 @@ struct DOMDetailViewControllerTests {
 
         let finalSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
         let finalStateIsStable = await waitUntil {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentTextView.text == "before" && currentTextView.isFirstResponder == false
@@ -553,7 +553,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -567,7 +567,7 @@ struct DOMDetailViewControllerTests {
 
         let liveValuePreserved = await waitUntil {
             let currentValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)) else {
+            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
                 return false
             }
             return currentValue == "live"
@@ -591,7 +591,7 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let initialTextView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 3)))
+        let initialTextView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
         #expect(initialTextView.isFirstResponder == false)
 
         let selectedNodeID = try #require(inspector.document.selectedNode?.id)
@@ -607,7 +607,7 @@ struct DOMDetailViewControllerTests {
         )
 
         let selectionRefreshes = await waitUntil {
-            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 3)) == "other"
+            self.visibleTextViewText(in: collectionView, at: IndexPath(item: 0, section: 2)) == "other"
         }
 
         #expect(selectionRefreshes)

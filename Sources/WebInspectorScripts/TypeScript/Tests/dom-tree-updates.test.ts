@@ -300,6 +300,36 @@ describe("dom-tree-updates", () => {
         expect(treeState.styleRevision).toBe(1);
     });
 
+    it("ignores unknown-parent mutations outside the captured tree without forcing a reload", () => {
+        const root = makeNode(1);
+        treeState.snapshot = { root };
+        treeState.nodes.set(1, root);
+
+        const reloadSpy = vi.fn();
+        setReloadHandler(reloadSpy);
+
+        const updater = new DOMTreeUpdater();
+        updater.enqueueEvents([{
+            method: "DOM.childNodeInserted",
+            params: {
+                parentNodeId: 999,
+                node: {
+                    nodeId: 1001,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: [],
+                    childNodeCount: 0,
+                    children: []
+                }
+            }
+        }]);
+
+        vi.advanceTimersByTime(16);
+        expect(reloadSpy).not.toHaveBeenCalled();
+        expect(treeState.pendingRefreshRequests.size).toBe(0);
+    });
+
     it("increments style revision for unknown text mutations in shallow snapshots", () => {
         const root = makeNode(1);
         treeState.snapshot = { root };

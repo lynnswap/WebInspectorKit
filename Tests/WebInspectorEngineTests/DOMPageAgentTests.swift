@@ -3,6 +3,8 @@ import WebKit
 @testable import WebInspectorEngine
 @testable import WebInspectorBridge
 
+private let bootstrapUserScriptMarker = "__wiDOMAgentBootstrapUserScript"
+
 @MainActor
 struct DOMSessionTests {
     @Test
@@ -50,19 +52,48 @@ struct DOMSessionTests {
     }
 
     @Test
-    func matchedStylesWithoutWebViewThrows() async {
-        let session = DOMSession(configuration: .init())
-        do {
-            _ = try await session.matchedStyles(nodeId: 1)
-            #expect(Bool(false))
-        } catch let error as WebInspectorCoreError {
-            guard case .scriptUnavailable = error else {
-                #expect(Bool(false))
-                return
-            }
-        } catch {
-            #expect(Bool(false))
-        }
+    func captureSnapshotPreservesPendingInitialSnapshotMode() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 2))
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            "window.webInspectorDOM.nextInitialSnapshotMode = 'fresh';",
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        _ = try await session.captureSnapshot(maxDepth: 2)
+
+        let status = await autoSnapshotStatus(on: webView)
+        let nextInitialSnapshotMode =
+            (status?["nextInitialSnapshotMode"] as? String)
+            ?? (status?["nextInitialSnapshotMode"] as? NSString as String?)
+        #expect(nextInitialSnapshotMode == "fresh")
+    }
+
+    @Test
+    func captureSnapshotConsumesPendingInitialSnapshotModeWhenRequested() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 2))
+        let (webView, _) = makeTestWebView()
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+
+        try await webView.callAsyncVoidJavaScript(
+            "window.webInspectorDOM.nextInitialSnapshotMode = 'fresh';",
+            contentWorld: WISPIContentWorldProvider.bridgeWorld()
+        )
+
+        _ = try await session.captureSnapshot(
+            maxDepth: 2,
+            initialModeOwnership: .consumePendingInitialMode
+        )
+
+        let status = await autoSnapshotStatus(on: webView)
+        let nextInitialSnapshotMode =
+            (status?["nextInitialSnapshotMode"] as? String)
+            ?? (status?["nextInitialSnapshotMode"] as? NSString as String?)
+        #expect(nextInitialSnapshotMode == nil)
     }
 
     @Test
@@ -77,7 +108,8 @@ struct DOMSessionTests {
         #expect(addedHandlerNames.contains("webInspectorDOMSnapshot"))
         #expect(addedHandlerNames.contains("webInspectorDOMMutations"))
         #expect(controller.addedHandlers.allSatisfy { $0.world == bridgeWorld })
-        #expect(controller.userScripts.count == 2)
+        #expect(controller.userScripts.count == 3)
+        #expect(controller.userScripts.contains { $0.source.contains(bootstrapUserScriptMarker) })
         #expect(controller.userScripts.contains { $0.source.contains("webInspectorDOM") })
     }
 
@@ -126,7 +158,7 @@ struct DOMSessionTests {
     }
 
     @Test
-    func reattachingSameWebViewAdoptsNewerPageEpochBeforeDocumentScopeCatchesUp() async throws {
+    func reattachingSameWebViewAdoptsObservedDocumentScopeWhenEpochAdvances() async throws {
         let session = DOMSession(configuration: .init())
         let (webView, _) = makeTestWebView()
 
@@ -243,6 +275,36 @@ struct DOMSessionTests {
     }
 
     @Test
+    func commitPageContextIgnoresHashOnlyDocumentURLChanges() throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        agent.commitPageContext(
+            .init(pageEpoch: 1, documentScopeID: 2, documentURL: "https://example.com/page#first"),
+            on: webView
+        )
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: 1)
+
+        agent.commitPageContext(
+            .init(pageEpoch: 1, documentScopeID: 2, documentURL: "https://example.com/page#second"),
+            on: webView
+        )
+
+        #expect(handleCache.handle(for: 1) != nil)
+        #expect(agent.currentPageContext.documentURL == "https://example.com/page")
+    }
+
+    @Test
     func stalePageEpochSyncDoesNotRegressNativeEpoch() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()
@@ -355,7 +417,7 @@ struct DOMSessionTests {
     }
 
     @Test
-    func syncDocumentScopeRefreshesStaleCachedScopeBeforeShortCircuiting() async throws {
+    func syncDocumentScopeAppliesPreparedScopeWhenPageRestoresOlderDocumentScope() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()
         let agent = DOMPageAgent(
@@ -367,17 +429,21 @@ struct DOMSessionTests {
         }
 
         agent.attachPageWebView(webView)
-        await loadHTML("<html><body><div id='first'></div></body></html>", in: webView)
-        await agent.ensureDOMAgentScriptInstalled(on: webView)
-        await agent.syncDocumentScopeIDIfNeeded(1, on: webView)
         agent.testSetCachedDocumentScopeID(4)
-        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 1)
+        agent.testPageContextFromPageOverride = { _ in
+            .init(pageEpoch: 0, documentScopeID: 1)
+        }
+        var appliedScopeIDs: [UInt64] = []
+        agent.testApplyDocumentScopeIDOverride = { documentScopeID, _ in
+            appliedScopeIDs.append(documentScopeID)
+            return true
+        }
+
+        let didSync = await agent.syncDocumentScopeIDIfNeeded(4, on: webView)
+
+        #expect(didSync == true)
         #expect(extractDocumentScopeID(from: agent) == 4)
-
-        await agent.syncDocumentScopeIDIfNeeded(2, on: webView)
-
-        #expect(extractDocumentScopeID(from: agent) == 2)
-        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 2)
+        #expect(appliedScopeIDs == [4])
     }
 
     @Test
@@ -558,7 +624,7 @@ struct DOMSessionTests {
         let mutationFinished = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 matchesApplied(
-                    await session.setAttribute(nodeId: nodeId, name: "class", value: "after")
+                    await session.setAttribute(target: .local(UInt64(nodeId)), name: "class", value: "after")
                 )
             }
             group.addTask {
@@ -578,6 +644,40 @@ struct DOMSessionTests {
     }
 
     @Test
+    func attachReappliesPreparedDocumentScopeUsingObservedPageEpochWhenPreparedPageEpochIsUnset() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let seedAgent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+        let session = DOMSession(configuration: .init())
+
+        seedAgent.attachPageWebView(webView)
+        await loadHTML("<html><body><div id='target'></div></body></html>", in: webView)
+        await seedAgent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 4, documentScopeID: 1)
+
+        let seeded = await waitForCondition {
+            let jsEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let jsScope = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return jsEpoch == 4 && jsScope == 1
+        }
+        #expect(seeded == true)
+
+        session.prepareDocumentScopeID(6)
+
+        _ = await session.attach(to: webView)
+
+        #expect(session.testCachedPageEpoch == 4)
+        #expect(session.testCachedDocumentScopeID == 6)
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 4)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 6)
+    }
+
+    @Test
     func attachingSecondSessionToSameControllerDoesNotDuplicateScripts() async {
         let firstSession = DOMSession(configuration: .init())
         let secondSession = DOMSession(configuration: .init())
@@ -585,7 +685,7 @@ struct DOMSessionTests {
 
         _ = await firstSession.attach(to: webView)
         let firstScriptCount = controller.userScripts.count
-        #expect(firstScriptCount == 2)
+        #expect(firstScriptCount == 3)
 
         _ = await secondSession.attach(to: webView)
 
@@ -612,12 +712,44 @@ struct DOMSessionTests {
         await agent.ensureDOMAgentScriptInstalled(on: webView)
         let firstScriptCount = controller.userScripts.count
 
-        #expect(firstScriptCount == 2)
+        #expect(firstScriptCount == 3)
         #expect(registry.domBridgeScriptInstalled(on: controller) == true)
 
         await agent.ensureDOMAgentScriptInstalled(on: webView)
 
         #expect(controller.userScripts.count == firstScriptCount)
+    }
+
+    @Test
+    func bootstrapRefreshReplacesExistingBootstrapUserScript() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 5, subtreeDepth: 2, autoUpdateDebounce: 0.2),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 1, documentScopeID: 2)
+
+        let initialScriptCount = controller.userScripts.count
+        #expect(initialScriptCount == 3)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        await agent.setAutoSnapshot(enabled: true)
+        #expect(controller.userScripts.count == initialScriptCount)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 4)
+        #expect(controller.userScripts.count == initialScriptCount)
+        #expect(controller.userScripts.first?.source.contains(bootstrapUserScriptMarker) == true)
+
+        let bootstrapScripts = controller.userScripts.filter { $0.source.contains(bootstrapUserScriptMarker) }
+        #expect(bootstrapScripts.count == 1)
     }
 
     @Test
@@ -702,6 +834,71 @@ struct DOMSessionTests {
     }
 
     @Test
+    func documentStartBootstrapRestoresPageContextAndAutoSnapshotAfterReload() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 6, subtreeDepth: 2, autoUpdateDebounce: 0.18),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML("<html><body><p>first</p></body></html>", in: webView)
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 3, documentScopeID: 5)
+        await agent.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        #expect(try await currentDOMAgentPageEpoch(in: webView) == 3)
+        #expect(try await currentDOMAgentDocumentScopeID(in: webView) == 5)
+
+        await loadHTML("<html><body><p>second</p></body></html>", in: webView)
+
+        let restoredAfterReload = await waitForCondition(attempts: 100) {
+            let status = await autoSnapshotStatus(on: webView)
+            let enabled = (status?["snapshotAutoUpdateEnabled"] as? Bool)
+                ?? (status?["snapshotAutoUpdateEnabled"] as? NSNumber)?.boolValue
+                ?? false
+            let maxDepth = (status?["snapshotAutoUpdateMaxDepth"] as? Int)
+                ?? (status?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
+            let debounce = (status?["snapshotAutoUpdateDebounce"] as? Int)
+                ?? (status?["snapshotAutoUpdateDebounce"] as? NSNumber)?.intValue
+            let pageEpoch = try? await currentDOMAgentPageEpoch(in: webView)
+            let documentScopeID = try? await currentDOMAgentDocumentScopeID(in: webView)
+            return enabled && maxDepth == 6 && debounce == 180 && pageEpoch == 3 && documentScopeID == 5
+        }
+
+        #expect(restoredAfterReload == true)
+    }
+
+    @Test
+    func preparingDocumentScopeWhileAttachedRefreshesBootstrapBeforeNextNavigation() async throws {
+        let session = DOMSession(configuration: .init(snapshotDepth: 4, subtreeDepth: 2, autoUpdateDebounce: 0.2))
+        let (webView, _) = makeTestWebView()
+
+        _ = await session.attach(to: webView)
+        await loadHTML("<html><body><p>first</p></body></html>", in: webView)
+        await session.setAutoSnapshot(enabled: true)
+        await waitForAutoSnapshotEnabled(on: webView)
+
+        session.prepareDocumentScopeID(2)
+
+        let appliedToCurrentPage = await waitForCondition {
+            (try? await currentDOMAgentDocumentScopeID(in: webView)) == 2
+        }
+        #expect(appliedToCurrentPage == true)
+
+        await loadHTML("<html><body><p>second</p></body></html>", in: webView)
+
+        let restoredOnNextNavigation = await waitForCondition {
+            (try? await currentDOMAgentDocumentScopeID(in: webView)) == 2
+        }
+        #expect(restoredOnNextNavigation == true)
+    }
+
+    @Test
     func updateConfigurationWhileAutoSnapshotEnabledEventuallyReconfiguresAgent() async throws {
         let session = DOMSession(configuration: .init(snapshotDepth: 4, subtreeDepth: 2, autoUpdateDebounce: 0.2))
         let (webView, _) = makeTestWebView()
@@ -742,39 +939,6 @@ struct DOMSessionTests {
     }
 
     @Test
-    func matchedStylesReturnsInlineAndMatchedRules() async throws {
-        let session = DOMSession(configuration: .init(snapshotDepth: 6, subtreeDepth: 4))
-        let (webView, _) = makeTestWebView()
-        let html = """
-        <html>
-            <head>
-                <style>
-                    .match-target { color: rgb(255, 0, 0); }
-                    div { margin: 0; }
-                </style>
-            </head>
-            <body>
-                <div id="target" class="match-target" style="display: inline; color: blue !important;">Hello</div>
-            </body>
-        </html>
-        """
-
-        _ = await session.attach(to: webView)
-        await loadHTML(html, in: webView)
-        let snapshot = try await session.captureSnapshot(maxDepth: 6)
-        guard let nodeId = findNodeId(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target") else {
-            Issue.record("target nodeId was not found in snapshot")
-            return
-        }
-
-        let payload = try await session.matchedStyles(nodeId: nodeId)
-
-        #expect(payload.nodeId == nodeId)
-        #expect(payload.rules.contains(where: { $0.origin == .inline && $0.selectorText == "element.style" }))
-        #expect(payload.rules.contains(where: { $0.selectorText == ".match-target" }))
-    }
-
-    @Test
     func removeNodeSupportsUndoAndRedo() async throws {
         let session = DOMSession(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
         let (webView, _) = makeTestWebView()
@@ -796,7 +960,7 @@ struct DOMSessionTests {
             return
         }
 
-        let removeResult = await session.removeNodeWithUndo(nodeId: nodeId)
+        let removeResult = await session.removeNodeWithUndo(target: .local(UInt64(nodeId)))
         guard case let .applied(undoToken) = removeResult else {
             Issue.record("removeNodeWithUndo should return a valid token")
             return
@@ -810,6 +974,66 @@ struct DOMSessionTests {
         let removedAgain = await session.redoRemoveNode(undoToken: undoToken)
         #expect(matchesApplied(removedAgain) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
+    }
+
+    @Test
+    func removeNodeWithUndoEncodesLocalTargetsWithExplicitKind() {
+        let agent = DOMPageAgent(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
+
+        let argument = agent.testJavaScriptRemovalTargetArgument(for: .local(42)) as? NSDictionary
+
+        #expect(argument?["kind"] as? String == "local")
+        #expect((argument?["value"] as? NSNumber)?.intValue == 42)
+    }
+
+    @Test
+    func removeNodeWithUndoClearsCachedHandlesForLocalAndBackendIDs() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 5, subtreeDepth: 3),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <div id="target">Target</div>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+
+        let snapshot = try await agent.captureSnapshot(maxDepth: 5)
+        let node = try #require(
+            findNodeDescriptor(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target")
+        )
+        let localID = try #require(node.localID)
+        let backendNodeID = localID + 10_000
+        #expect(localID != backendNodeID)
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: localID)
+        handleCache.store(handle: NSObject(), for: backendNodeID)
+        #expect(handleCache.handle(for: localID) != nil)
+        #expect(handleCache.handle(for: backendNodeID) != nil)
+
+        let removeResult = await agent.removeNodeWithUndo(target: .local(UInt64(localID)))
+        guard case let .applied(undoToken) = removeResult else {
+            Issue.record("removeNodeWithUndo should succeed for cached-handle invalidation test")
+            return
+        }
+
+        #expect(handleCache.handle(for: localID) == nil)
+        #expect(handleCache.handle(for: backendNodeID) == nil)
+        #expect(matchesApplied(await agent.undoRemoveNode(undoToken: undoToken)) == true)
     }
 
     @Test
@@ -855,7 +1079,7 @@ struct DOMSessionTests {
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
 
-        let removeResult = await session.removeNode(nodeId: nodeId)
+        let removeResult = await session.removeNode(target: .local(UInt64(nodeId)))
 
         #expect(matchesApplied(removeResult) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
@@ -936,7 +1160,22 @@ struct DOMSessionTests {
         else {
             return nil
         }
-        return findNodeId(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
+        return findNodeDescriptor(inNode: root, attributeName: attributeName, attributeValue: attributeValue)?.localID
+    }
+
+    private func findNodeDescriptor(
+        inSnapshotJSON snapshotJSON: String,
+        attributeName: String,
+        attributeValue: String
+    ) -> (localID: Int?, backendNodeID: Int?)? {
+        guard
+            let data = snapshotJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let root = object["root"] as? [String: Any]
+        else {
+            return nil
+        }
+        return findNodeDescriptor(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
     }
 
     private func findNodeId(
@@ -944,13 +1183,29 @@ struct DOMSessionTests {
         attributeName: String,
         attributeValue: String
     ) -> Int? {
+        findNodeDescriptor(inNode: node, attributeName: attributeName, attributeValue: attributeValue)?.localID
+    }
+
+    private func findNodeDescriptor(
+        inNode node: [String: Any],
+        attributeName: String,
+        attributeValue: String
+    ) -> (localID: Int?, backendNodeID: Int?)? {
         if let attributes = node["attributes"] as? [String] {
             var index = 0
             while index + 1 < attributes.count {
                 let currentName = attributes[index]
                 let currentValue = attributes[index + 1]
                 if currentName == attributeName, currentValue == attributeValue {
-                    return node["nodeId"] as? Int
+                    let localID =
+                        (node["localId"] as? Int)
+                        ?? (node["localId"] as? NSNumber)?.intValue
+                        ?? (node["nodeId"] as? Int)
+                        ?? (node["nodeId"] as? NSNumber)?.intValue
+                    let backendNodeID =
+                        (node["backendNodeId"] as? Int)
+                        ?? (node["backendNodeId"] as? NSNumber)?.intValue
+                    return (localID, backendNodeID)
                 }
                 index += 2
             }
@@ -958,8 +1213,12 @@ struct DOMSessionTests {
 
         if let children = node["children"] as? [[String: Any]] {
             for child in children {
-                if let nodeId = findNodeId(inNode: child, attributeName: attributeName, attributeValue: attributeValue) {
-                    return nodeId
+                if let descriptor = findNodeDescriptor(
+                    inNode: child,
+                    attributeName: attributeName,
+                    attributeValue: attributeValue
+                ) {
+                    return descriptor
                 }
             }
         }

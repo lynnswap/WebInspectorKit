@@ -6,11 +6,245 @@ import WebKit
 
 #if canImport(UIKit)
 import UIKit
+typealias BrowserPlatformColor = UIColor
+
+enum BrowserViewportChromeGeometry {
+    static func topEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+        let overlap = hostFrame.intersection(chromeFrame)
+        guard overlap.isNull == false else {
+            return 0
+        }
+        guard chromeFrame.minY <= hostFrame.minY else {
+            return 0
+        }
+        return max(0, overlap.maxY - hostFrame.minY)
+    }
+
+    static func bottomEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+        let overlap = hostFrame.intersection(chromeFrame)
+        guard overlap.isNull == false else {
+            return 0
+        }
+        guard chromeFrame.maxY >= hostFrame.maxY else {
+            return 0
+        }
+        return max(0, hostFrame.maxY - overlap.minY)
+    }
+}
+
+#if os(iOS)
 import WKViewportCoordinator
+typealias BrowserViewportCoordinator = ViewportCoordinator
+#else
+@MainActor
+final class BrowserViewportCoordinator {
+    weak var hostViewController: UIViewController?
+    private weak var webView: WKWebView?
+    private var lastAppliedInsets: UIEdgeInsets?
+    private var keyboardFrameInScreen: CGRect = .null
+    private var lastKnownWindowIdentity: ObjectIdentifier?
+
+    init(webView: WKWebView) {
+        self.webView = webView
+        observeKeyboardNotifications()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func invalidate() {
+        guard let webView else {
+            return
+        }
+        lastAppliedInsets = nil
+        hostViewController?.setContentScrollView(nil)
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.verticalScrollIndicatorInsets = .zero
+        webView.scrollView.horizontalScrollIndicatorInsets = .zero
+    }
+
+    func handleWebViewHierarchyDidChange() {
+        if let currentWindowIdentity = webView?.window.map(ObjectIdentifier.init) {
+            if let lastKnownWindowIdentity, lastKnownWindowIdentity != currentWindowIdentity {
+                keyboardFrameInScreen = .null
+            }
+            self.lastKnownWindowIdentity = currentWindowIdentity
+        }
+        updateViewport()
+    }
+
+    func handleViewDidAppear() {
+        updateViewport()
+    }
+
+    func handleWebViewSafeAreaInsetsDidChange() {
+        updateViewport()
+    }
+
+    func updateViewport() {
+        guard let webView else {
+            return
+        }
+        guard let hostView = webView.superview else {
+            invalidate()
+            return
+        }
+        let safeAreaInsets = projectedWindowSafeAreaInsets(in: hostView)
+        let topOverlap = topChromeObscuredHeight(in: hostViewController, hostView: hostView)
+        let bottomOverlap = max(
+            bottomChromeObscuredHeight(in: hostViewController, hostView: hostView),
+            keyboardOverlapHeight(in: hostView)
+        )
+        let resolvedInsets = UIEdgeInsets(
+            top: max(0, topOverlap - safeAreaInsets.top),
+            left: 0,
+            bottom: max(0, bottomOverlap - safeAreaInsets.bottom),
+            right: 0
+        )
+        if lastAppliedInsets != resolvedInsets {
+            lastAppliedInsets = resolvedInsets
+            webView.scrollView.contentInset = resolvedInsets
+            webView.scrollView.verticalScrollIndicatorInsets = resolvedInsets
+            webView.scrollView.horizontalScrollIndicatorInsets = resolvedInsets
+        }
+        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
+        hostViewController?.setContentScrollView(webView.scrollView)
+    }
+
+    private func observeKeyboardNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardFrameNotification(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardFrameNotification(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    @objc
+    private func handleKeyboardFrameNotification(_ notification: Notification) {
+        let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .null
+        keyboardFrameInScreen = keyboardFrame
+        updateViewport()
+    }
+
+    private func projectedWindowSafeAreaInsets(in hostView: UIView?) -> UIEdgeInsets {
+        guard let hostView, let window = hostView.window else {
+            return .zero
+        }
+
+        let hostRectInWindow = hostView.convert(hostView.bounds, to: window)
+        let safeRectInWindow = window.bounds.inset(by: window.safeAreaInsets)
+
+        return UIEdgeInsets(
+            top: max(0, safeRectInWindow.minY - hostRectInWindow.minY),
+            left: max(0, safeRectInWindow.minX - hostRectInWindow.minX),
+            bottom: max(0, hostRectInWindow.maxY - safeRectInWindow.maxY),
+            right: max(0, hostRectInWindow.maxX - safeRectInWindow.maxX)
+        )
+    }
+
+    private func topChromeObscuredHeight(in hostViewController: UIViewController?, hostView: UIView?) -> CGFloat {
+        topEdgeObscuredHeight(of: hostViewController?.navigationController?.navigationBar, in: hostView)
+    }
+
+    private func bottomChromeObscuredHeight(in hostViewController: UIViewController?, hostView: UIView?) -> CGFloat {
+        let tabBarOverlap = bottomEdgeObscuredHeight(of: hostViewController?.tabBarController?.tabBar, in: hostView)
+        let toolbarOverlap = bottomEdgeObscuredHeight(of: resolvedVisibleToolbar(for: hostViewController), in: hostView)
+        return max(tabBarOverlap, toolbarOverlap)
+    }
+
+    private func resolvedVisibleToolbar(for hostViewController: UIViewController?) -> UIToolbar? {
+        guard let navigationController = hostViewController?.navigationController else {
+            return nil
+        }
+        guard navigationController.isToolbarHidden == false else {
+            return nil
+        }
+        return navigationController.toolbar
+    }
+
+    private func topEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
+        guard let chromeView, let hostView else {
+            return 0
+        }
+        guard let window = hostView.window, chromeView.window != nil else {
+            return 0
+        }
+        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+            return 0
+        }
+
+        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
+        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
+        return BrowserViewportChromeGeometry.topEdgeOverlapHeight(
+            hostFrame: hostFrameInWindow,
+            chromeFrame: chromeFrameInWindow
+        )
+    }
+
+    private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
+        guard let chromeView, let hostView else {
+            return 0
+        }
+        guard let window = hostView.window, chromeView.window != nil else {
+            return 0
+        }
+        guard chromeView.isHidden == false, effectiveAlpha(of: chromeView) > 0 else {
+            return 0
+        }
+
+        let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
+        let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
+        return BrowserViewportChromeGeometry.bottomEdgeOverlapHeight(
+            hostFrame: hostFrameInWindow,
+            chromeFrame: chromeFrameInWindow
+        )
+    }
+
+    private func keyboardOverlapHeight(in hostView: UIView?) -> CGFloat {
+        guard let hostView, let window = hostView.window else {
+            return 0
+        }
+        guard keyboardFrameInScreen.isNull == false else {
+            return 0
+        }
+
+        let hostFrameInScreen = hostView.convert(hostView.bounds, to: window.screen.coordinateSpace)
+        let overlap = hostFrameInScreen.intersection(keyboardFrameInScreen)
+        guard overlap.isNull == false else {
+            return 0
+        }
+        return overlap.height
+    }
+
+    private func effectiveAlpha(of view: UIView) -> CGFloat {
+        var alpha = view.alpha
+        var currentSuperview = view.superview
+
+        while let superview = currentSuperview {
+            if superview.isHidden {
+                return 0
+            }
+            alpha *= superview.alpha
+            currentSuperview = superview.superview
+        }
+
+        return alpha
+    }
+}
+#endif
 
 @MainActor
 final class BrowserViewportWebView: WKWebView {
-    weak var viewportCoordinator: ViewportCoordinator?
+    weak var viewportCoordinator: BrowserViewportCoordinator?
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
@@ -27,7 +261,6 @@ final class BrowserViewportWebView: WKWebView {
         viewportCoordinator?.handleWebViewSafeAreaInsetsDidChange()
     }
 }
-typealias BrowserPlatformColor = UIColor
 #elseif canImport(AppKit)
 import AppKit
 typealias BrowserPlatformColor = NSColor
