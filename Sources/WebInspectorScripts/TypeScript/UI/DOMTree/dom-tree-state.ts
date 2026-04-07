@@ -90,6 +90,12 @@ export const protocolState: ProtocolState = {
     documentScopeID: typeof initialContext.documentScopeID === "number" ? initialContext.documentScopeID : 0,
 };
 
+export const transitionState: {
+    pendingFreshSnapshotContext: { pageEpoch: number; documentScopeID: number } | null;
+} = {
+    pendingFreshSnapshotContext: null,
+};
+
 // =============================================================================
 // Tree State
 // =============================================================================

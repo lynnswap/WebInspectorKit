@@ -23,6 +23,7 @@ import {
     dom,
     protocolState,
     treeState,
+    transitionState,
     ensureDomElements,
     clearRenderState,
 } from "./dom-tree-state";
@@ -614,12 +615,33 @@ function resolveMutationBundleContext(
 
 function resolveSnapshotMode(
     bundle: MutationBundle,
-    resolvedBundle: ResolvedMutationBundleInput
+    resolvedBundle: ResolvedMutationBundleInput,
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
 ): "fresh" | "preserve-ui-state" {
+    if (shouldForceFreshSnapshot(effectiveContext)) {
+        return "fresh";
+    }
     if (bundle.snapshotMode === "fresh" || bundle.snapshotMode === "preserve-ui-state") {
         return bundle.snapshotMode;
     }
     return resolvedBundle.mode;
+}
+
+function shouldForceFreshSnapshot(
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
+): boolean {
+    const pendingContext = transitionState.pendingFreshSnapshotContext;
+    return !!pendingContext
+        && pendingContext.pageEpoch === effectiveContext.pageEpoch
+        && pendingContext.documentScopeID === effectiveContext.documentScopeID;
+}
+
+function clearPendingFreshSnapshotContext(
+    effectiveContext: { pageEpoch: number; documentScopeID: number }
+): void {
+    if (shouldForceFreshSnapshot(effectiveContext)) {
+        transitionState.pendingFreshSnapshotContext = null;
+    }
 }
 
 /** Apply a single mutation bundle */
@@ -643,7 +665,7 @@ export function applyMutationBundle(
     const effectiveContext = resolveMutationBundleContext(parsed, resolvedBundle);
 
     if (parsed.kind === "snapshot") {
-        const snapshotMode = resolveSnapshotMode(parsed, resolvedBundle);
+        const snapshotMode = resolveSnapshotMode(parsed, resolvedBundle, effectiveContext);
         if (snapshotMode === "preserve-ui-state"
             && !matchesCurrentDocumentContext(effectiveContext.pageEpoch, effectiveContext.documentScopeID)) {
             postDOMFrontendTrace(`drop preserve snapshot contextMismatch effective=${effectiveContext.pageEpoch}:${effectiveContext.documentScopeID} current=${protocolState.pageEpoch}:${protocolState.documentScopeID}`);
@@ -671,6 +693,7 @@ export function applyMutationBundle(
                 }
                 return;
             }
+            clearPendingFreshSnapshotContext(effectiveContext);
         }
         return;
     }

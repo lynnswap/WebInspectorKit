@@ -8,7 +8,7 @@ import {
     RequestDocumentMode,
     RequestDocumentOptions,
 } from "./dom-tree-types";
-import { protocolState } from "./dom-tree-state";
+import { protocolState, transitionState } from "./dom-tree-state";
 
 type TypedHandlerName =
     | "webInspectorDomRequestChildren"
@@ -133,6 +133,10 @@ export function adoptDocumentContext(
 
     protocolState.pageEpoch = nextPageEpoch;
     protocolState.documentScopeID = nextDocumentScopeID;
+    transitionState.pendingFreshSnapshotContext = {
+        pageEpoch: nextPageEpoch,
+        documentScopeID: nextDocumentScopeID,
+    };
     pendingChildNodeDepths.clear();
     activeChildNodeRequests.clear();
     activeChildNodeRequestDepths.clear();

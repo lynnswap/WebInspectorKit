@@ -1,5 +1,9 @@
 import {inspector, type AnyNode} from "./dom-agent-state";
-import {forgetRemovedNodeHandles, resolveNodeTarget, type NodeTargetIdentifier} from "./dom-agent-dom-core";
+import {
+    forgetRemovedNodeHandles,
+    resolveNodeTarget,
+    type NodeTargetIdentifier
+} from "./dom-agent-dom-core";
 import {clearHighlight} from "./dom-agent-overlay";
 import {resumeSnapshotAutoUpdate, suppressSnapshotAutoUpdate, triggerSnapshotUpdate} from "./dom-agent-snapshot";
 

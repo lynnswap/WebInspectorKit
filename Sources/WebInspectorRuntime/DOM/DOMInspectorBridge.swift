@@ -149,6 +149,10 @@ final class DOMInspectorBridge: NSObject {
                 if (config && typeof config === "object") {
                     window.webInspectorDOMFrontend.updateConfig(config);
                 }
+                const context = window.__wiDOMFrontendBootstrap?.context;
+                if (context && typeof context === "object" && window.webInspectorDOMFrontend?.adoptDocumentContext) {
+                    window.webInspectorDOMFrontend.adoptDocumentContext(context);
+                }
             }
             """
         )

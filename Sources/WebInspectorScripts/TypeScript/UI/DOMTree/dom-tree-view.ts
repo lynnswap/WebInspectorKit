@@ -23,7 +23,7 @@ import {
     resetChildNodeRequests,
     matchesCurrentDocumentContext,
 } from "./dom-tree-protocol";
-import { protocolState } from "./dom-tree-state";
+import { protocolState, transitionState } from "./dom-tree-state";
 import {
     applySubtree,
     completeDocumentRequest,
@@ -133,24 +133,31 @@ function installWebInspectorKit(): void {
             documentScopeID = protocolState.documentScopeID
         ) => {
             const incomingContext = { pageEpoch, documentScopeID };
-            if (mode === "preserve-ui-state" && !matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+            const shouldForceFreshSnapshot =
+                transitionState.pendingFreshSnapshotContext?.pageEpoch === pageEpoch
+                && transitionState.pendingFreshSnapshotContext?.documentScopeID === documentScopeID;
+            const snapshotMode = shouldForceFreshSnapshot ? "fresh" : mode;
+            if (snapshotMode === "preserve-ui-state" && !matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
                 return;
             }
             const previousContext = {
                 pageEpoch: protocolState.pageEpoch,
                 documentScopeID: protocolState.documentScopeID,
             };
-            if (mode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
+            if (snapshotMode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
                 return;
             }
-            if (mode === "fresh") {
+            if (snapshotMode === "fresh") {
                 adoptDocumentContext(incomingContext);
             }
-            if (!setSnapshot(snapshot as never, { mode })) {
-                if (mode === "fresh") {
+            if (!setSnapshot(snapshot as never, { mode: snapshotMode })) {
+                if (snapshotMode === "fresh") {
                     restoreDocumentContext(previousContext);
                 }
                 return;
+            }
+            if (snapshotMode === "fresh") {
+                transitionState.pendingFreshSnapshotContext = null;
             }
         },
         applySubtreePayload: (
@@ -258,6 +265,7 @@ function installWebInspectorKit(): void {
         setSearchTerm,
         setPreferredDepth,
         updateConfig,
+        adoptDocumentContext,
         __installed: true,
     };
 

@@ -670,4 +670,5 @@ describe("dom-agent bootstrap", () => {
         expect(debugStatus.documentScopeID).toBe(3);
         expect(debugStatus.nextInitialSnapshotMode).toBe("fresh");
     });
+
 });

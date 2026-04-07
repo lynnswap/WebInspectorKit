@@ -48,7 +48,7 @@ package final class DOMSession {
         _ expectedDocumentScopeID: DOMDocumentScopeID?
     ) async -> DOMMutationExecutionResult<Void>)?
     package var testRemoveNodeWithUndoOverride: (@MainActor (
-        _ nodeId: Int,
+        _ target: DOMRequestNodeTarget,
         _ expectedPageEpoch: Int?,
         _ expectedDocumentScopeID: DOMDocumentScopeID?
     ) async -> DOMMutationExecutionResult<Int>)?
@@ -416,17 +416,17 @@ extension DOMSession {
     }
 
     package func removeNodeWithUndo(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Int> {
 #if DEBUG
         if let testRemoveNodeWithUndoOverride {
-            return await testRemoveNodeWithUndoOverride(nodeId, expectedPageEpoch, expectedDocumentScopeID)
+            return await testRemoveNodeWithUndoOverride(target, expectedPageEpoch, expectedDocumentScopeID)
         }
 #endif
         return await pageAgent.removeNodeWithUndo(
-            nodeId: nodeId,
+            target: target,
             expectedPageEpoch: expectedPageEpoch,
             expectedDocumentScopeID: expectedDocumentScopeID
         )

@@ -374,5 +374,6 @@ export interface WebInspectorDOMFrontend {
     setSearchTerm(value: string): void;
     setPreferredDepth(depth: number, pageEpoch?: number): void;
     updateConfig(partial: ProtocolConfig): void;
+    adoptDocumentContext(context: DOMDocumentContext): boolean;
     __installed?: boolean;
 }

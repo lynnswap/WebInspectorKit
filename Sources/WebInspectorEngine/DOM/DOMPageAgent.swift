@@ -408,14 +408,9 @@ extension DOMPageAgent {
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            let result = parseMutationExecutionResult(rawResult)
+            let result = parseMutationExecutionResult(rawResult as Any)
             if case .applied = result {
-                if let localID = target.localID, localID <= UInt64(Int.max) {
-                    handleCache.removeHandle(for: Int(localID))
-                }
-                if let backendNodeID = target.backendNodeID {
-                    handleCache.removeHandle(for: backendNodeID)
-                }
+                handleCache.clear()
             }
             return result
         } catch {
@@ -425,11 +420,14 @@ extension DOMPageAgent {
     }
 
     package func removeNodeWithUndo(
-        nodeId: Int,
+        target: DOMRequestNodeTarget,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: DOMDocumentScopeID? = nil
     ) async -> DOMMutationExecutionResult<Int> {
         guard let webView else {
+            return .failed
+        }
+        guard let identifier = javascriptRemovalTargetArgument(for: target) else {
             return .failed
         }
         await waitForPreparedPageContextSyncIfNeeded()
@@ -437,16 +435,16 @@ extension DOMPageAgent {
             let rawValue = try await webView.callAsyncJavaScript(
                 "return window.webInspectorDOM.removeNodeWithUndo(identifier, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
-                    "identifier": nodeId,
+                    "identifier": identifier,
                     "expectedPageEpoch": expectedPageEpoch as Any,
                     "expectedDocumentScopeID": expectedDocumentScopeID as Any,
                 ],
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            let result = parseUndoMutationExecutionResult(rawValue)
+            let result = parseUndoMutationExecutionResult(rawValue as Any)
             if case .applied = result {
-                handleCache.removeHandle(for: nodeId)
+                handleCache.clear()
             }
             return result
         } catch {
@@ -1508,6 +1506,18 @@ private extension DOMPageAgent {
 
     private func javascriptTargetArgument(for target: DOMRequestNodeTarget) -> Any? {
         target.jsArgument
+    }
+
+    private func javascriptRemovalTargetArgument(for target: DOMRequestNodeTarget) -> Any? {
+        switch target {
+        case let .local(localID):
+            guard localID <= UInt64(Int.max) else {
+                return nil
+            }
+            return Int(localID)
+        case .backend:
+            return javascriptTargetArgument(for: target)
+        }
     }
 
     func snapshotPayload(

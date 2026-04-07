@@ -759,7 +759,7 @@ private extension WIDOMInspector {
                 nodeLocalID: nodeLocalID
             )
             let removeWithUndoResult = await self.session.removeNodeWithUndo(
-                nodeId: nodeId,
+                target: target,
                 expectedPageEpoch: expectedContext.pageEpoch,
                 expectedDocumentScopeID: expectedContext.documentScopeID
             )

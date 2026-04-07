@@ -594,7 +594,7 @@ struct DOMSessionTests {
         let mutationFinished = await withTaskGroup(of: Bool.self) { group in
             group.addTask {
                 matchesApplied(
-                    await session.setAttribute(nodeId: nodeId, name: "class", value: "after")
+                    await session.setAttribute(target: .local(UInt64(nodeId)), name: "class", value: "after")
                 )
             }
             group.addTask {
@@ -930,7 +930,7 @@ struct DOMSessionTests {
             return
         }
 
-        let removeResult = await session.removeNodeWithUndo(nodeId: nodeId)
+        let removeResult = await session.removeNodeWithUndo(target: .local(UInt64(nodeId)))
         guard case let .applied(undoToken) = removeResult else {
             Issue.record("removeNodeWithUndo should return a valid token")
             return
@@ -944,6 +944,56 @@ struct DOMSessionTests {
         let removedAgain = await session.redoRemoveNode(undoToken: undoToken)
         #expect(matchesApplied(removedAgain) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
+    }
+
+    @Test
+    func removeNodeWithUndoClearsCachedHandlesForLocalAndBackendIDs() async throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(snapshotDepth: 5, subtreeDepth: 3),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <div id="target">Target</div>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+        await agent.ensureDOMAgentScriptInstalled(on: webView, pageEpoch: 0)
+
+        let snapshot = try await agent.captureSnapshot(maxDepth: 5)
+        let node = try #require(
+            findNodeDescriptor(inSnapshotJSON: snapshot, attributeName: "id", attributeValue: "target")
+        )
+        let localID = try #require(node.localID)
+        let backendNodeID = localID + 10_000
+        #expect(localID != backendNodeID)
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: localID)
+        handleCache.store(handle: NSObject(), for: backendNodeID)
+        #expect(handleCache.handle(for: localID) != nil)
+        #expect(handleCache.handle(for: backendNodeID) != nil)
+
+        let removeResult = await agent.removeNodeWithUndo(target: .local(UInt64(localID)))
+        guard case let .applied(undoToken) = removeResult else {
+            Issue.record("removeNodeWithUndo should succeed for cached-handle invalidation test")
+            return
+        }
+
+        #expect(handleCache.handle(for: localID) == nil)
+        #expect(handleCache.handle(for: backendNodeID) == nil)
+        #expect(matchesApplied(await agent.undoRemoveNode(undoToken: undoToken)) == true)
     }
 
     @Test
@@ -989,7 +1039,7 @@ struct DOMSessionTests {
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
         )
 
-        let removeResult = await session.removeNode(nodeId: nodeId)
+        let removeResult = await session.removeNode(target: .local(UInt64(nodeId)))
 
         #expect(matchesApplied(removeResult) == true)
         #expect(await domNodeExists(withID: "target", in: webView) == false)
@@ -1070,7 +1120,22 @@ struct DOMSessionTests {
         else {
             return nil
         }
-        return findNodeId(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
+        return findNodeDescriptor(inNode: root, attributeName: attributeName, attributeValue: attributeValue)?.localID
+    }
+
+    private func findNodeDescriptor(
+        inSnapshotJSON snapshotJSON: String,
+        attributeName: String,
+        attributeValue: String
+    ) -> (localID: Int?, backendNodeID: Int?)? {
+        guard
+            let data = snapshotJSON.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let root = object["root"] as? [String: Any]
+        else {
+            return nil
+        }
+        return findNodeDescriptor(inNode: root, attributeName: attributeName, attributeValue: attributeValue)
     }
 
     private func findNodeId(
@@ -1078,13 +1143,29 @@ struct DOMSessionTests {
         attributeName: String,
         attributeValue: String
     ) -> Int? {
+        findNodeDescriptor(inNode: node, attributeName: attributeName, attributeValue: attributeValue)?.localID
+    }
+
+    private func findNodeDescriptor(
+        inNode node: [String: Any],
+        attributeName: String,
+        attributeValue: String
+    ) -> (localID: Int?, backendNodeID: Int?)? {
         if let attributes = node["attributes"] as? [String] {
             var index = 0
             while index + 1 < attributes.count {
                 let currentName = attributes[index]
                 let currentValue = attributes[index + 1]
                 if currentName == attributeName, currentValue == attributeValue {
-                    return node["nodeId"] as? Int
+                    let localID =
+                        (node["localId"] as? Int)
+                        ?? (node["localId"] as? NSNumber)?.intValue
+                        ?? (node["nodeId"] as? Int)
+                        ?? (node["nodeId"] as? NSNumber)?.intValue
+                    let backendNodeID =
+                        (node["backendNodeId"] as? Int)
+                        ?? (node["backendNodeId"] as? NSNumber)?.intValue
+                    return (localID, backendNodeID)
                 }
                 index += 2
             }
@@ -1092,8 +1173,12 @@ struct DOMSessionTests {
 
         if let children = node["children"] as? [[String: Any]] {
             for child in children {
-                if let nodeId = findNodeId(inNode: child, attributeName: attributeName, attributeValue: attributeValue) {
-                    return nodeId
+                if let descriptor = findNodeDescriptor(
+                    inNode: child,
+                    attributeName: attributeName,
+                    attributeValue: attributeValue
+                ) {
+                    return descriptor
                 }
             }
         }

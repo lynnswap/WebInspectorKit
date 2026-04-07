@@ -2369,8 +2369,8 @@ struct DOMInspectorRuntimeTests {
             )
         )
 
-        inspector.session.testRemoveNodeWithUndoOverride = { nodeId, _, _ in
-            #expect(nodeId == removedBackendNodeID)
+        inspector.session.testRemoveNodeWithUndoOverride = { target, _, _ in
+            #expect(target == .backend(removedBackendNodeID))
             return .applied(undoToken)
         }
         inspector.session.testUndoRemoveNodeInterposer = { receivedUndoToken, _, _, _ in
