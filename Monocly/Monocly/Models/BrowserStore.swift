@@ -8,6 +8,30 @@ import WebKit
 import UIKit
 typealias BrowserPlatformColor = UIColor
 
+enum BrowserViewportChromeGeometry {
+    static func topEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+        let overlap = hostFrame.intersection(chromeFrame)
+        guard overlap.isNull == false else {
+            return 0
+        }
+        guard chromeFrame.minY <= hostFrame.minY else {
+            return 0
+        }
+        return max(0, overlap.maxY - hostFrame.minY)
+    }
+
+    static func bottomEdgeOverlapHeight(hostFrame: CGRect, chromeFrame: CGRect) -> CGFloat {
+        let overlap = hostFrame.intersection(chromeFrame)
+        guard overlap.isNull == false else {
+            return 0
+        }
+        guard chromeFrame.maxY >= hostFrame.maxY else {
+            return 0
+        }
+        return max(0, hostFrame.maxY - overlap.minY)
+    }
+}
+
 #if os(iOS)
 import WKViewportCoordinator
 typealias BrowserViewportCoordinator = ViewportCoordinator
@@ -160,11 +184,10 @@ final class BrowserViewportCoordinator {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard hostFrameInWindow.intersects(chromeFrameInWindow) || chromeFrameInWindow.maxY > hostFrameInWindow.minY else {
-            return 0
-        }
-
-        return max(0, min(hostFrameInWindow.maxY, chromeFrameInWindow.maxY) - hostFrameInWindow.minY)
+        return BrowserViewportChromeGeometry.topEdgeOverlapHeight(
+            hostFrame: hostFrameInWindow,
+            chromeFrame: chromeFrameInWindow
+        )
     }
 
     private func bottomEdgeObscuredHeight(of chromeView: UIView?, in hostView: UIView?) -> CGFloat {
@@ -180,14 +203,10 @@ final class BrowserViewportCoordinator {
 
         let hostFrameInWindow = hostView.convert(hostView.bounds, to: window)
         let chromeFrameInWindow = chromeView.convert(chromeView.bounds, to: window)
-        guard chromeFrameInWindow.minY < hostFrameInWindow.maxY else {
-            return 0
-        }
-        guard chromeFrameInWindow.maxY >= hostFrameInWindow.maxY else {
-            return 0
-        }
-
-        return max(0, hostFrameInWindow.maxY - max(hostFrameInWindow.minY, chromeFrameInWindow.minY))
+        return BrowserViewportChromeGeometry.bottomEdgeOverlapHeight(
+            hostFrame: hostFrameInWindow,
+            chromeFrame: chromeFrameInWindow
+        )
     }
 
     private func keyboardOverlapHeight(in hostView: UIView?) -> CGFloat {
