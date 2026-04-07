@@ -1099,6 +1099,7 @@ private extension WIDOMInspector {
         return .init(
             localID: selectedNode.localID,
             backendNodeID: selectedNode.backendNodeID,
+            backendNodeIDIsStable: selectedNode.backendNodeIDIsStable,
             preview: selectedNode.preview,
             attributes: selectedNode.attributes,
             path: selectedNode.path,
@@ -1393,6 +1394,7 @@ private extension WIDOMInspector {
         let payload = DOMSelectionSnapshotPayload(
             localID: node.localID,
             backendNodeID: backendNodeID,
+            backendNodeIDIsStable: node.backendNodeIDIsStable,
             preview: preview,
             attributes: selectionAttributes ?? node.attributes,
             path: path.isEmpty ? selectionPathLabels(for: node) : path,
@@ -1543,6 +1545,7 @@ private extension WIDOMInspector {
         .init(
             localID: node.localID,
             backendNodeID: node.backendNodeID,
+            backendNodeIDIsStable: node.backendNodeIDIsStable,
             preview: selectionPreview(for: node),
             attributes: node.attributes,
             path: selectionPathLabels(for: node),
@@ -1557,6 +1560,7 @@ private extension WIDOMInspector {
             "id": node.localID,
             "selectedLocalId": node.localID,
             "backendNodeId": node.backendNodeID as Any,
+            "backendNodeIdIsStable": node.backendNodeIDIsStable,
             "preview": selectionPreview(for: node),
             "attributes": node.attributes.map {
                 [

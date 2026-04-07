@@ -2343,6 +2343,65 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func undoSelectionRestorePreservesBackendIDStabilityFlag() {
+        let inspector = WIInspectorController().dom
+        let selectedLocalID: UInt64 = 42
+        let synthesizedBackendNodeID = 42
+
+        inspector.document.replaceDocument(
+            with: .init(
+                root: DOMGraphNodeDescriptor(
+                    localID: 1,
+                    backendNodeID: 1,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                    attributes: [],
+                    childCount: 1,
+                    layoutFlags: [],
+                    isRendered: true,
+                    children: [
+                        DOMGraphNodeDescriptor(
+                            localID: selectedLocalID,
+                            backendNodeID: synthesizedBackendNodeID,
+                            backendNodeIDIsStable: false,
+                            nodeType: 1,
+                            nodeName: "DIV",
+                            localName: "div",
+                            nodeValue: "",
+                            attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                            childCount: 0,
+                            layoutFlags: [],
+                            isRendered: true,
+                            children: []
+                        )
+                    ]
+                ),
+                selectedLocalID: selectedLocalID
+            )
+        )
+        inspector.document.applySelectionSnapshot(
+            .init(
+                localID: selectedLocalID,
+                backendNodeID: synthesizedBackendNodeID,
+                backendNodeIDIsStable: false,
+                preview: "<div id=\"target\">",
+                attributes: [.init(nodeId: synthesizedBackendNodeID, name: "id", value: "target")],
+                path: ["html", "body", "div"],
+                selectorPath: "#target",
+                styleRevision: 0
+            )
+        )
+
+        let payload = inspector.testSelectionRestorePayload(for: synthesizedBackendNodeID)
+
+        #expect(inspector.document.selectedNode?.backendNodeIDIsStable == false)
+        #expect(payload?.backendNodeID == synthesizedBackendNodeID)
+        #expect(payload?.backendNodeIDIsStable == false)
+    }
+
+    @Test
     func deleteSelectionDoesNotPruneModelAfterMutationContextChangesMidFlight() async {
         let inspector = WIInspectorController().dom
         inspector.document.replaceDocument(

@@ -1504,6 +1504,7 @@ struct DOMInspectorTests {
         .init(
             localID: node.localID,
             backendNodeID: node.backendNodeID,
+            backendNodeIDIsStable: node.backendNodeIDIsStable,
             preview: selectionPreview(for: node),
             attributes: selectionAttributes(for: node),
             path: selectionPath(for: node),
