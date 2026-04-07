@@ -330,4 +330,34 @@ describe("dom-agent-selection", () => {
         expect(result.status).toBe("applied");
         expect(selectorPathForNode(localID)).toBe("");
     });
+
+    it("does not reinterpret stale numeric local handles as backend identifiers", () => {
+        const staleNode = document.getElementById("parent");
+        expect(staleNode).not.toBeNull();
+
+        inspector.nextId = 42;
+        const staleLocalID = rememberNode(staleNode);
+        expect(staleLocalID).toBe(42);
+
+        inspector.map = new Map();
+        inspector.nodeMap = new WeakMap();
+
+        const webkit = window.webkit as unknown as {
+            serializeNode?: (node: Node) => unknown;
+        };
+        webkit.serializeNode = vi.fn((node: Node) => {
+            const element = node as Element;
+            if (element.id === "target") {
+                return { nodeId: 42 };
+            }
+            return null;
+        });
+
+        expect(selectorPathForNode(staleLocalID)).toBe("");
+
+        const result = removeNode(staleLocalID);
+
+        expect(result.status).toBe("failed");
+        expect(document.getElementById("target")).not.toBeNull();
+    });
 });

@@ -19,7 +19,7 @@ import {
     requestSnapshotReload,
     setSnapshot
 } from "../UI/DOMTree/dom-tree-snapshot";
-import { dom, protocolState, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
+import { dom, protocolState, renderState, transitionState, treeState } from "../UI/DOMTree/dom-tree-state";
 
 type WebKitMockHandler = {
     postMessage: ReturnType<typeof vi.fn>;
@@ -57,6 +57,7 @@ function resetDOMTreeState() {
     }
     renderState.frameId = null;
     renderState.pendingNodes.clear();
+    transitionState.pendingFreshSnapshotContext = null;
 }
 
 function latestPostedPayload(handler: WebKitMockHandler, index = -1): Record<string, unknown> | undefined {
@@ -522,6 +523,25 @@ describe("dom-tree typed backend bridge", () => {
 
         expect(protocolState.documentScopeID).toBe(2);
         expect(treeState.snapshot?.root?.attributes?.find((attribute) => attribute.name === "id")?.value).toBe("page-two");
+    });
+
+    it("restores the previous pending fresh marker when a fresh snapshot is rejected", () => {
+        adoptDocumentContext({ documentScopeID: 1 });
+
+        applyMutationBundle({
+            version: 1,
+            kind: "snapshot",
+            snapshotMode: "fresh",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: 2,
+            snapshot: "{",
+        });
+
+        expect(protocolState.documentScopeID).toBe(1);
+        expect(transitionState.pendingFreshSnapshotContext).toEqual({
+            pageEpoch: 0,
+            documentScopeID: 1,
+        });
     });
 
     it("drops preserve-ui-state snapshots whose context no longer matches", () => {

@@ -669,6 +669,9 @@ export function applyMutationBundle(
                 pageEpoch: protocolState.pageEpoch,
                 documentScopeID: protocolState.documentScopeID,
             };
+            const previousPendingFreshSnapshotContext = transitionState.pendingFreshSnapshotContext
+                ? { ...transitionState.pendingFreshSnapshotContext }
+                : null;
             if (snapshotMode === "fresh") {
                 adoptDocumentContext(effectiveContext);
             }
@@ -678,7 +681,9 @@ export function applyMutationBundle(
             );
             if (!didApplySnapshot) {
                 if (snapshotMode === "fresh") {
-                    restoreDocumentContext(previousContext);
+                    restoreDocumentContext(previousContext, {
+                        pendingFreshSnapshotContext: previousPendingFreshSnapshotContext,
+                    });
                 }
                 return;
             }

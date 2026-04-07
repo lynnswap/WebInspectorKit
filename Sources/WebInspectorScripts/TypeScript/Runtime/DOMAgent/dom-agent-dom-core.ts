@@ -219,7 +219,8 @@ function findNodeByStableIdentifier(identifier: number): AnyNode | null {
 
 export function resolveNodeTarget(identifier: NodeTargetIdentifier | null | undefined): AnyNode | null {
     if (typeof identifier === "number") {
-        return rememberedNode(identifier) || findNodeByStableIdentifier(identifier);
+        const localID = targetValue(identifier);
+        return localID ? rememberedNode(localID) : null;
     }
     if (!identifier || typeof identifier !== "object") {
         return null;

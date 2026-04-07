@@ -103,6 +103,10 @@ type AdoptDocumentContextOptions = {
     allowOutOfOrder?: boolean;
 };
 
+type RestoreDocumentContextOptions = {
+    pendingFreshSnapshotContext?: { pageEpoch: number; documentScopeID: number } | null;
+};
+
 export function adoptDocumentContext(
     context: DOMDocumentContext | null | undefined,
     options: AdoptDocumentContextOptions = {}
@@ -162,7 +166,10 @@ export function canAdoptDocumentContext(context: DOMDocumentContext | null | und
     return canAdoptResolvedDocumentContext(nextPageEpoch, nextDocumentScopeID);
 }
 
-export function restoreDocumentContext(context: DOMDocumentContext | null | undefined): boolean {
+export function restoreDocumentContext(
+    context: DOMDocumentContext | null | undefined,
+    options: RestoreDocumentContextOptions = {}
+): boolean {
     if (typeof context !== "object" || context === null) {
         return false;
     }
@@ -178,6 +185,7 @@ export function restoreDocumentContext(context: DOMDocumentContext | null | unde
 
     protocolState.pageEpoch = nextPageEpoch;
     protocolState.documentScopeID = nextDocumentScopeID;
+    transitionState.pendingFreshSnapshotContext = options.pendingFreshSnapshotContext ?? null;
     return true;
 }
 

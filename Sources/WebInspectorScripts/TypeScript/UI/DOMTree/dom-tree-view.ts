@@ -144,6 +144,9 @@ function installWebInspectorKit(): void {
                 pageEpoch: protocolState.pageEpoch,
                 documentScopeID: protocolState.documentScopeID,
             };
+            const previousPendingFreshSnapshotContext = transitionState.pendingFreshSnapshotContext
+                ? { ...transitionState.pendingFreshSnapshotContext }
+                : null;
             if (snapshotMode === "fresh" && !canAdoptDocumentContext(incomingContext)) {
                 return;
             }
@@ -152,7 +155,9 @@ function installWebInspectorKit(): void {
             }
             if (!setSnapshot(snapshot as never, { mode: snapshotMode })) {
                 if (snapshotMode === "fresh") {
-                    restoreDocumentContext(previousContext);
+                    restoreDocumentContext(previousContext, {
+                        pendingFreshSnapshotContext: previousPendingFreshSnapshotContext,
+                    });
                 }
                 return;
             }

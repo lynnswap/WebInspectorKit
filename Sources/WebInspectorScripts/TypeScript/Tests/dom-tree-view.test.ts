@@ -79,6 +79,10 @@ describe("dom-tree-view", () => {
 
         expect(protocolState.documentScopeID).toBe(1);
         expect(treeState.snapshot).toBeNull();
+        expect(transitionState.pendingFreshSnapshotContext).toEqual({
+            pageEpoch: 0,
+            documentScopeID: 1,
+        });
     });
 
     it("exposes document context adoption on the public frontend API", () => {
