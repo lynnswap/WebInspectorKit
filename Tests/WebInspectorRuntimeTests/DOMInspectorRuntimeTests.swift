@@ -3392,6 +3392,90 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func legacySnapshotSelectionPrefersLocalTargetForSelectorPathRequests() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 42,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "target"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                        "selectedLocalId": 42,
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let selected = try! #require(store.currentDocumentModel.selectedNode)
+        #expect(selected.backendNodeID == 42)
+        #expect(selected.backendNodeIDIsStable == false)
+        #expect(store.selectionRequestTarget(for: selected) == .local(42))
+    }
+
+    @Test
+    func stableBackendSnapshotSelectionKeepsBackendTargetForSelectorPathRequests() {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.domDidEmit(
+            bundle: .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "snapshot": [
+                        "root": [
+                            "nodeId": 1,
+                            "backendNodeId": 900,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 42,
+                                    "backendNodeId": 9001,
+                                    "nodeType": 1,
+                                    "nodeName": "DIV",
+                                    "localName": "div",
+                                    "attributes": ["id", "target"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                        "selectedLocalId": 42,
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let selected = try! #require(store.currentDocumentModel.selectedNode)
+        #expect(selected.backendNodeID == 9001)
+        #expect(selected.backendNodeIDIsStable == true)
+        #expect(store.selectionRequestTarget(for: selected) == .backend(9001))
+    }
+
+    @Test
     func selectionUpdateWithoutSelectorPathPreservesExistingSelectorPath() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         seedSelection(

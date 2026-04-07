@@ -1685,6 +1685,7 @@ extension DOMInspectorRuntime {
 
     func selectionRequestTarget(for node: DOMNodeModel) -> DOMRequestNodeTarget? {
         if let backendNodeID = node.backendNodeID,
+           node.backendNodeIDIsStable,
            backendNodeID > 0 {
             return .backend(backendNodeID)
         }

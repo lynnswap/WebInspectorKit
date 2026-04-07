@@ -128,11 +128,17 @@ public final class DOMDocumentModel {
         let node = existingNode ?? makePlaceholderNode(
             localID: localID,
             backendNodeID: payload.backendNodeID,
+            backendNodeIDIsStable: payload.backendNodeIDIsStable,
             synthesizeBackendNodeID: false
         )
         if let payloadBackendNodeID = payload.backendNodeID,
            node.backendNodeID != payloadBackendNodeID {
             node.backendNodeID = payloadBackendNodeID
+        }
+        if let payloadBackendNodeID = payload.backendNodeID,
+           node.backendNodeIDIsStable != payload.backendNodeIDIsStable,
+           node.backendNodeID == payloadBackendNodeID {
+            node.backendNodeIDIsStable = payload.backendNodeIDIsStable
         }
         node.preview = payload.preview
         node.path = payload.path
@@ -354,19 +360,25 @@ private extension DOMDocumentModel {
     func makePlaceholderNode(
         localID: UInt64,
         backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         synthesizeBackendNodeID: Bool = true
     ) -> DOMNodeModel {
         let resolvedBackendNodeID: Int?
+        let resolvedBackendNodeIDIsStable: Bool
         if let backendNodeID {
             resolvedBackendNodeID = backendNodeID
+            resolvedBackendNodeIDIsStable = backendNodeIDIsStable ?? true
         } else if synthesizeBackendNodeID, localID <= UInt64(Int.max) {
             resolvedBackendNodeID = Int(localID)
+            resolvedBackendNodeIDIsStable = false
         } else {
             resolvedBackendNodeID = nil
+            resolvedBackendNodeIDIsStable = false
         }
         let node = DOMNodeModel(
             id: .init(documentIdentity: documentIdentity, localID: localID),
             backendNodeID: resolvedBackendNodeID,
+            backendNodeIDIsStable: resolvedBackendNodeIDIsStable,
             nodeType: 1,
             nodeName: "",
             localName: "",
@@ -387,6 +399,7 @@ private extension DOMDocumentModel {
         let node = DOMNodeModel(
             id: .init(documentIdentity: documentIdentity, localID: descriptor.localID),
             backendNodeID: descriptor.backendNodeID,
+            backendNodeIDIsStable: descriptor.backendNodeIDIsStable,
             nodeType: descriptor.nodeType,
             nodeName: descriptor.nodeName,
             localName: descriptor.localName,
@@ -562,7 +575,7 @@ private extension DOMDocumentModel {
         }
 
         let existingNode = node(forLocalID: root.localID)
-            ?? root.backendNodeID.flatMap { node(backendNodeID: $0) }
+            ?? (root.backendNodeIDIsStable ? root.backendNodeID.flatMap { node(backendNodeID: $0) } : nil)
         if let existing = existingNode {
             let parent = existing.parent
             let previousIndex = parent?.children.firstIndex(where: { $0 === existing })

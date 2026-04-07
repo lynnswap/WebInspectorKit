@@ -3,6 +3,7 @@ import Foundation
 package struct DOMGraphNodeDescriptor: Sendable {
     package var localID: UInt64
     package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     package var nodeType: Int
     package var nodeName: String
     package var localName: String
@@ -16,6 +17,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package init(
         localID: UInt64,
         backendNodeID: Int?,
+        backendNodeIDIsStable: Bool? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
@@ -28,6 +30,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     ) {
         self.localID = localID
         self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.nodeType = nodeType
         self.nodeName = nodeName
         self.localName = localName
@@ -106,6 +109,7 @@ package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
 package struct DOMSelectionSnapshotPayload: Sendable {
     package var localID: UInt64?
     package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     package var preview: String
     package var attributes: [DOMAttribute]
     package var path: [String]
@@ -115,6 +119,7 @@ package struct DOMSelectionSnapshotPayload: Sendable {
     package init(
         localID: UInt64?,
         backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         preview: String,
         attributes: [DOMAttribute],
         path: [String],
@@ -123,6 +128,7 @@ package struct DOMSelectionSnapshotPayload: Sendable {
     ) {
         self.localID = localID
         self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.preview = preview
         self.attributes = attributes
         self.path = path

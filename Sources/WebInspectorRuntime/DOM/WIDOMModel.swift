@@ -858,6 +858,7 @@ private extension WIDOMInspector {
 
     private func preferredBackendNodeID(forDetachedRequestTarget node: DOMNodeModel) -> Int? {
         guard let backendNodeID = node.backendNodeID,
+              node.backendNodeIDIsStable,
               backendNodeID > 0
         else {
             return nil

@@ -41,6 +41,7 @@ public final class DOMNodeModel: Equatable, Hashable {
 
     public let id: ID
     package var backendNodeID: Int?
+    package var backendNodeIDIsStable: Bool
     public var nodeType: Int
     public var nodeName: String
     public var localName: String
@@ -63,6 +64,7 @@ public final class DOMNodeModel: Equatable, Hashable {
     package init(
         id: ID,
         backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
@@ -79,6 +81,7 @@ public final class DOMNodeModel: Equatable, Hashable {
     ) {
         self.id = id
         self.backendNodeID = backendNodeID
+        self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
         self.nodeType = nodeType
         self.nodeName = nodeName
         self.localName = localName

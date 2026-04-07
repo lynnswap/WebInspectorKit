@@ -78,8 +78,12 @@ final class DOMPayloadNormalizer {
         }
 
         let localID = uint64Value(object["id"]) ?? uint64Value(object["nodeId"])
-        let backendNodeID = intValue(object["backendNodeId"])
+        let explicitBackendNodeID = intValue(object["backendNodeId"])
             ?? intValue(object["backendNodeID"])
+        let backendNodeID = explicitBackendNodeID
+        let backendNodeIDIsStable = boolValue(object["backendNodeIdIsStable"])
+            ?? boolValue(object["backendNodeIDIsStable"])
+            ?? (explicitBackendNodeID != nil)
         let preview = stringValue(object["preview"]) ?? ""
         let attributes = normalizeSelectionAttributes(object["attributes"], localID: localID)
         let path = arrayValue(object["path"])?.compactMap(stringValue) ?? []
@@ -89,6 +93,7 @@ final class DOMPayloadNormalizer {
         let selection = DOMSelectionSnapshotPayload(
             localID: localID,
             backendNodeID: backendNodeID,
+            backendNodeIDIsStable: backendNodeIDIsStable,
             preview: preview,
             attributes: attributes,
             path: path,
@@ -320,10 +325,12 @@ private extension DOMPayloadNormalizer {
             return normalizeNodeDescriptor(root, fallbackState: &fallbackState)
         }
 
-        let backendNodeID = intValue(object["backendNodeId"])
+        let explicitBackendNodeID = intValue(object["backendNodeId"])
             ?? intValue(object["backendNodeID"])
+        let backendNodeID = explicitBackendNodeID
             ?? intValue(object["nodeId"])
             ?? intValue(object["id"])
+        let backendNodeIDIsStable = explicitBackendNodeID != nil
         let localID = uint64Value(object["localId"])
             ?? uint64Value(object["localID"])
             ?? uint64Value(object["handleId"])
@@ -356,6 +363,7 @@ private extension DOMPayloadNormalizer {
         return DOMGraphNodeDescriptor(
             localID: localID,
             backendNodeID: backendNodeID,
+            backendNodeIDIsStable: backendNodeIDIsStable,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
@@ -625,7 +633,8 @@ private extension DOMPayloadNormalizer {
         backendNodeID: Int,
         in root: DOMGraphNodeDescriptor
     ) -> DOMGraphNodeDescriptor? {
-        if root.backendNodeID == backendNodeID {
+        if root.backendNodeIDIsStable,
+           root.backendNodeID == backendNodeID {
             return root
         }
 
