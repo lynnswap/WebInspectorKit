@@ -1113,23 +1113,31 @@ private extension WIDOMInspector {
             return
         }
 
-        let resolvedNode: DOMNodeModel?
-        if let backendNodeID = payload.backendNodeID {
-            resolvedNode = document.node(backendNodeID: backendNodeID)
+        let resolvedNode: DOMNodeModel? = if payload.backendNodeIDIsStable,
+                                             let backendNodeID = payload.backendNodeID {
+            document.node(backendNodeID: backendNodeID)
         } else if let localID = payload.localID {
-            resolvedNode = document.node(localID: localID)
+            document.node(localID: localID)
         } else {
-            resolvedNode = nil
+            nil
         }
 
         guard let resolvedNode else {
             return
         }
 
+        let restoredBackendNodeID = resolvedNode.backendNodeID ?? payload.backendNodeID
+        let restoredBackendNodeIDIsStable = if resolvedNode.backendNodeID != nil {
+            resolvedNode.backendNodeIDIsStable
+        } else {
+            payload.backendNodeIDIsStable
+        }
+
         document.applySelectionSnapshot(
             .init(
                 localID: resolvedNode.localID,
-                backendNodeID: resolvedNode.backendNodeID ?? payload.backendNodeID,
+                backendNodeID: restoredBackendNodeID,
+                backendNodeIDIsStable: restoredBackendNodeIDIsStable,
                 preview: payload.preview,
                 attributes: resolvedNode.attributes,
                 path: payload.path,
@@ -1704,6 +1712,10 @@ private extension WIDOMInspector {
 extension WIDOMInspector {
     func testSelectionRestorePayload(for nodeId: Int) -> DOMSelectionSnapshotPayload? {
         selectionRestorePayload(for: nodeId)
+    }
+
+    func testReconcileSelectionAfterUndoRestore(_ payload: DOMSelectionSnapshotPayload?) {
+        reconcileSelectionAfterUndoRestore(payload)
     }
 }
 #endif
