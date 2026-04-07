@@ -254,10 +254,10 @@ public final class WIDOMInspector {
     }
 
     package func copyNode(nodeId: Int, kind: DOMSelectionCopyKind) async throws -> String {
-        guard let target = requestTarget(forRequestIdentifier: nodeId) else {
+        guard let resolution = backendRequestResolution(forNodeIdentifier: nodeId) else {
             return ""
         }
-        return try await session.selectionCopyText(target: target, kind: kind)
+        return try await session.selectionCopyText(target: resolution.target, kind: kind)
     }
 
     package func tearDownForDeinit() {
@@ -308,14 +308,14 @@ public final class WIDOMInspector {
     }
 
     public func deleteNode(nodeId: Int?, undoManager: UndoManager?) async -> DOMMutationResult {
-        if let resolvedNodeID = nodeId.flatMap({ documentNode(forRequestIdentifier: $0)?.id }) {
+        if let resolvedNode = nodeId.flatMap({ backendRequestResolution(forNodeIdentifier: $0)?.node }) {
             return await deleteNodeImpl(
-                nodeID: resolvedNodeID,
+                nodeID: resolvedNode.id,
                 undoManager: undoManager,
                 expectedContext: transport.currentMutationContext
             )
         }
-        guard let requestTarget = nodeId.flatMap(requestTarget(forRequestIdentifier:)) else {
+        guard let requestTarget = nodeId.flatMap({ backendRequestResolution(forNodeIdentifier: $0)?.target }) else {
             return .failed
         }
         return publicMutationResult(
@@ -842,18 +842,19 @@ private extension WIDOMInspector {
         return .local(node.localID)
     }
 
-    private func requestTarget(forRequestIdentifier nodeId: Int) -> DOMRequestNodeTarget? {
-        guard let node = documentNode(forRequestIdentifier: nodeId) else {
+    // `nodeId` overloads keep their historical backend-node-ID semantics.
+    // Tree-local IDs must be resolved to `DOMNodeModel.ID` by the caller first.
+    private func backendRequestResolution(
+        forNodeIdentifier nodeId: Int
+    ) -> (node: DOMNodeModel?, target: DOMRequestNodeTarget)? {
+        guard nodeId > 0 else {
             return nil
         }
-        return nodeRequestTarget(for: node)
-    }
-
-    private func documentNode(forRequestIdentifier nodeId: Int) -> DOMNodeModel? {
-        if nodeId >= 0, let node = document.node(localID: UInt64(nodeId)) {
-            return node
+        if let node = document.node(stableBackendNodeID: nodeId),
+           let target = nodeRequestTarget(for: node) {
+            return (node, target)
         }
-        return document.node(backendNodeID: nodeId)
+        return (nil, .backend(nodeId))
     }
 
     private func preferredBackendNodeID(forDetachedRequestTarget node: DOMNodeModel) -> Int? {
