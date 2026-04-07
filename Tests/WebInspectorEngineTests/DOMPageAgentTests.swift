@@ -977,6 +977,16 @@ struct DOMSessionTests {
     }
 
     @Test
+    func removeNodeWithUndoEncodesLocalTargetsWithExplicitKind() {
+        let agent = DOMPageAgent(configuration: .init(snapshotDepth: 5, subtreeDepth: 3))
+
+        let argument = agent.testJavaScriptRemovalTargetArgument(for: .local(42)) as? NSDictionary
+
+        #expect(argument?["kind"] as? String == "local")
+        #expect((argument?["value"] as? NSNumber)?.intValue == 42)
+    }
+
+    @Test
     func removeNodeWithUndoClearsCachedHandlesForLocalAndBackendIDs() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()

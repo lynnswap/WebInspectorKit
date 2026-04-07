@@ -1509,15 +1509,7 @@ private extension DOMPageAgent {
     }
 
     private func javascriptRemovalTargetArgument(for target: DOMRequestNodeTarget) -> Any? {
-        switch target {
-        case let .local(localID):
-            guard localID <= UInt64(Int.max) else {
-                return nil
-            }
-            return Int(localID)
-        case .backend:
-            return javascriptTargetArgument(for: target)
-        }
+        javascriptTargetArgument(for: target)
     }
 
     func snapshotPayload(
@@ -1837,6 +1829,10 @@ private func normalizedDocumentURL(_ documentURL: String?) -> String? {
 
 #if DEBUG
 extension DOMPageAgent {
+    func testJavaScriptRemovalTargetArgument(for target: DOMRequestNodeTarget) -> Any? {
+        javascriptRemovalTargetArgument(for: target)
+    }
+
     func testSetCachedDocumentScopeID(_ documentScopeID: DOMDocumentScopeID) {
         self.documentScopeID = documentScopeID
     }
