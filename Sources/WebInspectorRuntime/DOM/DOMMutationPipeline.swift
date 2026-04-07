@@ -85,9 +85,6 @@ final class DOMMutationSender {
         pageEpoch: Int,
         documentScopeID: UInt64
     ) {
-        domMutationPipelineLogger.notice(
-            "[TEMP DOM TRACE][Pipeline] enqueueMutationBundle generation=\(generation, privacy: .public) pageEpoch=\(pageEpoch, privacy: .public) documentScopeID=\(documentScopeID, privacy: .public) preservingState=\(preservingInspectorState, privacy: .public)"
-        )
         pendingBundles.append(
             PendingBundle(
                 bundle: bundle,
@@ -283,9 +280,6 @@ final class DOMMutationSender {
         guard !bundles.isEmpty else {
             return false
         }
-        domMutationPipelineLogger.notice(
-            "[TEMP DOM TRACE][Pipeline] applyBundlesNow generation=\(generation, privacy: .public) pageEpoch=\(pageEpoch, privacy: .public) bundleCount=\(bundles.count, privacy: .public)"
-        )
 
         let payloads = bundles.map(Self.makeFrontendTransportPayload(for:))
 

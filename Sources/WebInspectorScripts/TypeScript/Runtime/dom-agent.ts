@@ -17,7 +17,6 @@ import {
 } from "./DOMAgent/dom-agent-snapshot";
 import {
     applyDOMAgentBootstrapContext,
-    domTraceEnabled,
     inspector,
     readDOMAgentBootstrap,
     type DOMAgentAutoSnapshotBootstrap,
@@ -63,16 +62,6 @@ function setDocumentScopeID(documentScopeID: number): boolean {
     return true;
 }
 
-function postDOMAgentTrace(message: string): void {
-    if (!domTraceEnabled()) {
-        return;
-    }
-    try {
-        window.webkit?.messageHandlers?.webInspectorDOMLog?.postMessage({message});
-    } catch {
-    }
-}
-
 function applyAutoSnapshotBootstrap(
     options: DOMAgentAutoSnapshotBootstrap | null | undefined,
     useFallback: boolean
@@ -104,9 +93,6 @@ function bootstrapDOMAgent(bootstrap?: DOMAgentBootstrapState | null): boolean {
     if (didApplyContext && (inspector.pageEpoch !== previousPageEpoch || inspector.documentScopeID !== previousDocumentScopeID)) {
         inspector.nextInitialSnapshotMode = "fresh";
     }
-    postDOMAgentTrace(
-        `bootstrapDOMAgent pageEpoch=${String(nextBootstrap.pageEpoch)} documentScopeID=${String(nextBootstrap.documentScopeID)} hasAutoSnapshot=${hasAutoSnapshotBootstrap}`
-    );
     applyAutoSnapshotBootstrap(nextBootstrap.autoSnapshot, !hasAutoSnapshotBootstrap);
     return didApplyContext || hasAutoSnapshotBootstrap;
 }

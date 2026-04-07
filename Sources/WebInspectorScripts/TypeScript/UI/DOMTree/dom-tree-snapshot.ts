@@ -358,13 +358,6 @@ interface ResolvedMutationBundleInput {
     documentScopeID?: number;
 }
 
-function postDOMFrontendTrace(message: string): void {
-    try {
-        window.webkit?.messageHandlers?.webInspectorLog?.postMessage(`[TEMP DOM TRACE][Frontend] ${message}`);
-    } catch {
-    }
-}
-
 function ensureRenderedSnapshotIfNeeded(): void {
     ensureDomElements();
     const root = treeState.snapshot?.root;
@@ -383,7 +376,6 @@ function ensureRenderedSnapshotIfNeeded(): void {
     if (dom.empty) {
         dom.empty.hidden = true;
     }
-    postDOMFrontendTrace(`rebuild empty tree root=${root.id}`);
 }
 
 function resetDocumentRequestState(): void {
@@ -659,7 +651,6 @@ export function applyMutationBundle(
         return;
     }
     if (typeof parsed.version === "number" && parsed.version !== 1) {
-        postDOMFrontendTrace(`drop mutation bundle versionMismatch version=${String(parsed.version)}`);
         return;
     }
     const effectiveContext = resolveMutationBundleContext(parsed, resolvedBundle);
@@ -668,10 +659,8 @@ export function applyMutationBundle(
         const snapshotMode = resolveSnapshotMode(parsed, resolvedBundle, effectiveContext);
         if (snapshotMode === "preserve-ui-state"
             && !matchesCurrentDocumentContext(effectiveContext.pageEpoch, effectiveContext.documentScopeID)) {
-            postDOMFrontendTrace(`drop preserve snapshot contextMismatch effective=${effectiveContext.pageEpoch}:${effectiveContext.documentScopeID} current=${protocolState.pageEpoch}:${protocolState.documentScopeID}`);
             return;
         }
-        postDOMFrontendTrace(`apply snapshot bundle mode=${snapshotMode}`);
         if (parsed.snapshot) {
             if (snapshotMode === "fresh" && !canAdoptDocumentContext(effectiveContext)) {
                 return;
@@ -700,16 +689,10 @@ export function applyMutationBundle(
 
     if (parsed.kind === "mutation") {
         if (!matchesCurrentDocumentContext(effectiveContext.pageEpoch, effectiveContext.documentScopeID)) {
-            if (effectiveContext.pageEpoch !== protocolState.pageEpoch) {
-                postDOMFrontendTrace(`drop mutation bundle pageEpochMismatch effective=${effectiveContext.pageEpoch} current=${protocolState.pageEpoch}`);
-            } else {
-                postDOMFrontendTrace(`drop mutation bundle documentScopeMismatch effective=${effectiveContext.documentScopeID} current=${protocolState.documentScopeID}`);
-            }
             return;
         }
         ensureRenderedSnapshotIfNeeded();
         const events = Array.isArray(parsed.events) ? parsed.events : [];
-        postDOMFrontendTrace(`apply mutation bundle events=${events.length}`);
         if (events.length) {
             let bufferedEvents: DOMEventEntry[] = [];
             for (const event of events as DOMEventEntry[]) {

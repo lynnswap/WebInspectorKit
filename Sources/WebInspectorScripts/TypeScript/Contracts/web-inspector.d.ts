@@ -15,7 +15,6 @@ declare global {
         [key: string]: WebInspectorMessageHandler | undefined;
         webInspectorDOMSnapshot?: WebInspectorMessageHandler;
         webInspectorDOMMutations?: WebInspectorMessageHandler;
-        webInspectorDOMLog?: WebInspectorMessageHandler;
         webInspectorDomRequestDocument?: WebInspectorMessageHandler;
         webInspectorDomRequestChildren?: WebInspectorMessageHandler;
         webInspectorDomHighlight?: WebInspectorMessageHandler;

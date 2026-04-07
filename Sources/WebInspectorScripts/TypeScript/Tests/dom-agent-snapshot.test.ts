@@ -27,10 +27,6 @@ function mutationHandler(): WebKitMockHandler {
     return window.webkit?.messageHandlers?.webInspectorDOMMutations as WebKitMockHandler;
 }
 
-function logHandler(): WebKitMockHandler {
-    return window.webkit?.messageHandlers?.webInspectorDOMLog as WebKitMockHandler;
-}
-
 function parseBundleCall(
     handler: WebKitMockHandler
 ): Record<string, any> {
@@ -70,10 +66,8 @@ describe("dom-agent-snapshot", () => {
     beforeEach(() => {
         resetInspectorState();
         document.body.innerHTML = "<main id=\"app\"></main>";
-        delete (window as Window & { __wiDOMTraceEnabled?: boolean }).__wiDOMTraceEnabled;
         snapshotHandler().postMessage.mockClear();
         mutationHandler().postMessage.mockClear();
-        logHandler().postMessage.mockClear();
     });
 
     afterEach(() => {
@@ -404,17 +398,6 @@ describe("dom-agent-snapshot", () => {
         expect(payload.snapshotMode).toBe("preserve-ui-state");
     });
 
-    it("does not post DOM trace messages unless explicitly enabled", () => {
-        inspector.map = new Map([[1, document.documentElement]]);
-        inspector.snapshotAutoUpdateDebounce = 50;
-        inspector.pendingMutations = [];
-
-        enableAutoSnapshot();
-        vi.advanceTimersByTime(66);
-
-        expect(logHandler().postMessage).not.toHaveBeenCalled();
-    });
-
     it("does not downgrade a pending fresh snapshot when auto updates are enabled", () => {
         inspector.map = new Map([[1, document.documentElement]]);
         inspector.snapshotAutoUpdateDebounce = 50;
@@ -470,7 +453,6 @@ describe("dom-agent bootstrap", () => {
             messageHandlers: {
                 webInspectorDOMSnapshot: { postMessage: vi.fn() },
                 webInspectorDOMMutations: { postMessage: vi.fn() },
-                webInspectorDOMLog: { postMessage: vi.fn() },
             }
         } as never;
     });

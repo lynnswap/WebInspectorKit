@@ -1,4 +1,4 @@
-import {domTraceEnabled, inspector, type AnyNode} from "./dom-agent-state";
+import {inspector, type AnyNode} from "./dom-agent-state";
 import {
     captureDOMEnvelope,
     describe,
@@ -41,23 +41,8 @@ function mutationUpdateHandler(): MessageHandler | null {
     return window?.webkit?.messageHandlers?.webInspectorDOMMutations || null;
 }
 
-function domLogHandler(): MessageHandler | null {
-    return window?.webkit?.messageHandlers?.webInspectorDOMLog || null;
-}
-
-function postDOMTrace(message: string): void {
-    if (!domTraceEnabled()) {
-        return;
-    }
-    try {
-        domLogHandler()?.postMessage({message});
-    } catch {
-    }
-}
-
 export function enableAutoSnapshotIfSupported() {
     if (autoSnapshotHandler()) {
-        postDOMTrace(`enableAutoSnapshotIfSupported handlerPresent=true enabled=${inspector.snapshotAutoUpdateEnabled}`);
         enableAutoSnapshot();
     }
 }
@@ -77,7 +62,6 @@ function ensureAutoSnapshotObserver(): MutationObserver | null {
         if (!inspectableMutations.length) {
             return;
         }
-        postDOMTrace(`MutationObserver observed count=${inspectableMutations.length} enabled=${inspector.snapshotAutoUpdateEnabled} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         var queue = inspector.pendingMutations;
         if (!Array.isArray(queue)) {
             queue = inspector.pendingMutations = [];
@@ -218,7 +202,6 @@ function queueSnapshotAutoUpdateDispatch(reason: string) {
 function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
     var handler = autoSnapshotHandler();
     if (!handler) {
-        postDOMTrace(`sendFullSnapshot skipped missingHandler reason=${reason}`);
         return;
     }
     try {
@@ -243,9 +226,7 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             documentScopeID: inspector.documentScopeID,
             bundle: payload
         });
-        postDOMTrace(`sendFullSnapshot posted reason=${payload.reason} depth=${maxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID} documentURL=${document.URL || ""}`);
     } catch (error) {
-        postDOMTrace(`sendFullSnapshot failed reason=${reason} error=${String(error)}`);
         console.error("auto snapshot failed", error);
     } finally {
         inspector.nextInitialSnapshotMode = null;
@@ -468,7 +449,6 @@ function buildDomMutationEvents(records: MutationRecord[], maxDepth: number): { 
 function sendAutoSnapshotUpdate(reasonOverride?: string) {
     var mutationHandler = mutationUpdateHandler();
     if (!mutationHandler) {
-        postDOMTrace("sendAutoSnapshotUpdate missing mutation handler; detaching");
         const webInspectorDOM = window.webInspectorDOM as { detach?: () => void } | undefined;
         webInspectorDOM?.detach?.();
         return;
@@ -480,7 +460,6 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
     inspector.snapshotAutoUpdateOverflow = false;
     var mapSize = inspector.map?.size || 0;
     var initialSnapshotMode = inspector.nextInitialSnapshotMode;
-    postDOMTrace(`sendAutoSnapshotUpdate reason=${reasonOverride || inspector.snapshotAutoUpdateReason} pending=${pending.length} overflow=${overflow} mapSize=${mapSize} enabled=${inspector.snapshotAutoUpdateEnabled} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     if (initialSnapshotMode || !mapSize) {
         sendFullSnapshot("initial");
         if (initialSnapshotMode === "fresh") {
@@ -530,10 +509,8 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
                 documentScopeID: inspector.documentScopeID,
                 bundle: payload
             });
-            postDOMTrace(`sendAutoSnapshotUpdate posted mutation chunkSize=${payload.events.length} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         }
     } catch (error) {
-        postDOMTrace(`sendAutoSnapshotUpdate failed error=${String(error)}`);
         console.error("mutation update failed", error);
         sendFullSnapshot("post-error");
     }
@@ -555,7 +532,6 @@ export function configureAutoSnapshot(options: AutoSnapshotOptions | null) {
     if (!options || typeof options !== "object") {
         return;
     }
-    postDOMTrace(`configureAutoSnapshot enabled=${String(options.enabled)} maxDepth=${String(options.maxDepth)} debounce=${String(options.debounce)}`);
     configureAutoSnapshotOptions(options);
     if (options.enabled === true) {
         enableAutoSnapshot();
@@ -571,7 +547,6 @@ export function setAutoSnapshotOptions(options: AutoSnapshotOptions | null) {
 
 export function enableAutoSnapshot() {
     if (inspector.snapshotAutoUpdateEnabled) {
-        postDOMTrace(`enableAutoSnapshot noop alreadyEnabled=true pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
         return true;
     }
     inspector.snapshotAutoUpdateEnabled = true;
@@ -584,13 +559,11 @@ export function enableAutoSnapshot() {
     }
     connectAutoSnapshotObserver();
     scheduleSnapshotAutoUpdate("initial");
-    postDOMTrace(`enableAutoSnapshot activated debounce=${inspector.snapshotAutoUpdateDebounce} maxDepth=${inspector.snapshotAutoUpdateMaxDepth} pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     return inspector.snapshotAutoUpdateEnabled;
 }
 
 export function disableAutoSnapshot() {
     if (!inspector.snapshotAutoUpdateEnabled) {
-        postDOMTrace("disableAutoSnapshot noop alreadyDisabled=true");
         return false;
     }
     inspector.snapshotAutoUpdateEnabled = false;
@@ -612,7 +585,6 @@ export function disableAutoSnapshot() {
         inspector.nextInitialSnapshotMode = "preserve-ui-state";
     }
     disconnectAutoSnapshotObserver();
-    postDOMTrace(`disableAutoSnapshot completed pageEpoch=${inspector.pageEpoch} documentScopeID=${inspector.documentScopeID}`);
     return inspector.snapshotAutoUpdateEnabled;
 }
 

@@ -20,13 +20,12 @@ private typealias DOMBridgeScriptInstaller = @MainActor (WKWebView, String, WKCo
 private struct DOMBootstrapConfiguration {
     let pageEpoch: Int
     let documentScopeID: DOMDocumentScopeID
-    let traceEnabled: Bool
     let autoSnapshotEnabled: Bool
     let autoSnapshotMaxDepth: Int
     let autoSnapshotDebounce: Int
 
     var signature: String {
-        "\(pageEpoch)|\(documentScopeID)|\(traceEnabled ? 1 : 0)|\(autoSnapshotEnabled ? 1 : 0)|\(autoSnapshotMaxDepth)|\(autoSnapshotDebounce)"
+        "\(pageEpoch)|\(documentScopeID)|\(autoSnapshotEnabled ? 1 : 0)|\(autoSnapshotMaxDepth)|\(autoSnapshotDebounce)"
     }
 
     var autoSnapshotOptions: NSDictionary {
@@ -38,7 +37,6 @@ private struct DOMBootstrapConfiguration {
     }
 
     var scriptSource: String {
-        let traceEnabledLiteral = traceEnabled ? "true" : "false"
         let enabledLiteral = autoSnapshotEnabled ? "true" : "false"
         return """
         (function() {
@@ -46,7 +44,6 @@ private struct DOMBootstrapConfiguration {
             const bootstrap = {
                 pageEpoch: \(pageEpoch),
                 documentScopeID: \(documentScopeID),
-                traceEnabled: \(traceEnabledLiteral),
                 autoSnapshot: {
                     enabled: \(enabledLiteral),
                     maxDepth: \(autoSnapshotMaxDepth),
@@ -94,7 +91,6 @@ public final class DOMPageAgent: NSObject, PageAgent {
     private enum HandlerName: String, CaseIterable {
         case snapshot = "webInspectorDOMSnapshot"
         case mutation = "webInspectorDOMMutations"
-        case log = "webInspectorDOMLog"
     }
 
     private enum HandleCommand {
@@ -205,17 +201,6 @@ extension DOMPageAgent: WKScriptMessageHandler {
         guard let handlerName = HandlerName(rawValue: message.name) else {
             return
         }
-        if handlerName == .log {
-            if let body = message.body as? NSDictionary,
-               let logMessage = body["message"] as? String {
-                domLogger.notice("[TEMP DOM TRACE][Page] \(logMessage, privacy: .public)")
-            } else if let logMessage = message.body as? String {
-                domLogger.notice("[TEMP DOM TRACE][Page] \(logMessage, privacy: .public)")
-            } else {
-                domLogger.notice("[TEMP DOM TRACE][Page] \(String(describing: message.body), privacy: .public)")
-            }
-            return
-        }
         guard let payload = message.body as? NSDictionary,
               let bundle = payload["bundle"]
         else {
@@ -234,9 +219,6 @@ extension DOMPageAgent: WKScriptMessageHandler {
         } else {
             "raw"
         }
-        domLogger.notice(
-            "[TEMP DOM TRACE][PageAgent] received \(handlerName.rawValue, privacy: .public) kind=\(payloadKind, privacy: .public) pageEpoch=\(payloadPageEpoch, privacy: .public) documentScopeID=\(payloadDocumentScopeID, privacy: .public)"
-        )
 
         if let rawJSON = bundle as? String, !rawJSON.isEmpty {
             sink?.domDidEmit(
@@ -626,17 +608,12 @@ extension DOMPageAgent {
         autoSnapshotEnabled = enabled
         let bootstrap = currentBootstrapConfiguration()
         let options = bootstrap.autoSnapshotOptions
-        domLogger.notice(
-            "[TEMP DOM TRACE][PageAgent] setAutoSnapshot enabled=\(enabled, privacy: .public) pageEpoch=\(self.pageEpoch, privacy: .public) documentScopeID=\(self.documentScopeID, privacy: .public) maxDepth=\(bootstrap.autoSnapshotMaxDepth, privacy: .public) debounceMs=\(bootstrap.autoSnapshotDebounce, privacy: .public)"
-        )
         guard let webView else {
-            domLogger.notice("[TEMP DOM TRACE][PageAgent] setAutoSnapshot enabled=\(enabled, privacy: .public) persisted: no webView")
             return
         }
         await refreshDOMBootstrapIfNeeded(on: webView)
         do {
             let didConfigure = try await configureAutoSnapshotWhenReady(on: webView, options: options)
-            domLogger.notice("[TEMP DOM TRACE][PageAgent] configureAutoSnapshotWhenReady didConfigure=\(didConfigure, privacy: .public)")
             if !didConfigure {
                 domLogger.error("configure auto snapshot skipped: DOM agent is not ready")
             }
@@ -828,9 +805,6 @@ extension DOMPageAgent {
         pageEpoch: Int?,
         documentScopeID: DOMDocumentScopeID? = nil
     ) async {
-        domLogger.notice(
-            "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled requestedPageEpoch=\(String(describing: pageEpoch), privacy: .public) requestedDocumentScopeID=\(String(describing: documentScopeID), privacy: .public)"
-        )
         await installDOMAgentScriptIfNeeded(on: webView)
         await refreshCachedPageContextFromPageIfPossible(on: webView)
         await refreshDOMBootstrapIfNeeded(on: webView)
@@ -852,13 +826,6 @@ extension DOMPageAgent {
             } else {
                 await refreshDOMBootstrapIfNeeded(on: webView)
             }
-            domLogger.notice(
-                "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled applyPreparedPageContext didApply=\(didApply, privacy: .public) currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.documentScopeID, privacy: .public)"
-            )
-        } else {
-            domLogger.notice(
-                "[TEMP DOM TRACE][PageAgent] ensureDOMAgentScriptInstalled refreshed currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.documentScopeID, privacy: .public)"
-            )
         }
     }
 
@@ -1019,15 +986,9 @@ private extension DOMPageAgent {
     }
 
     func currentBootstrapConfiguration() -> DOMBootstrapConfiguration {
-#if DEBUG
-        let traceEnabled = true
-#else
-        let traceEnabled = false
-#endif
         return DOMBootstrapConfiguration(
             pageEpoch: pageEpoch,
             documentScopeID: documentScopeID,
-            traceEnabled: traceEnabled,
             autoSnapshotEnabled: autoSnapshotEnabled,
             autoSnapshotMaxDepth: max(1, configuration.snapshotDepth),
             autoSnapshotDebounce: max(50, Int(configuration.autoUpdateDebounce * 1000))
@@ -1079,9 +1040,6 @@ private extension DOMPageAgent {
             replaceBootstrapUserScript(on: controller, with: makeBootstrapUserScript(bootstrap))
             controllerStateRegistry.setDOMBootstrapSignature(bootstrap.signature, on: controller)
         }
-        domLogger.notice(
-            "[TEMP DOM TRACE][PageAgent] refreshDOMBootstrap appended=\(didAppendUserScript, privacy: .public) signature=\(bootstrap.signature, privacy: .public) pageEpoch=\(bootstrap.pageEpoch, privacy: .public) documentScopeID=\(bootstrap.documentScopeID, privacy: .public) enabled=\(bootstrap.autoSnapshotEnabled, privacy: .public)"
-        )
 
         do {
             try await webView.callAsyncVoidJavaScript(

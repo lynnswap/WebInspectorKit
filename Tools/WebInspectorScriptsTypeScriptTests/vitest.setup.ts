@@ -9,7 +9,6 @@ type MessageHandlers = Record<string, MessageHandler>;
 const createMessageHandlers = (): MessageHandlers => ({
     webInspectorDOMSnapshot: { postMessage: vi.fn() },
     webInspectorDOMMutations: { postMessage: vi.fn() },
-    webInspectorDOMLog: { postMessage: vi.fn() },
     webInspectorProtocol: { postMessage: vi.fn() },
     webInspectorLog: { postMessage: vi.fn() },
     webInspectorDomSelection: { postMessage: vi.fn() },
