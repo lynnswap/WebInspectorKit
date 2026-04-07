@@ -1115,7 +1115,7 @@ private extension WIDOMInspector {
 
         let resolvedNode: DOMNodeModel? = if payload.backendNodeIDIsStable,
                                              let backendNodeID = payload.backendNodeID {
-            document.node(backendNodeID: backendNodeID)
+            document.node(stableBackendNodeID: backendNodeID)
         } else if let localID = payload.localID {
             document.node(localID: localID)
         } else {
@@ -1302,7 +1302,7 @@ private extension WIDOMInspector {
 
         let selectedBackendNodeID = selectedBackendNodeID(from: result)
         if let selectedBackendNodeID,
-           let existingNode = document.node(backendNodeID: selectedBackendNodeID) {
+           let existingNode = document.node(stableBackendNodeID: selectedBackendNodeID) {
             return existingNode
         }
 
@@ -1521,7 +1521,7 @@ private extension WIDOMInspector {
                 return materializedNode
             }
             if let selectedBackendNodeID,
-               let materializedNode = document.node(backendNodeID: selectedBackendNodeID) {
+               let materializedNode = document.node(stableBackendNodeID: selectedBackendNodeID) {
                 return materializedNode
             }
         }

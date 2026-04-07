@@ -208,6 +208,12 @@ public final class DOMDocumentModel {
         nodesByLocalID.values.first(where: { $0.backendNodeID == backendNodeID })
     }
 
+    package func node(stableBackendNodeID: Int) -> DOMNodeModel? {
+        nodesByLocalID.values.first {
+            $0.backendNodeIDIsStable && $0.backendNodeID == stableBackendNodeID
+        }
+    }
+
     package func node(localID: UInt64) -> DOMNodeModel? {
         node(forLocalID: localID)
     }
@@ -355,6 +361,14 @@ private extension DOMDocumentModel {
             return
         }
         node.attributes = newAttributes
+    }
+
+    func placeholderNode(backendNodeID: Int) -> DOMNodeModel? {
+        nodesByLocalID.values.first {
+            $0.backendNodeID == backendNodeID
+                && $0.nodeName.isEmpty
+                && $0.localName.isEmpty
+        }
     }
 
     func makePlaceholderNode(
@@ -575,7 +589,11 @@ private extension DOMDocumentModel {
         }
 
         let existingNode = node(forLocalID: root.localID)
-            ?? (root.backendNodeIDIsStable ? root.backendNodeID.flatMap { node(backendNodeID: $0) } : nil)
+            ?? (root.backendNodeIDIsStable
+                    ? root.backendNodeID.flatMap {
+                        node(stableBackendNodeID: $0) ?? placeholderNode(backendNodeID: $0)
+                    }
+                    : nil)
         if let existing = existingNode {
             let parent = existing.parent
             let previousIndex = parent?.children.firstIndex(where: { $0 === existing })

@@ -114,6 +114,127 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func stableBackendLookupIgnoresUnstableBackendIDCollisions() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 7,
+                            backendNodeID: 7,
+                            backendNodeIDIsStable: false,
+                            attributes: [.init(nodeId: 7, name: "id", value: "collision")]
+                        ),
+                        makeNode(
+                            localID: 70,
+                            backendNodeID: 7,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 7, name: "id", value: "stable")]
+                        ),
+                    ]
+                )
+            )
+        )
+
+        let resolvedNode = try! #require(model.node(stableBackendNodeID: 7))
+        #expect(resolvedNode.localID == 70)
+        #expect(resolvedNode.attributes.first(where: { $0.name == "id" })?.value == "stable")
+    }
+
+    @Test
+    func replaceSubtreeUsesStableBackendFallbackWhenLocalIDsDrift() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 7,
+                            backendNodeID: 7,
+                            backendNodeIDIsStable: false,
+                            attributes: [.init(nodeId: 7, name: "id", value: "collision")]
+                        ),
+                        makeNode(
+                            localID: 70,
+                            backendNodeID: 7,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 7, name: "id", value: "stable")]
+                        ),
+                    ]
+                )
+            )
+        )
+
+        model.applyMutationBundle(
+            .init(
+                events: [
+                    .replaceSubtree(
+                        root: makeNode(
+                            localID: 700,
+                            backendNodeID: 7,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 7, name: "id", value: "replacement")]
+                        )
+                    )
+                ]
+            )
+        )
+
+        let root = try! #require(model.rootNode)
+        #expect(root.children.count == 2)
+        #expect(root.children.contains { $0.localID == 7 })
+        #expect(root.children.contains { $0.localID == 700 })
+        #expect(root.children.contains { $0.localID == 70 } == false)
+        #expect(root.children.first(where: { $0.localID == 7 })?.attributes.first(where: { $0.name == "id" })?.value == "collision")
+        #expect(root.children.first(where: { $0.localID == 700 })?.attributes.first(where: { $0.name == "id" })?.value == "replacement")
+    }
+
+    @Test
+    func replaceSubtreeReplacesMatchingPlaceholderWhenStableBackendNodeArrives() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(with: .init(root: makeNode(localID: 1)))
+        model.applySelectionSnapshot(
+            .init(
+                localID: 42,
+                backendNodeID: 77,
+                backendNodeIDIsStable: false,
+                preview: "<div id=\"placeholder\">",
+                attributes: [],
+                path: ["html", "body", "div"],
+                selectorPath: "#placeholder",
+                styleRevision: 0
+            )
+        )
+
+        let placeholder = try! #require(model.node(localID: 42))
+        #expect(placeholder.nodeName.isEmpty)
+
+        model.applyMutationBundle(
+            .init(
+                events: [
+                    .replaceSubtree(
+                        root: makeNode(
+                            localID: 700,
+                            backendNodeID: 77,
+                            backendNodeIDIsStable: true,
+                            attributes: [.init(nodeId: 77, name: "id", value: "materialized")]
+                        )
+                    )
+                ]
+            )
+        )
+
+        #expect(model.node(localID: 42) == nil)
+        let materialized = try! #require(model.node(localID: 700))
+        #expect(materialized.backendNodeID == 77)
+        #expect(materialized.backendNodeIDIsStable)
+        #expect(model.node(stableBackendNodeID: 77)?.id == materialized.id)
+    }
+
+    @Test
     func selectionSnapshotUpdatesDisplayedMetadata() {
         let model = DOMDocumentModel()
         model.replaceDocument(
@@ -269,6 +390,8 @@ struct DOMDocumentModelTests {
 
     private func makeNode(
         localID: UInt64,
+        backendNodeID: Int? = nil,
+        backendNodeIDIsStable: Bool? = nil,
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = [],
         nodeType: Int = 1,
@@ -278,7 +401,8 @@ struct DOMDocumentModelTests {
     ) -> DOMGraphNodeDescriptor {
         DOMGraphNodeDescriptor(
             localID: localID,
-            backendNodeID: Int(localID),
+            backendNodeID: backendNodeID ?? Int(localID),
+            backendNodeIDIsStable: backendNodeIDIsStable,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
