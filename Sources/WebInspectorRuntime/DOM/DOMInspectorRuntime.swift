@@ -6,6 +6,14 @@ import WebKit
 private let inspectorLogger = Logger(subsystem: "WebInspectorKit", category: "DOMInspectorRuntime")
 private let bootstrapRetryDelayNanoseconds: UInt64 = 50_000_000
 
+@inline(__always)
+private func domTraceNotice(_ message: @autoclosure () -> String) {
+#if DEBUG
+    let renderedMessage = message()
+    inspectorLogger.notice("\(renderedMessage, privacy: .public)")
+#endif
+}
+
 enum DOMDocumentReloadMode: String, Equatable {
     case fresh = "fresh"
     case preserveUIState = "preserve-ui-state"
@@ -2259,13 +2267,13 @@ extension DOMInspectorRuntime {
     ) -> Bool {
         let incomingDocumentURL = documentURL(from: payload)
         guard let delta = payloadNormalizer.normalizeBundlePayload(payload) else {
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] applyBundleToCurrentDocumentStore normalizeBundlePayload=nil")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] applyBundleToCurrentDocumentStore normalizeBundlePayload=nil")
             return true
         }
         switch delta {
         case let .snapshot(snapshot, shouldResetDocument):
             let shouldReplaceCurrentDocument = shouldResetDocument || currentDocumentModel.rootNode == nil
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=snapshot resetDocument=\(shouldResetDocument, privacy: .public) replaceCurrentDocument=\(shouldReplaceCurrentDocument, privacy: .public) advanceScope=false rootLocalID=\(snapshot.root.localID, privacy: .public)")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] apply delta=snapshot resetDocument=\(shouldResetDocument) replaceCurrentDocument=\(shouldReplaceCurrentDocument) advanceScope=false rootLocalID=\(snapshot.root.localID)")
             if shouldReplaceCurrentDocument {
                 payloadNormalizer.resetForDocumentUpdate()
             }
@@ -2278,7 +2286,7 @@ extension DOMInspectorRuntime {
             }
             return !shouldReplaceCurrentDocument
         case let .mutations(bundle):
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=mutations events=\(bundle.events.count, privacy: .public)")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] apply delta=mutations events=\(bundle.events.count)")
             applyMutationBundleAcrossDocumentUpdates(bundle)
             if bundle.events.contains(where: Self.isStructuralMutationEvent),
                let selectedEntry = currentDocumentModel.selectedNode,
@@ -2292,7 +2300,7 @@ extension DOMInspectorRuntime {
                 return false
             }
         case let .replaceSubtree(root):
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=replaceSubtree rootLocalID=\(root.localID, privacy: .public)")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] apply delta=replaceSubtree rootLocalID=\(root.localID)")
             currentDocumentModel.applyMutationBundle(.init(events: [.replaceSubtree(root: root)]))
             if let selectedEntry = currentDocumentModel.selectedNode,
                let target = selectionRequestTarget(for: selectedEntry) {
@@ -2300,11 +2308,11 @@ extension DOMInspectorRuntime {
             }
             return true
         case let .selection(selection):
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=selection hasSelection=\(selection != nil, privacy: .public)")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] apply delta=selection hasSelection=\(selection != nil)")
             currentDocumentModel.applySelectionSnapshot(selection)
             return true
         case let .selectorPath(selector):
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] apply delta=selectorPath localID=\(String(describing: selector.localID), privacy: .public)")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] apply delta=selectorPath localID=\(String(describing: selector.localID))")
             currentDocumentModel.applySelectorPath(selector)
             return true
         }
@@ -2342,31 +2350,31 @@ extension DOMInspectorRuntime {
                 "object"
             }
         }
-        inspectorLogger.notice(
-            "[TEMP DOM TRACE][Runtime] handleDOMBundle kind=\(payloadKind, privacy: .public) bundlePageEpoch=\(String(describing: bundle.pageEpoch), privacy: .public) bundleDocumentScopeID=\(String(describing: bundle.documentScopeID), privacy: .public) currentPageEpoch=\(self.pageEpoch, privacy: .public) currentDocumentScopeID=\(self.currentDocumentScope.documentScopeID, privacy: .public) bootstrapTaskActive=\(self.bootstrapTask != nil, privacy: .public) replacementFence=\(self.hasReplacementFenceForCurrentContext, privacy: .public)"
+        domTraceNotice(
+            "[TEMP DOM TRACE][Runtime] handleDOMBundle kind=\(payloadKind) bundlePageEpoch=\(String(describing: bundle.pageEpoch)) bundleDocumentScopeID=\(String(describing: bundle.documentScopeID)) currentPageEpoch=\(self.pageEpoch) currentDocumentScopeID=\(self.currentDocumentScope.documentScopeID) bootstrapTaskActive=\(self.bootstrapTask != nil) replacementFence=\(self.hasReplacementFenceForCurrentContext)"
         )
         if hasReplacementFenceForCurrentContext,
            bundle.pageEpoch == pageEpoch,
            bundle.documentScopeID == currentDocumentScope.documentScopeID
         {
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: replacement fence")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: replacement fence")
             deferredDOMBundlesDuringBootstrap.append(.init(bundle: bundle))
             return
         }
         if acceptsDOMBundle(documentScopeID: bundle.documentScopeID) == false,
            adoptAuthoritativeInitialSnapshotContextIfNeeded(from: bundle) {
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle adopted authoritative initial snapshot context")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] handleDOMBundle adopted authoritative initial snapshot context")
         }
         guard acceptsDOMBundle(documentScopeID: bundle.documentScopeID) else {
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle ignored: acceptsDOMBundle=false")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] handleDOMBundle ignored: acceptsDOMBundle=false")
             return
         }
         if bootstrapTask != nil {
-            inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: bootstrap in progress")
+            domTraceNotice("[TEMP DOM TRACE][Runtime] handleDOMBundle deferred: bootstrap in progress")
             deferredDOMBundlesDuringBootstrap.append(.init(bundle: bundle))
             return
         }
-        inspectorLogger.notice("[TEMP DOM TRACE][Runtime] handleDOMBundle applying and enqueueing")
+        domTraceNotice("[TEMP DOM TRACE][Runtime] handleDOMBundle applying and enqueueing")
         let preservesInspectorState = applyDOMBundleToCurrentDocumentStore(bundle)
         enqueueMutationPayload(bundle, preservingInspectorState: preservesInspectorState)
     }
@@ -2718,13 +2726,13 @@ extension DOMInspectorRuntime {
         if let dictionary = payload as? NSDictionary,
            let logMessage = dictionary["message"] as? String {
             if logMessage.contains("[TEMP DOM TRACE]") {
-                inspectorLogger.notice("\(logMessage, privacy: .public)")
+                domTraceNotice(logMessage)
             } else {
                 inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
             }
         } else if let logMessage = payload as? String {
             if logMessage.contains("[TEMP DOM TRACE]") {
-                inspectorLogger.notice("\(logMessage, privacy: .public)")
+                domTraceNotice(logMessage)
             } else {
                 inspectorLogger.debug("inspector log: \(logMessage, privacy: .public)")
             }
