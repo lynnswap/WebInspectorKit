@@ -275,6 +275,36 @@ struct DOMSessionTests {
     }
 
     @Test
+    func commitPageContextIgnoresHashOnlyDocumentURLChanges() throws {
+        let registry = WIUserContentControllerStateRegistry.shared
+        let (webView, controller) = makeTestWebView()
+        let agent = DOMPageAgent(
+            configuration: .init(),
+            controllerStateRegistry: registry
+        )
+        defer {
+            registry.clearState(for: controller)
+        }
+
+        agent.attachPageWebView(webView)
+        agent.commitPageContext(
+            .init(pageEpoch: 1, documentScopeID: 2, documentURL: "https://example.com/page#first"),
+            on: webView
+        )
+
+        let handleCache = try #require(extractHandleCache(from: agent))
+        handleCache.store(handle: NSObject(), for: 1)
+
+        agent.commitPageContext(
+            .init(pageEpoch: 1, documentScopeID: 2, documentURL: "https://example.com/page#second"),
+            on: webView
+        )
+
+        #expect(handleCache.handle(for: 1) != nil)
+        #expect(agent.currentPageContext.documentURL == "https://example.com/page")
+    }
+
+    @Test
     func stalePageEpochSyncDoesNotRegressNativeEpoch() async throws {
         let registry = WIUserContentControllerStateRegistry.shared
         let (webView, controller) = makeTestWebView()

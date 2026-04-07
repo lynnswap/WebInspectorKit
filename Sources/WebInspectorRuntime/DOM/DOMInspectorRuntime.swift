@@ -2491,7 +2491,11 @@ extension DOMInspectorRuntime {
         guard let documentURL, !documentURL.isEmpty else {
             return nil
         }
-        return documentURL
+        guard var components = URLComponents(string: documentURL) else {
+            return documentURL
+        }
+        components.fragment = nil
+        return components.string ?? documentURL
     }
 
     func applyReplacementDOMBundleAfterContextAdoption(_ bundle: DOMBundle) async -> Bool {

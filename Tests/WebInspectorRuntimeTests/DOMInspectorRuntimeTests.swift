@@ -1895,6 +1895,55 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func adoptPageContextIgnoresHashOnlyDocumentURLChanges() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.handleDOMBundle(
+            .init(
+                objectEnvelope: [
+                    "version": 1,
+                    "kind": "snapshot",
+                    "reason": "initial",
+                    "documentURL": "https://example.com/page-one#first",
+                    "snapshot": [
+                        "selectedNodeId": 2,
+                        "root": [
+                            "nodeId": 1,
+                            "nodeType": 1,
+                            "nodeName": "HTML",
+                            "localName": "html",
+                            "attributes": [],
+                            "children": [
+                                [
+                                    "nodeId": 2,
+                                    "nodeType": 1,
+                                    "nodeName": "BODY",
+                                    "localName": "body",
+                                    "attributes": ["id", "page-one"],
+                                    "children": [],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID
+            )
+        )
+
+        let didAdopt = await store.adoptPageContextIfNeeded(
+            .init(
+                pageEpoch: store.currentPageEpoch,
+                documentScopeID: store.currentDocumentScopeID,
+                documentURL: "https://example.com/page-one#second"
+            )
+        )
+
+        #expect(didAdopt == false)
+        #expect(store.currentDocumentModel.selectedNode?.backendNodeID == 2)
+    }
+
+    @Test
     func sameContextFreshSnapshotDoesNotAdvanceDocumentScope() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         replaceDocument(

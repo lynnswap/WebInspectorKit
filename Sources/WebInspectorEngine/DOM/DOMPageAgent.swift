@@ -1828,7 +1828,11 @@ private func normalizedDocumentURL(_ documentURL: String?) -> String? {
     guard let documentURL, !documentURL.isEmpty else {
         return nil
     }
-    return documentURL
+    guard var components = URLComponents(string: documentURL) else {
+        return documentURL
+    }
+    components.fragment = nil
+    return components.string ?? documentURL
 }
 
 #if DEBUG
