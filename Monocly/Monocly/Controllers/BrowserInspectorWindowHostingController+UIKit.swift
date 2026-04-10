@@ -1,29 +1,9 @@
-import SwiftUI
-
 #if canImport(UIKit)
 import UIKit
 import WebInspectorKit
 
-struct BrowserInspectorWindowSceneView: View {
-    var body: some View {
-        BrowserInspectorWindowControllerRepresentable()
-            .ignoresSafeArea()
-            .onContinueUserActivity(BrowserInspectorCoordinator.inspectorWindowSceneActivityType) { _ in }
-    }
-}
-
-private struct BrowserInspectorWindowControllerRepresentable: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> BrowserInspectorWindowHostingController {
-        BrowserInspectorWindowHostingController()
-    }
-
-    func updateUIViewController(_ uiViewController: BrowserInspectorWindowHostingController, context: Context) {
-        uiViewController.updateInspectorContext()
-    }
-}
-
 @MainActor
-private final class BrowserInspectorWindowHostingController: UIViewController {
+final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
         let inspectorControllerID: ObjectIdentifier
         let pageWebViewID: ObjectIdentifier
@@ -31,8 +11,6 @@ private final class BrowserInspectorWindowHostingController: UIViewController {
     }
 
     private var inspectorContainer: WITabViewController?
-    private var disconnectObserver: NSObjectProtocol?
-    private var observedSceneIdentifier: String?
     private let placeholderLabel = UILabel()
     private var lastAppliedContext: AppliedInspectorContext?
 
@@ -43,17 +21,6 @@ private final class BrowserInspectorWindowHostingController: UIViewController {
         placeholderLabel.textColor = .secondaryLabel
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         updateInspectorContext()
-    }
-
-    isolated deinit {
-        if let disconnectObserver {
-            NotificationCenter.default.removeObserver(disconnectObserver)
-        }
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        attachSceneObserverIfNeeded()
     }
 
     func updateInspectorContext() {
@@ -102,34 +69,6 @@ private final class BrowserInspectorWindowHostingController: UIViewController {
         container.didMove(toParent: self)
         inspectorContainer = container
         lastAppliedContext = appliedContext
-    }
-
-    private func attachSceneObserverIfNeeded() {
-        guard let windowScene = view.window?.windowScene else {
-            return
-        }
-
-        let persistentIdentifier = windowScene.session.persistentIdentifier
-        guard observedSceneIdentifier != persistentIdentifier else {
-            return
-        }
-
-        if let disconnectObserver {
-            NotificationCenter.default.removeObserver(disconnectObserver)
-        }
-
-        observedSceneIdentifier = persistentIdentifier
-        BrowserInspectorCoordinator.attachInspectorWindowSceneSession(windowScene.session)
-        let sceneSession = windowScene.session
-        disconnectObserver = NotificationCenter.default.addObserver(
-            forName: UIScene.didDisconnectNotification,
-            object: windowScene,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated {
-                BrowserInspectorCoordinator.handleInspectorWindowSceneDidDisconnect(sceneSession)
-            }
-        }
     }
 
     private func installPlaceholderIfNeeded() {

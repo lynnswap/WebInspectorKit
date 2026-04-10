@@ -135,57 +135,6 @@ extension MonoclyWindowContextStore {
     }
 }
 
-@MainActor
-final class MonoclyAppDelegate: NSObject, UIApplicationDelegate {
-    func application(
-        _ application: UIApplication,
-        configurationForConnecting connectingSceneSession: UISceneSession,
-        options: UIScene.ConnectionOptions
-    ) -> UISceneConfiguration {
-        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        if connectingSceneSession.role == .windowApplication {
-            configuration.delegateClass = MonoclySceneDelegate.self
-        }
-        return configuration
-    }
-}
-
-@MainActor
-final class MonoclySceneDelegate: NSObject, UIWindowSceneDelegate {
-    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-        _ = session
-        _ = connectionOptions
-        guard let windowScene = scene as? UIWindowScene else {
-            return
-        }
-
-        MonoclyWindowContextStore.shared.registerConnectedScene(windowScene)
-        if windowScene.activationState == .foregroundActive {
-            MonoclyWindowContextStore.shared.sceneDidBecomeActive(windowScene)
-        }
-    }
-
-    func sceneDidBecomeActive(_ scene: UIScene) {
-        guard let windowScene = scene as? UIWindowScene else {
-            return
-        }
-        MonoclyWindowContextStore.shared.sceneDidBecomeActive(windowScene)
-    }
-
-    func sceneWillResignActive(_ scene: UIScene) {
-        guard let windowScene = scene as? UIWindowScene else {
-            return
-        }
-        MonoclyWindowContextStore.shared.sceneWillResignActive(windowScene)
-    }
-
-    func sceneDidDisconnect(_ scene: UIScene) {
-        guard let windowScene = scene as? UIWindowScene else {
-            return
-        }
-        MonoclyWindowContextStore.shared.sceneDidDisconnect(windowScene)
-    }
-}
 #elseif canImport(AppKit)
 extension MonoclyWindowContextStore {
     func noteCurrentWindow(_ window: NSWindow?) {
@@ -226,59 +175,6 @@ extension MonoclyWindowContextStore {
             return mainWindow
         }
         return nil
-    }
-}
-
-@MainActor
-final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
-    private var hasInstalledWindowObservers = false
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        _ = notification
-        installWindowObserversIfNeeded()
-        MonoclyWindowContextStore.shared.refreshCurrentWindow()
-    }
-
-    private func installWindowObserversIfNeeded() {
-        guard hasInstalledWindowObservers == false else {
-            return
-        }
-        hasInstalledWindowObservers = true
-
-        let notificationCenter = NotificationCenter.default
-        notificationCenter.addObserver(
-            self,
-            selector: #selector(handleWindowDidBecomeKey(_:)),
-            name: NSWindow.didBecomeKeyNotification,
-            object: nil
-        )
-        notificationCenter.addObserver(
-            self,
-            selector: #selector(handleWindowDidBecomeMain(_:)),
-            name: NSWindow.didBecomeMainNotification,
-            object: nil
-        )
-        notificationCenter.addObserver(
-            self,
-            selector: #selector(handleWindowWillClose(_:)),
-            name: NSWindow.willCloseNotification,
-            object: nil
-        )
-    }
-
-    @objc private func handleWindowDidBecomeKey(_ notification: Notification) {
-        MonoclyWindowContextStore.shared.noteCurrentWindow(notification.object as? NSWindow)
-    }
-
-    @objc private func handleWindowDidBecomeMain(_ notification: Notification) {
-        MonoclyWindowContextStore.shared.noteCurrentWindow(notification.object as? NSWindow)
-    }
-
-    @objc private func handleWindowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else {
-            return
-        }
-        MonoclyWindowContextStore.shared.handleClosingWindow(window)
     }
 }
 #endif
