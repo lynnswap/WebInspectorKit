@@ -150,6 +150,15 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
         inspectorViewController?.updateInspectorContext()
     }
 
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        guard userActivity.activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType,
+              let windowScene = scene as? UIWindowScene else {
+            return
+        }
+        BrowserInspectorCoordinator.attachInspectorWindowSceneSession(windowScene.session)
+        inspectorViewController?.updateInspectorContext()
+    }
+
     func sceneDidDisconnect(_ scene: UIScene) {
         guard let windowScene = scene as? UIWindowScene else {
             return
@@ -178,6 +187,7 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
 }
 #elseif canImport(AppKit)
 import AppKit
+import WebInspectorKit
 
 @main
 @MainActor
@@ -282,6 +292,8 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
 final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     private let launchConfiguration: BrowserLaunchConfiguration
     private var needsFreshRootViewController = false
+    private var retainedStore: BrowserStore?
+    private var retainedInspectorController: WIInspectorController?
 
     init(launchConfiguration: BrowserLaunchConfiguration) {
         self.launchConfiguration = launchConfiguration
@@ -300,14 +312,28 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        _ = notification
+        guard let window = notification.object as? NSWindow else {
+            return
+        }
+        if let rootViewController = window.contentViewController as? BrowserRootViewController {
+            if BrowserInspectorCoordinator.hasVisibleInspectorWindow {
+                retainedStore = rootViewController.store
+                retainedInspectorController = rootViewController.inspectorController
+                rootViewController.prepareForWindowClosurePreservingInspectorSession()
+            } else {
+                retainedStore = nil
+                retainedInspectorController = nil
+                rootViewController.finalizeInspectorSessionForWindowClosure()
+            }
+        }
+        window.toolbar = nil
+        window.contentViewController = nil
         needsFreshRootViewController = true
     }
 
     private func ensureWindow() {
         if let window {
-            if needsFreshRootViewController,
-               BrowserInspectorCoordinator.hasVisibleInspectorWindow == false {
+            if needsFreshRootViewController || (window.contentViewController as? BrowserRootViewController) == nil {
                 replaceRootViewController(in: window)
                 needsFreshRootViewController = false
             }
@@ -328,7 +354,14 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func makeRootViewController() -> BrowserRootViewController {
-        BrowserRootViewController(launchConfiguration: launchConfiguration)
+        let rootViewController = BrowserRootViewController(
+            store: retainedStore,
+            inspectorController: retainedInspectorController,
+            launchConfiguration: launchConfiguration
+        )
+        retainedStore = nil
+        retainedInspectorController = nil
+        return rootViewController
     }
 }
 #endif

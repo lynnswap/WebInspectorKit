@@ -26,8 +26,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var pendingInspectorSessionState: InspectorSessionState?
     private var isFinalizingInspectorSession = false
-    private weak var observedWindow: NSWindow?
-    private var windowCloseObserver: NSObjectProtocol?
+    private var transfersInspectorControllerLifecycleOnDeinit = false
     private weak var installedToolbar: NSToolbar?
     private weak var navigationItemGroup: NSToolbarItemGroup?
 
@@ -66,7 +65,9 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         pendingWindowAttachmentTask?.cancel()
         inspectorLifecycleTask?.cancel()
         tearDownWindowIntegration()
-        inspectorController.tearDownForDeinit()
+        if transfersInspectorControllerLifecycleOnDeinit == false {
+            inspectorController.tearDownForDeinit()
+        }
     }
 
     override func loadView() {
@@ -115,6 +116,35 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         isFinalizingInspectorSession = true
         tearDownWindowIntegration()
         requestInspectorSessionState(.disconnected)
+    }
+
+    func prepareForWindowClosurePreservingInspectorSession() {
+        guard transfersInspectorControllerLifecycleOnDeinit == false else {
+            return
+        }
+        transfersInspectorControllerLifecycleOnDeinit = true
+        tearDownWindowIntegration()
+        let inspectorController = inspectorController
+        let store = store
+        Task { @MainActor in
+            await inspectorController.applyHostState(
+                pageWebView: store.webView,
+                visibility: .hidden
+            )
+        }
+    }
+
+    func finalizeInspectorSessionForWindowClosure() {
+        guard isFinalizingInspectorSession == false else {
+            return
+        }
+        isFinalizingInspectorSession = true
+        transfersInspectorControllerLifecycleOnDeinit = true
+        tearDownWindowIntegration()
+        let inspectorController = inspectorController
+        Task { @MainActor in
+            await inspectorController.finalize()
+        }
     }
 
     @objc
@@ -244,7 +274,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         guard let window = view.window else {
             return
         }
-        installWindowCloseObserverIfNeeded(for: window)
         pendingWindowAttachmentTask?.cancel()
         pendingWindowAttachmentTask = Task.immediateIfAvailable { [weak self, weak window] in
             await Task.yield()
@@ -260,7 +289,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
 
     func forceWindowAttachmentForTesting(in window: NSWindow) {
         loadViewIfNeeded()
-        installWindowCloseObserverIfNeeded(for: window)
         installToolbarIfNeeded(in: window)
         window.title = store.displayTitle
     }
@@ -331,31 +359,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         }
     }
 
-    private func installWindowCloseObserverIfNeeded(for window: NSWindow) {
-        guard observedWindow !== window else {
-            return
-        }
-        removeWindowCloseObserver()
-        observedWindow = window
-        windowCloseObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.finalizeInspectorSession()
-            }
-        }
-    }
-
-    private func removeWindowCloseObserver() {
-        if let windowCloseObserver {
-            NotificationCenter.default.removeObserver(windowCloseObserver)
-            self.windowCloseObserver = nil
-        }
-        observedWindow = nil
-    }
-
     private func tearDownWindowIntegration() {
         pendingWindowAttachmentTask?.cancel()
         pendingWindowAttachmentTask = nil
@@ -363,7 +366,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         installedToolbar?.delegate = nil
         installedToolbar = nil
         navigationItemGroup = nil
-        removeWindowCloseObserver()
     }
 }
 
