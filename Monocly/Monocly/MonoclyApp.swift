@@ -215,11 +215,12 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         _ = sender
-        guard flag == false else {
+        _ = flag
+        guard mainWindowController.window?.isVisible != true else {
             return false
         }
         showMainWindow(nil)
-        return true
+        return false
     }
 
     private func showMainWindow(_ sender: Any?) {

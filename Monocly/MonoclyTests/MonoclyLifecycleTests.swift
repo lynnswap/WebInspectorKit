@@ -171,6 +171,7 @@ final class MonoclyLifecycleTests: XCTestCase {
                 window = NSWindow(contentViewController: NSViewController())
             }
             showWindowCallCount += 1
+            window?.orderFront(nil)
         }
     }
 
@@ -209,12 +210,20 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertEqual(spyController.showWindowCallCount, 1)
         retainedWindows.append(spyController.window!)
 
-        XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
+        spyController.window?.orderOut(nil)
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
         XCTAssertEqual(factoryCallCount, 1)
         XCTAssertEqual(spyController.showWindowCallCount, 2)
 
+        let inspectorWindow = NSWindow(contentViewController: NSViewController())
+        inspectorWindow.orderFront(nil)
+        retainedWindows.append(inspectorWindow)
+        spyController.window?.orderOut(nil)
         XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
-        XCTAssertEqual(spyController.showWindowCallCount, 2)
+        XCTAssertEqual(spyController.showWindowCallCount, 3)
+
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+        XCTAssertEqual(spyController.showWindowCallCount, 3)
     }
 
     @MainActor
