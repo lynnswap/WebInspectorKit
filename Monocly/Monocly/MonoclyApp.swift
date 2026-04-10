@@ -1,6 +1,18 @@
 #if canImport(UIKit)
 import UIKit
 
+struct BrowserInspectorSceneDestructionRequester {
+    let destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
+
+    static let live = BrowserInspectorSceneDestructionRequester { sceneSession in
+        UIApplication.shared.requestSceneSessionDestruction(
+            sceneSession,
+            options: nil,
+            errorHandler: nil
+        )
+    }
+}
+
 @main
 @MainActor
 final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
@@ -133,6 +145,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private(set) var inspectorViewController: BrowserInspectorWindowHostingController?
+    private static var sceneDestructionRequester = BrowserInspectorSceneDestructionRequester.live
 
     func scene(
         _ scene: UIScene,
@@ -172,6 +185,11 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func connect(windowScene: UIWindowScene) {
+        guard BrowserInspectorCoordinator.canConnectInspectorWindowScene(windowScene.session) else {
+            Self.sceneDestructionRequester.destroySceneSession(windowScene.session)
+            return
+        }
+
         let inspectorViewController = BrowserInspectorWindowHostingController()
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = inspectorViewController
@@ -188,6 +206,14 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
         window?.isHidden = true
         inspectorViewController = nil
         window = nil
+    }
+
+    static func setSceneDestructionRequesterForTesting(_ requester: BrowserInspectorSceneDestructionRequester) {
+        sceneDestructionRequester = requester
+    }
+
+    static func resetSceneDestructionRequesterForTesting() {
+        sceneDestructionRequester = .live
     }
 }
 #elseif canImport(AppKit)

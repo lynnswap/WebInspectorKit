@@ -104,6 +104,9 @@ final class BrowserInspectorCoordinator {
             let previousState = presentationState
             sceneSessionsByIdentifier.removeValue(forKey: sceneSession.persistentIdentifier)
             pruneDisconnectedSceneSessions()
+            if sceneSessionsByIdentifier.isEmpty, isPendingPresentation == false {
+                context = nil
+            }
             notifyObserversIfNeeded(previousState: previousState)
         }
 
@@ -298,6 +301,10 @@ final class BrowserInspectorCoordinator {
 
     static func canRestoreInspectorWindowScene(_ sceneSession: UISceneSession) -> Bool {
         inspectorWindowRegistry.canRestoreSceneSession(sceneSession)
+    }
+
+    static func canConnectInspectorWindowScene(_ sceneSession: UISceneSession) -> Bool {
+        inspectorWindowRegistry.currentContext != nil || canRestoreInspectorWindowScene(sceneSession)
     }
 
     static func observeInspectorWindowPresentation(_ observer: @escaping (Bool) -> Void) -> UUID {
