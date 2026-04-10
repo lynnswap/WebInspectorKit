@@ -131,27 +131,36 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testInspectorSceneDelegateDestroysOrphanedRestoredSessionWithoutContext() throws {
-        let windowScene = try makeWindowScene()
+    func testPresentWindowReusesAttachedInspectorSceneWithoutContext() throws {
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
         let sceneDelegate = MonoclyInspectorSceneDelegate()
-        var destroyedSceneSession: UISceneSession?
+        var requestedSceneSession: UISceneSession?
+        var requestedActivity: NSUserActivity?
 
-        MonoclyInspectorSceneDelegate.setSceneDestructionRequesterForTesting(
-            BrowserInspectorSceneDestructionRequester { sceneSession in
-                destroyedSceneSession = sceneSession
-            }
+        sceneDelegate.connect(windowScene: fixture.windowScene)
+        retainedWindows.append(try XCTUnwrap(sceneDelegate.window))
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { sceneSession, userActivity, _, _ in
+                    requestedSceneSession = sceneSession
+                    requestedActivity = userActivity
+                }
+            )
         )
-        addTeardownBlock {
-            Task { @MainActor in
-                MonoclyInspectorSceneDelegate.resetSceneDestructionRequesterForTesting()
-            }
-        }
 
-        sceneDelegate.connect(windowScene: windowScene)
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
 
-        XCTAssertTrue(destroyedSceneSession === windowScene.session)
-        XCTAssertNil(sceneDelegate.window)
-        XCTAssertNil(sceneDelegate.inspectorViewController)
+        XCTAssertTrue(requestedSceneSession === fixture.windowScene.session)
+        XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
     }
 }
 
@@ -326,9 +335,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         controller.showWindow(nil)
 
         let reopenedRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
-        XCTAssertFalse(firstRootViewController === reopenedRootViewController)
-        XCTAssertTrue(firstRootViewController.store === reopenedRootViewController.store)
-        XCTAssertTrue(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
+        XCTAssertTrue(firstRootViewController === reopenedRootViewController)
     }
 
     @MainActor
@@ -363,8 +370,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         controller.showWindow(nil)
 
         let reopenedRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
-        XCTAssertTrue(firstRootViewController.store === reopenedRootViewController.store)
-        XCTAssertTrue(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
+        XCTAssertTrue(firstRootViewController === reopenedRootViewController)
     }
 
     @MainActor

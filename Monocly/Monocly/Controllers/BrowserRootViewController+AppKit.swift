@@ -26,7 +26,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var pendingInspectorSessionState: InspectorSessionState?
     private var isFinalizingInspectorSession = false
-    private var transfersInspectorControllerLifecycleOnDeinit = false
     private weak var installedToolbar: NSToolbar?
     private weak var navigationItemGroup: NSToolbarItemGroup?
 
@@ -65,9 +64,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         pendingWindowAttachmentTask?.cancel()
         inspectorLifecycleTask?.cancel()
         tearDownWindowIntegration()
-        if transfersInspectorControllerLifecycleOnDeinit == false {
-            inspectorController.tearDownForDeinit()
-        }
+        inspectorController.tearDownForDeinit()
     }
 
     override func loadView() {
@@ -119,31 +116,20 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     }
 
     func prepareForWindowClosurePreservingInspectorSession() {
-        guard transfersInspectorControllerLifecycleOnDeinit == false else {
-            return
-        }
-        transfersInspectorControllerLifecycleOnDeinit = true
         tearDownWindowIntegration()
-        let inspectorController = inspectorController
-        let store = store
-        Task { @MainActor in
-            await inspectorController.applyHostState(
-                pageWebView: store.webView,
-                visibility: .hidden
-            )
-        }
+        requestInspectorSessionState(.suspended)
     }
 
     func finalizeInspectorSessionForWindowClosure() {
-        guard isFinalizingInspectorSession == false else {
-            return
-        }
-        isFinalizingInspectorSession = true
-        transfersInspectorControllerLifecycleOnDeinit = true
-        tearDownWindowIntegration()
-        let inspectorController = inspectorController
-        Task { @MainActor in
-            await inspectorController.finalize()
+        finalizeInspectorSession()
+    }
+
+    func waitForInspectorSessionTransitions() async {
+        while let inspectorLifecycleTask {
+            await inspectorLifecycleTask.value
+            if self.inspectorLifecycleTask == nil {
+                break
+            }
         }
     }
 

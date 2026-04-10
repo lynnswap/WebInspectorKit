@@ -1,18 +1,6 @@
 #if canImport(UIKit)
 import UIKit
 
-struct BrowserInspectorSceneDestructionRequester {
-    let destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
-
-    static let live = BrowserInspectorSceneDestructionRequester { sceneSession in
-        UIApplication.shared.requestSceneSessionDestruction(
-            sceneSession,
-            options: nil,
-            errorHandler: nil
-        )
-    }
-}
-
 @main
 @MainActor
 final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
@@ -145,7 +133,6 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
 final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private(set) var inspectorViewController: BrowserInspectorWindowHostingController?
-    private static var sceneDestructionRequester = BrowserInspectorSceneDestructionRequester.live
 
     func scene(
         _ scene: UIScene,
@@ -185,11 +172,6 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func connect(windowScene: UIWindowScene) {
-        guard BrowserInspectorCoordinator.canConnectInspectorWindowScene(windowScene.session) else {
-            Self.sceneDestructionRequester.destroySceneSession(windowScene.session)
-            return
-        }
-
         let inspectorViewController = BrowserInspectorWindowHostingController()
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = inspectorViewController
@@ -206,14 +188,6 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
         window?.isHidden = true
         inspectorViewController = nil
         window = nil
-    }
-
-    static func setSceneDestructionRequesterForTesting(_ requester: BrowserInspectorSceneDestructionRequester) {
-        sceneDestructionRequester = requester
-    }
-
-    static func resetSceneDestructionRequesterForTesting() {
-        sceneDestructionRequester = .live
     }
 }
 #elseif canImport(AppKit)
@@ -379,8 +353,8 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
 final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     private let launchConfiguration: BrowserLaunchConfiguration
     private var needsFreshRootViewController = false
-    private var retainedStore: BrowserStore?
-    private var retainedInspectorController: WIInspectorController?
+    private var retainedRootViewController: BrowserRootViewController?
+    private var closingRootTransitionTask: Task<Void, Never>?
 
     init(launchConfiguration: BrowserLaunchConfiguration) {
         self.launchConfiguration = launchConfiguration
@@ -405,15 +379,24 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
         guard let window = notification.object as? NSWindow else {
             return
         }
+        closingRootTransitionTask?.cancel()
         if let rootViewController = window.contentViewController as? BrowserRootViewController {
             if BrowserInspectorCoordinator.hasVisibleInspectorWindow {
-                retainedStore = rootViewController.store
-                retainedInspectorController = rootViewController.inspectorController
+                retainedRootViewController = rootViewController
                 rootViewController.prepareForWindowClosurePreservingInspectorSession()
             } else {
-                retainedStore = nil
-                retainedInspectorController = nil
+                retainedRootViewController = nil
                 rootViewController.finalizeInspectorSessionForWindowClosure()
+                closingRootTransitionTask = Task { [weak self, rootViewController] in
+                    await rootViewController.waitForInspectorSessionTransitions()
+                    guard let self else {
+                        return
+                    }
+                    if self.retainedRootViewController === rootViewController {
+                        self.retainedRootViewController = nil
+                    }
+                    self.closingRootTransitionTask = nil
+                }
             }
         }
         window.toolbar = nil
@@ -422,11 +405,15 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func ensureWindow() {
-        discardRetainedInspectorSessionIfNeeded()
-
         if let window {
             if needsFreshRootViewController || (window.contentViewController as? BrowserRootViewController) == nil {
-                replaceRootViewController(in: window)
+                if let retainedRootViewController {
+                    window.toolbar = nil
+                    window.contentViewController = retainedRootViewController
+                    self.retainedRootViewController = nil
+                } else {
+                    replaceRootViewController(in: window)
+                }
                 needsFreshRootViewController = false
             }
             return
@@ -446,34 +433,25 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func makeRootViewController() -> BrowserRootViewController {
-        let rootViewController = BrowserRootViewController(
-            store: retainedStore,
-            inspectorController: retainedInspectorController,
-            launchConfiguration: launchConfiguration
-        )
-        retainedStore = nil
-        retainedInspectorController = nil
-        return rootViewController
+        BrowserRootViewController(launchConfiguration: launchConfiguration)
     }
 
     private func handleInspectorWindowDidClose() {
-        guard let retainedInspectorController else {
+        guard let retainedRootViewController else {
             return
         }
-        retainedStore = nil
-        self.retainedInspectorController = nil
-        Task { @MainActor in
-            await retainedInspectorController.finalize()
+        closingRootTransitionTask?.cancel()
+        retainedRootViewController.finalizeInspectorSessionForWindowClosure()
+        closingRootTransitionTask = Task { [weak self, retainedRootViewController] in
+            await retainedRootViewController.waitForInspectorSessionTransitions()
+            guard let self else {
+                return
+            }
+            if self.retainedRootViewController === retainedRootViewController {
+                self.retainedRootViewController = nil
+            }
+            self.closingRootTransitionTask = nil
         }
-    }
-
-    private func discardRetainedInspectorSessionIfNeeded() {
-        guard retainedInspectorController != nil,
-              BrowserInspectorCoordinator.hasVisibleInspectorWindow == false else {
-            return
-        }
-        retainedStore = nil
-        retainedInspectorController = nil
     }
 }
 #endif
