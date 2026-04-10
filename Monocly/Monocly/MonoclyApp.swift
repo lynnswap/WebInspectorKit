@@ -15,6 +15,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ = application
         return Self.sceneConfiguration(
             for: connectingSceneSession.role,
+            existingConfigurationName: connectingSceneSession.configuration.name,
             activityType: Self.sceneActivityType(
                 connectingSceneSession: connectingSceneSession,
                 options: options
@@ -24,13 +25,18 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
 
     static func sceneConfiguration(
         for role: UISceneSession.Role,
+        existingConfigurationName: String? = nil,
         activityType: String?
     ) -> UISceneConfiguration {
         let configurationName: String?
         let delegateClass: AnyClass?
+        let shouldUseInspectorConfiguration = role == .windowApplication
+            && (
+                activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType
+                    || existingConfigurationName == inspectorSceneConfigurationName
+            )
 
-        if role == .windowApplication,
-           activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType {
+        if shouldUseInspectorConfiguration {
             configurationName = inspectorSceneConfigurationName
             delegateClass = MonoclyInspectorSceneDelegate.self
         } else {
@@ -300,7 +306,8 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
 
     private func ensureWindow() {
         if let window {
-            if needsFreshRootViewController {
+            if needsFreshRootViewController,
+               BrowserInspectorCoordinator.hasVisibleInspectorWindow == false {
                 replaceRootViewController(in: window)
                 needsFreshRootViewController = false
             }

@@ -370,6 +370,10 @@ final class BrowserInspectorCoordinator {
 
     private static let inspectorWindowStore = InspectorWindowStore()
 
+    static var hasVisibleInspectorWindow: Bool {
+        inspectorWindowStore.window?.isVisible == true
+    }
+
     static func present(
         from parentWindow: NSWindow?,
         browserStore: BrowserStore,

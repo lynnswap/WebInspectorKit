@@ -31,6 +31,7 @@ final class MonoclyLifecycleTests: XCTestCase {
     func testAppDelegateUsesInspectorSceneDelegateForInspectorActivity() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
+            existingConfigurationName: nil,
             activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType
         )
 
@@ -41,10 +42,22 @@ final class MonoclyLifecycleTests: XCTestCase {
     func testAppDelegateUsesMainSceneDelegateForRegularActivity() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
+            existingConfigurationName: nil,
             activityType: nil
         )
 
         XCTAssertTrue(configuration.delegateClass === MonoclyMainSceneDelegate.self)
+    }
+
+    @MainActor
+    func testAppDelegateKeepsInspectorSceneDelegateForRestoredInspectorSession() {
+        let configuration = MonoclyAppDelegate.sceneConfiguration(
+            for: .windowApplication,
+            existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
+            activityType: nil
+        )
+
+        XCTAssertTrue(configuration.delegateClass === MonoclyInspectorSceneDelegate.self)
     }
 
     @MainActor
