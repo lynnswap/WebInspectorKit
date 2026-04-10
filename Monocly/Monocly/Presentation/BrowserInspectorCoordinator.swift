@@ -393,12 +393,48 @@ final class BrowserInspectorCoordinator {
 #elseif canImport(AppKit)
     private final class InspectorWindowStore {
         weak var window: NSWindow?
+        var onWindowWillClose: (() -> Void)?
+        private var closeObserver: NSObjectProtocol?
+
+        deinit {
+            removeCloseObserver()
+        }
+
+        func setWindow(_ window: NSWindow?) {
+            removeCloseObserver()
+            self.window = window
+
+            guard let window else {
+                return
+            }
+
+            closeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.window = nil
+                self?.removeCloseObserver()
+                self?.onWindowWillClose?()
+            }
+        }
+
+        private func removeCloseObserver() {
+            if let closeObserver {
+                NotificationCenter.default.removeObserver(closeObserver)
+                self.closeObserver = nil
+            }
+        }
     }
 
     private static let inspectorWindowStore = InspectorWindowStore()
 
     static var hasVisibleInspectorWindow: Bool {
-        inspectorWindowStore.window?.isVisible == true
+        inspectorWindowStore.window != nil
+    }
+
+    static func setInspectorWindowCloseHandler(_ handler: (() -> Void)?) {
+        inspectorWindowStore.onWindowWillClose = handler
     }
 
     static func present(
@@ -441,7 +477,7 @@ final class BrowserInspectorCoordinator {
             window.center()
         }
 
-        Self.inspectorWindowStore.window = window
+        Self.inspectorWindowStore.setWindow(window)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return true

@@ -367,6 +367,9 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
         self.launchConfiguration = launchConfiguration
         super.init(window: nil)
         shouldCascadeWindows = false
+        BrowserInspectorCoordinator.setInspectorWindowCloseHandler { [weak self] in
+            self?.handleInspectorWindowDidClose()
+        }
     }
 
     @available(*, unavailable)
@@ -400,6 +403,8 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func ensureWindow() {
+        discardRetainedInspectorSessionIfNeeded()
+
         if let window {
             if needsFreshRootViewController || (window.contentViewController as? BrowserRootViewController) == nil {
                 replaceRootViewController(in: window)
@@ -430,6 +435,26 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
         retainedStore = nil
         retainedInspectorController = nil
         return rootViewController
+    }
+
+    private func handleInspectorWindowDidClose() {
+        guard let retainedInspectorController else {
+            return
+        }
+        retainedStore = nil
+        self.retainedInspectorController = nil
+        Task { @MainActor in
+            await retainedInspectorController.finalize()
+        }
+    }
+
+    private func discardRetainedInspectorSessionIfNeeded() {
+        guard retainedInspectorController != nil,
+              BrowserInspectorCoordinator.hasVisibleInspectorWindow == false else {
+            return
+        }
+        retainedStore = nil
+        retainedInspectorController = nil
     }
 }
 #endif

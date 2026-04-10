@@ -356,5 +356,78 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertTrue(firstRootViewController.store === reopenedRootViewController.store)
         XCTAssertTrue(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
     }
+
+    @MainActor
+    func testMainWindowControllerPreservesInspectorSessionAcrossReopenWhenInspectorIsMiniaturized() throws {
+        let controller = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+
+        controller.showWindow(nil)
+
+        let mainWindow = try XCTUnwrap(controller.window)
+        retainedWindows.append(mainWindow)
+        let firstRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: mainWindow,
+                browserStore: firstRootViewController.store,
+                inspectorController: firstRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        retainedWindows.append(inspectorWindow)
+        inspectorWindow.miniaturize(nil)
+        XCTAssertTrue(inspectorWindow.isMiniaturized)
+
+        controller.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: mainWindow))
+        controller.showWindow(nil)
+
+        let reopenedRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
+        XCTAssertTrue(firstRootViewController.store === reopenedRootViewController.store)
+        XCTAssertTrue(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
+    }
+
+    @MainActor
+    func testMainWindowControllerDropsPreservedSessionWhenInspectorClosesBeforeReopen() throws {
+        let controller = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+
+        controller.showWindow(nil)
+
+        let mainWindow = try XCTUnwrap(controller.window)
+        retainedWindows.append(mainWindow)
+        let firstRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: mainWindow,
+                browserStore: firstRootViewController.store,
+                inspectorController: firstRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        retainedWindows.append(inspectorWindow)
+
+        controller.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: mainWindow))
+        inspectorWindow.close()
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        controller.showWindow(nil)
+
+        let reopenedRootViewController = try XCTUnwrap(mainWindow.contentViewController as? BrowserRootViewController)
+        XCTAssertFalse(firstRootViewController.store === reopenedRootViewController.store)
+        XCTAssertFalse(firstRootViewController.inspectorController === reopenedRootViewController.inspectorController)
+    }
 }
 #endif
