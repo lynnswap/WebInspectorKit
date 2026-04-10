@@ -310,7 +310,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
         pageViewController.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { userActivity, scene, _ in
+                activateScene: { _, userActivity, scene, _ in
                     requestedActivity = userActivity
                     requestingScene = scene
                     activationCount += 1
@@ -348,7 +348,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { _, scene, _ in
+                activateScene: { _, _, scene, _ in
                     requestingScene = scene
                     activationCount += 1
                 }

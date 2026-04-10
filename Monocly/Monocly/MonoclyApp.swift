@@ -16,9 +16,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         return Self.sceneConfiguration(
             for: connectingSceneSession.role,
             existingConfigurationName: connectingSceneSession.configuration.name,
-            canRestoreExistingInspectorSession: BrowserInspectorCoordinator.canRestoreInspectorWindowScene(
-                connectingSceneSession
-            ),
             activityType: Self.sceneActivityType(
                 connectingSceneSession: connectingSceneSession,
                 options: options
@@ -29,7 +26,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     static func sceneConfiguration(
         for role: UISceneSession.Role,
         existingConfigurationName: String? = nil,
-        canRestoreExistingInspectorSession: Bool = false,
         activityType: String?
     ) -> UISceneConfiguration {
         let configurationName: String?
@@ -37,10 +33,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         let shouldUseInspectorConfiguration = role == .windowApplication
             && (
                 activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType
-                    || (
-                        existingConfigurationName == inspectorSceneConfigurationName
-                            && canRestoreExistingInspectorSession
-                    )
+                    || existingConfigurationName == inspectorSceneConfigurationName
             )
 
         if shouldUseInspectorConfiguration {

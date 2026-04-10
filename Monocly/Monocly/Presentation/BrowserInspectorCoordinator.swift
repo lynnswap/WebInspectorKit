@@ -18,16 +18,17 @@ struct BrowserInspectorWindowContext {
 
 struct BrowserInspectorSceneActivationRequester {
     let activateScene: @MainActor (
+        _ sceneSession: UISceneSession?,
         _ userActivity: NSUserActivity,
         _ requestingScene: UIScene?,
         _ errorHandler: @escaping (Error) -> Void
     ) -> Void
 
-    static let live = BrowserInspectorSceneActivationRequester { userActivity, requestingScene, errorHandler in
+    static let live = BrowserInspectorSceneActivationRequester { sceneSession, userActivity, requestingScene, errorHandler in
         let options = UIScene.ActivationRequestOptions()
         options.requestingScene = requestingScene
         UIApplication.shared.requestSceneSessionActivation(
-            nil,
+            sceneSession,
             userActivity: userActivity,
             options: options,
             errorHandler: errorHandler
@@ -224,11 +225,15 @@ final class BrowserInspectorCoordinator {
                 tabs: tabs
             )
         )
-        Self.inspectorWindowRegistry.beginPendingPresentation()
         let userActivity = Self.makeInspectorWindowUserActivity()
         let requestingScene = presenter.view.window?.windowScene ?? MonoclyWindowContextStore.shared.currentWindowScene
 
-        sceneActivationRequester.activateScene(userActivity, requestingScene) { [weak self] _ in
+        let targetSceneSession = Self.inspectorWindowRegistry.currentSceneSessions.first
+        if targetSceneSession == nil {
+            Self.inspectorWindowRegistry.beginPendingPresentation()
+        }
+
+        sceneActivationRequester.activateScene(targetSceneSession, userActivity, requestingScene) { [weak self] _ in
             Self.inspectorWindowRegistry.clear()
             self?.notifyPresentationStateChanged()
         }

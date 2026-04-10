@@ -32,7 +32,6 @@ final class MonoclyLifecycleTests: XCTestCase {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: nil,
-            canRestoreExistingInspectorSession: false,
             activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType
         )
 
@@ -44,19 +43,6 @@ final class MonoclyLifecycleTests: XCTestCase {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: nil,
-            canRestoreExistingInspectorSession: false,
-            activityType: nil
-        )
-
-        XCTAssertTrue(configuration.delegateClass === MonoclyMainSceneDelegate.self)
-    }
-
-    @MainActor
-    func testAppDelegateUsesMainSceneDelegateForInspectorConfigurationWithoutRestorableContext() {
-        let configuration = MonoclyAppDelegate.sceneConfiguration(
-            for: .windowApplication,
-            existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
-            canRestoreExistingInspectorSession: false,
             activityType: nil
         )
 
@@ -68,7 +54,6 @@ final class MonoclyLifecycleTests: XCTestCase {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
-            canRestoreExistingInspectorSession: true,
             activityType: nil
         )
 
@@ -111,7 +96,7 @@ final class MonoclyLifecycleTests: XCTestCase {
 
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { _, _, _ in }
+                activateScene: { _, _, _, _ in }
             )
         )
 
@@ -146,6 +131,39 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testPresentWindowReusesAttachedInspectorSceneWithoutContext() throws {
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
+        let sceneDelegate = MonoclyInspectorSceneDelegate()
+        var requestedSceneSession: UISceneSession?
+        var requestedActivity: NSUserActivity?
+
+        sceneDelegate.connect(windowScene: fixture.windowScene)
+        retainedWindows.append(try XCTUnwrap(sceneDelegate.window))
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { sceneSession, userActivity, _, _ in
+                    requestedSceneSession = sceneSession
+                    requestedActivity = userActivity
+                }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        XCTAssertTrue(requestedSceneSession === fixture.windowScene.session)
+        XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
+    }
+
+    @MainActor
     func testDiscardingInspectorSceneSessionsRemovesRestorableContext() throws {
         let fixture = try makeHostedRootViewController()
         let coordinator = BrowserInspectorCoordinator()
@@ -154,7 +172,7 @@ final class MonoclyLifecycleTests: XCTestCase {
 
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { _, _, _ in }
+                activateScene: { _, _, _, _ in }
             )
         )
 
@@ -358,7 +376,7 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testMainWindowControllerPreservesInspectorSessionAcrossReopenWhenInspectorIsMiniaturized() throws {
+    func testMainWindowControllerPreservesInspectorSessionAcrossReopenWhenInspectorIsHidden() throws {
         let controller = MonoclyMainWindowController(
             launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
         )
@@ -382,8 +400,8 @@ final class MonoclyLifecycleTests: XCTestCase {
             NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
         )
         retainedWindows.append(inspectorWindow)
-        inspectorWindow.miniaturize(nil)
-        XCTAssertTrue(inspectorWindow.isMiniaturized)
+        inspectorWindow.orderOut(nil)
+        XCTAssertFalse(inspectorWindow.isVisible)
 
         controller.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: mainWindow))
         controller.showWindow(nil)
