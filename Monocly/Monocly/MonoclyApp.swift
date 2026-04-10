@@ -16,6 +16,9 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         return Self.sceneConfiguration(
             for: connectingSceneSession.role,
             existingConfigurationName: connectingSceneSession.configuration.name,
+            canRestoreExistingInspectorSession: BrowserInspectorCoordinator.canRestoreInspectorWindowScene(
+                connectingSceneSession
+            ),
             activityType: Self.sceneActivityType(
                 connectingSceneSession: connectingSceneSession,
                 options: options
@@ -26,6 +29,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     static func sceneConfiguration(
         for role: UISceneSession.Role,
         existingConfigurationName: String? = nil,
+        canRestoreExistingInspectorSession: Bool = false,
         activityType: String?
     ) -> UISceneConfiguration {
         let configurationName: String?
@@ -33,7 +37,10 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         let shouldUseInspectorConfiguration = role == .windowApplication
             && (
                 activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType
-                    || existingConfigurationName == inspectorSceneConfigurationName
+                    || (
+                        existingConfigurationName == inspectorSceneConfigurationName
+                            && canRestoreExistingInspectorSession
+                    )
             )
 
         if shouldUseInspectorConfiguration {
@@ -55,6 +62,11 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     ) -> String? {
         options.userActivities.first?.activityType
             ?? connectingSceneSession.stateRestorationActivity?.activityType
+    }
+
+    func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
+        _ = application
+        BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard(sceneSessions)
     }
 }
 
@@ -218,6 +230,7 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         installWindowObserversIfNeeded()
+        installMainMenu()
         NSApp.setActivationPolicy(.regular)
         showMainWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -243,6 +256,61 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController.showWindow(sender)
         mainWindowController.window?.orderFrontRegardless()
         mainWindowController.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private func installMainMenu() {
+        let applicationName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? ProcessInfo.processInfo.processName
+        let mainMenu = NSMenu(title: "Main Menu")
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu(title: applicationName)
+
+        let aboutItem = NSMenuItem(
+            title: "About \(applicationName)",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = NSApp
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(.separator())
+
+        let hideItem = NSMenuItem(
+            title: "Hide \(applicationName)",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+
+        let hideOthersItem = NSMenuItem(
+            title: "Hide Others",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthersItem.target = NSApp
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthersItem)
+
+        let showAllItem = NSMenuItem(
+            title: "Show All",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
+        showAllItem.target = NSApp
+        appMenu.addItem(showAllItem)
+        appMenu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: "Quit \(applicationName)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+        NSApp.mainMenu = mainMenu
     }
 
     private func installWindowObserversIfNeeded() {
