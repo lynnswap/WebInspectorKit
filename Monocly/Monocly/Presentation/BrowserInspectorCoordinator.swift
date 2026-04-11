@@ -128,6 +128,14 @@ final class BrowserInspectorCoordinator {
             context != nil && restorableSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier)
         }
 
+        func canConnectSceneSession(_ sceneSession: UISceneSession) -> Bool {
+            context != nil
+                && (
+                    isPendingPresentation
+                        || restorableSceneSessionIdentifiers.contains(sceneSession.persistentIdentifier)
+                )
+        }
+
         func clear() {
             let previousState = presentationState
             context = nil
@@ -304,7 +312,7 @@ final class BrowserInspectorCoordinator {
     }
 
     static func canConnectInspectorWindowScene(_ sceneSession: UISceneSession) -> Bool {
-        inspectorWindowRegistry.currentContext != nil || canRestoreInspectorWindowScene(sceneSession)
+        inspectorWindowRegistry.canConnectSceneSession(sceneSession)
     }
 
     static func observeInspectorWindowPresentation(_ observer: @escaping (Bool) -> Void) -> UUID {

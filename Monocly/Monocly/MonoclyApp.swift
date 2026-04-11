@@ -283,8 +283,12 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
         let applicationName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
             ?? ProcessInfo.processInfo.processName
         let mainMenu = NSMenu(title: "Main Menu")
-        let appMenuItem = NSMenuItem()
+        let appMenuItem = NSMenuItem(title: applicationName, action: nil, keyEquivalent: "")
         let appMenu = NSMenu(title: applicationName)
+        let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let windowMenuItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
 
         let aboutItem = NSMenuItem(
             title: "About \(applicationName)",
@@ -331,7 +335,59 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
 
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
+
+        let newWindowItem = NSMenuItem(
+            title: "New Window",
+            action: #selector(handleNewWindowMenuItem(_:)),
+            keyEquivalent: "n"
+        )
+        newWindowItem.target = self
+        fileMenu.addItem(newWindowItem)
+        fileMenu.addItem(.separator())
+
+        let closeItem = NSMenuItem(
+            title: "Close Window",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        closeItem.target = nil
+        fileMenu.addItem(closeItem)
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
+        let minimizeItem = NSMenuItem(
+            title: "Minimize",
+            action: #selector(NSWindow.performMiniaturize(_:)),
+            keyEquivalent: "m"
+        )
+        minimizeItem.target = nil
+        windowMenu.addItem(minimizeItem)
+
+        let zoomItem = NSMenuItem(
+            title: "Zoom",
+            action: #selector(NSWindow.performZoom(_:)),
+            keyEquivalent: ""
+        )
+        zoomItem.target = nil
+        windowMenu.addItem(zoomItem)
+        windowMenu.addItem(.separator())
+
+        let bringAllToFrontItem = NSMenuItem(
+            title: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: ""
+        )
+        bringAllToFrontItem.target = NSApp
+        windowMenu.addItem(bringAllToFrontItem)
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func handleNewWindowMenuItem(_ sender: Any?) {
+        showMainWindow(sender)
     }
 
     private func installWindowObserversIfNeeded() {
