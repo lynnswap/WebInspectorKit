@@ -184,6 +184,47 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertNil(sceneDelegate.window)
         XCTAssertNil(sceneDelegate.inspectorViewController)
     }
+
+    @MainActor
+    func testOrphanedInspectorSceneActivationDoesNotPolluteWindowRegistry() throws {
+        let orphanWindowScene = try makeWindowScene()
+        let sceneDelegate = MonoclyInspectorSceneDelegate()
+
+        MonoclyInspectorSceneDelegate.setSceneDestructionRequesterForTesting(
+            BrowserInspectorSceneDestructionRequester { _ in }
+        )
+        addTeardownBlock {
+            Task { @MainActor in
+                MonoclyInspectorSceneDelegate.resetSceneDestructionRequesterForTesting()
+            }
+        }
+
+        sceneDelegate.connect(windowScene: orphanWindowScene)
+        sceneDelegate.sceneDidBecomeActive(orphanWindowScene)
+
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
+        var activatedSceneSession: UISceneSession?
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { sceneSession, _, _, _ in
+                    activatedSceneSession = sceneSession
+                }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        XCTAssertNil(activatedSceneSession)
+    }
 }
 
 private extension MonoclyLifecycleTests {

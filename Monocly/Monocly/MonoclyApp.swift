@@ -161,7 +161,8 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
-        guard let windowScene = scene as? UIWindowScene else {
+        guard let windowScene = scene as? UIWindowScene,
+              inspectorViewController != nil else {
             return
         }
         BrowserInspectorCoordinator.attachInspectorWindowSceneSession(windowScene.session)
@@ -170,7 +171,8 @@ final class MonoclyInspectorSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
         guard userActivity.activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType,
-              let windowScene = scene as? UIWindowScene else {
+              let windowScene = scene as? UIWindowScene,
+              inspectorViewController != nil else {
             return
         }
         BrowserInspectorCoordinator.attachInspectorWindowSceneSession(windowScene.session)
