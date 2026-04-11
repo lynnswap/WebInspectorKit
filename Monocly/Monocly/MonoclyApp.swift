@@ -79,7 +79,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
 final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private(set) var rootViewController: BrowserRootViewController?
-    private var closingRootTransitionTask: Task<Void, Never>?
+    private var closingRootTransitionTasks: [UUID: Task<Void, Never>] = [:]
 
     func scene(
         _ scene: UIScene,
@@ -119,8 +119,6 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         windowScene: UIWindowScene,
         launchConfiguration: BrowserLaunchConfiguration = .current()
     ) {
-        closingRootTransitionTask?.cancel()
-        closingRootTransitionTask = nil
         let rootViewController = BrowserRootViewController(launchConfiguration: launchConfiguration)
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
@@ -135,7 +133,6 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func disconnect(windowScene: UIWindowScene) {
-        closingRootTransitionTask?.cancel()
         if let rootViewController {
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorController) {
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
@@ -149,10 +146,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
                 }
             } else {
                 rootViewController.finalizeInspectorSession()
-                closingRootTransitionTask = Task { @MainActor [weak self, rootViewController] in
-                    await rootViewController.waitForInspectorSessionTransitions()
-                    self?.closingRootTransitionTask = nil
-                }
+                retainRootUntilInspectorSessionTransitionsFinish(rootViewController)
             }
         }
         window?.rootViewController = nil
@@ -160,6 +154,14 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         rootViewController = nil
         window = nil
         MonoclyWindowContextStore.shared.sceneDidDisconnect(windowScene)
+    }
+
+    private func retainRootUntilInspectorSessionTransitionsFinish(_ rootViewController: BrowserRootViewController) {
+        let taskID = UUID()
+        closingRootTransitionTasks[taskID] = Task { @MainActor [weak self, rootViewController] in
+            await rootViewController.waitForInspectorSessionTransitions()
+            self?.closingRootTransitionTasks[taskID] = nil
+        }
     }
 }
 
@@ -535,7 +537,7 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
     private let launchConfiguration: BrowserLaunchConfiguration
     private var needsFreshRootViewController = false
     private var retainedRootViewController: BrowserRootViewController?
-    private var closingRootTransitionTask: Task<Void, Never>?
+    private var closingRootTransitionTasks: [UUID: Task<Void, Never>] = [:]
     var onRetainedInspectorSessionDidEnd: (() -> Void)?
 
     var isRetainingInspectorSessionAfterWindowClosure: Bool {
@@ -568,7 +570,6 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
         guard let window = notification.object as? NSWindow else {
             return
         }
-        closingRootTransitionTask?.cancel()
         if let rootViewController = window.contentViewController as? BrowserRootViewController {
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorController) {
                 retainedRootViewController = rootViewController
@@ -577,16 +578,7 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
                 retainedRootViewController = nil
                 clearInspectorWindowReleaseHandler(for: rootViewController)
                 rootViewController.finalizeInspectorSessionForWindowClosure()
-                closingRootTransitionTask = Task { [weak self, rootViewController] in
-                    await rootViewController.waitForInspectorSessionTransitions()
-                    guard let self else {
-                        return
-                    }
-                    if self.retainedRootViewController === rootViewController {
-                        self.retainedRootViewController = nil
-                    }
-                    self.closingRootTransitionTask = nil
-                }
+                retainRootUntilInspectorSessionTransitionsFinish(rootViewController)
             }
         }
         window.toolbar = nil
@@ -651,16 +643,23 @@ final class MonoclyMainWindowController: NSWindowController, NSWindowDelegate {
         }
         self.retainedRootViewController = nil
         clearInspectorWindowReleaseHandler(for: rootViewController)
-        closingRootTransitionTask?.cancel()
         rootViewController.finalizeInspectorSessionForWindowClosure()
-        closingRootTransitionTask = Task { [weak self, rootViewController] in
+        retainRootUntilInspectorSessionTransitionsFinish(rootViewController)
+        onRetainedInspectorSessionDidEnd?()
+    }
+
+    private func retainRootUntilInspectorSessionTransitionsFinish(_ rootViewController: BrowserRootViewController) {
+        let taskID = UUID()
+        closingRootTransitionTasks[taskID] = Task { [weak self, rootViewController] in
             await rootViewController.waitForInspectorSessionTransitions()
             guard let self else {
                 return
             }
-            self.closingRootTransitionTask = nil
+            if self.retainedRootViewController === rootViewController {
+                self.retainedRootViewController = nil
+            }
+            self.closingRootTransitionTasks[taskID] = nil
         }
-        onRetainedInspectorSessionDidEnd?()
     }
 }
 #endif
