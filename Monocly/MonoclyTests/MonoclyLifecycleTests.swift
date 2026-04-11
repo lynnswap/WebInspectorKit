@@ -203,6 +203,26 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testLegacySceneRecoveryComputesStaleSessionIdentifiersWhenMainSceneExists() {
+        let staleSessionIdentifiers = MonoclyAppDelegate.staleRecoveredSessionIdentifiers(
+            openSessionIdentifiers: ["main-session", "stale-session-a", "stale-session-b"],
+            preferredMainSessionIdentifier: "main-session"
+        )
+
+        XCTAssertEqual(staleSessionIdentifiers, ["stale-session-a", "stale-session-b"])
+    }
+
+    @MainActor
+    func testLegacySceneRecoveryComputesEverySessionAsStaleWithoutMainScene() {
+        let staleSessionIdentifiers = MonoclyAppDelegate.staleRecoveredSessionIdentifiers(
+            openSessionIdentifiers: ["session-a", "session-b"],
+            preferredMainSessionIdentifier: nil
+        )
+
+        XCTAssertEqual(staleSessionIdentifiers, ["session-a", "session-b"])
+    }
+
+    @MainActor
     func testLegacySceneRecoverySkipsResetWhenUsableMainSceneExists() throws {
         let fixture = try makeHostedRootViewController()
         let delegate = MonoclyAppDelegate()
