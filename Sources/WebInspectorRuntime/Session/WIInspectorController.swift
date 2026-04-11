@@ -404,15 +404,23 @@ private extension WIInspectorController {
 
         if let primaryScene = visibleUIHosts
             .filter({ $0.preferredRole == .primary })
-            .compactMap(\.sceneActivationRequestingScene)
+            .compactMap(activeSceneActivationRequestingScene(for:))
             .first {
             return primaryScene
         }
 
         return visibleUIHosts
             .filter { $0.preferredRole == .secondary }
-            .compactMap(\.sceneActivationRequestingScene)
+            .compactMap(activeSceneActivationRequestingScene(for:))
             .first
+    }
+
+    private func activeSceneActivationRequestingScene(for host: WIHostRecord) -> UIScene? {
+        guard let scene = host.sceneActivationRequestingScene,
+              scene.activationState == .foregroundActive else {
+            return nil
+        }
+        return scene
     }
 #endif
 

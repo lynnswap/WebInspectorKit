@@ -59,6 +59,8 @@ final class BrowserInspectorCoordinator {
 
         private var context: BrowserInspectorWindowContext?
         private var sceneSessionsByIdentifier: [String: WeakSceneSessionBox] = [:]
+        private var reusableSceneSession: WeakSceneSessionBox?
+        private var reusableSceneSessionIdentifier: String?
         private var restorableSceneSessionIdentifiers: Set<String> = []
         private var staleSceneSessionIdentifiers: Set<String> = []
         private var isPendingPresentation = false
@@ -72,6 +74,17 @@ final class BrowserInspectorCoordinator {
         var currentSceneSessions: [UISceneSession] {
             pruneDisconnectedSceneSessions()
             return sceneSessionsByIdentifier.values.compactMap(\.session)
+        }
+
+        var preferredActivationSceneSession: UISceneSession? {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionsByIdentifier.values.compactMap(\.session).first
+                ?? reusableSceneSession?.session
+        }
+
+        var hasAttachedSceneSession: Bool {
+            pruneDisconnectedSceneSessions()
+            return sceneSessionsByIdentifier.isEmpty == false
         }
 
         var presentationState: Bool {
@@ -104,6 +117,10 @@ final class BrowserInspectorCoordinator {
             let previousState = presentationState
             let persistentIdentifier = sceneSession.persistentIdentifier
             sceneSessionsByIdentifier[persistentIdentifier] = WeakSceneSessionBox(session: sceneSession)
+            if reusableSceneSessionIdentifier == persistentIdentifier {
+                reusableSceneSession = nil
+                reusableSceneSessionIdentifier = nil
+            }
             staleSceneSessionIdentifiers.remove(persistentIdentifier)
             restorableSceneSessionIdentifiers.insert(persistentIdentifier)
             isPendingPresentation = false
@@ -114,6 +131,8 @@ final class BrowserInspectorCoordinator {
             let previousState = presentationState
             let persistentIdentifier = sceneSession.persistentIdentifier
             sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
+            reusableSceneSession = WeakSceneSessionBox(session: sceneSession)
+            reusableSceneSessionIdentifier = persistentIdentifier
             restorableSceneSessionIdentifiers.remove(persistentIdentifier)
             staleSceneSessionIdentifiers.insert(persistentIdentifier)
             pruneDisconnectedSceneSessions()
@@ -128,13 +147,17 @@ final class BrowserInspectorCoordinator {
             for sceneSession in sceneSessions {
                 let persistentIdentifier = sceneSession.persistentIdentifier
                 sceneSessionsByIdentifier.removeValue(forKey: persistentIdentifier)
-                restorableSceneSessionIdentifiers.remove(persistentIdentifier)
-                if isPendingPresentation == false {
-                    staleSceneSessionIdentifiers.remove(persistentIdentifier)
+                if reusableSceneSessionIdentifier == persistentIdentifier {
+                    reusableSceneSession = nil
+                    reusableSceneSessionIdentifier = nil
                 }
+                restorableSceneSessionIdentifiers.remove(persistentIdentifier)
+                staleSceneSessionIdentifiers.remove(persistentIdentifier)
             }
             pruneDisconnectedSceneSessions()
-            if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
+            if restorableSceneSessionIdentifiers.isEmpty,
+               sceneSessionsByIdentifier.isEmpty,
+               isPendingPresentation == false {
                 setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
@@ -161,10 +184,12 @@ final class BrowserInspectorCoordinator {
         func canConnectSceneSession(_ sceneSession: UISceneSession) -> Bool {
             let persistentIdentifier = sceneSession.persistentIdentifier
             return context != nil
-                && staleSceneSessionIdentifiers.contains(persistentIdentifier) == false
                 && (
                     isPendingPresentation
-                        || restorableSceneSessionIdentifiers.contains(persistentIdentifier)
+                        || (
+                            staleSceneSessionIdentifiers.contains(persistentIdentifier) == false
+                                && restorableSceneSessionIdentifiers.contains(persistentIdentifier)
+                        )
                 )
         }
 
@@ -173,6 +198,8 @@ final class BrowserInspectorCoordinator {
             let previousInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
             setContext(nil)
             sceneSessionsByIdentifier.removeAll()
+            reusableSceneSession = nil
+            reusableSceneSessionIdentifier = nil
             restorableSceneSessionIdentifiers.removeAll()
             staleSceneSessionIdentifiers.removeAll()
             isPendingPresentation = false
@@ -193,6 +220,10 @@ final class BrowserInspectorCoordinator {
 
         private func pruneDisconnectedSceneSessions() {
             sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
+            if reusableSceneSession?.session == nil {
+                reusableSceneSession = nil
+                reusableSceneSessionIdentifier = nil
+            }
         }
 
         private func releaseContext(for inspectorControllerID: ObjectIdentifier?) {
@@ -281,8 +312,8 @@ final class BrowserInspectorCoordinator {
         let userActivity = Self.makeInspectorWindowUserActivity()
         let requestingScene = presenter.view.window?.windowScene ?? MonoclyWindowContextStore.shared.currentWindowScene
 
-        let targetSceneSession = Self.inspectorWindowRegistry.currentSceneSessions.first
-        if targetSceneSession == nil {
+        let targetSceneSession = Self.inspectorWindowRegistry.preferredActivationSceneSession
+        if Self.inspectorWindowRegistry.hasAttachedSceneSession == false {
             Self.inspectorWindowRegistry.beginPendingPresentation()
         }
 

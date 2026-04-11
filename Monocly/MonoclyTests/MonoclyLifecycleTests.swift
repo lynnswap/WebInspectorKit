@@ -266,16 +266,30 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testInspectorSceneDisconnectInvalidatesStaleSessionImmediately() throws {
+    func testInspectorSceneDisconnectAllowsImmediateSessionReuseWhilePending() throws {
         let fixture = try makeHostedRootViewController()
         let coordinator = BrowserInspectorCoordinator()
         let sceneDelegate = MonoclyInspectorSceneDelegate()
+        var activatedSceneSession: UISceneSession?
+        var destroyedSceneSession: UISceneSession?
 
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { _, _, _, _ in }
+                activateScene: { sceneSession, _, _, _ in
+                    activatedSceneSession = sceneSession
+                }
             )
         )
+        MonoclyInspectorSceneDelegate.setSceneDestructionRequesterForTesting(
+            BrowserInspectorSceneDestructionRequester { sceneSession in
+                destroyedSceneSession = sceneSession
+            }
+        )
+        addTeardownBlock {
+            Task { @MainActor in
+                MonoclyInspectorSceneDelegate.resetSceneDestructionRequesterForTesting()
+            }
+        }
 
         XCTAssertTrue(
             coordinator.presentWindow(
@@ -299,10 +313,17 @@ final class MonoclyLifecycleTests: XCTestCase {
                 tabs: [.dom(), .network()]
             )
         )
-        XCTAssertFalse(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
+        XCTAssertTrue(coordinator.hasInspectorWindowForTesting)
+        XCTAssertTrue(activatedSceneSession === fixture.windowScene.session)
+        XCTAssertTrue(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
 
+        sceneDelegate.connect(windowScene: fixture.windowScene)
+        XCTAssertNil(destroyedSceneSession)
+        XCTAssertNotNil(sceneDelegate.window)
+        XCTAssertTrue(coordinator.hasInspectorWindowForTesting)
+
+        sceneDelegate.disconnect(windowScene: fixture.windowScene)
         BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard([fixture.windowScene.session])
-
         XCTAssertFalse(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
     }
 
