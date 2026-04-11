@@ -1,4 +1,5 @@
 #if os(iOS) || os(macOS)
+import Darwin
 import Foundation
 import MachO
 import MachOKit
@@ -92,6 +93,8 @@ private struct WITransportResolvedFunctionAddresses: Sendable {
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
     let backendDispatcherDispatchAddress: UInt64
+    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
+    let frontendAttachmentStrategy: WITransportFrontendAttachmentStrategy
 
     static let zero = WITransportResolvedFunctionAddresses(
         connectFrontendAddress: 0,
@@ -99,8 +102,15 @@ private struct WITransportResolvedFunctionAddresses: Sendable {
         stringFromUTF8Address: 0,
         stringImplToNSStringAddress: 0,
         destroyStringImplAddress: 0,
-        backendDispatcherDispatchAddress: 0
+        backendDispatcherDispatchAddress: 0,
+        targetAgentDidCreateFrontendAndBackendAddress: 0,
+        frontendAttachmentStrategy: .controller
     )
+}
+
+private enum WITransportFrontendAttachmentStrategy: UInt8, Sendable {
+    case controller = 0
+    case frontendRouter = 1
 }
 
 private struct WITransportNativeInspectorSymbolResolution: Sendable {
@@ -124,6 +134,7 @@ private struct WITransportNativeInspectorResolvedSymbols {
     let stringImplToNSString: WITransportResolvedAddress
     let destroyStringImpl: WITransportResolvedAddress
     let backendDispatcherDispatch: WITransportResolvedAddress
+    let targetAgentDidCreateFrontendAndBackend: WITransportResolvedAddress
 }
 
 private enum WITransportNativeInspectorResolver {
@@ -140,14 +151,22 @@ private enum WITransportNativeInspectorResolver {
     private static let sharedCacheFileSuffix = WITransportNativeInspectorObfuscation.deobfuscate([".symbols"])
     private static let arm64eArchitecture = WITransportNativeInspectorObfuscation.deobfuscate(["arm64e"])
     private static let arm64Architecture = WITransportNativeInspectorObfuscation.deobfuscate(["arm64"])
+    #if os(iOS)
+    fileprivate static let connectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["nnelE", "ntendCha", "NS_15Fro", "ontendER", "onnectFr", "outer15c", "rontendR", "ector14F", "_ZN9Insp"])
+    fileprivate static let disconnectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["ChannelE", "Frontend", "dERNS_15", "tFronten", "isconnec", "outer18d", "rontendR", "ector14F", "_ZN9Insp"])
+    private static let frontendAttachmentStrategy: WITransportFrontendAttachmentStrategy = .frontendRouter
+    #else
     fileprivate static let connectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["annelEbb", "ontendCh", "ctor15Fr", "RN9Inspe", "rontendE", "connectF", "roller15", "ctorCont", "ageInspe", "it26WebP", "_ZN6WebK", "_"])
     fileprivate static let disconnectFrontendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["ChannelE", "Frontend", "pector15", "dERN9Ins", "tFronten", "isconnec", "oller18d", "torContr", "geInspec", "t26WebPa", "ZN6WebKi", "__"])
+    private static let frontendAttachmentStrategy: WITransportFrontendAttachmentStrategy = .controller
+    #endif
     private static let successLogFormat = WITransportNativeInspectorObfuscation.deobfuscate(["se=%@", "d=%@ pha", "d backen", " resolve", " symbols", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
     private static let failureLogFormat = WITransportNativeInspectorObfuscation.deobfuscate(["%@", " reason=", "ckend=%@", "ailed ba", "lookup f", " symbol ", "nspector", "native i", "nsport] ", "ectorTra", "[WebInsp"])
     private static let stringFromUTF8Symbol = WITransportNativeInspectorObfuscation.deobfuscate(["51615EEE", "40737095", "m1844674", "panIKDuL", "St3__14s", "omUTF8EN", "tring8fr", "ZN3WTF6S", "__"])
     private static let stringImplToNSStringSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["StringEv", "plcvP8NS", "StringIm", "ZN3WTF10", "__"])
     private static let destroyStringImplSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["royEPS0_", "mpl7dest", "0StringI", "_ZN3WTF1", "_"])
     private static let backendDispatcherDispatchSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["6StringE", "ERKN3WTF", "dispatch", "patcher8", "ckendDis", "ctor17Ba", "ZN9Inspe", "__"])
+    private static let targetAgentDidCreateFrontendAndBackendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["Ev", "dBackend", "ontendAn", "CreateFr", "ent27did", "TargetAg", "nspector", "ector20I", "_ZN9Insp"])
 
     #if os(iOS)
     fileprivate static let backendKind: WITransportBackendKind = .iOSNativeInspector
@@ -231,14 +250,65 @@ private enum WITransportNativeInspectorResolver {
         }
 
         let loadedImageResults = WITransportNativeInspectorResolvedSymbols(
-            connectFrontend: resolveLoadedImageSymbol(named: symbols.connectFrontend, in: image, text: text),
-            disconnectFrontend: resolveLoadedImageSymbol(named: symbols.disconnectFrontend, in: image, text: text),
+            connectFrontend: preferredResolvedAddress(
+                resolveLoadedImageSymbol(
+                    named: symbols.connectFrontend,
+                    in: preferredConnectDisconnectLoadedImage(
+                        webKitImage: image,
+                        javaScriptCoreImage: javaScriptCoreImage
+                    ),
+                    text: preferredConnectDisconnectTextSegment(
+                        webKitText: text,
+                        javaScriptCoreText: javaScriptCoreText
+                    )
+                ),
+                fallback: resolveLoadedImageSymbol(
+                    named: symbols.connectFrontend,
+                    in: fallbackConnectDisconnectLoadedImage(
+                        webKitImage: image,
+                        javaScriptCoreImage: javaScriptCoreImage
+                    ),
+                    text: fallbackConnectDisconnectTextSegment(
+                        webKitText: text,
+                        javaScriptCoreText: javaScriptCoreText
+                    )
+                )
+            ),
+            disconnectFrontend: preferredResolvedAddress(
+                resolveLoadedImageSymbol(
+                    named: symbols.disconnectFrontend,
+                    in: preferredConnectDisconnectLoadedImage(
+                        webKitImage: image,
+                        javaScriptCoreImage: javaScriptCoreImage
+                    ),
+                    text: preferredConnectDisconnectTextSegment(
+                        webKitText: text,
+                        javaScriptCoreText: javaScriptCoreText
+                    )
+                ),
+                fallback: resolveLoadedImageSymbol(
+                    named: symbols.disconnectFrontend,
+                    in: fallbackConnectDisconnectLoadedImage(
+                        webKitImage: image,
+                        javaScriptCoreImage: javaScriptCoreImage
+                    ),
+                    text: fallbackConnectDisconnectTextSegment(
+                        webKitText: text,
+                        javaScriptCoreText: javaScriptCoreText
+                    )
+                )
+            ),
             stringFromUTF8: resolveLoadedImageSymbol(named: symbols.stringFromUTF8, in: javaScriptCoreImage, text: javaScriptCoreText),
             stringImplToNSString: resolveLoadedImageSymbol(named: symbols.stringImplToNSString, in: javaScriptCoreImage, text: javaScriptCoreText),
             destroyStringImpl: resolveLoadedImageSymbol(named: symbols.destroyStringImpl, in: javaScriptCoreImage, text: javaScriptCoreText),
             backendDispatcherDispatch: preferredResolvedAddress(
                 resolveLoadedImageSymbol(named: symbols.backendDispatcherDispatch, in: image, text: text),
                 fallback: resolveLoadedImageSymbol(named: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
+            ),
+            targetAgentDidCreateFrontendAndBackend: resolveLoadedImageSymbol(
+                named: targetAgentDidCreateFrontendAndBackendSymbol,
+                in: javaScriptCoreImage,
+                text: javaScriptCoreText
             )
         )
         if let resolution = finalizeResolution(
@@ -316,21 +386,77 @@ private enum WITransportNativeInspectorResolver {
                    javaScriptCoreUpperBound >= javaScriptCoreLowerBound,
                    javaScriptCoreUpperBound <= symbols64.count {
                     let resolvedSymbols = WITransportNativeInspectorResolvedSymbols(
-                        connectFrontend: resolveSharedCacheSymbol(
-                            named: symbols.connectFrontend,
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
+                        connectFrontend: preferredResolvedAddress(
+                            resolveSharedCacheSymbol(
+                                named: symbols.connectFrontend,
+                                symbols: symbols64,
+                                symbolRange: preferredConnectDisconnectSymbolRange(
+                                    webKitSymbolRange: lowerBound ..< upperBound,
+                                    javaScriptCoreSymbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound
+                                ),
+                                textVMAddress: preferredConnectDisconnectTextVMAddress(
+                                    webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                                    javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                                ),
+                                textRange: preferredConnectDisconnectTextRange(
+                                    webKitTextRange: textRange,
+                                    javaScriptCoreTextRange: javaScriptCoreTextRange
+                                ),
+                                slide: UInt64(slide)
+                            ),
+                            fallback: resolveSharedCacheSymbol(
+                                named: symbols.connectFrontend,
+                                symbols: symbols64,
+                                symbolRange: fallbackConnectDisconnectSymbolRange(
+                                    webKitSymbolRange: lowerBound ..< upperBound,
+                                    javaScriptCoreSymbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound
+                                ),
+                                textVMAddress: fallbackConnectDisconnectTextVMAddress(
+                                    webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                                    javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                                ),
+                                textRange: fallbackConnectDisconnectTextRange(
+                                    webKitTextRange: textRange,
+                                    javaScriptCoreTextRange: javaScriptCoreTextRange
+                                ),
+                                slide: UInt64(slide)
+                            )
                         ),
-                        disconnectFrontend: resolveSharedCacheSymbol(
-                            named: symbols.disconnectFrontend,
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
+                        disconnectFrontend: preferredResolvedAddress(
+                            resolveSharedCacheSymbol(
+                                named: symbols.disconnectFrontend,
+                                symbols: symbols64,
+                                symbolRange: preferredConnectDisconnectSymbolRange(
+                                    webKitSymbolRange: lowerBound ..< upperBound,
+                                    javaScriptCoreSymbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound
+                                ),
+                                textVMAddress: preferredConnectDisconnectTextVMAddress(
+                                    webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                                    javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                                ),
+                                textRange: preferredConnectDisconnectTextRange(
+                                    webKitTextRange: textRange,
+                                    javaScriptCoreTextRange: javaScriptCoreTextRange
+                                ),
+                                slide: UInt64(slide)
+                            ),
+                            fallback: resolveSharedCacheSymbol(
+                                named: symbols.disconnectFrontend,
+                                symbols: symbols64,
+                                symbolRange: fallbackConnectDisconnectSymbolRange(
+                                    webKitSymbolRange: lowerBound ..< upperBound,
+                                    javaScriptCoreSymbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound
+                                ),
+                                textVMAddress: fallbackConnectDisconnectTextVMAddress(
+                                    webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                                    javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                                ),
+                                textRange: fallbackConnectDisconnectTextRange(
+                                    webKitTextRange: textRange,
+                                    javaScriptCoreTextRange: javaScriptCoreTextRange
+                                ),
+                                slide: UInt64(slide)
+                            )
                         ),
                         stringFromUTF8: resolveSharedCacheSymbol(
                             named: symbols.stringFromUTF8,
@@ -373,6 +499,14 @@ private enum WITransportNativeInspectorResolver {
                                 textRange: javaScriptCoreTextRange,
                                 slide: UInt64(slide)
                             )
+                        ),
+                        targetAgentDidCreateFrontendAndBackend: resolveSharedCacheSymbol(
+                            named: targetAgentDidCreateFrontendAndBackendSymbol,
+                            symbols: symbols64,
+                            symbolRange: javaScriptCoreLowerBound ..< javaScriptCoreUpperBound,
+                            textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                            textRange: javaScriptCoreTextRange,
+                            slide: UInt64(slide)
                         )
                     )
                     lastResolvedSymbols = resolvedSymbols
@@ -398,21 +532,89 @@ private enum WITransportNativeInspectorResolver {
                 dylibOffset: javaScriptCoreDylibOffset
             )
             let resolvedSymbols = WITransportNativeInspectorResolvedSymbols(
-                connectFrontend: resolveSharedCacheSymbol(
-                    named: symbols.connectFrontend,
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
+                connectFrontend: preferredResolvedAddress(
+                    resolveSharedCacheSymbol(
+                        named: symbols.connectFrontend,
+                        symbols: preferredConnectDisconnectFileBackedSymbols(
+                            webKitSymbols: fileBackedSymbols.symbols,
+                            javaScriptCoreSymbols: javaScriptCoreFileBackedSymbols.symbols
+                        ),
+                        symbolRange: preferredConnectDisconnectFileBackedSymbolRange(
+                            webKitSymbolRange: fileBackedSymbols.symbolRange,
+                            javaScriptCoreSymbolRange: javaScriptCoreFileBackedSymbols.symbolRange
+                        ),
+                        textVMAddress: preferredConnectDisconnectTextVMAddress(
+                            webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                            javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                        ),
+                        textRange: preferredConnectDisconnectTextRange(
+                            webKitTextRange: textRange,
+                            javaScriptCoreTextRange: javaScriptCoreTextRange
+                        ),
+                        slide: UInt64(slide)
+                    ),
+                    fallback: resolveSharedCacheSymbol(
+                        named: symbols.connectFrontend,
+                        symbols: fallbackConnectDisconnectFileBackedSymbols(
+                            webKitSymbols: fileBackedSymbols.symbols,
+                            javaScriptCoreSymbols: javaScriptCoreFileBackedSymbols.symbols
+                        ),
+                        symbolRange: fallbackConnectDisconnectFileBackedSymbolRange(
+                            webKitSymbolRange: fileBackedSymbols.symbolRange,
+                            javaScriptCoreSymbolRange: javaScriptCoreFileBackedSymbols.symbolRange
+                        ),
+                        textVMAddress: fallbackConnectDisconnectTextVMAddress(
+                            webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                            javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                        ),
+                        textRange: fallbackConnectDisconnectTextRange(
+                            webKitTextRange: textRange,
+                            javaScriptCoreTextRange: javaScriptCoreTextRange
+                        ),
+                        slide: UInt64(slide)
+                    )
                 ),
-                disconnectFrontend: resolveSharedCacheSymbol(
-                    named: symbols.disconnectFrontend,
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
+                disconnectFrontend: preferredResolvedAddress(
+                    resolveSharedCacheSymbol(
+                        named: symbols.disconnectFrontend,
+                        symbols: preferredConnectDisconnectFileBackedSymbols(
+                            webKitSymbols: fileBackedSymbols.symbols,
+                            javaScriptCoreSymbols: javaScriptCoreFileBackedSymbols.symbols
+                        ),
+                        symbolRange: preferredConnectDisconnectFileBackedSymbolRange(
+                            webKitSymbolRange: fileBackedSymbols.symbolRange,
+                            javaScriptCoreSymbolRange: javaScriptCoreFileBackedSymbols.symbolRange
+                        ),
+                        textVMAddress: preferredConnectDisconnectTextVMAddress(
+                            webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                            javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                        ),
+                        textRange: preferredConnectDisconnectTextRange(
+                            webKitTextRange: textRange,
+                            javaScriptCoreTextRange: javaScriptCoreTextRange
+                        ),
+                        slide: UInt64(slide)
+                    ),
+                    fallback: resolveSharedCacheSymbol(
+                        named: symbols.disconnectFrontend,
+                        symbols: fallbackConnectDisconnectFileBackedSymbols(
+                            webKitSymbols: fileBackedSymbols.symbols,
+                            javaScriptCoreSymbols: javaScriptCoreFileBackedSymbols.symbols
+                        ),
+                        symbolRange: fallbackConnectDisconnectFileBackedSymbolRange(
+                            webKitSymbolRange: fileBackedSymbols.symbolRange,
+                            javaScriptCoreSymbolRange: javaScriptCoreFileBackedSymbols.symbolRange
+                        ),
+                        textVMAddress: fallbackConnectDisconnectTextVMAddress(
+                            webKitTextVMAddress: UInt64(text.virtualMemoryAddress),
+                            javaScriptCoreTextVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress)
+                        ),
+                        textRange: fallbackConnectDisconnectTextRange(
+                            webKitTextRange: textRange,
+                            javaScriptCoreTextRange: javaScriptCoreTextRange
+                        ),
+                        slide: UInt64(slide)
+                    )
                 ),
                 stringFromUTF8: resolveSharedCacheSymbol(
                     named: symbols.stringFromUTF8,
@@ -455,6 +657,14 @@ private enum WITransportNativeInspectorResolver {
                         textRange: javaScriptCoreTextRange,
                         slide: UInt64(slide)
                     )
+                ),
+                targetAgentDidCreateFrontendAndBackend: resolveSharedCacheSymbol(
+                    named: targetAgentDidCreateFrontendAndBackendSymbol,
+                    symbols: javaScriptCoreFileBackedSymbols.symbols,
+                    symbolRange: javaScriptCoreFileBackedSymbols.symbolRange,
+                    textVMAddress: UInt64(javaScriptCoreText.virtualMemoryAddress),
+                    textRange: javaScriptCoreTextRange,
+                    slide: UInt64(slide)
                 )
             )
             lastResolvedSymbols = resolvedSymbols
@@ -514,6 +724,170 @@ private enum WITransportNativeInspectorResolver {
         }
     }
 
+    private static func preferredConnectDisconnectLoadedImage(
+        webKitImage: MachOImage,
+        javaScriptCoreImage: MachOImage
+    ) -> MachOImage {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitImage
+        case .frontendRouter:
+            return javaScriptCoreImage
+        }
+    }
+
+    private static func fallbackConnectDisconnectLoadedImage(
+        webKitImage: MachOImage,
+        javaScriptCoreImage: MachOImage
+    ) -> MachOImage {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreImage
+        case .frontendRouter:
+            return webKitImage
+        }
+    }
+
+    private static func preferredConnectDisconnectTextSegment(
+        webKitText: SegmentCommand64,
+        javaScriptCoreText: SegmentCommand64
+    ) -> SegmentCommand64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitText
+        case .frontendRouter:
+            return javaScriptCoreText
+        }
+    }
+
+    private static func fallbackConnectDisconnectTextSegment(
+        webKitText: SegmentCommand64,
+        javaScriptCoreText: SegmentCommand64
+    ) -> SegmentCommand64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreText
+        case .frontendRouter:
+            return webKitText
+        }
+    }
+
+    private static func preferredConnectDisconnectSymbolRange(
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbolRange: Range<Int>
+    ) -> Range<Int> {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitSymbolRange
+        case .frontendRouter:
+            return javaScriptCoreSymbolRange
+        }
+    }
+
+    private static func fallbackConnectDisconnectSymbolRange(
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbolRange: Range<Int>
+    ) -> Range<Int> {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreSymbolRange
+        case .frontendRouter:
+            return webKitSymbolRange
+        }
+    }
+
+    private static func preferredConnectDisconnectTextVMAddress(
+        webKitTextVMAddress: UInt64,
+        javaScriptCoreTextVMAddress: UInt64
+    ) -> UInt64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitTextVMAddress
+        case .frontendRouter:
+            return javaScriptCoreTextVMAddress
+        }
+    }
+
+    private static func fallbackConnectDisconnectTextVMAddress(
+        webKitTextVMAddress: UInt64,
+        javaScriptCoreTextVMAddress: UInt64
+    ) -> UInt64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreTextVMAddress
+        case .frontendRouter:
+            return webKitTextVMAddress
+        }
+    }
+
+    private static func preferredConnectDisconnectTextRange(
+        webKitTextRange: Range<UInt64>,
+        javaScriptCoreTextRange: Range<UInt64>
+    ) -> Range<UInt64> {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitTextRange
+        case .frontendRouter:
+            return javaScriptCoreTextRange
+        }
+    }
+
+    private static func fallbackConnectDisconnectTextRange(
+        webKitTextRange: Range<UInt64>,
+        javaScriptCoreTextRange: Range<UInt64>
+    ) -> Range<UInt64> {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreTextRange
+        case .frontendRouter:
+            return webKitTextRange
+        }
+    }
+
+    private static func preferredConnectDisconnectFileBackedSymbols(
+        webKitSymbols: MachOFile.Symbols64,
+        javaScriptCoreSymbols: MachOFile.Symbols64
+    ) -> MachOFile.Symbols64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return webKitSymbols
+        case .frontendRouter:
+            return javaScriptCoreSymbols
+        }
+    }
+
+    private static func fallbackConnectDisconnectFileBackedSymbols(
+        webKitSymbols: MachOFile.Symbols64,
+        javaScriptCoreSymbols: MachOFile.Symbols64
+    ) -> MachOFile.Symbols64 {
+        switch frontendAttachmentStrategy {
+        case .controller:
+            return javaScriptCoreSymbols
+        case .frontendRouter:
+            return webKitSymbols
+        }
+    }
+
+    private static func preferredConnectDisconnectFileBackedSymbolRange(
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbolRange: Range<Int>
+    ) -> Range<Int> {
+        preferredConnectDisconnectSymbolRange(
+            webKitSymbolRange: webKitSymbolRange,
+            javaScriptCoreSymbolRange: javaScriptCoreSymbolRange
+        )
+    }
+
+    private static func fallbackConnectDisconnectFileBackedSymbolRange(
+        webKitSymbolRange: Range<Int>,
+        javaScriptCoreSymbolRange: Range<Int>
+    ) -> Range<Int> {
+        fallbackConnectDisconnectSymbolRange(
+            webKitSymbolRange: webKitSymbolRange,
+            javaScriptCoreSymbolRange: javaScriptCoreSymbolRange
+        )
+    }
+
     private static func resolvedFunctionAddresses(
         from resolvedSymbols: WITransportNativeInspectorResolvedSymbols
     ) -> WITransportResolvedFunctionAddresses? {
@@ -528,13 +902,26 @@ private enum WITransportNativeInspectorResolver {
             return nil
         }
 
+        let targetAgentDidCreateFrontendAndBackendAddress: UInt64
+        switch frontendAttachmentStrategy {
+        case .controller:
+            targetAgentDidCreateFrontendAndBackendAddress = 0
+        case .frontendRouter:
+            guard case let .found(address) = resolvedSymbols.targetAgentDidCreateFrontendAndBackend else {
+                return nil
+            }
+            targetAgentDidCreateFrontendAndBackendAddress = address
+        }
+
         return WITransportResolvedFunctionAddresses(
             connectFrontendAddress: connectAddress,
             disconnectFrontendAddress: disconnectAddress,
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
             destroyStringImplAddress: destroyStringImplAddress,
-            backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
+            backendDispatcherDispatchAddress: backendDispatcherDispatchAddress,
+            targetAgentDidCreateFrontendAndBackendAddress: targetAgentDidCreateFrontendAndBackendAddress,
+            frontendAttachmentStrategy: frontendAttachmentStrategy
         )
     }
 
@@ -565,6 +952,7 @@ private enum WITransportNativeInspectorResolver {
             resolvedSymbols.stringImplToNSString,
             resolvedSymbols.destroyStringImpl,
             resolvedSymbols.backendDispatcherDispatch,
+            resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
         ]
 
         for result in allResults {
@@ -573,13 +961,22 @@ private enum WITransportNativeInspectorResolver {
             }
         }
 
+        let connectDisconnectExpectedHeaders: [UInt]
+        switch frontendAttachmentStrategy {
+        case .controller:
+            connectDisconnectExpectedHeaders = [webKitHeaderAddress]
+        case .frontendRouter:
+            connectDisconnectExpectedHeaders = [javaScriptCoreHeaderAddress]
+        }
+
         let expectedHeadersBySymbol: [(WITransportResolvedAddress, [UInt])] = [
-            (resolvedSymbols.connectFrontend, [webKitHeaderAddress]),
-            (resolvedSymbols.disconnectFrontend, [webKitHeaderAddress]),
+            (resolvedSymbols.connectFrontend, connectDisconnectExpectedHeaders),
+            (resolvedSymbols.disconnectFrontend, connectDisconnectExpectedHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.targetAgentDidCreateFrontendAndBackend, [javaScriptCoreHeaderAddress]),
         ]
         for (result, expectedHeaders) in expectedHeadersBySymbol {
             guard case let .found(address) = result else {
@@ -607,6 +1004,7 @@ private enum WITransportNativeInspectorResolver {
             resolvedSymbols.stringImplToNSString,
             resolvedSymbols.destroyStringImpl,
             resolvedSymbols.backendDispatcherDispatch,
+            resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
         ].reduce(into: 0) { count, result in
             if case .missing = result {
                 count += 1
@@ -787,15 +1185,41 @@ private enum WITransportNativeInspectorResolver {
         text: SegmentCommand64
     ) -> WITransportResolvedAddress {
         guard let symbol = image.symbol(named: symbolName, mangled: true, inSection: 0, isGlobalOnly: false) else {
-            return .missing
+            return resolveDynamicSymbol(named: symbolName, in: image, text: text)
         }
         guard symbol.offset >= 0 else {
-            return .missing
+            return resolveDynamicSymbol(named: symbolName, in: image, text: text)
         }
 
         let offset = UInt64(symbol.offset)
         let address = unsafe UInt64(UInt(bitPattern: image.ptr)) + offset
         guard offset < UInt64(text.virtualMemorySize) else {
+            return .outsideText(address)
+        }
+
+        return .found(address)
+    }
+
+    private static func resolveDynamicSymbol(
+        named symbolName: String,
+        in image: MachOImage,
+        text: SegmentCommand64
+    ) -> WITransportResolvedAddress {
+        guard let symbolPointer = unsafe symbolName.withCString({ rawName in
+            unsafe dlsym(UnsafeMutableRawPointer(bitPattern: -2), rawName)
+        }) else {
+            return .missing
+        }
+
+        let address = UInt64(UInt(bitPattern: symbolPointer))
+        let expectedHeaderAddress = unsafe UInt(bitPattern: image.ptr)
+        guard resolvedAddress(address, belongsToAnyOf: [expectedHeaderAddress]) else {
+            return .missing
+        }
+
+        let textStart = UInt64(expectedHeaderAddress)
+        let textRange = textStart ..< textStart + UInt64(text.virtualMemorySize)
+        guard textRange.contains(address) else {
             return .outsideText(address)
         }
 
@@ -906,6 +1330,8 @@ struct WITransportAttachSymbolResolution: Sendable {
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
     let backendDispatcherDispatchAddress: UInt64
+    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
+    let frontendAttachmentStrategy: UInt8
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
@@ -997,6 +1423,8 @@ enum WITransportNativeInspectorSymbolResolver {
             stringImplToNSStringAddress: resolution.functionAddresses.stringImplToNSStringAddress,
             destroyStringImplAddress: resolution.functionAddresses.destroyStringImplAddress,
             backendDispatcherDispatchAddress: resolution.functionAddresses.backendDispatcherDispatchAddress,
+            targetAgentDidCreateFrontendAndBackendAddress: resolution.functionAddresses.targetAgentDidCreateFrontendAndBackendAddress,
+            frontendAttachmentStrategy: resolution.functionAddresses.frontendAttachmentStrategy.rawValue,
             failureReason: resolution.failureReason
         )
     }
@@ -1012,6 +1440,8 @@ struct WITransportAttachSymbolResolution: Sendable {
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
     let backendDispatcherDispatchAddress: UInt64
+    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
+    let frontendAttachmentStrategy: UInt8
     let failureReason: String?
 
     var supportSnapshot: WITransportSupportSnapshot {
@@ -1031,6 +1461,8 @@ enum WITransportNativeInspectorSymbolResolver {
             stringImplToNSStringAddress: 0,
             destroyStringImplAddress: 0,
             backendDispatcherDispatchAddress: 0,
+            targetAgentDidCreateFrontendAndBackendAddress: 0,
+            frontendAttachmentStrategy: WITransportFrontendAttachmentStrategy.controller.rawValue,
             failureReason: "WebInspectorTransport is only available on iOS and macOS."
         )
     }

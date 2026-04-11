@@ -7,6 +7,7 @@
 #import <mach/mach.h>
 #import <algorithm>
 #import <atomic>
+#import <dlfcn.h>
 #import <memory>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -17,6 +18,14 @@ namespace WITransportBridgePrivate {
 
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
 using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
+using RouterConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
+using RouterDisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
+using TargetAgentDidCreateFrontendAndBackendFn = void (*)(void *);
+
+enum FrontendAttachmentStrategy : uint8_t {
+    FrontendAttachmentStrategyController = 0,
+    FrontendAttachmentStrategyFrontendRouter = 1,
+};
 
 static constexpr ptrdiff_t invalidControllerOffset = -1;
 static constexpr ptrdiff_t webPageInspectorControllerOffset = 0x4C0;
@@ -24,6 +33,8 @@ static constexpr size_t frontendRouterStorageIndex = 0;
 static constexpr size_t backendDispatcherStorageIndex = 1;
 static constexpr ptrdiff_t preferredControllerSearchRadius = 0x100;
 static constexpr size_t fallbackControllerScanBytes = 0x1000;
+static constexpr size_t targetAgentSearchBytes = 0x180;
+static constexpr size_t targetAgentCandidateScanBytes = 0x100;
 static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset };
 
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
@@ -67,17 +78,24 @@ static WITransportResolvedFunctions emptyResolvedFunctions()
         .stringImplToNSStringAddress = 0,
         .destroyStringImplAddress = 0,
         .backendDispatcherDispatchAddress = 0,
+        .targetAgentDidCreateFrontendAndBackendAddress = 0,
+        .frontendAttachmentStrategy = FrontendAttachmentStrategyController,
     };
 }
 
 static BOOL resolvedFunctionsAreComplete(WITransportResolvedFunctions resolvedFunctions)
 {
-    return resolvedFunctions.connectFrontendAddress
+    BOOL hasCoreFunctions = resolvedFunctions.connectFrontendAddress
         && resolvedFunctions.disconnectFrontendAddress
         && resolvedFunctions.stringFromUTF8Address
         && resolvedFunctions.stringImplToNSStringAddress
         && resolvedFunctions.destroyStringImplAddress
         && resolvedFunctions.backendDispatcherDispatchAddress;
+    if (!hasCoreFunctions)
+        return NO;
+    if (resolvedFunctions.frontendAttachmentStrategy == FrontendAttachmentStrategyFrontendRouter)
+        return resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress;
+    return YES;
 }
 
 static NSString *missingResolvedFunctionNames(WITransportResolvedFunctions resolvedFunctions)
@@ -95,6 +113,8 @@ static NSString *missingResolvedFunctionNames(WITransportResolvedFunctions resol
         [names addObject:@"destroyStringImpl"];
     if (!resolvedFunctions.backendDispatcherDispatchAddress)
         [names addObject:@"backendDispatcherDispatch"];
+    if (resolvedFunctions.frontendAttachmentStrategy == FrontendAttachmentStrategyFrontendRouter && !resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress)
+        [names addObject:@"targetAgentDidCreateFrontendAndBackend"];
     return [names componentsJoinedByString:@","];
 }
 
@@ -132,6 +152,7 @@ struct ControllerResolutionStats {
 
 struct ControllerResolutionResult {
     void *controller { nullptr };
+    void *frontendRouter { nullptr };
     void *backendDispatcher { nullptr };
     ControllerResolutionStats stats;
 };
@@ -178,6 +199,34 @@ static BOOL pointerIsWritableMapped(const void *pointer)
 
     vm_prot_t requiredProtection = VM_PROT_READ | VM_PROT_WRITE;
     return (info.protection & requiredProtection) == requiredProtection;
+}
+
+static BOOL pointerIsReadableMapped(const void *pointer)
+{
+    if (!pointer)
+        return NO;
+
+    vm_address_t regionAddress = trunc_page(static_cast<vm_address_t>(reinterpret_cast<uintptr_t>(pointer)));
+    vm_size_t regionSize = 0;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info;
+    mach_msg_type_number_t infoCount = VM_REGION_SUBMAP_INFO_COUNT_64;
+    kern_return_t result = vm_region_recurse_64(
+        mach_task_self(),
+        &regionAddress,
+        &regionSize,
+        &depth,
+        reinterpret_cast<vm_region_recurse_info_t>(&info),
+        &infoCount
+    );
+    if (result != KERN_SUCCESS)
+        return NO;
+
+    vm_address_t pointerAddress = static_cast<vm_address_t>(reinterpret_cast<uintptr_t>(pointer));
+    if (pointerAddress < regionAddress || pointerAddress >= regionAddress + regionSize)
+        return NO;
+
+    return (info.protection & VM_PROT_READ) == VM_PROT_READ;
 }
 
 static ptrdiff_t ivarOffset(Class cls, const char *name)
@@ -236,7 +285,7 @@ static BOOL backendDispatcherPointer(void *controller, void **backendDispatcherO
     return safeReadPointer(slot, backendDispatcherOut) && *backendDispatcherOut;
 }
 
-static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void **controllerOut, void **backendDispatcherOut)
+static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void **controllerOut, void **frontendRouterOut, void **backendDispatcherOut)
 {
     if (!pageProxy)
         return NO;
@@ -258,8 +307,82 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
 
     if (controllerOut)
         *controllerOut = controller;
+    if (frontendRouterOut)
+        *frontendRouterOut = frontendRouter;
     if (backendDispatcherOut)
         *backendDispatcherOut = backendDispatcher;
+    return YES;
+}
+
+static BOOL objectReferencesPointerWithinBytes(void *object, void *needle, size_t byteCount)
+{
+    if (!object || !needle)
+        return NO;
+    if (!pointerIsReadableMapped(object))
+        return NO;
+
+    size_t scanByteCount = std::min(byteCount, malloc_size(object));
+    if (!scanByteCount)
+        scanByteCount = byteCount;
+
+    for (size_t rawOffset = 0; rawOffset + sizeof(void *) <= scanByteCount; rawOffset += sizeof(void *)) {
+        void *value = nullptr;
+        if (!safeReadPointer(reinterpret_cast<uint8_t *>(object) + rawOffset, &value))
+            continue;
+        if (value == needle)
+            return YES;
+    }
+    return NO;
+}
+
+static BOOL objectVTableBelongsToJavaScriptCore(void *object)
+{
+    if (!object)
+        return NO;
+
+    void *vtable = nullptr;
+    if (!safeReadPointer(object, &vtable) || !vtable)
+        return NO;
+
+    Dl_info info;
+    if (!dladdr(vtable, &info) || !info.dli_fname)
+        return NO;
+
+    NSString *imagePath = [NSString stringWithUTF8String:info.dli_fname];
+    return [imagePath containsString:@"JavaScriptCore.framework"];
+}
+
+static BOOL targetAgentPointer(void *controller, void *frontendRouter, void *backendDispatcher, void **targetAgentOut)
+{
+    (void)backendDispatcher;
+    if (!controller || !frontendRouter || !targetAgentOut)
+        return NO;
+
+    size_t scanByteCount = std::min(targetAgentSearchBytes, malloc_size(controller));
+    if (!scanByteCount)
+        scanByteCount = targetAgentSearchBytes;
+
+    void *uniqueCandidate = nullptr;
+    for (size_t rawOffset = 0; rawOffset + sizeof(void *) <= scanByteCount; rawOffset += sizeof(void *)) {
+        void *candidate = nullptr;
+        if (!safeReadPointer(reinterpret_cast<uint8_t *>(controller) + rawOffset, &candidate))
+            continue;
+        if (!candidate || candidate == frontendRouter || candidate == backendDispatcher || candidate == controller)
+            continue;
+        if (!pointerIsReadableMapped(candidate))
+            continue;
+        if (!objectVTableBelongsToJavaScriptCore(candidate))
+            continue;
+        if (!objectReferencesPointerWithinBytes(candidate, frontendRouter, targetAgentCandidateScanBytes))
+            continue;
+        if (uniqueCandidate && uniqueCandidate != candidate)
+            return NO;
+        uniqueCandidate = candidate;
+    }
+
+    if (!uniqueCandidate)
+        return NO;
+    *targetAgentOut = uniqueCandidate;
     return YES;
 }
 
@@ -309,7 +432,7 @@ static ControllerResolutionResult resolveControllerInPageProxy(
 
     if (preferredCachedOffset != invalidControllerOffset) {
         result.stats.attemptedOffsetCount = 1;
-        if (controllerCandidateAtOffset(pageProxy, preferredCachedOffset, &result.controller, &result.backendDispatcher)) {
+        if (controllerCandidateAtOffset(pageProxy, preferredCachedOffset, &result.controller, &result.frontendRouter, &result.backendDispatcher)) {
             result.stats.validCandidateCount = 1;
             result.stats.resolvedOffset = preferredCachedOffset;
             return result;
@@ -322,21 +445,24 @@ static ControllerResolutionResult resolveControllerInPageProxy(
         appendUniqueCandidateOffset(preferredOffsets, webPageInspectorControllerOffset + delta, scanByteCount);
 
     void *uniqueController = nullptr;
+    void *uniqueFrontendRouter = nullptr;
     void *uniqueBackendDispatcher = nullptr;
     ptrdiff_t uniqueOffset = invalidControllerOffset;
 
-    auto registerCandidate = [&](ptrdiff_t offset, void *controller, void *backendDispatcher) {
+    auto registerCandidate = [&](ptrdiff_t offset, void *controller, void *frontendRouter, void *backendDispatcher) {
         result.stats.validCandidateCount += 1;
         result.stats.candidateOffsets.push_back(offset);
         if (result.stats.validCandidateCount == 1) {
             uniqueOffset = offset;
             uniqueController = controller;
+            uniqueFrontendRouter = frontendRouter;
             uniqueBackendDispatcher = backendDispatcher;
             return;
         }
 
         uniqueOffset = invalidControllerOffset;
         uniqueController = nullptr;
+        uniqueFrontendRouter = nullptr;
         uniqueBackendDispatcher = nullptr;
     };
 
@@ -344,11 +470,12 @@ static ControllerResolutionResult resolveControllerInPageProxy(
         result.stats.attemptedOffsetCount += 1;
 
         void *candidateController = nullptr;
+        void *candidateFrontendRouter = nullptr;
         void *candidateBackendDispatcher = nullptr;
-        if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateBackendDispatcher))
+        if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateFrontendRouter, &candidateBackendDispatcher))
             continue;
 
-        registerCandidate(offset, candidateController, candidateBackendDispatcher);
+        registerCandidate(offset, candidateController, candidateFrontendRouter, candidateBackendDispatcher);
     }
 
     if (result.stats.validCandidateCount != 1) {
@@ -360,16 +487,18 @@ static ControllerResolutionResult resolveControllerInPageProxy(
             result.stats.attemptedOffsetCount += 1;
 
             void *candidateController = nullptr;
+            void *candidateFrontendRouter = nullptr;
             void *candidateBackendDispatcher = nullptr;
-            if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateBackendDispatcher))
+            if (!controllerCandidateAtOffset(pageProxy, offset, &candidateController, &candidateFrontendRouter, &candidateBackendDispatcher))
                 continue;
 
-            registerCandidate(offset, candidateController, candidateBackendDispatcher);
+            registerCandidate(offset, candidateController, candidateFrontendRouter, candidateBackendDispatcher);
         }
     }
 
     if (result.stats.validCandidateCount == 1) {
         result.controller = uniqueController;
+        result.frontendRouter = uniqueFrontendRouter;
         result.backendDispatcher = uniqueBackendDispatcher;
         result.stats.resolvedOffset = uniqueOffset;
     }
@@ -456,7 +585,9 @@ static NSError *selectorFailureError(
     id inspectorObject,
     void *pageProxy,
     void *controller,
+    void *frontendRouter,
     void *backendDispatcher,
+    void *targetAgent,
     const ControllerResolutionStats& controllerResolutionStats
 )
 {
@@ -471,8 +602,16 @@ static NSError *selectorFailureError(
         return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageProxy from WKWebView.", diagnostics);
     if (!controller)
         return makeError(ErrorCodeAttachFailed, @"Unable to resolve WebPageInspectorController from WebPageProxy.", diagnostics);
+    if (!frontendRouter)
+        return makeError(ErrorCodeAttachFailed, @"Unable to resolve Inspector::FrontendRouter from WebPageInspectorController.", diagnostics);
     if (!backendDispatcher)
         return makeError(ErrorCodeAttachFailed, @"Unable to resolve Inspector::BackendDispatcher from WebPageInspectorController.", diagnostics);
+    if (!targetAgent)
+        return makeError(
+            ErrorCodeAttachFailed,
+            @"Unable to resolve Inspector::InspectorTargetAgent from WebPageInspectorController.",
+            diagnostics
+        );
     return makeError(
         ErrorCodeAttachFailed,
         @"Required private selectors or inspector controller state were unavailable.",
@@ -529,9 +668,10 @@ private:
     __weak WKWebView *_webView;
     id _inspector;
     void *_controller;
+    void *_frontendRouter;
     void *_backendDispatcher;
+    void *_targetAgent;
     ptrdiff_t _controllerOffset;
-    WITransportBridgePrivate::DisconnectFrontendFn _disconnectFrontend;
     WITransportResolvedFunctions _resolvedFunctions;
     std::unique_ptr<WITransportFrontendChannel> _frontendChannel;
     BOOL _frontendAttached;
@@ -568,18 +708,25 @@ private:
         return NO;
 
     auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(page, _controllerOffset);
-    return resolution.controller == _controller && resolution.backendDispatcher == _backendDispatcher;
+    if (resolution.controller != _controller || resolution.backendDispatcher != _backendDispatcher)
+        return NO;
+
+    if (_resolvedFunctions.frontendAttachmentStrategy == WITransportBridgePrivate::FrontendAttachmentStrategyFrontendRouter)
+        return resolution.frontendRouter == _frontendRouter;
+
+    return YES;
 }
 
 - (void)invalidateAttachmentState
 {
     _frontendAttached = NO;
     _frontendChannel.reset();
-    _disconnectFrontend = nullptr;
     _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     _inspector = nil;
     _controller = nullptr;
+    _frontendRouter = nullptr;
     _backendDispatcher = nullptr;
+    _targetAgent = nullptr;
     _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
 }
 
@@ -616,11 +763,6 @@ private:
         return NO;
     }
 
-    using ConnectFrontendFn = WITransportBridgePrivate::ConnectFrontendFn;
-    using DisconnectFrontendFn = WITransportBridgePrivate::DisconnectFrontendFn;
-
-    auto *connectFrontend = reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
-    _disconnectFrontend = reinterpret_cast<DisconnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.disconnectFrontendAddress));
     _resolvedFunctions = resolvedFunctions;
 
     _inspector = WITransportBridgePrivate::invokeObjectGetter(self.webView, @"_inspector");
@@ -631,10 +773,15 @@ private:
 
     auto resolution = WITransportBridgePrivate::resolveControllerInPageProxy(page, preferredCachedOffset);
     void *controller = resolution.controller;
+    void *frontendRouter = resolution.frontendRouter;
     void *backendDispatcher = resolution.backendDispatcher;
+    void *targetAgent = nullptr;
+    BOOL didResolveTargetAgent = WITransportBridgePrivate::targetAgentPointer(controller, frontendRouter, backendDispatcher, &targetAgent);
 
     _controller = controller;
+    _frontendRouter = frontendRouter;
     _backendDispatcher = backendDispatcher;
+    _targetAgent = targetAgent;
     _controllerOffset = resolution.stats.resolvedOffset;
     if (_controllerOffset != WITransportBridgePrivate::invalidControllerOffset)
         WITransportBridgePrivate::cachedControllerOffset.store(_controllerOffset);
@@ -645,14 +792,16 @@ private:
     BOOL requiresInspectorConnection = YES;
 #endif
 
-    if ((requiresInspectorConnection && !_inspector) || !_controller || !_backendDispatcher) {
+    if ((requiresInspectorConnection && !_inspector) || !_controller || !_backendDispatcher || !frontendRouter || (resolvedFunctions.frontendAttachmentStrategy == WITransportBridgePrivate::FrontendAttachmentStrategyFrontendRouter && !didResolveTargetAgent)) {
         NSString *diagnostics = WITransportBridgePrivate::controllerResolutionDiagnosticsString(resolution.stats);
         NSLog(@"[WebInspectorTransport] controller resolution failed %@", diagnostics);
         NSError *transportError = WITransportBridgePrivate::selectorFailureError(
             _inspector,
             page,
             controller,
+            frontendRouter,
             backendDispatcher,
+            targetAgent,
             resolution.stats
         );
         if (error)
@@ -680,7 +829,15 @@ private:
 #endif
 
     _frontendChannel = std::make_unique<WITransportFrontendChannel>(self, resolvedFunctions.stringImplToNSStringAddress);
-    connectFrontend(_controller, *_frontendChannel, false, false);
+    if (resolvedFunctions.frontendAttachmentStrategy == WITransportBridgePrivate::FrontendAttachmentStrategyFrontendRouter) {
+        auto *connectFrontend = reinterpret_cast<WITransportBridgePrivate::RouterConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
+        connectFrontend(_frontendRouter, *_frontendChannel);
+        auto *replayExistingTargets = reinterpret_cast<WITransportBridgePrivate::TargetAgentDidCreateFrontendAndBackendFn>(static_cast<uintptr_t>(resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress));
+        replayExistingTargets(_targetAgent);
+    } else {
+        auto *connectFrontend = reinterpret_cast<WITransportBridgePrivate::ConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
+        connectFrontend(_controller, *_frontendChannel, false, false);
+    }
     _frontendAttached = YES;
     return YES;
 }
@@ -803,12 +960,19 @@ private:
 - (void)detach
 {
     BOOL canDisconnectFrontend = NO;
-    if (_frontendAttached && _frontendChannel && _controller && _disconnectFrontend) {
+    if (_frontendAttached && _frontendChannel && _controller && _resolvedFunctions.disconnectFrontendAddress) {
         canDisconnectFrontend = [self attachedControllerIsStillValid];
     }
 
-    if (canDisconnectFrontend)
-        _disconnectFrontend(_controller, *_frontendChannel);
+    if (canDisconnectFrontend) {
+        if (_resolvedFunctions.frontendAttachmentStrategy == WITransportBridgePrivate::FrontendAttachmentStrategyFrontendRouter) {
+            auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::RouterDisconnectFrontendFn>(static_cast<uintptr_t>(_resolvedFunctions.disconnectFrontendAddress));
+            disconnectFrontend(_frontendRouter, *_frontendChannel);
+        } else {
+            auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_resolvedFunctions.disconnectFrontendAddress));
+            disconnectFrontend(_controller, *_frontendChannel);
+        }
+    }
 
     [self invalidateAttachmentState];
 }

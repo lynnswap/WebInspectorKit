@@ -225,7 +225,9 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
                 stringFromUTF8Address: resolution.stringFromUTF8Address,
                 stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
                 destroyStringImplAddress: resolution.destroyStringImplAddress,
-                backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress
+                backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress,
+                targetAgentDidCreateFrontendAndBackendAddress: resolution.targetAgentDidCreateFrontendAndBackendAddress,
+                frontendAttachmentStrategy: resolution.frontendAttachmentStrategy
             )
             try bridge.attach(
                 with: resolvedFunctions

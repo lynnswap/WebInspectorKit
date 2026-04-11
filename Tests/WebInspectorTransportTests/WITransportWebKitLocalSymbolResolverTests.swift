@@ -40,6 +40,16 @@ struct WITransportNativeInspectorSymbolResolverTests {
     }
 
     @Test
+    func resolveCurrentWebKitAttachSymbolsUsesExpectedAttachmentStrategy() {
+        let resolution = WITransportNativeInspectorSymbolResolver.currentAttachResolution()
+        #if os(iOS)
+        #expect(resolution.frontendAttachmentStrategy == 1)
+        #elseif os(macOS)
+        #expect(resolution.frontendAttachmentStrategy == 0)
+        #endif
+    }
+
+    @Test
     func resolveForTestingReportsFailureReasonForMissingSymbol() {
         let resolution = WITransportNativeInspectorSymbolResolver.resolveForTesting(
             stringFromUTF8Symbol: "__ZN3WTF6String27definitelyMissingFromUTF8FooEv"
