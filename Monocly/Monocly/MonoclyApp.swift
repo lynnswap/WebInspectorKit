@@ -14,29 +14,16 @@ struct BrowserInspectorSceneDestructionRequester {
 }
 
 struct MonoclyLegacySceneRecoveryEnvironment {
-    var connectedWindowScenes: @MainActor () -> [UIWindowScene]
     var openSessions: @MainActor () -> [UISceneSession]
     var destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
-    var requestFreshMainScene: @MainActor () -> Void
 
     static let live = MonoclyLegacySceneRecoveryEnvironment(
-        connectedWindowScenes: {
-            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        },
         openSessions: {
             Array(UIApplication.shared.openSessions)
         },
         destroySceneSession: { sceneSession in
             UIApplication.shared.requestSceneSessionDestruction(
                 sceneSession,
-                options: nil,
-                errorHandler: nil
-            )
-        },
-        requestFreshMainScene: {
-            UIApplication.shared.requestSceneSessionActivation(
-                nil,
-                userActivity: nil,
                 options: nil,
                 errorHandler: nil
             )
@@ -118,7 +105,6 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     static let mainSceneConfigurationName = "Monocly Main"
     static let inspectorSceneConfigurationName = "Monocly Inspector"
     private var didRecoverLegacySceneState = false
-    private var didScheduleLegacySceneRecovery = false
     private var legacySceneRecoveryEnvironment = MonoclyLegacySceneRecoveryEnvironment.live
 
     func application(
@@ -134,11 +120,8 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        _ = application
         _ = launchOptions
-        guard application.supportsMultipleScenes == false else {
-            return true
-        }
-        scheduleLegacySceneRecoveryIfNeeded()
         return true
     }
 
@@ -233,96 +216,34 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         didRecoverLegacySceneState = value
     }
 
-    func scheduleLegacySceneRecoveryIfNeededForTesting() {
-        scheduleLegacySceneRecoveryIfNeeded()
+    func handleLegacySceneRecoveryAfterMainSceneConnectedForTesting(_ windowScene: UIWindowScene) {
+        handleLegacySceneRecoveryAfterMainSceneConnected(windowScene)
     }
 }
 
 extension MonoclyAppDelegate {
-    static func hasUsableMainWindowScene(_ scenes: [UIWindowScene]) -> Bool {
-        preferredUsableMainWindowSceneSessionIdentifier(scenes) != nil
-    }
-
-    static func preferredUsableMainWindowSceneSessionIdentifier(_ scenes: [UIWindowScene]) -> String? {
-        scenes.first(where: { scene in
-            scene.windows.contains { window in
-                window.isHidden == false && window.rootViewController is BrowserRootViewController
-            }
-        })?.session.persistentIdentifier
-    }
-
     static func staleRecoveredSessionIdentifiers(
         openSessionIdentifiers: [String],
-        preferredMainSessionIdentifier: String?
+        connectedMainSessionIdentifier: String
     ) -> Set<String> {
-        if let preferredMainSessionIdentifier {
-            return Set(
-                openSessionIdentifiers.filter { $0 != preferredMainSessionIdentifier }
-            )
-        }
-        return Set(openSessionIdentifiers)
+        Set(openSessionIdentifiers.filter { $0 != connectedMainSessionIdentifier })
     }
 }
 
 private extension MonoclyAppDelegate {
-    func scheduleLegacySceneRecoveryIfNeeded() {
-        guard didRecoverLegacySceneState,
-              didScheduleLegacySceneRecovery == false else {
-            return
-        }
-        didScheduleLegacySceneRecovery = true
-        scheduleLegacySceneRecoveryCheck(remainingDeferrals: 2)
-    }
-
-    func scheduleLegacySceneRecoveryCheck(remainingDeferrals: Int) {
-        DispatchQueue.main.async { [weak self] in
-            self?.performLegacySceneRecoveryCheck(remainingDeferrals: remainingDeferrals)
-        }
-    }
-
-    func performLegacySceneRecoveryCheck(remainingDeferrals: Int) {
+    func handleLegacySceneRecoveryAfterMainSceneConnected(_ windowScene: UIWindowScene) {
         guard didRecoverLegacySceneState else {
             return
         }
 
-        let connectedWindowScenes = legacySceneRecoveryEnvironment.connectedWindowScenes()
-        let openSessions = legacySceneRecoveryEnvironment.openSessions()
-        let preferredMainSessionIdentifier = Self.preferredUsableMainWindowSceneSessionIdentifier(connectedWindowScenes)
         let staleSessionIdentifiers = Self.staleRecoveredSessionIdentifiers(
-            openSessionIdentifiers: openSessions.map(\.persistentIdentifier),
-            preferredMainSessionIdentifier: preferredMainSessionIdentifier
+            openSessionIdentifiers: legacySceneRecoveryEnvironment.openSessions().map(\.persistentIdentifier),
+            connectedMainSessionIdentifier: windowScene.session.persistentIdentifier
         )
-
-        if preferredMainSessionIdentifier != nil {
-            openSessions
-                .filter { staleSessionIdentifiers.contains($0.persistentIdentifier) }
-                .forEach { legacySceneRecoveryEnvironment.destroySceneSession($0) }
-            didRecoverLegacySceneState = false
-            return
-        }
-        guard remainingDeferrals == 0 else {
-            scheduleLegacySceneRecoveryCheck(remainingDeferrals: remainingDeferrals - 1)
-            return
-        }
-
-        openSessions
+        legacySceneRecoveryEnvironment.openSessions()
             .filter { staleSessionIdentifiers.contains($0.persistentIdentifier) }
-            .forEach {
-                legacySceneRecoveryEnvironment.destroySceneSession($0)
-            }
-        let destroyedAllRecoveredSessions = staleSessionIdentifiers.isEmpty == false
-        let shouldRequestFreshMainScene = destroyedAllRecoveredSessions
-            || Self.hasUsableMainWindowScene(legacySceneRecoveryEnvironment.connectedWindowScenes()) == false
-        DispatchQueue.main.async { [weak self] in
-            guard let self else {
-                return
-            }
-            if shouldRequestFreshMainScene,
-               Self.hasUsableMainWindowScene(self.legacySceneRecoveryEnvironment.connectedWindowScenes()) == false {
-                self.legacySceneRecoveryEnvironment.requestFreshMainScene()
-            }
-            self.didRecoverLegacySceneState = false
-        }
+            .forEach { legacySceneRecoveryEnvironment.destroySceneSession($0) }
+        didRecoverLegacySceneState = false
     }
 }
 
@@ -386,6 +307,8 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         self.rootViewController = rootViewController
         MonoclyWindowContextStore.shared.registerConnectedScene(windowScene)
         window.makeKeyAndVisible()
+        (UIApplication.shared.delegate as? MonoclyAppDelegate)?
+            .handleLegacySceneRecoveryAfterMainSceneConnected(windowScene)
 
         if windowScene.activationState == .foregroundActive {
             MonoclyWindowContextStore.shared.sceneDidBecomeActive(windowScene)

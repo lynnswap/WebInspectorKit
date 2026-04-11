@@ -200,77 +200,31 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testLegacySceneRecoveryDestroysOpenSessionsAndRequestsFreshMainScene() throws {
-        let sceneSession = try makeWindowScene().session
+    func testLegacySceneRecoveryLeavesConnectedMainSessionAlive() throws {
+        let windowScene = try makeWindowScene()
         let delegate = MonoclyAppDelegate()
         var destroyedSceneSessions: [UISceneSession] = []
-        var activationCount = 0
 
         delegate.setLegacySceneRecoveryEnvironmentForTesting(
             MonoclyLegacySceneRecoveryEnvironment(
-                connectedWindowScenes: { [] },
-                openSessions: { [sceneSession] },
-                destroySceneSession: { destroyedSceneSessions.append($0) },
-                requestFreshMainScene: { activationCount += 1 }
+                openSessions: { [windowScene.session] },
+                destroySceneSession: { destroyedSceneSessions.append($0) }
             )
         )
         delegate.setDidRecoverLegacySceneStateForTesting(true)
-        delegate.scheduleLegacySceneRecoveryIfNeededForTesting()
-        drainMainQueue()
-        drainMainQueue()
-        drainMainQueue()
-        drainMainQueue()
+        delegate.handleLegacySceneRecoveryAfterMainSceneConnectedForTesting(windowScene)
 
-        XCTAssertEqual(
-            destroyedSceneSessions.map(\.persistentIdentifier),
-            [sceneSession.persistentIdentifier]
-        )
-        XCTAssertEqual(activationCount, 1)
+        XCTAssertTrue(destroyedSceneSessions.isEmpty)
     }
 
     @MainActor
-    func testLegacySceneRecoveryComputesStaleSessionIdentifiersWhenMainSceneExists() {
+    func testLegacySceneRecoveryComputesStaleSessionIdentifiers() {
         let staleSessionIdentifiers = MonoclyAppDelegate.staleRecoveredSessionIdentifiers(
             openSessionIdentifiers: ["main-session", "stale-session-a", "stale-session-b"],
-            preferredMainSessionIdentifier: "main-session"
+            connectedMainSessionIdentifier: "main-session"
         )
 
         XCTAssertEqual(staleSessionIdentifiers, ["stale-session-a", "stale-session-b"])
-    }
-
-    @MainActor
-    func testLegacySceneRecoveryComputesEverySessionAsStaleWithoutMainScene() {
-        let staleSessionIdentifiers = MonoclyAppDelegate.staleRecoveredSessionIdentifiers(
-            openSessionIdentifiers: ["session-a", "session-b"],
-            preferredMainSessionIdentifier: nil
-        )
-
-        XCTAssertEqual(staleSessionIdentifiers, ["session-a", "session-b"])
-    }
-
-    @MainActor
-    func testLegacySceneRecoverySkipsResetWhenUsableMainSceneExists() throws {
-        let fixture = try makeHostedRootViewController()
-        let delegate = MonoclyAppDelegate()
-        var destroyedSceneSessions: [UISceneSession] = []
-        var activationCount = 0
-
-        delegate.setLegacySceneRecoveryEnvironmentForTesting(
-            MonoclyLegacySceneRecoveryEnvironment(
-                connectedWindowScenes: { [fixture.windowScene] },
-                openSessions: { [fixture.windowScene.session] },
-                destroySceneSession: { destroyedSceneSessions.append($0) },
-                requestFreshMainScene: { activationCount += 1 }
-            )
-        )
-        delegate.setDidRecoverLegacySceneStateForTesting(true)
-        delegate.scheduleLegacySceneRecoveryIfNeededForTesting()
-        drainMainQueue()
-        drainMainQueue()
-        drainMainQueue()
-
-        XCTAssertTrue(destroyedSceneSessions.isEmpty)
-        XCTAssertEqual(activationCount, 0)
     }
 
     @MainActor
