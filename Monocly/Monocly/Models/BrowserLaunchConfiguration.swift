@@ -2,6 +2,8 @@ import Foundation
 import WebInspectorKit
 
 struct BrowserLaunchConfiguration {
+    static let defaultInspectorTabs: [WITab] = [.dom(), .network(), .console()]
+
     let initialURL: URL
     let autoOpenInspectorTabs: [WITab]
     let shouldAutoOpenInspector: Bool
@@ -10,7 +12,7 @@ struct BrowserLaunchConfiguration {
 
     init(
         initialURL: URL,
-        autoOpenInspectorTabs: [WITab] = [.dom(), .network()],
+        autoOpenInspectorTabs: [WITab] = BrowserLaunchConfiguration.defaultInspectorTabs,
         shouldAutoOpenInspector: Bool = false,
         shouldAutoStartDOMSelection: Bool = false,
         shouldShowDiagnostics: Bool = false
@@ -55,7 +57,7 @@ struct BrowserLaunchConfiguration {
 
     private static func resolveAutoOpenInspectorTabs(from environment: [String: String]) -> [WITab] {
         guard let rawValue = environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR_TABS"] else {
-            return [.dom(), .network()]
+            return defaultInspectorTabs
         }
 
         let requested = rawValue
@@ -69,11 +71,13 @@ struct BrowserLaunchConfiguration {
                 tabs.append(.dom())
             case "network":
                 tabs.append(.network())
+            case "console":
+                tabs.append(.console())
             default:
                 continue
             }
         }
 
-        return tabs.isEmpty ? [.dom(), .network()] : tabs
+        return tabs.isEmpty ? defaultInspectorTabs : tabs
     }
 }

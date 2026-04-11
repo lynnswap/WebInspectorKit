@@ -262,7 +262,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        tabs: [WITab] = BrowserLaunchConfiguration.defaultInspectorTabs
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -296,7 +296,7 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        tabs: [WITab] = BrowserLaunchConfiguration.defaultInspectorTabs
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -577,7 +577,7 @@ final class BrowserInspectorCoordinator {
         from parentWindow: NSWindow?,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        tabs: [WITab] = BrowserLaunchConfiguration.defaultInspectorTabs
     ) -> Bool {
         let resolvedParentWindow = parentWindow ?? MonoclyWindowContextStore.shared.currentWindow
 

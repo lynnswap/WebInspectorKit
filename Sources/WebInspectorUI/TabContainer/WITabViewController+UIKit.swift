@@ -456,6 +456,8 @@ public final class WITabViewController: UIViewController {
                 viewController = WIDOMDetailViewController(inspector: inspectorController.dom)
             case WITab.networkTabID:
                 viewController = WINetworkViewController(inspector: inspectorController.network)
+            case WITab.consoleTabID:
+                viewController = WIConsoleViewController(inspector: inspectorController.console)
             default:
                 viewController = nil
             }

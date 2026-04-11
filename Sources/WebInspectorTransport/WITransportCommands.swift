@@ -21,6 +21,18 @@ package enum WITransportMethod {
         package static let getBootstrapSnapshot = "Network.getBootstrapSnapshot"
     }
 
+    package enum Console {
+        package static let enable = "Console.enable"
+        package static let clearMessages = "Console.clearMessages"
+        package static let setConsoleClearAPIEnabled = "Console.setConsoleClearAPIEnabled"
+    }
+
+    package enum Runtime {
+        package static let enable = "Runtime.enable"
+        package static let evaluate = "Runtime.evaluate"
+        package static let releaseObjectGroup = "Runtime.releaseObjectGroup"
+    }
+
     package enum DOM {
         package static let enable = "DOM.enable"
         package static let getDocument = "DOM.getDocument"

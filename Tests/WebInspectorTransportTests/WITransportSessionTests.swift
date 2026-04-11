@@ -78,6 +78,7 @@ struct WITransportSessionTests {
         #expect(session.supportSnapshot.backendKind == .macOSNativeInspector)
         #expect(session.supportSnapshot.capabilities.contains(.domDomain))
         #expect(session.supportSnapshot.capabilities.contains(.networkDomain))
+        #expect(session.supportSnapshot.capabilities.contains(.consoleDomain))
         #expect(session.supportSnapshot.failureReason == nil)
     }
 

@@ -40,9 +40,16 @@ public final class WIInspectorController {
         case detach
     }
 
+    private enum ConsolePlan {
+        case attach
+        case suspend
+        case detach
+    }
+
     private struct WIRuntimePlan {
         let dom: DOMPlan
         let network: NetworkPlan
+        let console: ConsolePlan
     }
 
     private struct WIRuntimeTarget: Equatable {
@@ -88,6 +95,7 @@ public final class WIInspectorController {
 
     public let dom: WIDOMInspector
     public let network: WINetworkModel
+    public let console: WIConsoleModel
 
     public private(set) var lastRecoverableError: String?
     public private(set) var tabs: [WITab] = []
@@ -117,9 +125,14 @@ public final class WIInspectorController {
             configuration: configuration.network,
             backend: networkBackend
         )
+        let consoleBackend = WIBackendFactory.makeConsoleBackend()
+        let consoleSession = ConsoleSession(
+            runtime: WIConsoleRuntime(backend: consoleBackend)
+        )
 
         dom = WIDOMInspector(session: domSession)
         network = WINetworkModel(session: networkSession)
+        console = WIConsoleModel(session: consoleSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in
             self?.setRecoverableError(message)
@@ -470,14 +483,14 @@ private extension WIInspectorController {
         case .suspended:
             if lifecycle == .active {
                 await apply(
-                    .init(dom: .suspend, network: .suspend),
+                    .init(dom: .suspend, network: .suspend, console: .suspend),
                     pageWebView: nil
                 )
             }
         case .disconnected:
             if lifecycle != .disconnected {
                 await apply(
-                    .init(dom: .detach, network: .detach),
+                    .init(dom: .detach, network: .detach, console: .detach),
                     pageWebView: nil
                 )
             }
@@ -573,12 +586,12 @@ private extension WIInspectorController {
     private func runtimePlan(for target: WIRuntimeTarget) -> WIRuntimePlan {
         switch target.lifecycle {
         case .disconnected:
-            return .init(dom: .detach, network: .detach)
+            return .init(dom: .detach, network: .detach, console: .detach)
         case .suspended:
-            return .init(dom: .suspend, network: .suspend)
+            return .init(dom: .suspend, network: .suspend, console: .suspend)
         case .active:
             guard target.primaryHostPageWebView != nil else {
-                return .init(dom: .suspend, network: .suspend)
+                return .init(dom: .suspend, network: .suspend, console: .suspend)
             }
             let tabState = resolvedTabState(for: target)
             return .init(
@@ -587,6 +600,9 @@ private extension WIInspectorController {
                     : .suspend,
                 network: tabState.networkEnabled
                     ? .attach(mode: tabState.networkMode)
+                    : .suspend,
+                console: tabState.consoleEnabled
+                    ? .attach
                     : .suspend
             )
         }
@@ -595,27 +611,29 @@ private extension WIInspectorController {
     private func resolvedTabState(for target: WIRuntimeTarget) -> (
         domEnabled: Bool,
         networkEnabled: Bool,
+        consoleEnabled: Bool,
         domAutoSnapshotEnabled: Bool,
         networkMode: NetworkLoggingMode
     ) {
         if target.tabs.isEmpty {
             guard target.hasExplicitTabsConfiguration == false else {
-                return (false, false, false, .stopped)
+                return (false, false, false, false, .stopped)
             }
-            return (true, true, true, .active)
+            return (true, true, false, true, .active)
         }
 
         let domEnabled = target.tabs.contains {
             $0.identifier == WITab.domTabID || $0.identifier == WITab.elementTabID
         }
         let networkEnabled = target.tabs.contains { $0.identifier == WITab.networkTabID }
+        let consoleEnabled = target.tabs.contains { $0.identifier == WITab.consoleTabID }
         let domAutoSnapshotEnabled = target.selectedTab?.identifier == WITab.domTabID
             || target.selectedTab?.identifier == WITab.elementTabID
         let networkMode: NetworkLoggingMode = target.selectedTab?.identifier == WITab.networkTabID
             ? .active
             : .buffering
 
-        return (domEnabled, networkEnabled, domAutoSnapshotEnabled, networkMode)
+        return (domEnabled, networkEnabled, consoleEnabled, domAutoSnapshotEnabled, networkMode)
     }
 
     private func apply(
@@ -634,6 +652,19 @@ private extension WIInspectorController {
             await network.suspend()
         case .detach:
             await network.detach()
+        }
+
+        switch plan.console {
+        case .attach:
+            if let pageWebView {
+                await console.attach(to: pageWebView)
+            } else {
+                await console.suspend()
+            }
+        case .suspend:
+            await console.suspend()
+        case .detach:
+            await console.detach()
         }
 
         switch plan.dom {

@@ -140,7 +140,7 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
             from: view.window,
             browserStore: store,
             inspectorController: inspectorController,
-            tabs: [.dom(), .network()]
+            tabs: BrowserLaunchConfiguration.defaultInspectorTabs
         )
     }
 

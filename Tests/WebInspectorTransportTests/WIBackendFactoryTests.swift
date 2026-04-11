@@ -27,4 +27,14 @@ struct WIBackendFactoryTests {
 
         #expect(String(describing: type(of: backend)) == "NetworkTransportDriver")
     }
+
+    @Test
+    func makeConsoleBackendUsesTransportDriverEvenWhenTransportIsUnsupported() {
+        let backend = WIBackendFactory.makeConsoleBackend(
+            supportSnapshot: .unsupported(reason: "test")
+        )
+
+        #expect(String(describing: type(of: backend)) == "ConsoleTransportDriver")
+        #expect(backend.support.isSupported == false)
+    }
 }
