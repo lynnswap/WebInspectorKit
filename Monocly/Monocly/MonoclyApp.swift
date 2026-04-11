@@ -125,9 +125,8 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = application
         _ = launchOptions
-        recoverLegacySceneStateIfNeeded()
+        recoverLegacySceneStateIfNeeded(supportsMultipleScenes: application.supportsMultipleScenes)
         return true
     }
 
@@ -135,8 +134,10 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        _ = application
         _ = launchOptions
+        guard application.supportsMultipleScenes == false else {
+            return true
+        }
         scheduleLegacySceneRecoveryIfNeeded()
         return true
     }
@@ -154,7 +155,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
                 options: options
             ),
             supportsMultipleScenes: application.supportsMultipleScenes,
-            forceMainSceneConfiguration: didRecoverLegacySceneState
+            forceMainSceneConfiguration: didRecoverLegacySceneState && application.supportsMultipleScenes == false
         )
     }
 
@@ -206,10 +207,12 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
 
     @discardableResult
     func recoverLegacySceneStateIfNeeded(
+        supportsMultipleScenes: Bool = UIApplication.shared.supportsMultipleScenes,
         fileManager: FileManager = .default,
         savedStateDirectoryURL: URL? = MonoclyLegacySceneStateRecovery.savedStateDirectoryURL()
     ) -> Bool {
-        guard didRecoverLegacySceneState == false,
+        guard supportsMultipleScenes == false,
+              didRecoverLegacySceneState == false,
               let savedStateDirectoryURL else {
             return false
         }

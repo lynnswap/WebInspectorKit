@@ -68,6 +68,32 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testAppDelegateSkipsLegacyRecoveryWhenMultipleScenesSupported() throws {
+        let savedStateDirectoryURL = try makeSavedStateFixture(
+            knownSceneSessionData: Data("SwiftUI.AppSceneDelegate".utf8),
+            userInfoData: Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            <key>com.apple.SwiftUI.sceneID</key>
+            <string>Monocly.ContentView-1</string>
+            </dict>
+            </plist>
+            """.utf8)
+        )
+        let delegate = MonoclyAppDelegate()
+
+        XCTAssertFalse(
+            delegate.recoverLegacySceneStateIfNeeded(
+                supportsMultipleScenes: true,
+                savedStateDirectoryURL: savedStateDirectoryURL
+            )
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: savedStateDirectoryURL.path))
+    }
+
+    @MainActor
     func testAppDelegateUsesInspectorSceneDelegateAndWindowSceneForInspectorActivity() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
