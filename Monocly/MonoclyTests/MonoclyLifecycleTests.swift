@@ -174,7 +174,7 @@ final class MonoclyLifecycleTests: XCTestCase {
             rootViewController.inspectorController.lifecycle == .suspended
         })
 
-        BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard([windowScene.session])
+        inspectorSceneDelegate.disconnect(windowScene: windowScene)
 
         XCTAssertTrue(waitForCondition {
             rootViewController.inspectorController.lifecycle == .disconnected

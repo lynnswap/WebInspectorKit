@@ -110,7 +110,8 @@ final class BrowserInspectorCoordinator {
             let previousState = presentationState
             sceneSessionsByIdentifier.removeValue(forKey: sceneSession.persistentIdentifier)
             pruneDisconnectedSceneSessions()
-            if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
+            if isPendingPresentation == false,
+               (restorableSceneSessionIdentifiers.isEmpty || hasReleaseHandlerForCurrentContext()) {
                 setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
@@ -186,6 +187,13 @@ final class BrowserInspectorCoordinator {
                 return
             }
             releaseHandler()
+        }
+
+        private func hasReleaseHandlerForCurrentContext() -> Bool {
+            guard let context else {
+                return false
+            }
+            return releaseHandlersByInspectorControllerID[ObjectIdentifier(context.inspectorController)] != nil
         }
 
         static func isPresentationActive(
