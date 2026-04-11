@@ -131,6 +131,37 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testInspectorSceneDisconnectKeepsContextUntilSessionIsDiscarded() throws {
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
+        let sceneDelegate = MonoclyInspectorSceneDelegate()
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { _, _, _, _ in }
+            )
+        )
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        sceneDelegate.connect(windowScene: fixture.windowScene)
+        sceneDelegate.disconnect(windowScene: fixture.windowScene)
+
+        XCTAssertTrue(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
+
+        BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard([fixture.windowScene.session])
+
+        XCTAssertFalse(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
+    }
+
+    @MainActor
     func testInspectorSceneDelegateDestroysOrphanedRestoredSessionWithoutContext() throws {
         let windowScene = try makeWindowScene()
         let sceneDelegate = MonoclyInspectorSceneDelegate()

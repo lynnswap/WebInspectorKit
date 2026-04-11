@@ -104,7 +104,7 @@ final class BrowserInspectorCoordinator {
             let previousState = presentationState
             sceneSessionsByIdentifier.removeValue(forKey: sceneSession.persistentIdentifier)
             pruneDisconnectedSceneSessions()
-            if sceneSessionsByIdentifier.isEmpty, isPendingPresentation == false {
+            if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
                 context = nil
             }
             notifyObserversIfNeeded(previousState: previousState)
