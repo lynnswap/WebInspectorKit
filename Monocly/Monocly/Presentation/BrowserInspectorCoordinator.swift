@@ -255,6 +255,7 @@ final class BrowserInspectorCoordinator {
     private weak var presentedSheetController: WITabViewController?
     private let sheetObserver = InspectorSheetObserver()
     private var sceneActivationRequester = BrowserInspectorSceneActivationRequester.live
+    private var supportsMultipleScenesProvider: @MainActor () -> Bool = { UIApplication.shared.supportsMultipleScenes }
 
     var onPresentationStateChange: (() -> Void)?
 
@@ -299,6 +300,9 @@ final class BrowserInspectorCoordinator {
         tabs: [WITab] = BrowserLaunchConfiguration.defaultInspectorTabs
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
+            return false
+        }
+        guard supportsMultipleScenesProvider() else {
             return false
         }
 
@@ -354,6 +358,10 @@ final class BrowserInspectorCoordinator {
 
     func setSceneActivationRequesterForTesting(_ requester: BrowserInspectorSceneActivationRequester) {
         sceneActivationRequester = requester
+    }
+
+    func setSupportsMultipleScenesProviderForTesting(_ provider: @escaping @MainActor () -> Bool) {
+        supportsMultipleScenesProvider = provider
     }
 
     var hasInspectorWindowForTesting: Bool {

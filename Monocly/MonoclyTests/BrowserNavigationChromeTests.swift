@@ -340,6 +340,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         var activationCount = 0
         var requestingScene: UIScene?
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         let windowScene = try XCTUnwrap(fixture.window.windowScene)
         MonoclyWindowContextStore.shared.setCurrentSceneForTesting(windowScene, window: fixture.window)
         addTeardownBlock {

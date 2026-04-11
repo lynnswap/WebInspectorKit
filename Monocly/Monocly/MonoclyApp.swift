@@ -13,36 +13,147 @@ struct BrowserInspectorSceneDestructionRequester {
     }
 }
 
+struct MonoclyLegacySceneRecoveryEnvironment {
+    var openSessions: @MainActor () -> [UISceneSession]
+    var destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
+
+    static let live = MonoclyLegacySceneRecoveryEnvironment(
+        openSessions: {
+            Array(UIApplication.shared.openSessions)
+        },
+        destroySceneSession: { sceneSession in
+            UIApplication.shared.requestSceneSessionDestruction(
+                sceneSession,
+                options: nil,
+                errorHandler: nil
+            )
+        }
+    )
+}
+
+enum MonoclyLegacySceneStateRecovery {
+    static let bundleIdentifier = "lynnpd.Monocly"
+    private static let legacyMarkers = [
+        Data("SwiftUI.AppSceneDelegate".utf8),
+        Data("com.apple.SwiftUI.sceneID".utf8)
+    ]
+
+    static func savedStateDirectoryURL(
+        fileManager: FileManager = .default,
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? MonoclyLegacySceneStateRecovery.bundleIdentifier,
+        libraryDirectoryURL: URL? = nil
+    ) -> URL? {
+        let resolvedLibraryDirectoryURL = libraryDirectoryURL
+            ?? fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
+        guard let resolvedLibraryDirectoryURL else {
+            return nil
+        }
+
+        return resolvedLibraryDirectoryURL
+            .appendingPathComponent("Saved Application State", isDirectory: true)
+            .appendingPathComponent("\(bundleIdentifier).savedState", isDirectory: true)
+    }
+
+    static func recoverIfNeeded(
+        savedStateDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) throws -> Bool {
+        guard fileManager.fileExists(atPath: savedStateDirectoryURL.path) else {
+            return false
+        }
+        guard containsLegacySwiftUISceneState(
+            savedStateDirectoryURL: savedStateDirectoryURL,
+            fileManager: fileManager
+        ) else {
+            return false
+        }
+
+        try fileManager.removeItem(at: savedStateDirectoryURL)
+        return true
+    }
+
+    static func containsLegacySwiftUISceneState(
+        savedStateDirectoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard let enumerator = fileManager.enumerator(
+            at: savedStateDirectoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey]),
+                  resourceValues.isRegularFile == true,
+                  let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+                continue
+            }
+            if legacyMarkers.contains(where: { data.range(of: $0) != nil }) {
+                return true
+            }
+        }
+
+        return false
+    }
+}
+
 @main
 @MainActor
 final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     static let mainSceneConfigurationName = "Monocly Main"
     static let inspectorSceneConfigurationName = "Monocly Inspector"
+    private var didRecoverLegacySceneState = false
+    private var legacySceneRecoveryEnvironment = MonoclyLegacySceneRecoveryEnvironment.live
+
+    func application(
+        _ application: UIApplication,
+        willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        _ = launchOptions
+        recoverLegacySceneStateIfNeeded(supportsMultipleScenes: application.supportsMultipleScenes)
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        _ = application
+        _ = launchOptions
+        return true
+    }
 
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
-        _ = application
         return Self.sceneConfiguration(
             for: connectingSceneSession.role,
             existingConfigurationName: connectingSceneSession.configuration.name,
             activityType: Self.sceneActivityType(
                 connectingSceneSession: connectingSceneSession,
                 options: options
-            )
+            ),
+            supportsMultipleScenes: application.supportsMultipleScenes,
+            forceMainSceneConfiguration: didRecoverLegacySceneState && application.supportsMultipleScenes == false
         )
     }
 
     static func sceneConfiguration(
         for role: UISceneSession.Role,
         existingConfigurationName: String? = nil,
-        activityType: String?
+        activityType: String?,
+        supportsMultipleScenes: Bool = UIApplication.shared.supportsMultipleScenes,
+        forceMainSceneConfiguration: Bool = false
     ) -> UISceneConfiguration {
         let configurationName: String?
         let delegateClass: AnyClass?
-        let shouldUseInspectorConfiguration = role == .windowApplication
+        let shouldUseInspectorConfiguration = forceMainSceneConfiguration == false
+            && supportsMultipleScenes
+            && role == .windowApplication
             && (
                 activityType == BrowserInspectorCoordinator.inspectorWindowSceneActivityType
                     || existingConfigurationName == inspectorSceneConfigurationName
@@ -57,6 +168,9 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         }
 
         let configuration = UISceneConfiguration(name: configurationName, sessionRole: role)
+        if role == .windowApplication {
+            configuration.sceneClass = UIWindowScene.self
+        }
         configuration.delegateClass = delegateClass
         return configuration
     }
@@ -72,6 +186,64 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
         _ = application
         BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard(sceneSessions)
+    }
+
+    @discardableResult
+    func recoverLegacySceneStateIfNeeded(
+        supportsMultipleScenes: Bool = UIApplication.shared.supportsMultipleScenes,
+        fileManager: FileManager = .default,
+        savedStateDirectoryURL: URL? = MonoclyLegacySceneStateRecovery.savedStateDirectoryURL()
+    ) -> Bool {
+        guard supportsMultipleScenes == false,
+              didRecoverLegacySceneState == false,
+              let savedStateDirectoryURL else {
+            return false
+        }
+
+        let didRecover = (try? MonoclyLegacySceneStateRecovery.recoverIfNeeded(
+            savedStateDirectoryURL: savedStateDirectoryURL,
+            fileManager: fileManager
+        )) ?? false
+        didRecoverLegacySceneState = didRecover
+        return didRecover
+    }
+
+    func setLegacySceneRecoveryEnvironmentForTesting(_ environment: MonoclyLegacySceneRecoveryEnvironment) {
+        legacySceneRecoveryEnvironment = environment
+    }
+
+    func setDidRecoverLegacySceneStateForTesting(_ value: Bool) {
+        didRecoverLegacySceneState = value
+    }
+
+    func handleLegacySceneRecoveryAfterMainSceneConnectedForTesting(_ windowScene: UIWindowScene) {
+        handleLegacySceneRecoveryAfterMainSceneConnected(windowScene)
+    }
+}
+
+extension MonoclyAppDelegate {
+    static func staleRecoveredSessionIdentifiers(
+        openSessionIdentifiers: [String],
+        connectedMainSessionIdentifier: String
+    ) -> Set<String> {
+        Set(openSessionIdentifiers.filter { $0 != connectedMainSessionIdentifier })
+    }
+}
+
+private extension MonoclyAppDelegate {
+    func handleLegacySceneRecoveryAfterMainSceneConnected(_ windowScene: UIWindowScene) {
+        guard didRecoverLegacySceneState else {
+            return
+        }
+
+        let staleSessionIdentifiers = Self.staleRecoveredSessionIdentifiers(
+            openSessionIdentifiers: legacySceneRecoveryEnvironment.openSessions().map(\.persistentIdentifier),
+            connectedMainSessionIdentifier: windowScene.session.persistentIdentifier
+        )
+        legacySceneRecoveryEnvironment.openSessions()
+            .filter { staleSessionIdentifiers.contains($0.persistentIdentifier) }
+            .forEach { legacySceneRecoveryEnvironment.destroySceneSession($0) }
+        didRecoverLegacySceneState = false
     }
 }
 
@@ -135,6 +307,8 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         self.rootViewController = rootViewController
         MonoclyWindowContextStore.shared.registerConnectedScene(windowScene)
         window.makeKeyAndVisible()
+        (UIApplication.shared.delegate as? MonoclyAppDelegate)?
+            .handleLegacySceneRecoveryAfterMainSceneConnected(windowScene)
 
         if windowScene.activationState == .foregroundActive {
             MonoclyWindowContextStore.shared.sceneDidBecomeActive(windowScene)
