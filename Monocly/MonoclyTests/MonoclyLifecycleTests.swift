@@ -28,36 +28,203 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testAppDelegateUsesInspectorSceneDelegateForInspectorActivity() {
+    func testLegacySceneStateRecoveryRemovesSavedStateWhenSwiftUIMarkersExist() throws {
+        let savedStateDirectoryURL = try makeSavedStateFixture(
+            knownSceneSessionData: Data("SwiftUI.AppSceneDelegate".utf8),
+            userInfoData: Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            <key>com.apple.SwiftUI.sceneID</key>
+            <string>Monocly.ContentView-1</string>
+            </dict>
+            </plist>
+            """.utf8)
+        )
+
+        XCTAssertTrue(try MonoclyLegacySceneStateRecovery.recoverIfNeeded(savedStateDirectoryURL: savedStateDirectoryURL))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: savedStateDirectoryURL.path))
+    }
+
+    @MainActor
+    func testLegacySceneStateRecoveryPreservesUIKitSavedState() throws {
+        let savedStateDirectoryURL = try makeSavedStateFixture(
+            knownSceneSessionData: Data("Monocly.MonoclyMainSceneDelegate".utf8),
+            userInfoData: Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+            <key>MonoclyScene</key>
+            <string>Main</string>
+            </dict>
+            </plist>
+            """.utf8)
+        )
+
+        XCTAssertFalse(try MonoclyLegacySceneStateRecovery.recoverIfNeeded(savedStateDirectoryURL: savedStateDirectoryURL))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: savedStateDirectoryURL.path))
+    }
+
+    @MainActor
+    func testAppDelegateUsesInspectorSceneDelegateAndWindowSceneForInspectorActivity() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: nil,
-            activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType
+            activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType,
+            supportsMultipleScenes: true
         )
 
+        XCTAssertEqual(configuration.name, MonoclyAppDelegate.inspectorSceneConfigurationName)
+        XCTAssertTrue(configuration.sceneClass === UIWindowScene.self)
         XCTAssertTrue(configuration.delegateClass === MonoclyInspectorSceneDelegate.self)
     }
 
     @MainActor
-    func testAppDelegateUsesMainSceneDelegateForRegularActivity() {
+    func testAppDelegateUsesMainSceneDelegateAndWindowSceneForRegularActivity() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: nil,
-            activityType: nil
+            activityType: nil,
+            supportsMultipleScenes: false
         )
 
+        XCTAssertEqual(configuration.name, MonoclyAppDelegate.mainSceneConfigurationName)
+        XCTAssertTrue(configuration.sceneClass === UIWindowScene.self)
         XCTAssertTrue(configuration.delegateClass === MonoclyMainSceneDelegate.self)
     }
 
     @MainActor
-    func testAppDelegateKeepsInspectorSceneDelegateForRestoredInspectorSession() {
+    func testAppDelegateKeepsInspectorSceneDelegateAndWindowSceneForRestoredInspectorSession() {
         let configuration = MonoclyAppDelegate.sceneConfiguration(
             for: .windowApplication,
             existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
-            activityType: nil
+            activityType: nil,
+            supportsMultipleScenes: true
         )
 
+        XCTAssertEqual(configuration.name, MonoclyAppDelegate.inspectorSceneConfigurationName)
+        XCTAssertTrue(configuration.sceneClass === UIWindowScene.self)
         XCTAssertTrue(configuration.delegateClass === MonoclyInspectorSceneDelegate.self)
+    }
+
+    @MainActor
+    func testAppDelegateFallsBackToMainSceneWhenMultipleScenesUnsupported() {
+        let inspectorActivityConfiguration = MonoclyAppDelegate.sceneConfiguration(
+            for: .windowApplication,
+            existingConfigurationName: nil,
+            activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType,
+            supportsMultipleScenes: false
+        )
+        let restoredInspectorConfiguration = MonoclyAppDelegate.sceneConfiguration(
+            for: .windowApplication,
+            existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
+            activityType: nil,
+            supportsMultipleScenes: false
+        )
+
+        for configuration in [inspectorActivityConfiguration, restoredInspectorConfiguration] {
+            XCTAssertEqual(configuration.name, MonoclyAppDelegate.mainSceneConfigurationName)
+            XCTAssertTrue(configuration.sceneClass === UIWindowScene.self)
+            XCTAssertTrue(configuration.delegateClass === MonoclyMainSceneDelegate.self)
+        }
+    }
+
+    @MainActor
+    func testAppDelegateForcesMainSceneDuringLegacyRecovery() {
+        let configuration = MonoclyAppDelegate.sceneConfiguration(
+            for: .windowApplication,
+            existingConfigurationName: MonoclyAppDelegate.inspectorSceneConfigurationName,
+            activityType: BrowserInspectorCoordinator.inspectorWindowSceneActivityType,
+            supportsMultipleScenes: true,
+            forceMainSceneConfiguration: true
+        )
+
+        XCTAssertEqual(configuration.name, MonoclyAppDelegate.mainSceneConfigurationName)
+        XCTAssertTrue(configuration.sceneClass === UIWindowScene.self)
+        XCTAssertTrue(configuration.delegateClass === MonoclyMainSceneDelegate.self)
+    }
+
+    @MainActor
+    func testPresentWindowFailsWithoutMultipleSceneSupport() throws {
+        let fixture = try makeHostedRootViewController()
+        let coordinator = BrowserInspectorCoordinator()
+        var activationCount = 0
+
+        coordinator.setSupportsMultipleScenesProviderForTesting { false }
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { _, _, _, _ in
+                    activationCount += 1
+                }
+            )
+        )
+
+        XCTAssertFalse(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+        XCTAssertEqual(activationCount, 0)
+        XCTAssertFalse(coordinator.hasInspectorWindowForTesting)
+    }
+
+    @MainActor
+    func testLegacySceneRecoveryDestroysOpenSessionsAndRequestsFreshMainScene() throws {
+        let sceneSession = try makeWindowScene().session
+        let delegate = MonoclyAppDelegate()
+        var destroyedSceneSessions: [UISceneSession] = []
+        var activationCount = 0
+
+        delegate.setLegacySceneRecoveryEnvironmentForTesting(
+            MonoclyLegacySceneRecoveryEnvironment(
+                connectedWindowScenes: { [] },
+                openSessions: { [sceneSession] },
+                destroySceneSession: { destroyedSceneSessions.append($0) },
+                requestFreshMainScene: { activationCount += 1 }
+            )
+        )
+        delegate.setDidRecoverLegacySceneStateForTesting(true)
+        delegate.scheduleLegacySceneRecoveryIfNeededForTesting()
+        drainMainQueue()
+        drainMainQueue()
+        drainMainQueue()
+        drainMainQueue()
+
+        XCTAssertEqual(
+            destroyedSceneSessions.map(\.persistentIdentifier),
+            [sceneSession.persistentIdentifier]
+        )
+        XCTAssertEqual(activationCount, 1)
+    }
+
+    @MainActor
+    func testLegacySceneRecoverySkipsResetWhenUsableMainSceneExists() throws {
+        let fixture = try makeHostedRootViewController()
+        let delegate = MonoclyAppDelegate()
+        var destroyedSceneSessions: [UISceneSession] = []
+        var activationCount = 0
+
+        delegate.setLegacySceneRecoveryEnvironmentForTesting(
+            MonoclyLegacySceneRecoveryEnvironment(
+                connectedWindowScenes: { [fixture.windowScene] },
+                openSessions: { [fixture.windowScene.session] },
+                destroySceneSession: { destroyedSceneSessions.append($0) },
+                requestFreshMainScene: { activationCount += 1 }
+            )
+        )
+        delegate.setDidRecoverLegacySceneStateForTesting(true)
+        delegate.scheduleLegacySceneRecoveryIfNeededForTesting()
+        drainMainQueue()
+        drainMainQueue()
+        drainMainQueue()
+
+        XCTAssertTrue(destroyedSceneSessions.isEmpty)
+        XCTAssertEqual(activationCount, 0)
     }
 
     @MainActor
@@ -140,6 +307,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { _, _, _, _ in }
@@ -189,6 +357,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         let windowScene = try makeWindowScene()
         let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { _, _, _, _ in }
@@ -229,6 +398,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         let coordinator = BrowserInspectorCoordinator()
         let sceneDelegate = MonoclyInspectorSceneDelegate()
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { _, _, _, _ in }
@@ -273,6 +443,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         var activatedSceneSession: UISceneSession?
         var destroyedSceneSession: UISceneSession?
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { sceneSession, _, _, _ in
@@ -372,6 +543,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         let coordinator = BrowserInspectorCoordinator()
         var activatedSceneSession: UISceneSession?
 
+        coordinator.setSupportsMultipleScenesProviderForTesting { true }
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
                 activateScene: { sceneSession, _, _, _ in
@@ -436,6 +608,35 @@ private extension MonoclyLifecycleTests {
             drainMainQueue()
         }
         return condition()
+    }
+
+    func makeSavedStateFixture(
+        knownSceneSessionData: Data,
+        userInfoData: Data,
+        sceneData: Data = Data("SceneState".utf8)
+    ) throws -> URL {
+        let rootDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MonoclySavedState-\(UUID().uuidString)", isDirectory: true)
+        let savedStateDirectoryURL = rootDirectoryURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Saved Application State", isDirectory: true)
+            .appendingPathComponent("lynnpd.Monocly.savedState", isDirectory: true)
+        let sceneDirectoryURL = savedStateDirectoryURL
+            .appendingPathComponent("3D56A58A-9EA8-4124-B116-56125EBB0D46", isDirectory: true)
+        let knownSceneSessionsDirectoryURL = savedStateDirectoryURL
+            .appendingPathComponent("KnownSceneSessions", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: sceneDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: knownSceneSessionsDirectoryURL, withIntermediateDirectories: true)
+        try knownSceneSessionData.write(to: knownSceneSessionsDirectoryURL.appendingPathComponent("data.data"))
+        try userInfoData.write(to: sceneDirectoryURL.appendingPathComponent("userInfo.data"))
+        try sceneData.write(to: sceneDirectoryURL.appendingPathComponent("data.data"))
+
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: rootDirectoryURL)
+        }
+
+        return savedStateDirectoryURL
     }
 }
 #elseif os(macOS)
