@@ -267,7 +267,7 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         _ = sender
         _ = flag
-        guard mainWindowController.window?.isVisible != true else {
+        guard hasVisibleBrowserWindow == false else {
             return false
         }
         showMainWindow(nil)
@@ -287,6 +287,11 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
         windowController.showWindow(sender)
         windowController.window?.orderFrontRegardless()
         windowController.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private var hasVisibleBrowserWindow: Bool {
+        mainWindowController.window?.isVisible == true
+            || additionalWindowControllers.contains { $0.window?.isVisible == true }
     }
 
     private func installRetainedInspectorSessionCleanup(for windowController: NSWindowController) {

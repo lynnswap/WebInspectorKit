@@ -302,6 +302,11 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertEqual(controllers[1].showWindowCallCount, 1)
         retainedWindows.append(try XCTUnwrap(controllers[0].window))
         retainedWindows.append(try XCTUnwrap(controllers[1].window))
+
+        controllers[0].window?.orderOut(nil)
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true))
+        XCTAssertEqual(controllers[0].showWindowCallCount, 1)
+        XCTAssertEqual(controllers[1].showWindowCallCount, 1)
     }
 
     @MainActor
