@@ -89,6 +89,55 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testMainSceneDelegatePreservesInspectorSessionWhileInspectorSceneIsConnected() throws {
+        let mainSceneDelegate = MonoclyMainSceneDelegate()
+        let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()
+        let coordinator = BrowserInspectorCoordinator()
+        let windowScene = try makeWindowScene()
+        let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { _, _, _, _ in }
+            )
+        )
+
+        mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+
+        let mainWindow = try XCTUnwrap(mainSceneDelegate.window)
+        retainedWindows.append(mainWindow)
+        let rootViewController = try XCTUnwrap(mainSceneDelegate.rootViewController)
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: rootViewController,
+                browserStore: rootViewController.store,
+                inspectorController: rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        inspectorSceneDelegate.connect(windowScene: windowScene)
+
+        let inspectorWindow = try XCTUnwrap(inspectorSceneDelegate.window)
+        retainedWindows.append(inspectorWindow)
+
+        mainSceneDelegate.disconnect(windowScene: windowScene)
+
+        XCTAssertNil(mainSceneDelegate.window)
+        XCTAssertNil(mainSceneDelegate.rootViewController)
+        XCTAssertTrue(waitForCondition {
+            rootViewController.inspectorController.lifecycle == .suspended
+        })
+
+        BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard([windowScene.session])
+
+        XCTAssertTrue(waitForCondition {
+            rootViewController.inspectorController.lifecycle == .disconnected
+        })
+    }
+
+    @MainActor
     func testInspectorSceneDelegateAttachesAndDetachesInspectorWindowSession() throws {
         let fixture = try makeHostedRootViewController()
         let coordinator = BrowserInspectorCoordinator()

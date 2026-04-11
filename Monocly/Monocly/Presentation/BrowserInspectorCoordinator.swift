@@ -62,6 +62,7 @@ final class BrowserInspectorCoordinator {
         private var restorableSceneSessionIdentifiers: Set<String> = []
         private var isPendingPresentation = false
         private var observers: [UUID: (Bool) -> Void] = [:]
+        private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
 
         var currentContext: BrowserInspectorWindowContext? {
             context
@@ -82,7 +83,12 @@ final class BrowserInspectorCoordinator {
         }
 
         func setContext(_ context: BrowserInspectorWindowContext?) {
+            let previousInspectorControllerID = self.context.map { ObjectIdentifier($0.inspectorController) }
+            let nextInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
             self.context = context
+            if previousInspectorControllerID != nextInspectorControllerID {
+                releaseContext(for: previousInspectorControllerID)
+            }
         }
 
         func beginPendingPresentation() {
@@ -105,7 +111,7 @@ final class BrowserInspectorCoordinator {
             sceneSessionsByIdentifier.removeValue(forKey: sceneSession.persistentIdentifier)
             pruneDisconnectedSceneSessions()
             if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
-                context = nil
+                setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
         }
@@ -119,9 +125,21 @@ final class BrowserInspectorCoordinator {
             }
             pruneDisconnectedSceneSessions()
             if restorableSceneSessionIdentifiers.isEmpty, isPendingPresentation == false {
-                context = nil
+                setContext(nil)
             }
             notifyObserversIfNeeded(previousState: previousState)
+        }
+
+        func hasWindow(for inspectorController: WIInspectorController) -> Bool {
+            context?.inspectorController === inspectorController && presentationState
+        }
+
+        func setReleaseHandler(
+            for inspectorController: WIInspectorController,
+            _ handler: (() -> Void)?
+        ) {
+            let inspectorControllerID = ObjectIdentifier(inspectorController)
+            releaseHandlersByInspectorControllerID[inspectorControllerID] = handler
         }
 
         func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
@@ -138,10 +156,12 @@ final class BrowserInspectorCoordinator {
 
         func clear() {
             let previousState = presentationState
-            context = nil
+            let previousInspectorControllerID = context.map { ObjectIdentifier($0.inspectorController) }
+            setContext(nil)
             sceneSessionsByIdentifier.removeAll()
             restorableSceneSessionIdentifiers.removeAll()
             isPendingPresentation = false
+            releaseContext(for: previousInspectorControllerID)
             notifyObserversIfNeeded(previousState: previousState)
         }
 
@@ -158,6 +178,14 @@ final class BrowserInspectorCoordinator {
 
         private func pruneDisconnectedSceneSessions() {
             sceneSessionsByIdentifier = sceneSessionsByIdentifier.filter { $0.value.session != nil }
+        }
+
+        private func releaseContext(for inspectorControllerID: ObjectIdentifier?) {
+            guard let inspectorControllerID,
+                  let releaseHandler = releaseHandlersByInspectorControllerID.removeValue(forKey: inspectorControllerID) else {
+                return
+            }
+            releaseHandler()
         }
 
         static func isPresentationActive(
@@ -293,6 +321,17 @@ final class BrowserInspectorCoordinator {
 
     static func inspectorWindowContext() -> BrowserInspectorWindowContext? {
         inspectorWindowRegistry.currentContext
+    }
+
+    static func hasInspectorWindow(for inspectorController: WIInspectorController) -> Bool {
+        inspectorWindowRegistry.hasWindow(for: inspectorController)
+    }
+
+    static func setInspectorWindowReleaseHandler(
+        for inspectorController: WIInspectorController,
+        _ handler: (() -> Void)?
+    ) {
+        inspectorWindowRegistry.setReleaseHandler(for: inspectorController, handler)
     }
 
     static func attachInspectorWindowSceneSession(_ sceneSession: UISceneSession) {

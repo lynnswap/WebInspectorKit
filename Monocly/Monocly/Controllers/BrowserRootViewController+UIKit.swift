@@ -81,6 +81,19 @@ final class BrowserRootViewController: UINavigationController {
         requestInspectorSessionState(.disconnected)
     }
 
+    func prepareForSceneDisconnectionPreservingInspectorSession() {
+        requestInspectorSessionState(.suspended)
+    }
+
+    func waitForInspectorSessionTransitions() async {
+        while let inspectorLifecycleTask {
+            await inspectorLifecycleTask.value
+            if self.inspectorLifecycleTask == nil {
+                break
+            }
+        }
+    }
+
     var pageViewControllerForTesting: BrowserPageViewController? {
         viewControllers.first as? BrowserPageViewController
     }

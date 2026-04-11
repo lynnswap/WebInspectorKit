@@ -132,7 +132,21 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func disconnect(windowScene: UIWindowScene) {
-        rootViewController?.finalizeInspectorSession()
+        if let rootViewController {
+            if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorController) {
+                rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
+                BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
+                    for: rootViewController.inspectorController
+                ) { [rootViewController] in
+                    rootViewController.finalizeInspectorSession()
+                    Task { @MainActor [rootViewController] in
+                        await rootViewController.waitForInspectorSessionTransitions()
+                    }
+                }
+            } else {
+                rootViewController.finalizeInspectorSession()
+            }
+        }
         window?.rootViewController = nil
         window?.isHidden = true
         rootViewController = nil
