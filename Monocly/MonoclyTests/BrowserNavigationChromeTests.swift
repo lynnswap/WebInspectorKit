@@ -310,7 +310,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
         pageViewController.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { userActivity, scene, _ in
+                activateScene: { _, userActivity, scene, _ in
                     requestedActivity = userActivity
                     requestingScene = scene
                     activationCount += 1
@@ -348,7 +348,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
 
         coordinator.setSceneActivationRequesterForTesting(
             BrowserInspectorSceneActivationRequester(
-                activateScene: { _, scene, _ in
+                activateScene: { _, _, scene, _ in
                     requestingScene = scene
                     activationCount += 1
                 }
@@ -872,14 +872,14 @@ private extension BrowserNavigationChromeTests {
         XCTAssertTrue(compactHost.tabBarController(compactHost, shouldSelectTab: targetTab))
         compactHost.selectedTab = targetTab
         compactHost.tabBarController(compactHost, didSelectTab: targetTab, previousTab: previousTab)
-        drainMainQueue()
+        waitForInspectorRuntimeApply(in: inspectorContainer.inspectorController)
     }
 
     @MainActor
     func selectInspectorTab(_ identifier: String, in inspectorController: WIInspectorController) {
         let tab = inspectorController.tabs.first(where: { $0.identifier == identifier })
         inspectorController.setSelectedTab(tab)
-        drainMainQueue()
+        waitForInspectorRuntimeApply(in: inspectorController)
     }
 
     @MainActor
@@ -967,6 +967,19 @@ private extension BrowserNavigationChromeTests {
         while rootViewController.presentedViewController != nil, Date() < deadline {
             drainMainQueue()
         }
+        drainMainQueue()
+    }
+
+    @MainActor
+    func waitForInspectorRuntimeApply(in inspectorController: WIInspectorController) {
+        let expectation = XCTestExpectation(description: "wait for inspector runtime apply")
+        Task { @MainActor in
+            await inspectorController.waitForRuntimeApplyForTesting()
+            expectation.fulfill()
+        }
+
+        let waitResult = XCTWaiter().wait(for: [expectation], timeout: 5)
+        XCTAssertEqual(waitResult, .completed, "Timed out while waiting for inspector runtime state to settle.")
         drainMainQueue()
     }
 

@@ -26,8 +26,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
     private var inspectorLifecycleTask: Task<Void, Never>?
     private var pendingInspectorSessionState: InspectorSessionState?
     private var isFinalizingInspectorSession = false
-    private weak var observedWindow: NSWindow?
-    private var windowCloseObserver: NSObjectProtocol?
     private weak var installedToolbar: NSToolbar?
     private weak var navigationItemGroup: NSToolbarItemGroup?
 
@@ -115,6 +113,24 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         isFinalizingInspectorSession = true
         tearDownWindowIntegration()
         requestInspectorSessionState(.disconnected)
+    }
+
+    func prepareForWindowClosurePreservingInspectorSession() {
+        tearDownWindowIntegration()
+        requestInspectorSessionState(.suspended)
+    }
+
+    func finalizeInspectorSessionForWindowClosure() {
+        finalizeInspectorSession()
+    }
+
+    func waitForInspectorSessionTransitions() async {
+        while let inspectorLifecycleTask {
+            await inspectorLifecycleTask.value
+            if self.inspectorLifecycleTask == nil {
+                break
+            }
+        }
     }
 
     @objc
@@ -244,7 +260,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         guard let window = view.window else {
             return
         }
-        installWindowCloseObserverIfNeeded(for: window)
         pendingWindowAttachmentTask?.cancel()
         pendingWindowAttachmentTask = Task.immediateIfAvailable { [weak self, weak window] in
             await Task.yield()
@@ -260,7 +275,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
 
     func forceWindowAttachmentForTesting(in window: NSWindow) {
         loadViewIfNeeded()
-        installWindowCloseObserverIfNeeded(for: window)
         installToolbarIfNeeded(in: window)
         window.title = store.displayTitle
     }
@@ -331,31 +345,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         }
     }
 
-    private func installWindowCloseObserverIfNeeded(for window: NSWindow) {
-        guard observedWindow !== window else {
-            return
-        }
-        removeWindowCloseObserver()
-        observedWindow = window
-        windowCloseObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: window,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.finalizeInspectorSession()
-            }
-        }
-    }
-
-    private func removeWindowCloseObserver() {
-        if let windowCloseObserver {
-            NotificationCenter.default.removeObserver(windowCloseObserver)
-            self.windowCloseObserver = nil
-        }
-        observedWindow = nil
-    }
-
     private func tearDownWindowIntegration() {
         pendingWindowAttachmentTask?.cancel()
         pendingWindowAttachmentTask = nil
@@ -363,7 +352,6 @@ final class BrowserRootViewController: NSViewController, NSToolbarDelegate, NSTo
         installedToolbar?.delegate = nil
         installedToolbar = nil
         navigationItemGroup = nil
-        removeWindowCloseObserver()
     }
 }
 

@@ -68,6 +68,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
 #if canImport(UIKit)
     @ObservationIgnored private var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
+    @ObservationIgnored package weak var sceneActivationRequestingScene: UIScene?
 #endif
 
     package init(

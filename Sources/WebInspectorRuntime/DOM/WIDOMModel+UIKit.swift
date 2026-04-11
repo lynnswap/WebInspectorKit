@@ -20,6 +20,7 @@ extension UIWindowScene: WIDOMUIKitSceneActivationTarget {
 package protocol WIDOMUIKitSceneActivationRequesting {
     func requestActivation(
         of target: any WIDOMUIKitSceneActivationTarget,
+        requestingScene: UIScene?,
         errorHandler: ((any Error) -> Void)?
     )
 }
@@ -27,16 +28,20 @@ package protocol WIDOMUIKitSceneActivationRequesting {
 extension UIApplication: WIDOMUIKitSceneActivationRequesting {
     package func requestActivation(
         of target: any WIDOMUIKitSceneActivationTarget,
+        requestingScene: UIScene?,
         errorHandler: ((any Error) -> Void)?
     ) {
         guard let sceneSession = target.sceneSession else {
             return
         }
 
+        let options = UIScene.ActivationRequestOptions()
+        options.requestingScene = requestingScene
+
         requestSceneSessionActivation(
             sceneSession,
             userActivity: nil,
-            options: nil,
+            options: options,
             errorHandler: errorHandler
         )
     }
@@ -46,6 +51,7 @@ extension UIApplication: WIDOMUIKitSceneActivationRequesting {
 package enum WIDOMUIKitSceneActivationEnvironment {
     package static var requester: any WIDOMUIKitSceneActivationRequesting = UIApplication.shared
     package static var sceneProvider: @MainActor (UIWindow) -> (any WIDOMUIKitSceneActivationTarget)? = { $0.windowScene }
+    package static var requestingSceneProvider: @MainActor (any WIDOMUIKitSceneActivationTarget) -> UIScene? = { _ in nil }
 }
 
 extension WIDOMInspector {
@@ -63,7 +69,12 @@ extension WIDOMInspector {
             return
         }
 
-        WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(of: pageScene) { error in
+        let requestingScene = sceneActivationRequestingScene
+            ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
+        WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
+            of: pageScene,
+            requestingScene: requestingScene
+        ) { error in
             domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
         }
     }

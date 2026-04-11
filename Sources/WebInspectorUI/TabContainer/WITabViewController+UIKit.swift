@@ -138,7 +138,8 @@ public final class WITabViewController: UIViewController {
             hostID,
             pageWebView: webView,
             visibility: .hidden,
-            isAttached: true
+            isAttached: true,
+            sceneActivationRequestingScene: nil
         )
     }
 
@@ -288,7 +289,8 @@ public final class WITabViewController: UIViewController {
             hostID,
             pageWebView: requestedPageWebView,
             visibility: forcedVisibility ?? currentHostVisibility,
-            isAttached: true
+            isAttached: true,
+            sceneActivationRequestingScene: view.window?.windowScene
         )
     }
 
