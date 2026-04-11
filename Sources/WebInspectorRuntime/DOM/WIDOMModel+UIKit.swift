@@ -51,17 +51,7 @@ extension UIApplication: WIDOMUIKitSceneActivationRequesting {
 package enum WIDOMUIKitSceneActivationEnvironment {
     package static var requester: any WIDOMUIKitSceneActivationRequesting = UIApplication.shared
     package static var sceneProvider: @MainActor (UIWindow) -> (any WIDOMUIKitSceneActivationTarget)? = { $0.windowScene }
-    package static var requestingSceneProvider: @MainActor (any WIDOMUIKitSceneActivationTarget) -> UIScene? = { target in
-        UIApplication.shared.connectedScenes.first { scene in
-            guard scene.activationState == .foregroundActive else {
-                return false
-            }
-            guard let targetSession = target.sceneSession else {
-                return true
-            }
-            return scene.session.persistentIdentifier != targetSession.persistentIdentifier
-        }
-    }
+    package static var requestingSceneProvider: @MainActor (any WIDOMUIKitSceneActivationTarget) -> UIScene? = { _ in nil }
 }
 
 extension WIDOMInspector {
@@ -79,7 +69,8 @@ extension WIDOMInspector {
             return
         }
 
-        let requestingScene = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
+        let requestingScene = sceneActivationRequestingScene
+            ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
         WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
             of: pageScene,
             requestingScene: requestingScene

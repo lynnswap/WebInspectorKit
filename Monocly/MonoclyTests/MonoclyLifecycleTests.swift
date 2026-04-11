@@ -258,6 +258,8 @@ final class MonoclyLifecycleTests: XCTestCase {
         XCTAssertEqual(spyController.showWindowCallCount, 1)
         XCTAssertEqual(NSApp.mainMenu?.items.first?.submenu?.items.last?.action, #selector(NSApplication.terminate(_:)))
         XCTAssertEqual(NSApp.mainMenu?.item(withTitle: "File")?.submenu?.item(withTitle: "Close Window")?.keyEquivalent, "w")
+        XCTAssertEqual(NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Paste")?.action, #selector(NSText.paste(_:)))
+        XCTAssertEqual(NSApp.mainMenu?.item(withTitle: "Edit")?.submenu?.item(withTitle: "Select All")?.keyEquivalent, "a")
         XCTAssertEqual(NSApp.windowsMenu?.item(withTitle: "Minimize")?.keyEquivalent, "m")
         retainedWindows.append(spyController.window!)
 
