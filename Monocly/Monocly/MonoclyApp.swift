@@ -227,6 +227,7 @@ import WebInspectorKit
 final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowControllerFactory: (BrowserLaunchConfiguration) -> NSWindowController
     private var hasInstalledWindowObservers = false
+    private var additionalWindowControllers: [NSWindowController] = []
     private lazy var mainWindowController = mainWindowControllerFactory(.current())
 
     override init() {
@@ -277,6 +278,14 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController.showWindow(sender)
         mainWindowController.window?.orderFrontRegardless()
         mainWindowController.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private func showNewMainWindow(_ sender: Any?) {
+        let windowController = mainWindowControllerFactory(.current())
+        additionalWindowControllers.append(windowController)
+        windowController.showWindow(sender)
+        windowController.window?.orderFrontRegardless()
+        windowController.window?.makeKeyAndOrderFront(sender)
     }
 
     private func installMainMenu() {
@@ -387,7 +396,7 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleNewWindowMenuItem(_ sender: Any?) {
-        showMainWindow(sender)
+        showNewMainWindow(sender)
     }
 
     private func installWindowObserversIfNeeded() {
@@ -430,6 +439,7 @@ final class MonoclyAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         MonoclyWindowContextStore.shared.handleClosingWindow(window)
+        additionalWindowControllers.removeAll { $0.window === window }
     }
 }
 

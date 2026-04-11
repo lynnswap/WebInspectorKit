@@ -278,6 +278,31 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testNewWindowMenuCreatesAdditionalMainWindowController() throws {
+        var controllers: [SpyMainWindowController] = []
+        let previousMainMenu = NSApp.mainMenu
+        addTeardownBlock {
+            NSApp.mainMenu = previousMainMenu
+        }
+        let delegate = MonoclyAppDelegate { _ in
+            let controller = SpyMainWindowController()
+            controllers.append(controller)
+            return controller
+        }
+
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+
+        let newWindowItem = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "File")?.submenu?.item(withTitle: "New Window"))
+        XCTAssertTrue(NSApp.sendAction(newWindowItem.action!, to: newWindowItem.target, from: newWindowItem))
+
+        XCTAssertEqual(controllers.count, 2)
+        XCTAssertEqual(controllers[0].showWindowCallCount, 1)
+        XCTAssertEqual(controllers[1].showWindowCallCount, 1)
+        retainedWindows.append(try XCTUnwrap(controllers[0].window))
+        retainedWindows.append(try XCTUnwrap(controllers[1].window))
+    }
+
+    @MainActor
     func testMainWindowControllerReplacesRootControllerAfterClose() throws {
         let controller = MonoclyMainWindowController(
             launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
