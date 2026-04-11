@@ -80,6 +80,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private(set) var rootViewController: BrowserRootViewController?
     private var closingRootTransitionTasks: [UUID: Task<Void, Never>] = [:]
+    private var preservedRootViewController: BrowserRootViewController?
 
     func scene(
         _ scene: UIScene,
@@ -119,7 +120,15 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         windowScene: UIWindowScene,
         launchConfiguration: BrowserLaunchConfiguration = .current()
     ) {
-        let rootViewController = BrowserRootViewController(launchConfiguration: launchConfiguration)
+        let rootViewController = preservedRootViewController
+            ?? BrowserRootViewController(launchConfiguration: launchConfiguration)
+        if preservedRootViewController === rootViewController {
+            BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
+                for: rootViewController.inspectorController,
+                nil
+            )
+            preservedRootViewController = nil
+        }
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
         self.window = window
@@ -135,10 +144,14 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     func disconnect(windowScene: UIWindowScene) {
         if let rootViewController {
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorController) {
+                preservedRootViewController = rootViewController
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
                 BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
                     for: rootViewController.inspectorController
-                ) { [rootViewController] in
+                ) { [weak self, rootViewController] in
+                    if self?.preservedRootViewController === rootViewController {
+                        self?.preservedRootViewController = nil
+                    }
                     rootViewController.finalizeInspectorSession()
                     Task { @MainActor [rootViewController] in
                         await rootViewController.waitForInspectorSessionTransitions()

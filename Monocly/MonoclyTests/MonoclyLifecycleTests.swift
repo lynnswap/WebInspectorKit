@@ -182,6 +182,48 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testMainSceneDelegateReusesPreservedRootWhenSceneReconnects() throws {
+        let mainSceneDelegate = MonoclyMainSceneDelegate()
+        let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()
+        let coordinator = BrowserInspectorCoordinator()
+        let windowScene = try makeWindowScene()
+        let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+
+        coordinator.setSceneActivationRequesterForTesting(
+            BrowserInspectorSceneActivationRequester(
+                activateScene: { _, _, _, _ in }
+            )
+        )
+
+        mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+
+        let firstWindow = try XCTUnwrap(mainSceneDelegate.window)
+        retainedWindows.append(firstWindow)
+        let firstRootViewController = try XCTUnwrap(mainSceneDelegate.rootViewController)
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: firstRootViewController,
+                browserStore: firstRootViewController.store,
+                inspectorController: firstRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        inspectorSceneDelegate.connect(windowScene: windowScene)
+        retainedWindows.append(try XCTUnwrap(inspectorSceneDelegate.window))
+
+        mainSceneDelegate.disconnect(windowScene: windowScene)
+        mainSceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+
+        let reconnectedWindow = try XCTUnwrap(mainSceneDelegate.window)
+        retainedWindows.append(reconnectedWindow)
+        let reconnectedRootViewController = try XCTUnwrap(mainSceneDelegate.rootViewController)
+
+        XCTAssertTrue(firstRootViewController === reconnectedRootViewController)
+    }
+
+    @MainActor
     func testInspectorSceneDelegateAttachesAndDetachesInspectorWindowSession() throws {
         let fixture = try makeHostedRootViewController()
         let coordinator = BrowserInspectorCoordinator()
@@ -248,6 +290,16 @@ final class MonoclyLifecycleTests: XCTestCase {
         sceneDelegate.disconnect(windowScene: fixture.windowScene)
 
         XCTAssertTrue(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
+
+        XCTAssertTrue(
+            coordinator.presentWindow(
+                from: fixture.rootViewController,
+                browserStore: fixture.rootViewController.store,
+                inspectorController: fixture.rootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+        XCTAssertFalse(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
 
         BrowserInspectorCoordinator.handleInspectorWindowSceneSessionsDidDiscard([fixture.windowScene.session])
 

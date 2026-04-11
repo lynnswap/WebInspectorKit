@@ -575,20 +575,6 @@ private extension WIInspectorController {
         _ plan: WIRuntimePlan,
         pageWebView: WKWebView?
     ) async {
-        switch plan.dom {
-        case let .attach(autoSnapshot):
-            if let pageWebView {
-                await dom.attach(to: pageWebView)
-            } else {
-                await dom.suspend()
-            }
-            await dom.setAutoSnapshotEnabled(autoSnapshot)
-        case .suspend:
-            await dom.suspend()
-        case .detach:
-            await dom.detach()
-        }
-
         switch plan.network {
         case let .attach(mode):
             if let pageWebView {
@@ -601,6 +587,20 @@ private extension WIInspectorController {
             await network.suspend()
         case .detach:
             await network.detach()
+        }
+
+        switch plan.dom {
+        case let .attach(autoSnapshot):
+            if let pageWebView {
+                await dom.attach(to: pageWebView)
+            } else {
+                await dom.suspend()
+            }
+            await dom.setAutoSnapshotEnabled(autoSnapshot)
+        case .suspend:
+            await dom.suspend()
+        case .detach:
+            await dom.detach()
         }
     }
 
