@@ -647,6 +647,9 @@ final class BrowserPageViewController: UIViewController {
 
     func setSupportsMultipleScenesForTesting(_ value: Bool?) {
         supportsMultipleScenesOverrideForTesting = value
+        inspectorCoordinator.setSupportsMultipleScenesProviderForTesting {
+            value ?? UIApplication.shared.supportsMultipleScenes
+        }
         refreshChromeControls()
     }
 }
