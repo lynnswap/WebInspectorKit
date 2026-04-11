@@ -665,6 +665,54 @@ struct ControllerActivationTests {
     }
 
     @Test
+    func pageSceneActivationKeepsRemainingInspectorHostSceneAfterOtherHostDisconnects() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        let pageWindow = makeUIKitWindow(containing: webView)
+        let firstInspectorContainer = WITabViewController(controller, webView: webView, tabs: [.dom(), .network()])
+        let secondInspectorContainer = WITabViewController(controller, webView: webView, tabs: [.dom(), .network()])
+        let firstInspectorWindow = makeUIKitWindow()
+        let secondInspectorWindow = makeUIKitWindow()
+        firstInspectorWindow.rootViewController = firstInspectorContainer
+        secondInspectorWindow.rootViewController = secondInspectorContainer
+        defer {
+            tearDownUIKitWindow(secondInspectorWindow)
+            tearDownUIKitWindow(firstInspectorWindow)
+            tearDownUIKitWindow(pageWindow)
+        }
+
+        await controller.connect(to: webView)
+        pageWindow.makeKeyAndVisible()
+        firstInspectorWindow.makeKeyAndVisible()
+        secondInspectorWindow.makeKeyAndVisible()
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let requester = RecordingSceneActivationRequester()
+        let target = FakeSceneActivationTarget(activationState: .background)
+        let remainingInspectorScene = try #require(secondInspectorWindow.windowScene)
+        let previousRequester = WIDOMUIKitSceneActivationEnvironment.requester
+        let previousSceneProvider = WIDOMUIKitSceneActivationEnvironment.sceneProvider
+        let previousRequestingSceneProvider = WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider
+        defer {
+            WIDOMUIKitSceneActivationEnvironment.requester = previousRequester
+            WIDOMUIKitSceneActivationEnvironment.sceneProvider = previousSceneProvider
+            WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = previousRequestingSceneProvider
+        }
+        WIDOMUIKitSceneActivationEnvironment.requester = requester
+        WIDOMUIKitSceneActivationEnvironment.sceneProvider = { _ in target }
+        WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider = { _ in nil }
+
+        tearDownUIKitWindow(firstInspectorWindow)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        controller.dom.activatePageWindowForSelectionIfPossible()
+
+        #expect(requester.requestedTargets.count == 1)
+        let requestedScene = try #require(requester.requestedRequestingScenes.first)
+        #expect(requestedScene === remainingInspectorScene)
+    }
+
+    @Test
     func pageWindowActivationWithoutAttachedWindowIsNoOp() async {
         let controller = WIInspectorController()
         let webView = makeTestWebView()

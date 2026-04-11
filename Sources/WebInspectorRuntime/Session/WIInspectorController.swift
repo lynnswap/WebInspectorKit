@@ -10,6 +10,12 @@ public enum WIHostVisibility: Sendable {
     case finalizing
 }
 
+#if canImport(UIKit)
+package typealias WIInspectorHostActivationScene = UIScene
+#else
+package typealias WIInspectorHostActivationScene = AnyObject
+#endif
+
 package struct WIInspectorHostID: Hashable, Sendable {
     fileprivate let rawValue = UUID()
 }
@@ -67,6 +73,7 @@ public final class WIInspectorController {
         weak var pageWebView: WKWebView?
         var visibility: WIHostVisibility = .hidden
         var isAttached = false
+        weak var sceneActivationRequestingScene: WIInspectorHostActivationScene?
 
         init(
             id: WIInspectorHostID,
@@ -242,6 +249,7 @@ public final class WIInspectorController {
             preferredRole: resolvedRole,
             registrationOrder: nextHostRegistrationOrder
         )
+        updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
         return hostID
     }
@@ -254,6 +262,7 @@ public final class WIInspectorController {
             previousVisibleUIHostCount: previousVisibleUIHostCount,
             newVisibility: nil
         )
+        updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
     }
 
@@ -274,7 +283,8 @@ public final class WIInspectorController {
         _ hostID: WIInspectorHostID,
         pageWebView: WKWebView?,
         visibility: WIHostVisibility,
-        isAttached: Bool
+        isAttached: Bool,
+        sceneActivationRequestingScene: WIInspectorHostActivationScene? = nil
     ) {
         guard let host = hostRegistry[hostID] else {
             return
@@ -284,11 +294,13 @@ public final class WIInspectorController {
         host.pageWebView = pageWebView
         host.visibility = visibility
         host.isAttached = isAttached
+        host.sceneActivationRequestingScene = sceneActivationRequestingScene
         updateDirectHostActivationSuppression(
             afterMutatingHost: hostID,
             previousVisibleUIHostCount: previousVisibleUIHostCount,
             newVisibility: visibility
         )
+        updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
     }
 
@@ -319,6 +331,7 @@ private extension WIInspectorController {
             preferredRole: .primary,
             registrationOrder: 0
         )
+        updateSceneActivationRequestingSceneIfNeeded()
     }
 
     private func setRecoverableError(_ message: String?) {
@@ -376,6 +389,32 @@ private extension WIInspectorController {
             ? .secondary
             : .primary
     }
+
+    private func updateSceneActivationRequestingSceneIfNeeded() {
+#if canImport(UIKit)
+        dom.sceneActivationRequestingScene = resolvedSceneActivationRequestingScene()
+#endif
+    }
+
+#if canImport(UIKit)
+    private func resolvedSceneActivationRequestingScene() -> UIScene? {
+        let visibleUIHosts = hostRegistry.values
+            .filter { $0.id != directHostID && $0.isAttached && $0.visibility == .visible }
+            .sorted { $0.registrationOrder < $1.registrationOrder }
+
+        if let primaryScene = visibleUIHosts
+            .filter({ $0.preferredRole == .primary })
+            .compactMap(\.sceneActivationRequestingScene)
+            .first {
+            return primaryScene
+        }
+
+        return visibleUIHosts
+            .filter { $0.preferredRole == .secondary }
+            .compactMap(\.sceneActivationRequestingScene)
+            .first
+    }
+#endif
 
     private func scheduleRuntimeApply() {
         guard isTearingDown == false else {
@@ -623,8 +662,10 @@ private extension WIInspectorController {
             host.pageWebView = nil
             host.visibility = .finalizing
             host.isAttached = false
+            host.sceneActivationRequestingScene = nil
         }
         suppressesDirectHostActivation = false
+        updateSceneActivationRequestingSceneIfNeeded()
         scheduleRuntimeApply()
     }
 }

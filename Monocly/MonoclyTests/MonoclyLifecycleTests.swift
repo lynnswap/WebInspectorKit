@@ -266,7 +266,7 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testInspectorSceneDisconnectKeepsContextUntilSessionIsDiscarded() throws {
+    func testInspectorSceneDisconnectInvalidatesStaleSessionImmediately() throws {
         let fixture = try makeHostedRootViewController()
         let coordinator = BrowserInspectorCoordinator()
         let sceneDelegate = MonoclyInspectorSceneDelegate()
@@ -289,7 +289,7 @@ final class MonoclyLifecycleTests: XCTestCase {
         sceneDelegate.connect(windowScene: fixture.windowScene)
         sceneDelegate.disconnect(windowScene: fixture.windowScene)
 
-        XCTAssertTrue(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
+        XCTAssertFalse(BrowserInspectorCoordinator.canConnectInspectorWindowScene(fixture.windowScene.session))
 
         XCTAssertTrue(
             coordinator.presentWindow(

@@ -138,7 +138,8 @@ public final class WITabViewController: UIViewController {
             hostID,
             pageWebView: webView,
             visibility: .hidden,
-            isAttached: true
+            isAttached: true,
+            sceneActivationRequestingScene: nil
         )
     }
 
@@ -235,7 +236,6 @@ public final class WITabViewController: UIViewController {
     }
 
     isolated deinit {
-        inspectorController.dom.sceneActivationRequestingScene = nil
         inspectorController.unregisterHost(hostID)
     }
 
@@ -285,12 +285,12 @@ public final class WITabViewController: UIViewController {
             return
         }
         needsHostStateSyncAfterSwap = false
-        inspectorController.dom.sceneActivationRequestingScene = view.window?.windowScene
         inspectorController.updateHost(
             hostID,
             pageWebView: requestedPageWebView,
             visibility: forcedVisibility ?? currentHostVisibility,
-            isAttached: true
+            isAttached: true,
+            sceneActivationRequestingScene: view.window?.windowScene
         )
     }
 
@@ -345,7 +345,6 @@ public final class WITabViewController: UIViewController {
                     continue
                 }
 
-                previousController.dom.sceneActivationRequestingScene = nil
                 previousController.unregisterHost(previousHostID)
                 previousController.finalizeForControllerSwap()
                 await previousController.waitForRuntimeApplyForTesting()
