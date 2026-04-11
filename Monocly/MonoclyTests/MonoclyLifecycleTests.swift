@@ -303,6 +303,150 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testInspectorCloseHandlerStaysScopedToPresentingMainWindowController() throws {
+        let firstController = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+        let secondController = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+
+        firstController.showWindow(nil)
+        secondController.showWindow(nil)
+
+        let firstWindow = try XCTUnwrap(firstController.window)
+        let secondWindow = try XCTUnwrap(secondController.window)
+        retainedWindows.append(firstWindow)
+        retainedWindows.append(secondWindow)
+        let firstRootViewController = try XCTUnwrap(firstWindow.contentViewController as? BrowserRootViewController)
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: firstWindow,
+                browserStore: firstRootViewController.store,
+                inspectorController: firstRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        retainedWindows.append(inspectorWindow)
+
+        firstController.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: firstWindow))
+        inspectorWindow.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        firstController.showWindow(nil)
+
+        let reopenedRootViewController = try XCTUnwrap(firstWindow.contentViewController as? BrowserRootViewController)
+        XCTAssertFalse(firstRootViewController === reopenedRootViewController)
+    }
+
+    @MainActor
+    func testRetainedRootIsReleasedWhenInspectorSwitchesToAnotherMainWindowController() throws {
+        let firstController = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+        let secondController = MonoclyMainWindowController(
+            launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        )
+
+        firstController.showWindow(nil)
+        secondController.showWindow(nil)
+
+        let firstWindow = try XCTUnwrap(firstController.window)
+        let secondWindow = try XCTUnwrap(secondController.window)
+        retainedWindows.append(firstWindow)
+        retainedWindows.append(secondWindow)
+        let firstRootViewController = try XCTUnwrap(firstWindow.contentViewController as? BrowserRootViewController)
+        let secondRootViewController = try XCTUnwrap(secondWindow.contentViewController as? BrowserRootViewController)
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: firstWindow,
+                browserStore: firstRootViewController.store,
+                inspectorController: firstRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        retainedWindows.append(inspectorWindow)
+
+        firstController.windowWillClose(Notification(name: NSWindow.willCloseNotification, object: firstWindow))
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: secondWindow,
+                browserStore: secondRootViewController.store,
+                inspectorController: secondRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        firstController.showWindow(nil)
+
+        let reopenedRootViewController = try XCTUnwrap(firstWindow.contentViewController as? BrowserRootViewController)
+        XCTAssertFalse(firstRootViewController === reopenedRootViewController)
+    }
+
+    @MainActor
+    func testAdditionalMainWindowControllerStaysRetainedWhileItsInspectorIsOpen() throws {
+        var controllers: [MonoclyMainWindowController] = []
+        let previousMainMenu = NSApp.mainMenu
+        addTeardownBlock {
+            NSApp.mainMenu = previousMainMenu
+        }
+        let delegate = MonoclyAppDelegate { launchConfiguration in
+            let controller = MonoclyMainWindowController(launchConfiguration: launchConfiguration)
+            controllers.append(controller)
+            return controller
+        }
+
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+
+        let newWindowItem = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "File")?.submenu?.item(withTitle: "New Window"))
+        XCTAssertTrue(NSApp.sendAction(newWindowItem.action!, to: newWindowItem.target, from: newWindowItem))
+        XCTAssertEqual(delegate.additionalWindowControllerCountForTesting, 1)
+
+        let primaryWindow = try XCTUnwrap(controllers.first?.window)
+        let secondaryController = try XCTUnwrap(controllers.last)
+        let secondaryWindow = try XCTUnwrap(secondaryController.window)
+        retainedWindows.append(primaryWindow)
+        retainedWindows.append(secondaryWindow)
+        let secondaryRootViewController = try XCTUnwrap(secondaryWindow.contentViewController as? BrowserRootViewController)
+
+        XCTAssertTrue(
+            BrowserInspectorCoordinator.present(
+                from: secondaryWindow,
+                browserStore: secondaryRootViewController.store,
+                inspectorController: secondaryRootViewController.inspectorController,
+                tabs: [.dom(), .network()]
+            )
+        )
+
+        let inspectorWindow = try XCTUnwrap(
+            NSApp.windows.first { $0.title == "Web Inspector" && $0.isVisible }
+        )
+        retainedWindows.append(inspectorWindow)
+
+        secondaryWindow.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(delegate.additionalWindowControllerCountForTesting, 1)
+        XCTAssertTrue(secondaryController.isRetainingInspectorSessionAfterWindowClosure)
+
+        inspectorWindow.close()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(delegate.additionalWindowControllerCountForTesting, 0)
+        XCTAssertFalse(secondaryController.isRetainingInspectorSessionAfterWindowClosure)
+    }
+
+    @MainActor
     func testMainWindowControllerReplacesRootControllerAfterClose() throws {
         let controller = MonoclyMainWindowController(
             launchConfiguration: BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)

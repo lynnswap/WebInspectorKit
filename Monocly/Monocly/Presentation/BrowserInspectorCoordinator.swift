@@ -413,18 +413,21 @@ final class BrowserInspectorCoordinator {
 #elseif canImport(AppKit)
     private final class InspectorWindowStore {
         weak var window: NSWindow?
-        var onWindowWillClose: (() -> Void)?
+        private var currentInspectorControllerID: ObjectIdentifier?
+        private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
         private var closeObserver: NSObjectProtocol?
 
         deinit {
             removeCloseObserver()
         }
 
-        func setWindow(_ window: NSWindow?) {
+        func setWindow(_ window: NSWindow?, inspectorController: WIInspectorController) {
             removeCloseObserver()
             self.window = window
+            currentInspectorControllerID = ObjectIdentifier(inspectorController)
 
             guard let window else {
+                currentInspectorControllerID = nil
                 return
             }
 
@@ -433,10 +436,36 @@ final class BrowserInspectorCoordinator {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
+                let releaseHandler = self?.currentInspectorControllerID.flatMap {
+                    self?.releaseHandlersByInspectorControllerID[$0]
+                }
                 self?.window = nil
+                self?.currentInspectorControllerID = nil
                 self?.removeCloseObserver()
-                self?.onWindowWillClose?()
+                releaseHandler?()
             }
+        }
+
+        func setCurrentInspectorController(_ inspectorController: WIInspectorController) {
+            let previousInspectorControllerID = currentInspectorControllerID
+            let nextInspectorControllerID = ObjectIdentifier(inspectorController)
+            currentInspectorControllerID = nextInspectorControllerID
+            if let previousInspectorControllerID,
+               previousInspectorControllerID != nextInspectorControllerID {
+                releaseHandlersByInspectorControllerID[previousInspectorControllerID]?()
+            }
+        }
+
+        func hasWindow(for inspectorController: WIInspectorController) -> Bool {
+            window != nil && currentInspectorControllerID == ObjectIdentifier(inspectorController)
+        }
+
+        func setReleaseHandler(
+            for inspectorController: WIInspectorController,
+            _ handler: (() -> Void)?
+        ) {
+            let inspectorControllerID = ObjectIdentifier(inspectorController)
+            releaseHandlersByInspectorControllerID[inspectorControllerID] = handler
         }
 
         private func removeCloseObserver() {
@@ -449,12 +478,15 @@ final class BrowserInspectorCoordinator {
 
     private static let inspectorWindowStore = InspectorWindowStore()
 
-    static var hasVisibleInspectorWindow: Bool {
-        inspectorWindowStore.window != nil
+    static func hasInspectorWindow(for inspectorController: WIInspectorController) -> Bool {
+        inspectorWindowStore.hasWindow(for: inspectorController)
     }
 
-    static func setInspectorWindowCloseHandler(_ handler: (() -> Void)?) {
-        inspectorWindowStore.onWindowWillClose = handler
+    static func setInspectorWindowReleaseHandler(
+        for inspectorController: WIInspectorController,
+        _ handler: (() -> Void)?
+    ) {
+        inspectorWindowStore.setReleaseHandler(for: inspectorController, handler)
     }
 
     static func present(
@@ -470,6 +502,7 @@ final class BrowserInspectorCoordinator {
             existingContainer.setTabs(tabs)
             existingContainer.setPageWebView(browserStore.webView)
             existingContainer.setInspectorController(inspectorController)
+            Self.inspectorWindowStore.setCurrentInspectorController(inspectorController)
             existingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return true
@@ -497,7 +530,7 @@ final class BrowserInspectorCoordinator {
             window.center()
         }
 
-        Self.inspectorWindowStore.setWindow(window)
+        Self.inspectorWindowStore.setWindow(window, inspectorController: inspectorController)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         return true
