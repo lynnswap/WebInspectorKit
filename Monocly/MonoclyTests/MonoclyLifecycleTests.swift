@@ -131,36 +131,27 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
-    func testPresentWindowReusesAttachedInspectorSceneWithoutContext() throws {
-        let fixture = try makeHostedRootViewController()
-        let coordinator = BrowserInspectorCoordinator()
+    func testInspectorSceneDelegateDestroysOrphanedRestoredSessionWithoutContext() throws {
+        let windowScene = try makeWindowScene()
         let sceneDelegate = MonoclyInspectorSceneDelegate()
-        var requestedSceneSession: UISceneSession?
-        var requestedActivity: NSUserActivity?
+        var destroyedSceneSession: UISceneSession?
 
-        sceneDelegate.connect(windowScene: fixture.windowScene)
-        retainedWindows.append(try XCTUnwrap(sceneDelegate.window))
-
-        coordinator.setSceneActivationRequesterForTesting(
-            BrowserInspectorSceneActivationRequester(
-                activateScene: { sceneSession, userActivity, _, _ in
-                    requestedSceneSession = sceneSession
-                    requestedActivity = userActivity
-                }
-            )
+        MonoclyInspectorSceneDelegate.setSceneDestructionRequesterForTesting(
+            BrowserInspectorSceneDestructionRequester { sceneSession in
+                destroyedSceneSession = sceneSession
+            }
         )
+        addTeardownBlock {
+            Task { @MainActor in
+                MonoclyInspectorSceneDelegate.resetSceneDestructionRequesterForTesting()
+            }
+        }
 
-        XCTAssertTrue(
-            coordinator.presentWindow(
-                from: fixture.rootViewController,
-                browserStore: fixture.rootViewController.store,
-                inspectorController: fixture.rootViewController.inspectorController,
-                tabs: [.dom(), .network()]
-            )
-        )
+        sceneDelegate.connect(windowScene: windowScene)
 
-        XCTAssertTrue(requestedSceneSession === fixture.windowScene.session)
-        XCTAssertEqual(requestedActivity?.activityType, BrowserInspectorCoordinator.inspectorWindowSceneActivityType)
+        XCTAssertTrue(destroyedSceneSession === windowScene.session)
+        XCTAssertNil(sceneDelegate.window)
+        XCTAssertNil(sceneDelegate.inspectorViewController)
     }
 }
 
