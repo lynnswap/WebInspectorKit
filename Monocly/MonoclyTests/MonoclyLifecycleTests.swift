@@ -89,6 +89,50 @@ final class MonoclyLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testMainSceneDelegateRetainsRootUntilDisconnectFinalizationCompletes() throws {
+        let sceneDelegate = MonoclyMainSceneDelegate()
+        let windowScene = try makeWindowScene()
+        let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        weak var weakRootViewController: BrowserRootViewController?
+        var inspectorController: WIInspectorController?
+        var didEnterDisconnectedCommit = false
+        var resumeDisconnectedCommit: CheckedContinuation<Void, Never>?
+
+        sceneDelegate.connect(windowScene: windowScene, launchConfiguration: launchConfiguration)
+
+        let hostWindow = try XCTUnwrap(sceneDelegate.window)
+        retainedWindows.append(hostWindow)
+
+        do {
+            let rootViewController = try XCTUnwrap(sceneDelegate.rootViewController)
+            weakRootViewController = rootViewController
+            inspectorController = rootViewController.inspectorController
+            rootViewController.inspectorController.testRuntimeLifecycleCommitHook = { lifecycle in
+                guard lifecycle == .disconnected else {
+                    return
+                }
+                didEnterDisconnectedCommit = true
+                await withCheckedContinuation { continuation in
+                    resumeDisconnectedCommit = continuation
+                }
+            }
+
+            sceneDelegate.disconnect(windowScene: windowScene)
+        }
+
+        XCTAssertTrue(waitForCondition {
+            didEnterDisconnectedCommit
+        })
+        XCTAssertNotNil(weakRootViewController)
+
+        resumeDisconnectedCommit?.resume()
+
+        XCTAssertTrue(waitForCondition {
+            inspectorController?.lifecycle == .disconnected
+        })
+    }
+
+    @MainActor
     func testMainSceneDelegatePreservesInspectorSessionWhileInspectorSceneIsConnected() throws {
         let mainSceneDelegate = MonoclyMainSceneDelegate()
         let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()

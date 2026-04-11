@@ -79,6 +79,7 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
 final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
     private(set) var rootViewController: BrowserRootViewController?
+    private var closingRootTransitionTask: Task<Void, Never>?
 
     func scene(
         _ scene: UIScene,
@@ -118,6 +119,8 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         windowScene: UIWindowScene,
         launchConfiguration: BrowserLaunchConfiguration = .current()
     ) {
+        closingRootTransitionTask?.cancel()
+        closingRootTransitionTask = nil
         let rootViewController = BrowserRootViewController(launchConfiguration: launchConfiguration)
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = rootViewController
@@ -132,6 +135,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func disconnect(windowScene: UIWindowScene) {
+        closingRootTransitionTask?.cancel()
         if let rootViewController {
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorController) {
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
@@ -145,6 +149,10 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
                 }
             } else {
                 rootViewController.finalizeInspectorSession()
+                closingRootTransitionTask = Task { @MainActor [weak self, rootViewController] in
+                    await rootViewController.waitForInspectorSessionTransitions()
+                    self?.closingRootTransitionTask = nil
+                }
             }
         }
         window?.rootViewController = nil
