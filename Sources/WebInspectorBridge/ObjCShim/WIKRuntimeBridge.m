@@ -1,4 +1,5 @@
 #import "WIKRuntimeBridge.h"
+#import "WKWebView+EvaluateJavaScriptCompat.h"
 
 #if TARGET_OS_OSX
 #import <objc/runtime.h>
@@ -316,6 +317,15 @@ NSErrorDomain const WIKRuntimeBridgeErrorDomain = @"WebInspectorBridge.WIKRuntim
     Setter function = (Setter)implementation;
     function(webView, selector, delegate);
     return YES;
+}
+
++ (void)evaluateJavaScriptOnWebView:(WKWebView *)webView
+                         javaScript:(NSString *)javaScript
+                            inFrame:(WKFrameInfo *)frame
+                     inContentWorld:(WKContentWorld *)contentWorld
+                  completionHandler:(void (^)(id _Nullable, NSError * _Nullable))completionHandler
+{
+    [webView wi_evaluateJavaScript:javaScript inFrame:frame inContentWorld:contentWorld completionHandler:completionHandler];
 }
 
 + (WKContentWorld *)makeContentWorldWithConfigurationClassName:(NSString *)configurationClassName

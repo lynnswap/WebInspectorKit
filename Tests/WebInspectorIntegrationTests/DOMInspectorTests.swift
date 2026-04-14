@@ -1218,7 +1218,7 @@ struct DOMInspectorTests {
     }
 
     private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(identifier) !== null;",
             arguments: ["identifier": id],
             in: nil,
@@ -1228,7 +1228,7 @@ struct DOMInspectorTests {
     }
 
     private func selectionIsActive(in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return window.webInspectorDOM.debugStatus().selectionActive;",
             arguments: [:],
             in: nil,
@@ -1238,7 +1238,7 @@ struct DOMInspectorTests {
     }
 
     private func domAgentDebugStatus(in webView: WKWebView) async -> [String: Any]? {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return window.webInspectorDOM.debugStatus();",
             arguments: [:],
             in: nil,
@@ -1266,7 +1266,7 @@ struct DOMInspectorTests {
     }
 
     private func clickElement(withID elementID: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             """
             return (function(elementID) {
                 const element = document.getElementById(elementID);
@@ -1285,7 +1285,7 @@ struct DOMInspectorTests {
     }
 
     private func triggerElementSelection(elementID: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             """
             return (function(elementID, shieldAttribute) {
                 const target = document.getElementById(elementID);
@@ -1320,7 +1320,7 @@ struct DOMInspectorTests {
         newElementID: String,
         in webView: WKWebView
     ) async throws -> Bool {
-        let rawValue = try await webView.callAsyncJavaScript(
+        let rawValue = try await webView.callAsyncJavaScriptCompat(
             """
             return (function(parentElementID, newElementID) {
                 const parent = document.getElementById(parentElementID);
@@ -1350,7 +1350,7 @@ struct DOMInspectorTests {
         count: Int,
         in webView: WKWebView
     ) async throws -> Bool {
-        let rawValue = try await webView.callAsyncJavaScript(
+        let rawValue = try await webView.callAsyncJavaScriptCompat(
             """
             return (function(parentElementID, elementIDPrefix, count) {
                 const parent = document.getElementById(parentElementID);
@@ -1383,7 +1383,7 @@ struct DOMInspectorTests {
         beforeElementID: String,
         in webView: WKWebView
     ) async throws -> Bool {
-        let rawValue = try await webView.callAsyncJavaScript(
+        let rawValue = try await webView.callAsyncJavaScriptCompat(
             """
             return (function(parentElementID, movingElementID, beforeElementID) {
                 const parent = document.getElementById(parentElementID);
@@ -1412,7 +1412,7 @@ struct DOMInspectorTests {
         attributeName: String,
         in webView: WKWebView
     ) async -> String? {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(elementID)?.getAttribute(attributeName) ?? null;",
             arguments: [
                 "elementID": elementID,

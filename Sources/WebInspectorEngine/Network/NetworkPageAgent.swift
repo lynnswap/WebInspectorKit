@@ -492,9 +492,9 @@ private extension NetworkPageAgent {
                 controller.addUserScript(checkScript)
             }
             do {
-                _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
+                _ = try await webView.evaluateJavaScriptCompat(tokenBootstrapScript, in: nil, contentWorld: .page)
                 if let scriptSource {
-                    _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+                    _ = try await webView.evaluateJavaScriptCompat(scriptSource, in: nil, contentWorld: .page)
                 }
             } catch {
                 networkLogger.error("failed to refresh network agent bootstrap: \(error.localizedDescription, privacy: .public)")
@@ -525,8 +525,8 @@ private extension NetworkPageAgent {
         controllerStateRegistry.setNetworkBridgeScriptInstalled(true, on: controller)
 
         do {
-            _ = try await webView.evaluateJavaScript(tokenBootstrapScript, in: nil, contentWorld: .page)
-            _ = try await webView.evaluateJavaScript(scriptSource, in: nil, contentWorld: .page)
+            _ = try await webView.evaluateJavaScriptCompat(tokenBootstrapScript, in: nil, contentWorld: .page)
+            _ = try await webView.evaluateJavaScriptCompat(scriptSource, in: nil, contentWorld: .page)
         } catch {
             networkLogger.error("failed to install network agent: \(error.localizedDescription, privacy: .public)")
         }
@@ -582,7 +582,7 @@ private extension NetworkPageAgent {
 
     private func probeBodyFetchAvailability(in webView: WKWebView) async -> BodyFetchAvailability {
         do {
-            let raw = try await webView.evaluateJavaScript(
+            let raw = try await webView.evaluateJavaScriptCompat(
                 """
                 (() => ({
                     hasGetBody: Boolean(
@@ -712,7 +712,7 @@ private extension NetworkPageAgent {
         in webView: WKWebView
     ) async -> NetworkBodyFetchResult {
         do {
-            let result = try await webView.callAsyncJavaScript(
+            let result = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(handle, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function") {
@@ -767,7 +767,7 @@ private extension NetworkPageAgent {
         in webView: WKWebView
     ) async -> NetworkBodyFetchResult {
         do {
-            let result = try await webView.callAsyncJavaScript(
+            let result = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(ref, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {

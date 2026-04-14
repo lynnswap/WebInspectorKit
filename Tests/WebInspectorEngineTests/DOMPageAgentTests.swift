@@ -213,7 +213,7 @@ struct DOMSessionTests {
         _ = await session.attach(to: webView)
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             "(() => Boolean(window.webInspectorDOM && window.webInspectorDOM.__installed))();",
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -237,7 +237,7 @@ struct DOMSessionTests {
         _ = await session.attach(to: webView)
         await loadHTML("<html><body><p>hi</p></body></html>", in: webView)
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             "(() => Boolean(window.webInspectorDOM && window.webInspectorDOM.__installed))();",
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -762,7 +762,7 @@ struct DOMSessionTests {
         await session.setAutoSnapshot(enabled: true)
         await waitForAutoSnapshotEnabled(on: webView)
 
-        let rawStatus = try await webView.evaluateJavaScript(
+        let rawStatus = try await webView.evaluateJavaScriptCompat(
             "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -1056,7 +1056,7 @@ struct DOMSessionTests {
             return
         }
 
-        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+        let didDisableHandleAPI = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorDOM) {
@@ -1108,7 +1108,7 @@ struct DOMSessionTests {
 
     private func waitForAutoSnapshotEnabled(on webView: WKWebView) async {
         for _ in 0..<100 {
-            let raw = try? await webView.evaluateJavaScript(
+            let raw = try? await webView.evaluateJavaScriptCompat(
                 "(() => Boolean(window.webInspectorDOM?.debugStatus?.().snapshotAutoUpdateEnabled))();",
                 in: nil,
                 contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -1140,7 +1140,7 @@ struct DOMSessionTests {
     }
 
     private func autoSnapshotStatus(on webView: WKWebView) async -> [String: Any]? {
-        let rawStatus = try? await webView.evaluateJavaScript(
+        let rawStatus = try? await webView.evaluateJavaScriptCompat(
             "(() => window.webInspectorDOM?.debugStatus?.() ?? null)();",
             in: nil,
             contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -1226,7 +1226,7 @@ struct DOMSessionTests {
     }
 
     private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(identifier) !== null;",
             arguments: ["identifier": id],
             in: nil,
@@ -1240,7 +1240,7 @@ struct DOMSessionTests {
         attributeName: String,
         in webView: WKWebView
     ) async -> String? {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(identifier)?.getAttribute(attributeName) ?? null;",
             arguments: [
                 "identifier": elementID,
@@ -1277,7 +1277,7 @@ private func extractDocumentScopeID(from agent: DOMPageAgent) -> UInt64? {
 
 @MainActor
 private func currentDOMAgentPageEpoch(in webView: WKWebView) async throws -> Int? {
-    let rawValue = try await webView.evaluateJavaScript(
+    let rawValue = try await webView.evaluateJavaScriptCompat(
         "(() => window.webInspectorDOM?.debugStatus?.().pageEpoch ?? null)();",
         in: nil,
         contentWorld: WISPIContentWorldProvider.bridgeWorld()
@@ -1296,7 +1296,7 @@ private func currentDOMAgentPageEpoch(in webView: WKWebView) async throws -> Int
 
 @MainActor
 private func currentDOMAgentDocumentScopeID(in webView: WKWebView) async throws -> UInt64? {
-    let rawValue = try await webView.evaluateJavaScript(
+    let rawValue = try await webView.evaluateJavaScriptCompat(
         "(() => window.webInspectorDOM?.debugStatus?.().documentScopeID ?? null)();",
         in: nil,
         contentWorld: WISPIContentWorldProvider.bridgeWorld()

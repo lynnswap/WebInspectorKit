@@ -240,7 +240,7 @@ struct NetworkPageAgentTests {
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>hello</p></body></html>", in: webView)
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
             contentWorld: .page
@@ -265,7 +265,7 @@ struct NetworkPageAgentTests {
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>hello</p></body></html>", in: webView)
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
             contentWorld: .page
@@ -282,7 +282,7 @@ struct NetworkPageAgentTests {
         await attachAndWait(agent, to: webView)
         await loadHTML("<html><body><p>patch-check</p></body></html>", in: webView)
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             """
             (() => ({
                 xhrPatched: Boolean(XMLHttpRequest.prototype.open && XMLHttpRequest.prototype.open.__wiNetworkPatched),
@@ -328,7 +328,7 @@ struct NetworkPageAgentTests {
         let body = await agent.fetchBody(bodyRef: nil, bodyHandle: "token" as NSString, role: .response)
         #expect(body?.full == "token")
 
-        let raw = try await webView.evaluateJavaScript(
+        let raw = try await webView.evaluateJavaScriptCompat(
             "(() => Boolean(window.webInspectorNetworkAgent && window.webInspectorNetworkAgent.__installed))();",
             in: nil,
             contentWorld: .page
@@ -348,7 +348,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>handle retry</p></body></html>", in: webView)
         await agent.waitForPendingConfigurationForTesting()
 
-        let patched = try await webView.callAsyncJavaScript(
+        let patched = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent) {
@@ -391,7 +391,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>fallback without repair</p></body></html>", in: webView)
         await agent.waitForPendingConfigurationForTesting()
 
-        let prepared = try await webView.callAsyncJavaScript(
+        let prepared = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
@@ -445,7 +445,7 @@ struct NetworkPageAgentTests {
             #expect(firstBody?.full == "token")
         }
 
-        let rawRepairCountAfterFirstFetch = try await webView.evaluateJavaScript(
+        let rawRepairCountAfterFirstFetch = try await webView.evaluateJavaScriptCompat(
             "window.__wiRepairCount ? window.__wiRepairCount() : -1;",
             in: nil,
             contentWorld: .page
@@ -464,7 +464,7 @@ struct NetworkPageAgentTests {
             #expect(secondBody?.full == "token")
         }
 
-        let rawRepairCount = try await webView.evaluateJavaScript(
+        let rawRepairCount = try await webView.evaluateJavaScriptCompat(
             "window.__wiRepairCount ? window.__wiRepairCount() : -1;",
             in: nil,
             contentWorld: .page
@@ -485,7 +485,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>fallback</p></body></html>", in: webView)
 
         let modeBeforeFallback = agent.currentBridgeMode
-        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+        let didDisableHandleAPI = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent) {

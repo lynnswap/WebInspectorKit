@@ -248,7 +248,7 @@ extension DOMPageAgent {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
-        let rawResult = try await webView.callAsyncJavaScript(
+        let rawResult = try await webView.callAsyncJavaScriptCompat(
             "return window.webInspectorDOM.startSelection()",
             arguments: [:],
             in: nil,
@@ -380,7 +380,7 @@ extension DOMPageAgent {
         }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOM.removeNode(target, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "target": targetArgument,
@@ -414,7 +414,7 @@ extension DOMPageAgent {
         }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
-            let rawValue = try await webView.callAsyncJavaScript(
+            let rawValue = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOM.removeNodeWithUndo(identifier, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "identifier": identifier,
@@ -445,7 +445,7 @@ extension DOMPageAgent {
         }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
-            let rawValue = try await webView.callAsyncJavaScript(
+            let rawValue = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOM.undoRemoveNode(token, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "token": undoToken,
@@ -473,7 +473,7 @@ extension DOMPageAgent {
         }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
-            let rawValue = try await webView.callAsyncJavaScript(
+            let rawValue = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOM.redoRemoveNode(token, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "token": undoToken,
@@ -516,7 +516,7 @@ extension DOMPageAgent {
                 return .failed
             }
             do {
-                let rawValue = try await webView.callAsyncJavaScript(
+                let rawValue = try await webView.callAsyncJavaScriptCompat(
                     "return window.webInspectorDOM.setAttributeForNode(target, name, value, expectedPageEpoch, expectedDocumentScopeID)",
                     arguments: [
                         "target": targetArgument,
@@ -563,7 +563,7 @@ extension DOMPageAgent {
         }
         await waitForPreparedPageContextSyncIfNeeded()
         do {
-            let rawValue = try await webView.callAsyncJavaScript(
+            let rawValue = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOM.removeAttributeForNode(target, name, expectedPageEpoch, expectedDocumentScopeID)",
                 arguments: [
                     "target": targetArgument,
@@ -1145,7 +1145,7 @@ private extension DOMPageAgent {
         }
 #endif
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function() {
                     if (!window.webInspectorDOM || typeof window.webInspectorDOM.debugStatus !== "function") {
@@ -1198,7 +1198,7 @@ private extension DOMPageAgent {
         }
 #endif
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(documentScopeID) {
                     if (!window.webInspectorDOM || typeof window.webInspectorDOM.setDocumentScopeID !== "function") {
@@ -1245,7 +1245,7 @@ private extension DOMPageAgent {
             return true
         }
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(epoch, documentScopeID) {
                     if (!window.webInspectorDOM) {
@@ -1320,7 +1320,7 @@ private extension DOMPageAgent {
         guard let webView else {
             return
         }
-        webView.evaluateJavaScript(
+        webView.evaluateJavaScriptCompat(
             "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
             in: nil,
             in: bridgeWorld,
@@ -1355,7 +1355,7 @@ private extension DOMPageAgent {
         options: NSDictionary
     ) async throws -> Bool {
         for attempt in 0..<autoSnapshotConfigureRetryCount {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 if (!window.webInspectorDOM || typeof window.webInspectorDOM.configureAutoSnapshot !== "function") {
                     return false;
@@ -1453,7 +1453,7 @@ private extension DOMPageAgent {
         guard let targetArgument = javascriptTargetArgument(for: target) else {
             return ""
         }
-        let rawResult = try await webView.callAsyncJavaScript(
+        let rawResult = try await webView.callAsyncJavaScriptCompat(
             script,
             arguments: ["target": targetArgument],
             in: nil,
@@ -1488,7 +1488,7 @@ private extension DOMPageAgent {
             captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth)"
             captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth)"
         }
-        let rawResult = try await webView.callAsyncJavaScript(
+        let rawResult = try await webView.callAsyncJavaScriptCompat(
             preferEnvelope
                 ? """
                 if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSnapshotEnvelope === "function") {
@@ -1537,7 +1537,7 @@ private extension DOMPageAgent {
         guard let targetArgument = javascriptTargetArgument(for: target) else {
             throw WebInspectorCoreError.subtreeUnavailable
         }
-        let rawResult = try await webView.callAsyncJavaScript(
+        let rawResult = try await webView.callAsyncJavaScriptCompat(
             preferEnvelope
                 ? """
                 if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSubtreeEnvelope === "function") {
@@ -1650,7 +1650,7 @@ private extension DOMPageAgent {
                 expectedPageEpoch: expectedPageEpoch,
                 reveal: reveal
             )
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 invocation.script,
                 arguments: invocation.arguments,
                 in: nil,
@@ -1680,7 +1680,7 @@ private extension DOMPageAgent {
         }
 
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 if (!window.webInspectorDOM || typeof window.webInspectorDOM.createNodeHandle !== "function") {
                     return unavailable;

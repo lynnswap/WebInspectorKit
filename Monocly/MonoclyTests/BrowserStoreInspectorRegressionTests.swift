@@ -559,7 +559,7 @@ private extension BrowserStoreInspectorRegressionTests {
     }
 
     func mainFrameText(in webView: WKWebView) async -> String? {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById('content')?.textContent ?? document.body?.textContent ?? null;",
             arguments: [:],
             in: nil,

@@ -131,29 +131,6 @@ struct WIImageCacheSPITests {
     }
 
     @Test
-    func archiveFallbackRequestStopsAwaitingWhenTaskIsCancelled() async throws {
-        let state = SlowArchiveRequestState()
-
-        let task = Task {
-            try await WIImageCacheLoader.requestArchiveData { completionHandler in
-                state.completionHandler = completionHandler
-            }
-        }
-
-        let requestStarted = await waitUntil {
-            state.completionHandler != nil
-        }
-        #expect(requestStarted)
-        task.cancel()
-
-        await #expect(throws: CancellationError.self) {
-            try await task.value
-        }
-
-        state.completionHandler?(.success(Data()))
-    }
-
-    @Test
     func frameBridgeThrowsWhenDirectLookupCannotResolvePage() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
@@ -176,7 +153,7 @@ struct WIImageCacheSPITests {
     }
 
     @Test
-    func displayedImageCacheFallsBackToArchiveWhenDirectSymbolsAreUnavailable() async throws {
+    func displayedImageCacheReturnsNilWhenDirectSymbolsAreUnavailable() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
@@ -202,12 +179,11 @@ struct WIImageCacheSPITests {
             in: webView
         )
 
-        #expect(entry?.data == Self.pngData)
-        #expect(entry?.mimeType == "image/png")
+        #expect(entry == nil)
     }
 
     @Test
-    func displayedImageCacheFallsBackToArchiveWhenPageLookupFails() async throws {
+    func displayedImageCacheReturnsNilWhenPageLookupFails() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
@@ -233,12 +209,11 @@ struct WIImageCacheSPITests {
             in: webView
         )
 
-        #expect(entry?.data == Self.pngData)
-        #expect(entry?.mimeType == "image/png")
+        #expect(entry == nil)
     }
 
     @Test
-    func displayedImageCacheFallsBackToArchiveWhenDirectLookupReturnsGenericNSError() async throws {
+    func displayedImageCacheReturnsNilWhenDirectLookupReturnsGenericNSError() async throws {
         let fixture = try makeFixtureSite(
             indexHTML: """
             <!doctype html>
@@ -261,8 +236,7 @@ struct WIImageCacheSPITests {
             in: webView
         )
 
-        #expect(entry?.data == Self.pngData)
-        #expect(entry?.mimeType == "image/png")
+        #expect(entry == nil)
     }
 
     @Test
@@ -673,11 +647,6 @@ private final class SlowResourceRequestState {
 }
 
 @MainActor
-private final class SlowArchiveRequestState {
-    var completionHandler: ((Result<Data, Error>) -> Void)?
-}
-
-@MainActor
 private struct StubFrameInfoProvider: WIFrameInfoProviding {
     let frameInfos: [WKFrameInfo]?
 
@@ -715,6 +684,16 @@ private final class FallbackFrameTestWebView: WKWebView {
     @objc(_mainFrame)
     func test_mainFrame() -> AnyObject {
         fallbackHandle
+    }
+
+    @objc(_frames:)
+    func test_frames(_ completionHandler: @escaping (AnyObject?) -> Void) {
+        completionHandler(nil)
+    }
+
+    @objc(_frameTrees:)
+    func test_frameTrees(_ completionHandler: @escaping (NSSet?) -> Void) {
+        completionHandler(nil)
     }
 
     @objc(_frameInfoFromHandle:completionHandler:)
@@ -769,6 +748,11 @@ private final class FrameTreesFallbackWebView: WKWebView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc(_frames:)
+    func test_frames(_ completionHandler: @escaping (AnyObject?) -> Void) {
+        completionHandler(nil)
     }
 
     @objc(_frameTrees:)
