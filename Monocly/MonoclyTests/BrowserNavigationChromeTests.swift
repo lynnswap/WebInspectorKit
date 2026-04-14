@@ -916,7 +916,7 @@ private extension BrowserNavigationChromeTests {
         Task { @MainActor in
             defer { expectation.fulfill() }
             do {
-                let result = try await webView.callAsyncJavaScript(
+                let result = try await webView.callAsyncJavaScriptCompat(
                     """
                     return (function(entries) {
                         const prototype = Object.getPrototypeOf(performance) || performance;

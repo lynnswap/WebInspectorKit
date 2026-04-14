@@ -1056,7 +1056,7 @@ struct DOMSessionTests {
             return
         }
 
-        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+        let didDisableHandleAPI = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorDOM) {
@@ -1226,7 +1226,7 @@ struct DOMSessionTests {
     }
 
     private func domNodeExists(withID id: String, in webView: WKWebView) async -> Bool {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(identifier) !== null;",
             arguments: ["identifier": id],
             in: nil,
@@ -1240,7 +1240,7 @@ struct DOMSessionTests {
         attributeName: String,
         in webView: WKWebView
     ) async -> String? {
-        let rawValue = try? await webView.callAsyncJavaScript(
+        let rawValue = try? await webView.callAsyncJavaScriptCompat(
             "return document.getElementById(identifier)?.getAttribute(attributeName) ?? null;",
             arguments: [
                 "identifier": elementID,

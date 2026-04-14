@@ -712,7 +712,7 @@ private extension NetworkPageAgent {
         in webView: WKWebView
     ) async -> NetworkBodyFetchResult {
         do {
-            let result = try await webView.callAsyncJavaScript(
+            let result = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(handle, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBodyForHandle !== "function") {
@@ -767,7 +767,7 @@ private extension NetworkPageAgent {
         in webView: WKWebView
     ) async -> NetworkBodyFetchResult {
         do {
-            let result = try await webView.callAsyncJavaScript(
+            let result = try await webView.callAsyncJavaScriptCompat(
                 """
                 return (function(ref, agentUnavailable, bodyUnavailable) {
                     if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.getBody !== "function") {

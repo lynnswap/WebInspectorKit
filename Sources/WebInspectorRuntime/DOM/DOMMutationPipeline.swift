@@ -377,7 +377,7 @@ final class DOMMutationSender {
 
         do {
             activeDispatchGeneration = generation
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 """
                 if (!window.webInspectorDOMFrontend || typeof window.webInspectorDOMFrontend.applyMutationBuffer !== "function") {
                     return false;

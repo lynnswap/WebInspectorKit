@@ -348,7 +348,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>handle retry</p></body></html>", in: webView)
         await agent.waitForPendingConfigurationForTesting()
 
-        let patched = try await webView.callAsyncJavaScript(
+        let patched = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent) {
@@ -391,7 +391,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>fallback without repair</p></body></html>", in: webView)
         await agent.waitForPendingConfigurationForTesting()
 
-        let prepared = try await webView.callAsyncJavaScript(
+        let prepared = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent || typeof window.webInspectorNetworkAgent.configure !== "function") {
@@ -485,7 +485,7 @@ struct NetworkPageAgentTests {
         await loadHTML("<html><body><p>fallback</p></body></html>", in: webView)
 
         let modeBeforeFallback = agent.currentBridgeMode
-        let didDisableHandleAPI = try await webView.callAsyncJavaScript(
+        let didDisableHandleAPI = try await webView.callAsyncJavaScriptCompat(
             """
             return (function() {
                 if (!window.webInspectorNetworkAgent) {

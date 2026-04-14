@@ -10,7 +10,7 @@ package extension WKWebView {
         in frame: WKFrameInfo? = nil,
         contentWorld: WKContentWorld
     ) async throws {
-        _ = try await callAsyncJavaScript(
+        _ = try await callAsyncJavaScriptCompat(
             "(() => { \(script); })();",
             arguments: arguments,
             in: frame,

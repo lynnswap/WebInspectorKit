@@ -1881,7 +1881,7 @@ extension DOMInspectorRuntime {
             return false
         }
         do {
-            let rawResult = try await webView.callAsyncJavaScript(
+            let rawResult = try await webView.callAsyncJavaScriptCompat(
                 "return window.webInspectorDOMFrontend?.applySelectionPayload?.(selectionPayload, pageEpoch, documentScopeID) ?? false",
                 arguments: [
                     "selectionPayload": payload,
