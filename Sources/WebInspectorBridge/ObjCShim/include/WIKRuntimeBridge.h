@@ -36,6 +36,11 @@ typedef NS_ERROR_ENUM(WIKRuntimeBridgeErrorDomain, WIKRuntimeBridgeErrorCode) {
 + (BOOL)invokeSetResourceLoadDelegateOnWebView:(WKWebView *)webView
                                   selectorName:(NSString *)selectorName
                                       delegate:(nullable id)delegate;
++ (void)evaluateJavaScriptOnWebView:(WKWebView *)webView
+                         javaScript:(NSString *)javaScript
+                            inFrame:(nullable WKFrameInfo *)frame
+                     inContentWorld:(WKContentWorld *)contentWorld
+                  completionHandler:(void (^ _Nullable)(id _Nullable result, NSError * _Nullable error))completionHandler;
 
 + (nullable WKContentWorld *)makeContentWorldWithConfigurationClassName:(NSString *)configurationClassName
                                                        worldSelectorName:(NSString *)worldSelectorName

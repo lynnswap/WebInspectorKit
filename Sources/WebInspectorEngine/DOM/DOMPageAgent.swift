@@ -1320,7 +1320,7 @@ private extension DOMPageAgent {
         guard let webView else {
             return
         }
-        webView.evaluateJavaScript(
+        webView.evaluateJavaScriptCompat(
             "window.webInspectorDOM && window.webInspectorDOM.detach && window.webInspectorDOM.detach();",
             in: nil,
             in: bridgeWorld,

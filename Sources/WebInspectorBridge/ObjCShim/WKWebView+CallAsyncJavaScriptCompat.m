@@ -2,7 +2,7 @@
 
 @implementation WKWebView (WIKCallAsyncJavaScriptCompat)
 
-- (void)wki_callAsyncJavaScript:(NSString *)functionBody
+- (void)wi_callAsyncJavaScript:(NSString *)functionBody
                       arguments:(NSDictionary<NSString *, id> *)arguments
                         inFrame:(WKFrameInfo *)frame
                  inContentWorld:(WKContentWorld *)contentWorld

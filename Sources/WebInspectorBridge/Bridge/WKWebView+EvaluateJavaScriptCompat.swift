@@ -4,9 +4,8 @@ import WebKit
 extension WKWebView {
     @MainActor
     @preconcurrency
-    public func callAsyncJavaScriptCompat(
-        _ functionBody: String,
-        arguments: [String: Any] = [:],
+    public func evaluateJavaScriptCompat(
+        _ javaScript: String,
         in frame: WKFrameInfo? = nil,
         in contentWorld: WKContentWorld,
         completionHandler: ((Result<Any, any Error>) -> Void)? = nil
@@ -14,9 +13,9 @@ extension WKWebView {
         let thunk = completionHandler.map { handler in
             WIKObjCBlockConversion.boxingNilAsAnyForCompatibility(WIKUnsafeTransfer(value: handler))
         }
-        self.wi_callAsyncJavaScript(
-            functionBody,
-            arguments: arguments,
+        WIKRuntimeBridge.evaluateJavaScript(
+            on: self,
+            javaScript: javaScript,
             inFrame: frame,
             in: contentWorld,
             completionHandler: thunk
@@ -24,26 +23,26 @@ extension WKWebView {
     }
 
     @MainActor
-    public func callAsyncJavaScriptCompat(
-        _ functionBody: String,
-        arguments: [String: Any] = [:],
+    public func evaluateJavaScriptCompat(
+        _ javaScript: String,
         in frame: WKFrameInfo? = nil,
         contentWorld: WKContentWorld
     ) async throws -> Any? {
         let transferredResult = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<WIKUnsafeTransfer<Any?>, Error>) in
-            self.wi_callAsyncJavaScript(
-                functionBody,
-                arguments: arguments,
+            WIKRuntimeBridge.evaluateJavaScript(
+                on: self,
+                javaScript: javaScript,
                 inFrame: frame,
-                in: contentWorld
-            ) { result, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: WIKUnsafeTransfer(value: result))
+                in: contentWorld,
+                completionHandler: { result, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume(returning: WIKUnsafeTransfer(value: result))
+                    }
                 }
-            }
+            )
         }
         return transferredResult.value
     }
