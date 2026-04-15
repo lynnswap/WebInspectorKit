@@ -219,12 +219,26 @@ export function requestDocumentFromBackend(options: RequestDocumentOptions = {})
         return;
     }
 
+    const requestDocumentScopeID =
+        typeof options.documentScopeID === "number" && Number.isFinite(options.documentScopeID)
+            ? options.documentScopeID
+            : protocolState.documentScopeID;
+    if (requestDocumentScopeID !== protocolState.documentScopeID) {
+        return;
+    }
+
     const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
     const mode: RequestDocumentMode = options.mode === "preserve-ui-state" ? "preserve-ui-state" : "fresh";
-    postTypedMessage("webInspectorDomRequestDocument", {
+    const payload: Record<string, unknown> = {
         depth,
         mode,
-    });
+        pageEpoch: requestPageEpoch,
+        documentScopeID: requestDocumentScopeID,
+    };
+    if (options.selectionRestoreTarget && typeof options.selectionRestoreTarget === "object") {
+        payload.selectionRestoreTarget = options.selectionRestoreTarget;
+    }
+    postTypedMessage("webInspectorDomRequestDocument", payload);
 }
 
 export async function requestChildNodes(nodeId: number, depth: number): Promise<void> {

@@ -401,7 +401,7 @@ export function startElementSelection() {
         }
 
         function cancelSelection() {
-            inspector.pendingSelectionPath = null;
+            inspector.pendingSelectionRestoreTarget = null;
             clearHighlight();
             finish({ cancelled: true, requiredDepth: 0 });
         }
@@ -531,7 +531,7 @@ export function cancelElementSelection() {
         inspector.selectionState = null;
         return true;
     }
-    inspector.pendingSelectionPath = null;
+    inspector.pendingSelectionRestoreTarget = null;
     restoreSelectionCursor();
     uninstallWindowClickBlocker();
     removeSelectionShield(
@@ -540,14 +540,44 @@ export function cancelElementSelection() {
     return false;
 }
 
-export function setPendingSelectionPath(path: unknown) {
+function normalizedPendingSelectionPath(path: unknown): number[] | null {
     if (!Array.isArray(path)) {
-        inspector.pendingSelectionPath = null;
-        return false;
+        return null;
     }
     const normalizedPath = path.filter(function(entry): entry is number {
         return typeof entry === "number" && Number.isFinite(entry) && entry >= 0;
     });
-    inspector.pendingSelectionPath = normalizedPath.length ? normalizedPath : null;
-    return normalizedPath.length > 0;
+    return normalizedPath;
+}
+
+function normalizedPendingSelectionLocalID(localId: unknown): number | null {
+    return typeof localId === "number" && Number.isFinite(localId) && localId > 0
+        ? Math.floor(localId)
+        : null;
+}
+
+function normalizedPendingSelectionBackendNodeID(backendNodeId: unknown): number | null {
+    return typeof backendNodeId === "number" && Number.isFinite(backendNodeId) && backendNodeId > 0
+        ? Math.floor(backendNodeId)
+        : null;
+}
+
+export function setPendingSelectionRestoreTarget(
+    path: unknown,
+    localId: unknown,
+    backendNodeId: unknown
+) {
+    const normalizedPath = normalizedPendingSelectionPath(path);
+    const normalizedLocalId = normalizedPendingSelectionLocalID(localId);
+    const normalizedBackendNodeId = normalizedPendingSelectionBackendNodeID(backendNodeId);
+    if (!normalizedPath && !normalizedLocalId && !normalizedBackendNodeId) {
+        inspector.pendingSelectionRestoreTarget = null;
+        return false;
+    }
+    inspector.pendingSelectionRestoreTarget = {
+        path: normalizedPath,
+        localId: normalizedLocalId,
+        backendNodeId: normalizedBackendNodeId,
+    };
+    return true;
 }

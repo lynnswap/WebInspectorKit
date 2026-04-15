@@ -336,11 +336,17 @@ extension DOMSession {
 extension DOMSession {
     package func captureSnapshotPayload(
         maxDepth: Int,
-        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode,
+        selectionRestorePath: [Int]? = nil,
+        selectionRestoreLocalID: UInt64? = nil,
+        selectionRestoreBackendNodeID: Int? = nil
     ) async throws -> Any {
         try await pageAgent.captureSnapshotEnvelope(
             maxDepth: maxDepth,
-            initialModeOwnership: initialModeOwnership
+            initialModeOwnership: initialModeOwnership,
+            selectionRestorePath: selectionRestorePath,
+            selectionRestoreLocalID: selectionRestoreLocalID,
+            selectionRestoreBackendNodeID: selectionRestoreBackendNodeID
         )
     }
 
@@ -370,8 +376,16 @@ extension DOMSession {
         await pageAgent.cancelSelectionMode()
     }
 
-    package func setPendingSelectionPath(_ path: [Int]?) async {
-        await pageAgent.setPendingSelectionPath(path)
+    package func setPendingSelectionRestoreTarget(
+        path: [Int]?,
+        localID: UInt64?,
+        backendNodeID: Int?
+    ) async {
+        await pageAgent.setPendingSelectionRestoreTarget(
+            path: path,
+            localID: localID,
+            backendNodeID: backendNodeID
+        )
     }
 
     package func highlight(nodeId: Int, reveal: Bool = true) async {

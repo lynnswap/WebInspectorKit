@@ -101,6 +101,16 @@ export interface DOMSelectionSyncPayload {
     localId?: number;
     localID?: number;
     selectedLocalId?: number;
+    backendNodeId?: number;
+    backendNodeID?: number;
+    backendNodeIdIsStable?: boolean;
+    selectedBackendNodeId?: number;
+    selectedNodePath?: number[] | null;
+}
+
+export interface DOMSelectionRestoreTarget {
+    selectedLocalId?: number | null;
+    selectedBackendNodeId?: number | null;
     selectedNodePath?: number[] | null;
 }
 
@@ -152,6 +162,7 @@ export interface TreeState {
     refreshAttempts: Map<number, RefreshAttempt>;
     selectionChain: number[];
     deferredChildRenders: Set<number>;
+    selectionRecoveryRequestKeys: Set<string>;
 }
 
 /** Refresh attempt tracking */
@@ -323,6 +334,8 @@ export interface RequestDocumentOptions {
     depth?: number;
     mode?: RequestDocumentMode;
     pageEpoch?: number;
+    documentScopeID?: number;
+    selectionRestoreTarget?: DOMSelectionRestoreTarget | null;
 }
 
 // =============================================================================

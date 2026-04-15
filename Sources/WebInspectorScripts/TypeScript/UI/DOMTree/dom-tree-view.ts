@@ -28,6 +28,7 @@ import {
     applySubtree,
     completeDocumentRequest,
     rejectDocumentRequest,
+    requestSelectionRecoveryIfNeeded,
     setSnapshot,
     resetDocumentRequestStateForPageEpoch,
     applyMutationBuffer,
@@ -79,16 +80,20 @@ function readBootstrap(): DOMFrontendBootstrapState {
 
 function normalizeSelectionSyncPayload(
     payload: number | DOMSelectionSyncPayload
-): { nodeId: number | null; selectedNodePath: number[] | null } {
+): { nodeId: number | null; selectedLocalId: number | null; selectedBackendNodeId: number | null; selectedNodePath: number[] | null } {
     if (typeof payload === "number" && Number.isFinite(payload)) {
         return {
             nodeId: payload > 0 ? payload : null,
+            selectedLocalId: payload > 0 ? payload : null,
+            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
     if (!payload || typeof payload !== "object") {
         return {
             nodeId: null,
+            selectedLocalId: null,
+            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
@@ -100,15 +105,27 @@ function normalizeSelectionSyncPayload(
         payload.nodeId,
         payload.id,
     ];
-    const nodeId =
+    const selectedLocalId =
         candidateNodeIDs.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
         ?? null;
     const selectedNodePath = Array.isArray(payload.selectedNodePath)
         && payload.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment))
         ? payload.selectedNodePath
         : null;
+    const backendNodeIDCandidates = [
+        payload.selectedBackendNodeId,
+        payload.backendNodeId,
+        payload.backendNodeID,
+    ];
+    const selectedBackendNodeId =
+        payload.backendNodeIdIsStable === false
+            ? null
+            : backendNodeIDCandidates.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
+                ?? null;
     return {
-        nodeId,
+        nodeId: selectedLocalId,
+        selectedLocalId,
+        selectedBackendNodeId,
         selectedNodePath,
     };
 }
@@ -195,8 +212,19 @@ function installWebInspectorKit(): void {
                 return true;
             }
             if (Array.isArray(selection.selectedNodePath)) {
-                return selectNodeByPath(selection.selectedNodePath, selectionOptions);
+                if (selectNodeByPath(selection.selectedNodePath, selectionOptions)) {
+                    return true;
+                }
             }
+            requestSelectionRecoveryIfNeeded(
+                {
+                    selectedLocalId: selection.selectedLocalId,
+                    selectedBackendNodeId: selection.selectedBackendNodeId,
+                    selectedNodePath: selection.selectedNodePath,
+                },
+                pageEpoch,
+                documentScopeID
+            );
             return false;
         },
         completeChildNodeRequest: (

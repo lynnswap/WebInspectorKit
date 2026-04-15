@@ -828,6 +828,61 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func domSplitAttachesSharedInspectorWebViewOnlyToVisibleTreeHost() {
+        let inspector = makeDOMInspectorWithSelection()
+        let domViewController = WIDOMViewController(inspector: inspector)
+        domViewController.regularLayoutModeOverrideForTesting = .legacyPrimarySecondary
+        domViewController.horizontalSizeClassOverrideForTesting = .compact
+
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = domViewController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        domViewController.loadViewIfNeeded()
+        drainMainQueue()
+
+        #expect(domViewController.compactTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting)
+        #expect(domViewController.regularTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting == false)
+
+        domViewController.horizontalSizeClassOverrideForTesting = .regular
+        drainMainQueue()
+
+        #expect(domViewController.compactTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting == false)
+        #expect(domViewController.regularTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting)
+    }
+
+    @Test
+    func domSplitKeepsRegularTreeHostActiveInInspectorColumnLayout() {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
+        let inspector = makeDOMInspectorWithSelection()
+        let domViewController = WIDOMViewController(inspector: inspector)
+        domViewController.regularLayoutModeOverrideForTesting = .secondaryWithInspector
+        domViewController.horizontalSizeClassOverrideForTesting = .regular
+
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = domViewController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        domViewController.loadViewIfNeeded()
+        drainMainQueue()
+
+        #expect(domViewController.compactTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting == false)
+        #expect(domViewController.regularTreeViewControllerForTesting.isInspectorWebViewAttachedForTesting)
+        #expect(domViewController.isInspectorColumnVisibleForTesting)
+    }
+
+    @Test
     func domHostMenuResolvesLatestSelectionStateOnDemand() {
         let inspector = makeDOMInspectorWithSelection()
         let viewController = WIDOMViewController(inspector: inspector)

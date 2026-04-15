@@ -39,6 +39,7 @@ function resetRenderState() {
     treeState.elements.clear();
     treeState.openState.clear();
     treeState.deferredChildRenders.clear();
+    treeState.selectionRecoveryRequestKeys.clear();
     treeState.snapshot = null;
 }
 

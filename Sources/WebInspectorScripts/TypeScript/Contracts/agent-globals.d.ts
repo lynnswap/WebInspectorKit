@@ -37,7 +37,11 @@ declare global {
             __installed?: boolean;
             detach?: () => void;
             setPageEpoch?: (epoch: number) => void;
-            setPendingSelectionPath?: (path: number[] | null) => boolean;
+            setPendingSelectionRestoreTarget?: (
+                path: number[] | null,
+                localId?: number | null,
+                backendNodeId?: number | null
+            ) => boolean;
             bootstrap?: (bootstrap?: {
                 pageEpoch?: number;
                 documentScopeID?: number;

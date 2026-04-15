@@ -1288,6 +1288,7 @@ private extension WIDOMInspector {
         applyRecoverableError(nil)
         await applySelection(
             projectedSelectedNode,
+            selectedNodePath: result.selectedPath,
             expectedContext: expectedContext
         )
         return result
@@ -1533,13 +1534,17 @@ private extension WIDOMInspector {
 
     private func applySelection(
         _ node: DOMNodeModel,
+        selectedNodePath: [Int]?,
         expectedContext: DOMInspectorRuntime.MutationContext
     ) async {
         guard transport.matchesCurrentMutationContext(expectedContext) else {
             return
         }
 
-        let selectionPayload = selectionPayloadDictionary(for: node)
+        let selectionPayload = selectionPayloadDictionary(
+            for: node,
+            selectedNodePath: selectedNodePath
+        )
         transport.handleDOMSelectionMessage(selectionPayload)
         guard transport.matchesCurrentMutationContext(expectedContext) else {
             return
@@ -1564,8 +1569,11 @@ private extension WIDOMInspector {
         )
     }
 
-    private func selectionPayloadDictionary(for node: DOMNodeModel) -> [String: Any] {
-        let selectedNodePath = selectionNodePath(for: node)
+    private func selectionPayloadDictionary(
+        for node: DOMNodeModel,
+        selectedNodePath: [Int]? = nil
+    ) -> [String: Any] {
+        let resolvedSelectedNodePath = selectedNodePath ?? selectionNodePath(for: node)
         return [
             "id": node.localID,
             "selectedLocalId": node.localID,
@@ -1580,7 +1588,7 @@ private extension WIDOMInspector {
                 ]
             },
             "path": selectionPathLabels(for: node),
-            "selectedNodePath": selectedNodePath as Any,
+            "selectedNodePath": resolvedSelectedNodePath as Any,
             "selectorPath": node.selectorPath,
             "styleRevision": node.styleRevision,
         ]
