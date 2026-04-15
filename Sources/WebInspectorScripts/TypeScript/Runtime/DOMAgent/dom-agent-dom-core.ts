@@ -623,12 +623,18 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
     inspector.documentURL = currentURL;
 
     let selectionPath = pendingSelection?.path ?? null;
-    if (!selectionNode && pendingSelection?.backendNodeId) {
-        selectionNode = findNodeByStableIdentifier(pendingSelection.backendNodeId);
-    }
     if (selectionNode) {
         const resolvedPath = computeNodePath(selectionNode);
-        if (Array.isArray(resolvedPath) && resolvedPath.length > 0) {
+        if (Array.isArray(resolvedPath)) {
+            selectionPath = resolvedPath;
+        } else {
+            selectionNode = null;
+        }
+    }
+    if (!selectionNode && pendingSelection?.backendNodeId) {
+        selectionNode = findNodeByStableIdentifier(pendingSelection.backendNodeId);
+        const resolvedPath = selectionNode ? computeNodePath(selectionNode) : null;
+        if (Array.isArray(resolvedPath)) {
             selectionPath = resolvedPath;
         }
     }
