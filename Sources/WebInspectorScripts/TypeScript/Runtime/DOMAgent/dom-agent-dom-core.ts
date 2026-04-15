@@ -622,11 +622,16 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
     }
     inspector.documentURL = currentURL;
 
+    const shouldDiscardFallbackSelectionPath =
+        !!pendingSelection
+        && (pendingSelection.localId !== null || pendingSelection.backendNodeId !== null);
+    let didResolveSelectionPath = false;
     let selectionPath = pendingSelection?.path ?? null;
     if (selectionNode) {
         const resolvedPath = computeNodePath(selectionNode);
         if (Array.isArray(resolvedPath)) {
             selectionPath = resolvedPath;
+            didResolveSelectionPath = true;
         } else {
             selectionNode = null;
         }
@@ -636,7 +641,13 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
         const resolvedPath = selectionNode ? computeNodePath(selectionNode) : null;
         if (Array.isArray(resolvedPath)) {
             selectionPath = resolvedPath;
+            didResolveSelectionPath = true;
+        } else {
+            selectionNode = null;
         }
+    }
+    if (shouldDiscardFallbackSelectionPath && !didResolveSelectionPath) {
+        selectionPath = null;
     }
     var depthRequirement = Array.isArray(selectionPath) ? selectionPath.length + 1 : 0;
     var effectiveDepth = Math.max(maxDepth || 5, depthRequirement);

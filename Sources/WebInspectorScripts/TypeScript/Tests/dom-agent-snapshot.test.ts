@@ -421,6 +421,49 @@ describe("dom-agent-snapshot", () => {
         expect(payload.selectedNodePath).toEqual(expectedPath);
     });
 
+    it("clears selection recovery when the target disappears before the fresh snapshot is captured", () => {
+        document.body.innerHTML = "<main id=\"root\"><section id=\"parent\"><div id=\"target\"></div></section></main>";
+        const originalTarget = document.getElementById("target");
+        expect(originalTarget).not.toBeNull();
+
+        const webkit = window.webkit as unknown as {
+            serializeNode?: (node: Node) => unknown;
+        };
+        webkit.serializeNode = vi.fn((node: Node) => {
+            const element = node as Element;
+            switch (element.id || element.localName || element.nodeName.toLowerCase()) {
+            case "html":
+                return { nodeId: 100, children: [] };
+            case "body":
+                return { nodeId: 101, children: [] };
+            case "root":
+                return { nodeId: 102, children: [] };
+            case "parent":
+                return { nodeId: 103, children: [] };
+            case "replacement":
+                return { nodeId: 109, children: [] };
+            default:
+                return null;
+            }
+        });
+
+        const staleLocalId = rememberNode(originalTarget);
+        inspector.pendingSelectionRestoreTarget = {
+            path: computeNodePath(originalTarget),
+            localId: staleLocalId,
+            backendNodeId: 104,
+        };
+        inspector.nextInitialSnapshotMode = "fresh";
+
+        document.body.innerHTML = "<main id=\"root\"><section id=\"parent\"><div id=\"replacement\"></div></section></main>";
+
+        const payload = captureDOMPayload(5, { consumeInitialSnapshotMode: false });
+
+        expect(payload.selectedNodeId).toBeNull();
+        expect(payload.selectedLocalId).toBeNull();
+        expect(payload.selectedNodePath).toBeNull();
+    });
+
     it("preserves an empty pending selection path for root selection recovery", () => {
         inspector.pendingSelectionRestoreTarget = {
             path: [],
