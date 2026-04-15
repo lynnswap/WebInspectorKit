@@ -68,7 +68,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     var usesDeferredSecondaryMenuForTesting: Bool {
-        resolveActiveNavigationItem().additionalOverflowItems != nil
+        resolveActiveNavigationItem().additionalOverflowItems === deferredSecondaryOverflowItems
     }
 
     var inspectorColumnViewControllerForTesting: UIViewController? {
@@ -95,6 +95,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         item.accessibilityIdentifier = "WI.DOM.PickButton"
         return item
     }()
+    private lazy var deferredSecondaryOverflowItems = makeDeferredDOMSecondaryOverflowItems()
 
     public init(inspector: WIDOMInspector) {
         self.inspector = inspector
@@ -195,7 +196,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.setLeftBarButtonItems(nil, animated: false)
         navigationItem.setRightBarButtonItems([pickItem], animated: false)
-        navigationItem.additionalOverflowItems = makeDeferredDOMSecondaryOverflowItems()
+        navigationItem.additionalOverflowItems = deferredSecondaryOverflowItems
     }
 
     private func clearNavigationItemState(on navigationItem: UINavigationItem) {
