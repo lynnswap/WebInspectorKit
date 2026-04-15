@@ -622,9 +622,7 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
     }
     inspector.documentURL = currentURL;
 
-    const shouldDiscardFallbackSelectionPath =
-        !!pendingSelection
-        && (pendingSelection.localId !== null || pendingSelection.backendNodeId !== null);
+    const shouldDiscardFallbackSelectionPath = pendingSelection?.backendNodeId !== null;
     let didResolveSelectionPath = false;
     let selectionPath = pendingSelection?.path ?? null;
     if (selectionNode) {
