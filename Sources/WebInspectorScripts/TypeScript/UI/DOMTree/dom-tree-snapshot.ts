@@ -510,15 +510,22 @@ function normalizeSelectionRestoreTarget(
         && target.selectedLocalId > 0
             ? Math.floor(target.selectedLocalId)
             : null;
+    const selectedBackendNodeId =
+        typeof target.selectedBackendNodeId === "number"
+        && Number.isFinite(target.selectedBackendNodeId)
+        && target.selectedBackendNodeId > 0
+            ? Math.floor(target.selectedBackendNodeId)
+            : null;
     const selectedNodePath = Array.isArray(target.selectedNodePath)
         && target.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment) && segment >= 0)
         ? target.selectedNodePath
         : null;
-    if (selectedLocalId === null && selectedNodePath === null) {
+    if (selectedLocalId === null && selectedBackendNodeId === null && selectedNodePath === null) {
         return null;
     }
     return {
         selectedLocalId,
+        selectedBackendNodeId,
         selectedNodePath,
     };
 }
@@ -528,8 +535,9 @@ function selectionRestoreTargetKey(target: DOMSelectionRestoreTarget | null | un
         return "";
     }
     const selectedLocalId = typeof target.selectedLocalId === "number" ? target.selectedLocalId : 0;
+    const selectedBackendNodeId = typeof target.selectedBackendNodeId === "number" ? target.selectedBackendNodeId : 0;
     const selectedNodePath = Array.isArray(target.selectedNodePath) ? target.selectedNodePath.join(".") : "";
-    return `${selectedLocalId}|${selectedNodePath}`;
+    return `${selectedLocalId}|${selectedBackendNodeId}|${selectedNodePath}`;
 }
 
 function documentRequestMatches(

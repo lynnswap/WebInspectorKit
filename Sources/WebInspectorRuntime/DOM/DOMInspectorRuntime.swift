@@ -80,6 +80,7 @@ package final class DOMInspectorRuntime: NSObject {
 
     struct SelectionRestoreTarget: Equatable {
         let selectedLocalID: UInt64?
+        let selectedBackendNodeID: Int?
         let selectedNodePath: [Int]?
     }
 
@@ -491,10 +492,19 @@ package final class DOMInspectorRuntime: NSObject {
                 "pageEpoch": pageEpoch,
             ]
             if let selectionRestoreTarget = pendingDocumentRequest.selectionRestoreTarget {
-                requestPayload["selectionRestoreTarget"] = [
-                    "selectedLocalId": selectionRestoreTarget.selectedLocalID as Any,
-                    "selectedNodePath": selectionRestoreTarget.selectedNodePath as Any,
-                ]
+                var selectionRestorePayload: [String: Any] = [:]
+                if let selectedLocalID = selectionRestoreTarget.selectedLocalID {
+                    selectionRestorePayload["selectedLocalId"] = selectedLocalID
+                }
+                if let selectedBackendNodeID = selectionRestoreTarget.selectedBackendNodeID {
+                    selectionRestorePayload["selectedBackendNodeId"] = selectedBackendNodeID
+                }
+                if let selectedNodePath = selectionRestoreTarget.selectedNodePath {
+                    selectionRestorePayload["selectedNodePath"] = selectedNodePath
+                }
+                if !selectionRestorePayload.isEmpty {
+                    requestPayload["selectionRestoreTarget"] = selectionRestorePayload
+                }
             }
             payload["pendingDocumentRequest"] = requestPayload
         }
@@ -1448,7 +1458,8 @@ extension DOMInspectorRuntime {
                 maxDepth: depth,
                 initialModeOwnership: .preservePendingInitialMode,
                 selectionRestorePath: selectionRestoreTarget?.selectedNodePath,
-                selectionRestoreLocalID: selectionRestoreTarget?.selectedLocalID
+                selectionRestoreLocalID: selectionRestoreTarget?.selectedLocalID,
+                selectionRestoreBackendNodeID: selectionRestoreTarget?.selectedBackendNodeID
             )
             let (payloadForDispatch, appliedSelectionOverride) = payloadByApplyingPendingSelectionOverride(payload)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
@@ -1708,18 +1719,26 @@ extension DOMInspectorRuntime {
             }
             return UInt64(selectedLocalID)
         }()
+        let selectedBackendNodeID: Int? = {
+            guard let selectedBackendNodeID = parseIntegerValue(object["selectedBackendNodeId"]),
+                  selectedBackendNodeID > 0 else {
+                return nil
+            }
+            return selectedBackendNodeID
+        }()
         let selectedNodePath: [Int]? = {
             guard let path = object["selectedNodePath"] as? [Any] else {
                 return nil
             }
             let normalizedPath = path.compactMap(parseIntegerValue).filter { $0 >= 0 }
-            return normalizedPath.isEmpty ? nil : normalizedPath
+            return normalizedPath.count == path.count ? normalizedPath : nil
         }()
-        guard selectedLocalID != nil || selectedNodePath != nil else {
+        guard selectedLocalID != nil || selectedBackendNodeID != nil || selectedNodePath != nil else {
             return nil
         }
         return .init(
             selectedLocalID: selectedLocalID,
+            selectedBackendNodeID: selectedBackendNodeID,
             selectedNodePath: selectedNodePath
         )
     }

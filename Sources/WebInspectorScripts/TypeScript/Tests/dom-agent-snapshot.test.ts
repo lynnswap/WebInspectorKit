@@ -375,6 +375,19 @@ describe("dom-agent-snapshot", () => {
         expect(payload.selectedNodePath).toEqual(expectedPath);
     });
 
+    it("preserves an empty pending selection path for root selection recovery", () => {
+        inspector.pendingSelectionRestoreTarget = {
+            path: [],
+            localId: null,
+            backendNodeId: null,
+        };
+
+        const payload = captureDOMPayload(4, { consumeInitialSnapshotMode: false });
+
+        expect(payload.selectedNodePath).toEqual([]);
+        expect(payload.selectedLocalId).toBeTypeOf("number");
+    });
+
     it("clears the pending initial snapshot mode even when snapshot posting throws", () => {
         inspector.map = new Map([[1, document.documentElement]]);
         inspector.snapshotAutoUpdateDebounce = 50;

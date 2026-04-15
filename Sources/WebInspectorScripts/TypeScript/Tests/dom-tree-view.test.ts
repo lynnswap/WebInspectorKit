@@ -326,6 +326,7 @@ describe("dom-tree-view", () => {
         const firstAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
             {
                 selectedLocalId: 99,
+                backendNodeId: 9001,
                 selectedNodePath: [0, 0],
             },
             protocolState.pageEpoch,
@@ -334,6 +335,7 @@ describe("dom-tree-view", () => {
         const duplicateAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
             {
                 selectedLocalId: 99,
+                backendNodeId: 9001,
                 selectedNodePath: [0, 0],
             },
             protocolState.pageEpoch,
@@ -350,6 +352,7 @@ describe("dom-tree-view", () => {
             documentScopeID: protocolState.documentScopeID,
             selectionRestoreTarget: {
                 selectedLocalId: 99,
+                selectedBackendNodeId: 9001,
                 selectedNodePath: [0, 0],
             },
         });

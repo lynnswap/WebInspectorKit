@@ -80,11 +80,12 @@ function readBootstrap(): DOMFrontendBootstrapState {
 
 function normalizeSelectionSyncPayload(
     payload: number | DOMSelectionSyncPayload
-): { nodeId: number | null; selectedLocalId: number | null; selectedNodePath: number[] | null } {
+): { nodeId: number | null; selectedLocalId: number | null; selectedBackendNodeId: number | null; selectedNodePath: number[] | null } {
     if (typeof payload === "number" && Number.isFinite(payload)) {
         return {
             nodeId: payload > 0 ? payload : null,
             selectedLocalId: payload > 0 ? payload : null,
+            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
@@ -92,6 +93,7 @@ function normalizeSelectionSyncPayload(
         return {
             nodeId: null,
             selectedLocalId: null,
+            selectedBackendNodeId: null,
             selectedNodePath: null,
         };
     }
@@ -110,9 +112,20 @@ function normalizeSelectionSyncPayload(
         && payload.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment))
         ? payload.selectedNodePath
         : null;
+    const backendNodeIDCandidates = [
+        payload.selectedBackendNodeId,
+        payload.backendNodeId,
+        payload.backendNodeID,
+    ];
+    const selectedBackendNodeId =
+        payload.backendNodeIdIsStable === false
+            ? null
+            : backendNodeIDCandidates.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
+                ?? null;
     return {
         nodeId: selectedLocalId,
         selectedLocalId,
+        selectedBackendNodeId,
         selectedNodePath,
     };
 }
@@ -206,6 +219,7 @@ function installWebInspectorKit(): void {
             requestSelectionRecoveryIfNeeded(
                 {
                     selectedLocalId: selection.selectedLocalId,
+                    selectedBackendNodeId: selection.selectedBackendNodeId,
                     selectedNodePath: selection.selectedNodePath,
                 },
                 pageEpoch,

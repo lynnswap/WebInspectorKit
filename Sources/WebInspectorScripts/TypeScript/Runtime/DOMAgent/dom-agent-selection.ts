@@ -547,7 +547,7 @@ function normalizedPendingSelectionPath(path: unknown): number[] | null {
     const normalizedPath = path.filter(function(entry): entry is number {
         return typeof entry === "number" && Number.isFinite(entry) && entry >= 0;
     });
-    return normalizedPath.length ? normalizedPath : null;
+    return normalizedPath;
 }
 
 function normalizedPendingSelectionLocalID(localId: unknown): number | null {
