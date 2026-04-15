@@ -68,7 +68,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     }
 
     var usesDeferredSecondaryMenuForTesting: Bool {
-        menuItem.menu?.children.contains(where: { $0 is UIDeferredMenuElement }) == true
+        resolveActiveNavigationItem().additionalOverflowItems === deferredSecondaryOverflowItems
     }
 
     var inspectorColumnViewControllerForTesting: UIViewController? {
@@ -95,15 +95,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         item.accessibilityIdentifier = "WI.DOM.PickButton"
         return item
     }()
-
-    private lazy var menuItem: UIBarButtonItem = {
-        let item = UIBarButtonItem(
-            image: UIImage(systemName: "ellipsis"),
-            menu: makeDeferredDOMSecondaryMenu()
-        )
-        item.accessibilityIdentifier = "WI.DOM.MenuButton"
-        return item
-    }()
+    private lazy var deferredSecondaryOverflowItems = makeDeferredDOMSecondaryOverflowItems()
 
     public init(inspector: WIDOMInspector) {
         self.inspector = inspector
@@ -203,8 +195,8 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         navigationItem.preferredSearchBarPlacement = .automatic
         navigationItem.hidesSearchBarWhenScrolling = false
         navigationItem.setLeftBarButtonItems(nil, animated: false)
-        navigationItem.setRightBarButtonItems([menuItem, pickItem], animated: false)
-        navigationItem.additionalOverflowItems = nil
+        navigationItem.setRightBarButtonItems([pickItem], animated: false)
+        navigationItem.additionalOverflowItems = deferredSecondaryOverflowItems
     }
 
     private func clearNavigationItemState(on navigationItem: UINavigationItem) {
@@ -345,12 +337,10 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return items
     }
 
-    private func makeDeferredDOMSecondaryMenu() -> UIMenu {
-        UIMenu(children: [
-            UIDeferredMenuElement.uncached { [weak self] completion in
-                completion((self?.makeDOMSecondaryMenu() ?? UIMenu()).children)
-            }
-        ])
+    private func makeDeferredDOMSecondaryOverflowItems() -> UIDeferredMenuElement {
+        UIDeferredMenuElement.uncached { [weak self] completion in
+            completion((self?.makeDOMSecondaryMenu() ?? UIMenu()).children)
+        }
     }
 
     private func makeDOMSecondaryMenu() -> UIMenu {

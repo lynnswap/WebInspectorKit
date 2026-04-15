@@ -743,7 +743,8 @@ struct TabViewControllerUITabTests {
         #expect(domViewController.activeHostViewControllerForTesting is UISplitViewController)
         #expect(compactColumn.topViewController is WIDOMTreeViewController)
         let buttonIdentifiers = compactColumn.topViewController?.navigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
-        #expect(buttonIdentifiers == ["WI.DOM.MenuButton", "WI.DOM.PickButton"])
+        #expect(buttonIdentifiers == ["WI.DOM.PickButton"])
+        #expect(compactColumn.topViewController?.navigationItem.additionalOverflowItems != nil)
         if #available(iOS 26.0, *) {
             #expect(domViewController.primaryColumnViewControllerForTesting == nil)
             #expect(secondaryColumn.topViewController is WIDOMTreeViewController)
@@ -980,7 +981,8 @@ struct TabViewControllerUITabTests {
         drainMainQueue()
 
         let buttonIdentifiers = hostNavigationItem.rightBarButtonItems?.compactMap(\.accessibilityIdentifier) ?? []
-        #expect(buttonIdentifiers == ["WI.DOM.MenuButton", "WI.DOM.PickButton"])
+        #expect(buttonIdentifiers == ["WI.DOM.PickButton"])
+        #expect(hostNavigationItem.additionalOverflowItems != nil)
     }
 
     @Test
