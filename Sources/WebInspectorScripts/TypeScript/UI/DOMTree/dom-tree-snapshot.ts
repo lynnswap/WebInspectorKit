@@ -11,6 +11,7 @@
 import {
     DOMEventEntry,
     DOMNode,
+    DOMSelectionRestoreTarget,
     DOM_SNAPSHOT_SCHEMA_VERSION,
     DOMSnapshot,
     DOMSnapshotEnvelopePayload,
@@ -382,6 +383,7 @@ function resetDocumentRequestState(): void {
     pendingDocumentRequest = null;
     documentRequestInFlightEpoch = null;
     documentRequestInFlight = null;
+    treeState.selectionRecoveryRequestKeys.clear();
 }
 
 export function resetDocumentRequestStateForPageEpoch(pageEpoch?: number, documentScopeID?: number): void {
@@ -410,6 +412,7 @@ export function rejectDocumentRequest(pageEpoch?: number, documentScopeID?: numb
     if (documentRequestInFlight?.pageEpoch === currentPageEpoch) {
         documentRequestInFlight = null;
     }
+    treeState.selectionRecoveryRequestKeys.clear();
 }
 
 function markDocumentRequestCompleted(): void {
@@ -420,6 +423,7 @@ function markDocumentRequestCompleted(): void {
     if (documentRequestInFlight?.pageEpoch === currentPageEpoch) {
         documentRequestInFlight = null;
     }
+    treeState.selectionRecoveryRequestKeys.clear();
 }
 
 function drainQueuedDocumentRequestIfPossible(): void {
@@ -494,6 +498,40 @@ function requestDocumentSafely(options: RequestDocumentOptions): void {
     });
 }
 
+function normalizeSelectionRestoreTarget(
+    target: DOMSelectionRestoreTarget | null | undefined
+): DOMSelectionRestoreTarget | null {
+    if (!target || typeof target !== "object") {
+        return null;
+    }
+    const selectedLocalId =
+        typeof target.selectedLocalId === "number"
+        && Number.isFinite(target.selectedLocalId)
+        && target.selectedLocalId > 0
+            ? Math.floor(target.selectedLocalId)
+            : null;
+    const selectedNodePath = Array.isArray(target.selectedNodePath)
+        && target.selectedNodePath.every((segment) => typeof segment === "number" && Number.isInteger(segment) && segment >= 0)
+        ? target.selectedNodePath
+        : null;
+    if (selectedLocalId === null && selectedNodePath === null) {
+        return null;
+    }
+    return {
+        selectedLocalId,
+        selectedNodePath,
+    };
+}
+
+function selectionRestoreTargetKey(target: DOMSelectionRestoreTarget | null | undefined): string {
+    if (!target) {
+        return "";
+    }
+    const selectedLocalId = typeof target.selectedLocalId === "number" ? target.selectedLocalId : 0;
+    const selectedNodePath = Array.isArray(target.selectedNodePath) ? target.selectedNodePath.join(".") : "";
+    return `${selectedLocalId}|${selectedNodePath}`;
+}
+
 function documentRequestMatches(
     lhs: Required<RequestDocumentOptions> | null | undefined,
     rhs: Required<RequestDocumentOptions> | null | undefined
@@ -502,7 +540,9 @@ function documentRequestMatches(
         && !!rhs
         && lhs.depth === rhs.depth
         && lhs.mode === rhs.mode
-        && lhs.pageEpoch === rhs.pageEpoch;
+        && lhs.pageEpoch === rhs.pageEpoch
+        && lhs.documentScopeID === rhs.documentScopeID
+        && selectionRestoreTargetKey(lhs.selectionRestoreTarget) === selectionRestoreTargetKey(rhs.selectionRestoreTarget);
 }
 
 function normalizeDocumentRequestOptions(options: RequestDocumentOptions = {}): Required<RequestDocumentOptions> | null {
@@ -513,11 +553,20 @@ function normalizeDocumentRequestOptions(options: RequestDocumentOptions = {}): 
     if (requestPageEpoch !== protocolState.pageEpoch) {
         return null;
     }
+    const requestDocumentScopeID =
+        typeof options.documentScopeID === "number" && Number.isFinite(options.documentScopeID)
+            ? options.documentScopeID
+            : protocolState.documentScopeID;
+    if (requestDocumentScopeID !== protocolState.documentScopeID) {
+        return null;
+    }
     const depth = typeof options.depth === "number" ? options.depth : protocolState.snapshotDepth;
     return {
         depth,
         mode: options.mode === "preserve-ui-state" ? "preserve-ui-state" : "fresh",
         pageEpoch: requestPageEpoch,
+        documentScopeID: requestDocumentScopeID,
+        selectionRestoreTarget: normalizeSelectionRestoreTarget(options.selectionRestoreTarget),
     };
 }
 
@@ -540,10 +589,46 @@ export async function requestDocument(options: RequestDocumentOptions = {}): Pro
     }
 }
 
+function selectionRecoveryRequestKey(
+    pageEpoch: number,
+    documentScopeID: number,
+    target: DOMSelectionRestoreTarget
+): string {
+    return `${pageEpoch}:${documentScopeID}:${selectionRestoreTargetKey(target)}`;
+}
+
+export function requestSelectionRecoveryIfNeeded(
+    target: DOMSelectionRestoreTarget | null | undefined,
+    pageEpoch = protocolState.pageEpoch,
+    documentScopeID = protocolState.documentScopeID
+): boolean {
+    const normalizedTarget = normalizeSelectionRestoreTarget(target);
+    if (!normalizedTarget) {
+        return false;
+    }
+    if (!matchesCurrentDocumentContext(pageEpoch, documentScopeID)) {
+        return false;
+    }
+    const requestKey = selectionRecoveryRequestKey(pageEpoch, documentScopeID, normalizedTarget);
+    if (treeState.selectionRecoveryRequestKeys.has(requestKey)) {
+        return false;
+    }
+    treeState.selectionRecoveryRequestKeys.add(requestKey);
+    console.debug("[WebInspectorKit] request reload:", "refresh-missing-target");
+    requestDocumentSafely({
+        mode: "preserve-ui-state",
+        pageEpoch,
+        documentScopeID,
+        selectionRestoreTarget: normalizedTarget,
+    });
+    return true;
+}
+
 onPageEpochDidChange(() => {
     resetDocumentRequestState();
     treeState.pendingRefreshRequests.clear();
     treeState.refreshAttempts.clear();
+    treeState.selectionRecoveryRequestKeys.clear();
 });
 onChildNodeRequestCompleted((nodeId) => {
     treeState.pendingRefreshRequests.delete(nodeId);

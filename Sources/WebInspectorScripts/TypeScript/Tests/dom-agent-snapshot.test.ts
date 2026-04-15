@@ -60,6 +60,7 @@ function resetInspectorState() {
     inspector.snapshotAutoUpdatePendingReason = null;
     inspector.nextInitialSnapshotMode = null;
     inspector.documentURL = null;
+    inspector.pendingSelectionRestoreTarget = null;
 }
 
 describe("dom-agent-snapshot", () => {
@@ -259,7 +260,11 @@ describe("dom-agent-snapshot", () => {
         document.body.innerHTML = "<main id=\"root\"><section id=\"target-parent\"><div id=\"target\"></div></section></main>";
         const target = document.getElementById("target");
         expect(target).not.toBeNull();
-        inspector.pendingSelectionPath = computeNodePath(target);
+        inspector.pendingSelectionRestoreTarget = {
+            path: computeNodePath(target),
+            localId: rememberNode(target),
+            backendNodeId: null,
+        };
 
         const webkit = window.webkit as unknown as {
             serializeNode?: (node: Node) => unknown;
@@ -294,6 +299,80 @@ describe("dom-agent-snapshot", () => {
         expect(mainDescriptor?.backendNodeId).toBe(102);
         expect(mainDescriptor?.localId).toBeTypeOf("number");
         expect(mainDescriptor?.localId).not.toBe(mainDescriptor?.backendNodeId);
+    });
+
+    it("recomputes the pending selection path from the live node before capture", () => {
+        document.body.innerHTML = "<main id=\"root\"><section id=\"parent\"><div id=\"target\"></div></section></main>";
+        const target = document.getElementById("target");
+        const parent = document.getElementById("parent");
+        expect(target).not.toBeNull();
+        expect(parent).not.toBeNull();
+
+        const webkit = window.webkit as unknown as {
+            serializeNode?: (node: Node) => unknown;
+        };
+        webkit.serializeNode = vi.fn((node: Node) => {
+            const element = node as Element;
+            switch (element.id || element.localName || element.nodeName.toLowerCase()) {
+            case "html":
+                return { nodeId: 100, children: [] };
+            case "body":
+                return { nodeId: 101, children: [] };
+            case "root":
+                return { nodeId: 102, children: [] };
+            case "parent":
+                return { nodeId: 103, children: [] };
+            case "before":
+                return { nodeId: 109, children: [] };
+            case "target":
+                return { nodeId: 104, children: [] };
+            default:
+                return null;
+            }
+        });
+
+        inspector.pendingSelectionRestoreTarget = {
+            path: computeNodePath(target),
+            localId: rememberNode(target),
+            backendNodeId: 104,
+        };
+
+        const inserted = document.createElement("div");
+        inserted.id = "before";
+        parent?.insertBefore(inserted, target);
+        const expectedPath = computeNodePath(target);
+
+        const payload = captureDOMPayload(5);
+
+        expect(payload.selectedNodeId).toBe(104);
+        expect(payload.selectedLocalId).toBeTypeOf("number");
+        expect(payload.selectedNodePath).toEqual(expectedPath);
+    });
+
+    it("recomputes the pending selection path from a remembered local id before a fresh snapshot reset", () => {
+        document.body.innerHTML = "<main id=\"root\"><section id=\"parent\"><div id=\"target\"></div></section></main>";
+        const target = document.getElementById("target");
+        const parent = document.getElementById("parent");
+        expect(target).not.toBeNull();
+        expect(parent).not.toBeNull();
+
+        const targetLocalId = rememberNode(target);
+        inspector.pendingSelectionRestoreTarget = {
+            path: computeNodePath(target),
+            localId: targetLocalId,
+            backendNodeId: null,
+        };
+        inspector.nextInitialSnapshotMode = "fresh";
+
+        const inserted = document.createElement("div");
+        inserted.id = "before";
+        parent?.insertBefore(inserted, target);
+        const expectedPath = computeNodePath(target);
+
+        const payload = captureDOMPayload(5, { consumeInitialSnapshotMode: false });
+
+        expect(payload.selectedLocalId).toBeTypeOf("number");
+        expect(payload.selectedNodePath).toEqual(expectedPath);
     });
 
     it("clears the pending initial snapshot mode even when snapshot posting throws", () => {
@@ -331,6 +410,34 @@ describe("dom-agent-snapshot", () => {
             expect(payload.reason).toBe("initial");
             expect(payload.snapshotMode).toBe("fresh");
             expect(inspector.nextInitialSnapshotMode).toBeNull();
+        } finally {
+            if (originalURLDescriptor) {
+                Object.defineProperty(document, "URL", originalURLDescriptor);
+            }
+        }
+    });
+
+    it("drops pending selection restore targets when the document URL changes", () => {
+        const originalURLDescriptor = Object.getOwnPropertyDescriptor(document, "URL");
+        inspector.documentURL = "https://example.com/page-one";
+        inspector.pendingSelectionRestoreTarget = {
+            path: [0, 0, 0],
+            localId: 99,
+            backendNodeId: 199,
+        };
+
+        Object.defineProperty(document, "URL", {
+            configurable: true,
+            value: "https://example.com/page-two"
+        });
+
+        try {
+            const payload = captureDOMPayload(4, { consumeInitialSnapshotMode: false });
+
+            expect(payload.selectedNodeId).toBeNull();
+            expect(payload.selectedLocalId).toBeNull();
+            expect(payload.selectedNodePath).toBeNull();
+            expect(inspector.pendingSelectionRestoreTarget).toBeNull();
         } finally {
             if (originalURLDescriptor) {
                 Object.defineProperty(document, "URL", originalURLDescriptor);

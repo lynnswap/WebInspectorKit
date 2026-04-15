@@ -16,6 +16,7 @@ function resetTreeState() {
     treeState.refreshAttempts.clear();
     treeState.selectionChain = [];
     treeState.deferredChildRenders.clear();
+    treeState.selectionRecoveryRequestKeys.clear();
     protocolState.snapshotDepth = 4;
     protocolState.subtreeDepth = 3;
     protocolState.pageEpoch = -1;
@@ -36,6 +37,7 @@ describe("dom-tree-view", () => {
         document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
         window.webkit = {
             messageHandlers: {
+                webInspectorDomRequestDocument: { postMessage: vi.fn() },
                 webInspectorReady: { postMessage: vi.fn() },
                 webInspectorLog: { postMessage: vi.fn() },
                 webInspectorDomSelection: { postMessage: vi.fn() },
@@ -288,5 +290,114 @@ describe("dom-tree-view", () => {
 
         expect(didSelect).toBe(true);
         expect(treeState.selectedNodeId).toBe(2);
+    });
+
+    it("requests a preserve-ui-state snapshot with a selection restore target when selection is missing from the current tree", () => {
+        const requestDocumentHandler = window.webkit?.messageHandlers?.webInspectorDomRequestDocument as {
+            postMessage: ReturnType<typeof vi.fn>;
+        };
+        const rafSpy = vi.spyOn(globalThis, "requestAnimationFrame");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
+            {
+                root: {
+                    nodeId: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["id", "root"],
+                    children: [
+                        {
+                            nodeId: 2,
+                            nodeType: 1,
+                            nodeName: "SECTION",
+                            localName: "section",
+                            attributes: ["id", "branch"],
+                            children: [],
+                        },
+                    ],
+                },
+            },
+            "fresh",
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+
+        const firstAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
+            {
+                selectedLocalId: 99,
+                selectedNodePath: [0, 0],
+            },
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+        const duplicateAttempt = window.webInspectorDOMFrontend?.applySelectionPayload?.(
+            {
+                selectedLocalId: 99,
+                selectedNodePath: [0, 0],
+            },
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+
+        expect(firstAttempt).toBe(false);
+        expect(duplicateAttempt).toBe(false);
+        expect(requestDocumentHandler.postMessage).toHaveBeenCalledTimes(1);
+        expect(requestDocumentHandler.postMessage.mock.calls[0]?.[0]).toMatchObject({
+            depth: protocolState.snapshotDepth,
+            mode: "preserve-ui-state",
+            pageEpoch: protocolState.pageEpoch,
+            documentScopeID: protocolState.documentScopeID,
+            selectionRestoreTarget: {
+                selectedLocalId: 99,
+                selectedNodePath: [0, 0],
+            },
+        });
+
+        rafSpy.mockClear();
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.(
+            {
+                root: {
+                    nodeId: 1,
+                    nodeType: 1,
+                    nodeName: "DIV",
+                    localName: "div",
+                    attributes: ["id", "root"],
+                    children: [
+                        {
+                            nodeId: 2,
+                            nodeType: 1,
+                            nodeName: "SECTION",
+                            localName: "section",
+                            attributes: ["id", "branch"],
+                            children: [
+                                {
+                                    nodeId: 99,
+                                    nodeType: 1,
+                                    nodeName: "SPAN",
+                                    localName: "span",
+                                    attributes: ["id", "target"],
+                                    children: [],
+                                },
+                            ],
+                        },
+                    ],
+                    selectedLocalId: 99,
+                    selectedNodePath: [0, 0],
+                },
+                selectedLocalId: 99,
+                selectedNodePath: [0, 0],
+            },
+            "fresh",
+            protocolState.pageEpoch,
+            protocolState.documentScopeID
+        );
+
+        expect(treeState.selectedNodeId).toBe(99);
+        expect(treeState.openState.get(1)).toBe(true);
+        expect(treeState.openState.get(2)).toBe(true);
+        expect(rafSpy).toHaveBeenCalled();
+        rafSpy.mockRestore();
     });
 });

@@ -14,6 +14,12 @@ export type SelectionState = {
 
 export type InitialSnapshotMode = "fresh" | "preserve-ui-state";
 
+export type PendingSelectionRestoreTarget = {
+    path: number[] | null;
+    localId: number | null;
+    backendNodeId: number | null;
+};
+
 export type InspectorState = {
     map: Map<number, AnyNode> | null;
     nodeMap: WeakMap<AnyNode, number> | null;
@@ -24,7 +30,7 @@ export type InspectorState = {
     overlayMutationObserver: MutationObserver | null;
     overlayMutationObserverActive: boolean;
     nextId: number;
-    pendingSelectionPath: number[] | null;
+    pendingSelectionRestoreTarget: PendingSelectionRestoreTarget | null;
     selectionState: SelectionState | null;
     cursorBackup: CursorBackup | null;
     windowClickBlockerHandler: ((event: Event) => void) | null;
@@ -108,7 +114,7 @@ export const inspector: InspectorState = {
     overlayMutationObserver: null,
     overlayMutationObserverActive: false,
     nextId: 1,
-    pendingSelectionPath: null,
+    pendingSelectionRestoreTarget: null,
     selectionState: null,
     cursorBackup: null,
     windowClickBlockerHandler: null,

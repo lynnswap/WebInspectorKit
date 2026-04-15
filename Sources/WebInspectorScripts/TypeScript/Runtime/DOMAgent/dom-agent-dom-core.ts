@@ -609,6 +609,11 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
     var normalizedPreviousURL = normalizeDocumentURL(inspector.documentURL || "");
     var shouldResetForURLChange = !!inspector.documentURL && normalizedPreviousURL !== normalizedCurrentURL;
     var shouldReset = inspector.nextInitialSnapshotMode === "fresh" || shouldResetForURLChange;
+    const pendingSelection = shouldResetForURLChange ? null : inspector.pendingSelectionRestoreTarget;
+    let selectionNode: AnyNode | null = null;
+    if (pendingSelection?.localId) {
+        selectionNode = rememberedNode(pendingSelection.localId);
+    }
     if (shouldReset || !inspector.map || !inspector.nodeMap || typeof inspector.nextId !== "number" || inspector.nextId < 1) {
         resetRememberedNodeHandles();
     }
@@ -617,7 +622,16 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
     }
     inspector.documentURL = currentURL;
 
-    var selectionPath = inspector.pendingSelectionPath;
+    let selectionPath = pendingSelection?.path ?? null;
+    if (!selectionNode && pendingSelection?.backendNodeId) {
+        selectionNode = findNodeByStableIdentifier(pendingSelection.backendNodeId);
+    }
+    if (selectionNode) {
+        const resolvedPath = computeNodePath(selectionNode);
+        if (Array.isArray(resolvedPath) && resolvedPath.length > 0) {
+            selectionPath = resolvedPath;
+        }
+    }
     var depthRequirement = Array.isArray(selectionPath) ? selectionPath.length + 1 : 0;
     var effectiveDepth = Math.max(maxDepth || 5, depthRequirement);
 
@@ -631,7 +645,7 @@ export function captureDOMPayload(maxDepth?: number, options?: SnapshotCaptureOp
         selectedLocalId = selectedNode ? (selectedNode.localId || null) : null;
     }
     var selectedNodePath: number[] | null = Array.isArray(selectionPath) ? selectionPath : null;
-    inspector.pendingSelectionPath = null;
+    inspector.pendingSelectionRestoreTarget = null;
     if (options?.consumeInitialSnapshotMode !== false) {
         inspector.nextInitialSnapshotMode = null;
     }

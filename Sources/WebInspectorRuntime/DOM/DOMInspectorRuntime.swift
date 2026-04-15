@@ -75,6 +75,12 @@ package final class DOMInspectorRuntime: NSObject {
     private struct PendingDocumentRequest: Equatable {
         let depth: Int
         let mode: DOMDocumentReloadMode
+        let selectionRestoreTarget: SelectionRestoreTarget?
+    }
+
+    struct SelectionRestoreTarget: Equatable {
+        let selectedLocalID: UInt64?
+        let selectedNodePath: [Int]?
     }
 
     let session: DOMSession
@@ -293,6 +299,7 @@ package final class DOMInspectorRuntime: NSObject {
     func requestDocument(
         depth: Int,
         mode: DOMDocumentReloadMode,
+        selectionRestoreTarget: SelectionRestoreTarget? = nil,
         expectedPageEpoch: Int? = nil,
         expectedDocumentScopeID: UInt64? = nil
     ) async -> Bool {
@@ -360,7 +367,11 @@ package final class DOMInspectorRuntime: NSObject {
             pendingSelectionOverrideLocalID = nil
             payloadNormalizer.resetForDocumentUpdate()
             currentDocumentModel.clearDocument(isFreshDocument: true)
-            pendingDocumentRequest = .init(depth: depth, mode: mode)
+            pendingDocumentRequest = .init(
+                depth: depth,
+                mode: mode,
+                selectionRestoreTarget: selectionRestoreTarget
+            )
             bridge.refreshBootstrapPayloadIfPossible()
             completeTransition(transition)
             await waitForCurrentBootstrapIfNeeded()
@@ -373,7 +384,11 @@ package final class DOMInspectorRuntime: NSObject {
         guard acceptsExpectedDocumentScopeID(expectedDocumentScopeID) else {
             return false
         }
-        pendingDocumentRequest = .init(depth: depth, mode: mode)
+        pendingDocumentRequest = .init(
+            depth: depth,
+            mode: mode,
+            selectionRestoreTarget: selectionRestoreTarget
+        )
         bridge.refreshBootstrapPayloadIfPossible()
         updateMutationPipelineReadyState()
         scheduleBootstrapIfNeeded()
@@ -470,11 +485,18 @@ package final class DOMInspectorRuntime: NSObject {
             payload["preferredDepth"] = pendingPreferredDepth
         }
         if let pendingDocumentRequest {
-            payload["pendingDocumentRequest"] = [
+            var requestPayload: [String: Any] = [
                 "depth": pendingDocumentRequest.depth,
                 "mode": pendingDocumentRequest.mode.rawValue,
                 "pageEpoch": pageEpoch,
             ]
+            if let selectionRestoreTarget = pendingDocumentRequest.selectionRestoreTarget {
+                requestPayload["selectionRestoreTarget"] = [
+                    "selectedLocalId": selectionRestoreTarget.selectedLocalID as Any,
+                    "selectedNodePath": selectionRestoreTarget.selectedNodePath as Any,
+                ]
+            }
+            payload["pendingDocumentRequest"] = requestPayload
         }
         return payload
     }
@@ -876,7 +898,7 @@ extension DOMInspectorRuntime {
     }
 
     func retryDocumentReplacementAfterContextAdoption(depth: Int, mode: DOMDocumentReloadMode) {
-        pendingDocumentRequest = .init(depth: depth, mode: mode)
+        pendingDocumentRequest = .init(depth: depth, mode: mode, selectionRestoreTarget: nil)
         replacementFenceContext = currentMutationContext
         bridge.refreshBootstrapPayloadIfPossible()
         updateMutationPipelineReadyState()
@@ -1131,6 +1153,7 @@ extension DOMInspectorRuntime {
             guard await requestDocumentNow(
                 depth: request.depth,
                 mode: request.mode,
+                selectionRestoreTarget: request.selectionRestoreTarget,
                 expectedPageEpoch: expectedPageEpoch
             ) else {
                 return false
@@ -1399,7 +1422,12 @@ extension DOMInspectorRuntime {
         }
     }
 
-    func requestDocumentNow(depth: Int, mode: DOMDocumentReloadMode, expectedPageEpoch: Int) async -> Bool {
+    func requestDocumentNow(
+        depth: Int,
+        mode: DOMDocumentReloadMode,
+        selectionRestoreTarget: SelectionRestoreTarget?,
+        expectedPageEpoch: Int
+    ) async -> Bool {
         guard pageEpoch == expectedPageEpoch else {
             return true
         }
@@ -1407,10 +1435,10 @@ extension DOMInspectorRuntime {
         let requestDocumentScopeID = currentDocumentScope.documentScopeID
 #if DEBUG
         if let testDocumentRequestApplyOverride {
-            await testDocumentRequestApplyOverride(depth, mode)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
                 return true
             }
+            await testDocumentRequestApplyOverride(depth, mode)
             await clearDocumentReplacementAfterContextAdoptionRequirement()
             return true
         }
@@ -1418,7 +1446,9 @@ extension DOMInspectorRuntime {
         do {
             let payload = try await session.captureSnapshotPayload(
                 maxDepth: depth,
-                initialModeOwnership: .preservePendingInitialMode
+                initialModeOwnership: .preservePendingInitialMode,
+                selectionRestorePath: selectionRestoreTarget?.selectedNodePath,
+                selectionRestoreLocalID: selectionRestoreTarget?.selectedLocalID
             )
             let (payloadForDispatch, appliedSelectionOverride) = payloadByApplyingPendingSelectionOverride(payload)
             guard pageEpoch == expectedPageEpoch, currentRequestScope === requestScope else {
@@ -1472,6 +1502,13 @@ extension DOMInspectorRuntime {
             }
             return true
         } catch {
+            if selectionRestoreTarget != nil {
+                await session.setPendingSelectionRestoreTarget(
+                    path: nil,
+                    localID: nil,
+                    backendNodeID: nil
+                )
+            }
             publishRecoverableError(error.localizedDescription)
             inspectorLogger.error("request document failed: \(error.localizedDescription, privacy: .public)")
             return false
@@ -1651,6 +1688,40 @@ extension DOMInspectorRuntime {
             return parsed
         }
         return nil
+    }
+
+    func parseSelectionRestoreTarget(_ value: Any?) -> SelectionRestoreTarget? {
+        let object: [String: Any]? = if let dictionary = value as? [String: Any] {
+            dictionary
+        } else if let dictionary = value as? NSDictionary {
+            dictionary as? [String: Any]
+        } else {
+            nil
+        }
+        guard let object else {
+            return nil
+        }
+        let selectedLocalID: UInt64? = {
+            guard let selectedLocalID = parseIntegerValue(object["selectedLocalId"]),
+                  selectedLocalID > 0 else {
+                return nil
+            }
+            return UInt64(selectedLocalID)
+        }()
+        let selectedNodePath: [Int]? = {
+            guard let path = object["selectedNodePath"] as? [Any] else {
+                return nil
+            }
+            let normalizedPath = path.compactMap(parseIntegerValue).filter { $0 >= 0 }
+            return normalizedPath.isEmpty ? nil : normalizedPath
+        }()
+        guard selectedLocalID != nil || selectedNodePath != nil else {
+            return nil
+        }
+        return .init(
+            selectedLocalID: selectedLocalID,
+            selectedNodePath: selectedNodePath
+        )
     }
 
     func parseBooleanValue(_ value: Any?) -> Bool? {
@@ -2108,6 +2179,7 @@ extension DOMInspectorRuntime {
         }
         let requestedDepth = parseIntegerValue(body["depth"]) ?? configuration.snapshotDepth
         let mode = DOMDocumentReloadMode(rawValue: body["mode"] as? String ?? "") ?? .fresh
+        let selectionRestoreTarget = parseSelectionRestoreTarget(body["selectionRestoreTarget"])
         let expectedPageEpoch = pageEpoch
         let expectedDocumentScopeID = if let requestedDocumentScopeID = parseIntegerValue(body["documentScopeID"]),
                                          requestedDocumentScopeID >= 0 {
@@ -2122,6 +2194,7 @@ extension DOMInspectorRuntime {
             let didRequestDocument = await self.requestDocument(
                 depth: requestedDepth,
                 mode: mode,
+                selectionRestoreTarget: selectionRestoreTarget,
                 expectedPageEpoch: expectedPageEpoch,
                 expectedDocumentScopeID: expectedDocumentScopeID
             )

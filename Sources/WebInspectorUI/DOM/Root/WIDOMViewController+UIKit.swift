@@ -26,15 +26,15 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         didSet {
             hasAppliedInitialRegularColumnWidth = false
             configureSplitViewLayout()
-            if isViewLoaded {
-                applyRegularLayoutPresentationIfNeeded()
-            }
+            applyRegularLayoutPresentationIfNeeded()
+            updateVisibleTreeHost()
         }
     }
 
     var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
         didSet {
             traitOverrides.horizontalSizeClass = horizontalSizeClassOverrideForTesting ?? .unspecified
+            updateVisibleTreeHost()
         }
     }
 
@@ -61,6 +61,14 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     var compactColumnViewControllerForTesting: UIViewController? {
         viewController(for: .compact)
+    }
+
+    var compactTreeViewControllerForTesting: WIDOMTreeViewController {
+        compactRootViewController
+    }
+
+    var regularTreeViewControllerForTesting: WIDOMTreeViewController {
+        domTreeViewController
     }
 
     var resolvedSecondaryMenuForTesting: UIMenu {
@@ -103,6 +111,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         let compactRootViewController = WIDOMTreeViewController(
             inspector: inspector
         )
+        compactRootViewController.setManagesInspectorWebViewExternally(true)
         self.compactRootViewController = compactRootViewController
         let compactNavigationController = UINavigationController(rootViewController: compactRootViewController)
         wiApplyClearNavigationBarStyle(to: compactNavigationController)
@@ -111,6 +120,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         let domTreeViewController = WIDOMTreeViewController(
             inspector: inspector
         )
+        domTreeViewController.setManagesInspectorWebViewExternally(true)
         self.domTreeViewController = domTreeViewController
         let domTreeNavigationController = UINavigationController(rootViewController: domTreeViewController)
         wiApplyClearNavigationBarStyle(to: domTreeNavigationController)
@@ -149,11 +159,13 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             self.applyRegularLayoutPresentationIfNeeded()
             self.updatePickItemAppearance()
             self.applyNavigationPlacement()
+            self.updateVisibleTreeHost()
         }
 
         startObservingPickItemStateIfNeeded()
         updatePickItemAppearance()
         applyNavigationPlacement()
+        updateVisibleTreeHost()
     }
 
     public override func viewDidLayoutSubviews() {
@@ -164,16 +176,19 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         applyNavigationPlacement()
+        updateVisibleTreeHost()
     }
 
     public override func didMove(toParent parent: UIViewController?) {
         super.didMove(toParent: parent)
         applyNavigationPlacement()
+        updateVisibleTreeHost()
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         applyRegularLayoutPresentationIfNeeded()
+        updateVisibleTreeHost()
     }
 
     private func updatePickItemAppearance() {
@@ -286,6 +301,21 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             }
             show(.inspector)
         }
+    }
+
+    private func updateVisibleTreeHost() {
+        let visibleTreeViewController = resolveVisibleTreeViewController()
+        if compactRootViewController !== visibleTreeViewController {
+            compactRootViewController.setInspectorWebViewActive(false)
+        }
+        if domTreeViewController !== visibleTreeViewController {
+            domTreeViewController.setInspectorWebViewActive(false)
+        }
+        visibleTreeViewController.setInspectorWebViewActive(true)
+    }
+
+    private func resolveVisibleTreeViewController() -> WIDOMTreeViewController {
+        traitCollection.horizontalSizeClass == .compact ? compactRootViewController : domTreeViewController
     }
 
     private func startObservingPickItemStateIfNeeded() {

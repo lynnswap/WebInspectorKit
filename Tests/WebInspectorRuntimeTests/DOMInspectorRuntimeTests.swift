@@ -1621,6 +1621,37 @@ struct DOMInspectorRuntimeTests {
     }
 
     @Test
+    func documentRequestMessagePreservesSelectionRestoreTargetInPendingRequest() async {
+        let store = makeStore(autoUpdateDebounce: 0.4)
+
+        store.handleDocumentRequestMessage([
+            "depth": 4,
+            "mode": DOMDocumentReloadMode.fresh.rawValue,
+            "selectionRestoreTarget": [
+                "selectedLocalId": 42,
+                "selectedNodePath": [0, 1],
+            ],
+        ])
+
+        let didQueueRequest = await waitForCondition {
+            (store.currentBootstrapPayload["pendingDocumentRequest"] as? [String: Any]) != nil
+        }
+        #expect(didQueueRequest == true)
+
+        let requestPayload = store.currentBootstrapPayload["pendingDocumentRequest"] as? [String: Any]
+        let selectionRestoreTarget = requestPayload?["selectionRestoreTarget"] as? [String: Any]
+        let selectedLocalID = (selectionRestoreTarget?["selectedLocalId"] as? NSNumber)?.intValue
+            ?? selectionRestoreTarget?["selectedLocalId"] as? Int
+        let selectedNodePath = (selectionRestoreTarget?["selectedNodePath"] as? [NSNumber])?.map(\.intValue)
+            ?? selectionRestoreTarget?["selectedNodePath"] as? [Int]
+
+        #expect(requestPayload?["depth"] as? Int == 4)
+        #expect(requestPayload?["mode"] as? String == DOMDocumentReloadMode.fresh.rawValue)
+        #expect(selectedLocalID == 42)
+        #expect(selectedNodePath == [0, 1])
+    }
+
+    @Test
     func staleInitialSnapshotScopeDoesNotRewindCurrentDocumentScope() {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.currentDocumentModel.replaceDocument(

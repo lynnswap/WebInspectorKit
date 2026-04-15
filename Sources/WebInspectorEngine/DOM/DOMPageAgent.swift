@@ -268,13 +268,21 @@ extension DOMPageAgent {
         )
     }
 
-    package func setPendingSelectionPath(_ path: [Int]?) async {
+    package func setPendingSelectionRestoreTarget(
+        path: [Int]?,
+        localID: UInt64?,
+        backendNodeID: Int?
+    ) async {
         guard let webView else {
             return
         }
         try? await webView.callAsyncVoidJavaScript(
-            "window.webInspectorDOM.setPendingSelectionPath(path)",
-            arguments: ["path": path as Any],
+            "window.webInspectorDOM.setPendingSelectionRestoreTarget(path, localId, backendNodeId)",
+            arguments: [
+                "path": path as Any,
+                "localId": localID as Any,
+                "backendNodeId": backendNodeID as Any,
+            ],
             contentWorld: bridgeWorld
         )
     }
@@ -350,12 +358,18 @@ extension DOMPageAgent {
 
     package func captureSnapshotEnvelope(
         maxDepth: Int,
-        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode
+        initialModeOwnership: DOMSnapshotInitialModeOwnership = .preservePendingInitialMode,
+        selectionRestorePath: [Int]? = nil,
+        selectionRestoreLocalID: UInt64? = nil,
+        selectionRestoreBackendNodeID: Int? = nil
     ) async throws -> Any {
         try await snapshotPayload(
             maxDepth: maxDepth,
             preferEnvelope: bridgeMode != .legacyJSON,
-            initialModeOwnership: initialModeOwnership
+            initialModeOwnership: initialModeOwnership,
+            selectionRestorePath: selectionRestorePath,
+            selectionRestoreLocalID: selectionRestoreLocalID,
+            selectionRestoreBackendNodeID: selectionRestoreBackendNodeID
         )
     }
 
@@ -1473,31 +1487,56 @@ private extension DOMPageAgent {
     func snapshotPayload(
         maxDepth: Int,
         preferEnvelope: Bool,
-        initialModeOwnership: DOMSnapshotInitialModeOwnership
+        initialModeOwnership: DOMSnapshotInitialModeOwnership,
+        selectionRestorePath: [Int]? = nil,
+        selectionRestoreLocalID: UInt64? = nil,
+        selectionRestoreBackendNodeID: Int? = nil
     ) async throws -> Any {
         guard let webView else {
             throw WebInspectorCoreError.scriptUnavailable
         }
         let captureExpression: String
         let captureEnvelopeExpression: String
+        let consumeInitialSnapshotMode: Bool
         switch initialModeOwnership {
         case .preservePendingInitialMode:
-            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth, { consumeInitialSnapshotMode: false })"
-            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth, { consumeInitialSnapshotMode: false })"
+            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth, { consumeInitialSnapshotMode })"
+            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth, { consumeInitialSnapshotMode })"
+            consumeInitialSnapshotMode = false
         case .consumePendingInitialMode:
-            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth)"
-            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth)"
+            captureExpression = "window.webInspectorDOM.captureSnapshot(maxDepth, { consumeInitialSnapshotMode })"
+            captureEnvelopeExpression = "window.webInspectorDOM.captureSnapshotEnvelope(maxDepth, { consumeInitialSnapshotMode })"
+            consumeInitialSnapshotMode = true
         }
+        let captureStatement = preferEnvelope
+            ? """
+            if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSnapshotEnvelope === "function") {
+                return \(captureEnvelopeExpression);
+            }
+            return \(captureExpression);
+            """
+            : "return \(captureExpression)"
+        let selectionRestoreTargetProvided =
+            selectionRestorePath != nil || selectionRestoreLocalID != nil || selectionRestoreBackendNodeID != nil
         let rawResult = try await webView.callAsyncJavaScriptCompat(
-            preferEnvelope
-                ? """
-                if (window.webInspectorDOM && typeof window.webInspectorDOM.captureSnapshotEnvelope === "function") {
-                    return \(captureEnvelopeExpression);
-                }
-                return \(captureExpression);
-                """
-                : "return \(captureExpression)",
-            arguments: ["maxDepth": max(1, maxDepth)],
+            """
+            if (selectionRestoreTargetProvided) {
+                window.webInspectorDOM.setPendingSelectionRestoreTarget(
+                    selectionRestorePath,
+                    selectionRestoreLocalID,
+                    selectionRestoreBackendNodeID
+                );
+            }
+            \(captureStatement)
+            """,
+            arguments: [
+                "maxDepth": max(1, maxDepth),
+                "consumeInitialSnapshotMode": consumeInitialSnapshotMode,
+                "selectionRestoreTargetProvided": selectionRestoreTargetProvided,
+                "selectionRestorePath": selectionRestorePath as Any,
+                "selectionRestoreLocalID": selectionRestoreLocalID as Any,
+                "selectionRestoreBackendNodeID": selectionRestoreBackendNodeID as Any,
+            ],
             in: nil,
             contentWorld: bridgeWorld
         )

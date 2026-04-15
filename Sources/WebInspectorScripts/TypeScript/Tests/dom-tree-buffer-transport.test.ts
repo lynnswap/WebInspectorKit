@@ -19,6 +19,7 @@ describe("dom-tree-buffer-transport", () => {
         treeState.refreshAttempts.clear();
         treeState.selectionChain = [];
         treeState.deferredChildRenders.clear();
+        treeState.selectionRecoveryRequestKeys.clear();
         protocolState.snapshotDepth = 4;
         protocolState.subtreeDepth = 3;
         protocolState.pageEpoch = -1;

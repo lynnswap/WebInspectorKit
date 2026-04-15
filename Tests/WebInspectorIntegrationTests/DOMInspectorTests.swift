@@ -3,6 +3,7 @@ import Testing
 import WebKit
 @testable import WebInspectorEngine
 @testable import WebInspectorRuntime
+@testable import WebInspectorUI
 
 #if canImport(UIKit)
 import UIKit
@@ -125,6 +126,87 @@ struct DOMInspectorTests {
     }
 
     @Test
+    func pickedSelectionUpdatesVisibleUIKitTreeAndDetailPanels() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+#if canImport(UIKit)
+        let pageWindow = makeUIKitWindow(containing: webView)
+        defer {
+            tearDownUIKitWindow(pageWindow)
+        }
+
+        let domViewController = WIDOMViewController(inspector: inspector)
+        domViewController.regularLayoutModeOverrideForTesting = .legacyPrimarySecondary
+        domViewController.horizontalSizeClassOverrideForTesting = .regular
+        let inspectorWindow = makeUIKitWindow(rootViewController: domViewController)
+        defer {
+            tearDownUIKitWindow(inspectorWindow)
+        }
+
+        domViewController.loadViewIfNeeded()
+        let detailNavigationController = try #require(domViewController.secondaryColumnViewControllerForTesting as? UINavigationController)
+        let detailViewController = try #require(detailNavigationController.topViewController as? WIDOMDetailViewController)
+        detailViewController.loadViewIfNeeded()
+#endif
+
+        await inspector.attach(to: webView)
+        await inspector.setAutoSnapshotEnabled(true)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <main>
+                        <section>
+                            <div id="target" data-testid="picked">Target</div>
+                        </section>
+                    </main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+        try await seedDocumentFromPageSnapshot(in: inspector, depth: 6)
+
+        let initialDocumentLoaded = await waitForCondition {
+            inspector.document.rootNode != nil
+        }
+        #expect(initialDocumentLoaded == true)
+
+        let selectionTask = Task { try await inspector.beginSelectionMode() }
+        let selectionStarted = await waitForCondition {
+            await selectionIsActive(in: webView)
+        }
+        #expect(selectionStarted == true)
+
+        let didDispatchSelection = await triggerElementSelection(elementID: "target", in: webView)
+        #expect(didDispatchSelection == true)
+
+        let selectionResult = try await selectionTask.value
+        #expect(selectionResult.cancelled == false)
+
+        let selectionApplied = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "target" }) == true
+        }
+        #expect(selectionApplied == true)
+
+#if canImport(UIKit)
+        let treeSelectionApplied = await waitForCondition(maxAttempts: 300) {
+            guard let selectedLocalID = inspector.document.selectedNode?.localID else {
+                return false
+            }
+            return await domViewController.regularTreeViewControllerForTesting.selectedNodeIDForTesting() == Int(selectedLocalID)
+        }
+        #expect(treeSelectionApplied == true)
+
+        let detailCollectionView = try #require(detailViewController.collectionView)
+        let detailSelectionApplied = await waitForCondition(maxAttempts: 300) {
+            visibleTextViewText(in: detailCollectionView, at: IndexPath(item: 0, section: 2)) == "target"
+        }
+        #expect(detailSelectionApplied == true)
+#endif
+    }
+
+    @Test
     func autoSnapshotMutationsContinueAfterPageElementSelection() async throws {
         let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
@@ -185,10 +267,18 @@ struct DOMInspectorTests {
         let inspector = WIInspectorController().dom
         let webView = makeTestWebView()
 #if canImport(UIKit)
-        let window = makeUIKitWindow(containing: webView)
+        let pageWindow = makeUIKitWindow(containing: webView)
         defer {
-            tearDownUIKitWindow(window)
+            tearDownUIKitWindow(pageWindow)
         }
+        let domViewController = WIDOMViewController(inspector: inspector)
+        domViewController.regularLayoutModeOverrideForTesting = .legacyPrimarySecondary
+        domViewController.horizontalSizeClassOverrideForTesting = .regular
+        let inspectorWindow = makeUIKitWindow(rootViewController: domViewController)
+        defer {
+            tearDownUIKitWindow(inspectorWindow)
+        }
+        domViewController.loadViewIfNeeded()
 #endif
 
         await inspector.attach(to: webView)
@@ -256,6 +346,70 @@ struct DOMInspectorTests {
             ?? (currentDebugStatus?["snapshotAutoUpdateMaxDepth"] as? NSNumber)?.intValue
             ?? initialSnapshotDepth
         #expect(currentPageSnapshotDepth == initialPageSnapshotDepth)
+#if canImport(UIKit)
+        let treeSelectionApplied = await waitForCondition(maxAttempts: 300) {
+            guard let selectedLocalID = inspector.document.selectedNode?.localID else {
+                return false
+            }
+            return await domViewController.regularTreeViewControllerForTesting.selectedNodeIDForTesting() == Int(selectedLocalID)
+        }
+        #expect(treeSelectionApplied == true)
+#endif
+    }
+
+    @Test
+    func headlessDeepSelectionDoesNotRequireInspectorFrontendReload() async throws {
+        let inspector = WIInspectorController().dom
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        await inspector.setAutoSnapshotEnabled(true)
+        await loadHTML(
+            """
+            <html>
+                <body>
+                    <main>
+                        <section id="level-1">
+                            <section id="level-2">
+                                <section id="level-3">
+                                    <section id="level-4">
+                                        <section id="level-5">
+                                            <section id="level-6">
+                                                <div id="target-headless">Target</div>
+                                            </section>
+                                        </section>
+                                    </section>
+                                </section>
+                            </section>
+                        </section>
+                    </main>
+                </body>
+            </html>
+            """,
+            in: webView
+        )
+        try await seedDocumentFromPageSnapshot(in: inspector, depth: 4)
+
+        let selectionTask = Task { try await inspector.beginSelectionMode() }
+        let selectionStarted = await waitForCondition {
+            await selectionIsActive(in: webView)
+        }
+        #expect(selectionStarted == true)
+        #expect(await triggerElementSelection(elementID: "target-headless", in: webView) == true)
+
+        let selectionResult = try await selectionTask.value
+        #expect(selectionResult.cancelled == false)
+
+        let selectionApplied = await waitForCondition(maxAttempts: 300) {
+            inspector.document.selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "target-headless" }) == true
+                && self.modelContainsNode(
+                    inspector.document.rootNode,
+                    attributeName: "id",
+                    attributeValue: "target-headless"
+                )
+        }
+        #expect(selectionApplied == true)
+        #expect(inspector.document.errorMessage == nil)
     }
 
     @Test
@@ -1690,8 +1844,38 @@ private func makeUIKitWindow(containing webView: WKWebView) -> UIWindow {
 }
 
 @MainActor
+private func makeUIKitWindow(rootViewController: UIViewController) -> UIWindow {
+    let window = UIWindow(frame: UIScreen.main.bounds)
+    window.rootViewController = rootViewController
+    window.isHidden = false
+    return window
+}
+
+@MainActor
 private func tearDownUIKitWindow(_ window: UIWindow) {
     window.isHidden = true
     window.rootViewController = nil
+}
+
+@MainActor
+private func visibleTextViewText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
+    collectionView.layoutIfNeeded()
+    guard let cell = collectionView.cellForItem(at: indexPath) else {
+        return nil
+    }
+    return firstSubview(of: UITextView.self, in: cell.contentView)?.text
+}
+
+@MainActor
+private func firstSubview<ViewType: UIView>(of type: ViewType.Type, in view: UIView) -> ViewType? {
+    if let matched = view as? ViewType {
+        return matched
+    }
+    for subview in view.subviews {
+        if let matched = firstSubview(of: type, in: subview) {
+            return matched
+        }
+    }
+    return nil
 }
 #endif

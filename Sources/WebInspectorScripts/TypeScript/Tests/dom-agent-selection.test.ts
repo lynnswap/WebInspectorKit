@@ -10,7 +10,7 @@ function resetInspectorSelectionState() {
     inspector.nodeMap = new WeakMap();
     inspector.nextId = 1;
     inspector.selectionState = null;
-    inspector.pendingSelectionPath = null;
+    inspector.pendingSelectionRestoreTarget = null;
     inspector.cursorBackup = null;
     inspector.windowClickBlockerHandler = null;
     inspector.windowClickBlockerPendingRelease = false;

@@ -104,6 +104,11 @@ export interface DOMSelectionSyncPayload {
     selectedNodePath?: number[] | null;
 }
 
+export interface DOMSelectionRestoreTarget {
+    selectedLocalId?: number | null;
+    selectedNodePath?: number[] | null;
+}
+
 // =============================================================================
 // Protocol Types
 // =============================================================================
@@ -152,6 +157,7 @@ export interface TreeState {
     refreshAttempts: Map<number, RefreshAttempt>;
     selectionChain: number[];
     deferredChildRenders: Set<number>;
+    selectionRecoveryRequestKeys: Set<string>;
 }
 
 /** Refresh attempt tracking */
@@ -323,6 +329,8 @@ export interface RequestDocumentOptions {
     depth?: number;
     mode?: RequestDocumentMode;
     pageEpoch?: number;
+    documentScopeID?: number;
+    selectionRestoreTarget?: DOMSelectionRestoreTarget | null;
 }
 
 // =============================================================================

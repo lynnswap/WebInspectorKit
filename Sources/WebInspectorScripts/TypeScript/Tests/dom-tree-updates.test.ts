@@ -39,6 +39,7 @@ function resetTreeState() {
     treeState.refreshAttempts.clear();
     treeState.selectionChain = [];
     treeState.deferredChildRenders.clear();
+    treeState.selectionRecoveryRequestKeys.clear();
 
     if (renderState.frameId !== null) {
         cancelAnimationFrame(renderState.frameId);

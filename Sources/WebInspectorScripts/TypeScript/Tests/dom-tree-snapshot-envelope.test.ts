@@ -20,6 +20,7 @@ function resetTreeState() {
     treeState.refreshAttempts.clear();
     treeState.selectionChain = [];
     treeState.deferredChildRenders.clear();
+    treeState.selectionRecoveryRequestKeys.clear();
     dom.tree = null;
     dom.empty = null;
 

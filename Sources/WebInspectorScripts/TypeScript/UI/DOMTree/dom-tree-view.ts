@@ -28,6 +28,7 @@ import {
     applySubtree,
     completeDocumentRequest,
     rejectDocumentRequest,
+    requestSelectionRecoveryIfNeeded,
     setSnapshot,
     resetDocumentRequestStateForPageEpoch,
     applyMutationBuffer,
@@ -79,16 +80,18 @@ function readBootstrap(): DOMFrontendBootstrapState {
 
 function normalizeSelectionSyncPayload(
     payload: number | DOMSelectionSyncPayload
-): { nodeId: number | null; selectedNodePath: number[] | null } {
+): { nodeId: number | null; selectedLocalId: number | null; selectedNodePath: number[] | null } {
     if (typeof payload === "number" && Number.isFinite(payload)) {
         return {
             nodeId: payload > 0 ? payload : null,
+            selectedLocalId: payload > 0 ? payload : null,
             selectedNodePath: null,
         };
     }
     if (!payload || typeof payload !== "object") {
         return {
             nodeId: null,
+            selectedLocalId: null,
             selectedNodePath: null,
         };
     }
@@ -100,7 +103,7 @@ function normalizeSelectionSyncPayload(
         payload.nodeId,
         payload.id,
     ];
-    const nodeId =
+    const selectedLocalId =
         candidateNodeIDs.find((candidate) => typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0)
         ?? null;
     const selectedNodePath = Array.isArray(payload.selectedNodePath)
@@ -108,7 +111,8 @@ function normalizeSelectionSyncPayload(
         ? payload.selectedNodePath
         : null;
     return {
-        nodeId,
+        nodeId: selectedLocalId,
+        selectedLocalId,
         selectedNodePath,
     };
 }
@@ -195,8 +199,18 @@ function installWebInspectorKit(): void {
                 return true;
             }
             if (Array.isArray(selection.selectedNodePath)) {
-                return selectNodeByPath(selection.selectedNodePath, selectionOptions);
+                if (selectNodeByPath(selection.selectedNodePath, selectionOptions)) {
+                    return true;
+                }
             }
+            requestSelectionRecoveryIfNeeded(
+                {
+                    selectedLocalId: selection.selectedLocalId,
+                    selectedNodePath: selection.selectedNodePath,
+                },
+                pageEpoch,
+                documentScopeID
+            );
             return false;
         },
         completeChildNodeRequest: (
