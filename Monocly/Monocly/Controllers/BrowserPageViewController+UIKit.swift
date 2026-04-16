@@ -142,7 +142,7 @@ final class BrowserPageViewController: UIViewController {
     @objc
     private func handleOpenInspectorAction(_ sender: Any?) {
         _ = sender
-        _ = openInspectorAsSheet(tabs: [.dom(), .network()])
+        _ = openInspectorAsSheet(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
     }
 
     private func configureViewHierarchy() {
@@ -363,7 +363,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
         }
     }
 
@@ -381,7 +381,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorAsSheet(tabs: [.dom(), .network()])
+            _ = self.openInspectorAsSheet(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
         }
         let openInWindow = UIAction(
             title: "Open in New Window",
@@ -391,7 +391,7 @@ final class BrowserPageViewController: UIViewController {
             guard let self else {
                 return
             }
-            _ = self.openInspectorInNewWindow(tabs: [.dom(), .network()])
+            _ = self.openInspectorInNewWindow(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
         }
 
         return UIMenu(title: "", children: [openAsSheet, openInWindow])
@@ -611,7 +611,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorPrimaryActionForTesting() -> Bool {
-        openInspectorAsSheet(tabs: [.dom(), .network()])
+        openInspectorAsSheet(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
     }
 
     @discardableResult
@@ -626,7 +626,7 @@ final class BrowserPageViewController: UIViewController {
 
     @discardableResult
     func triggerInspectorWindowActionForTesting() -> Bool {
-        openInspectorInNewWindow(tabs: [.dom(), .network()])
+        openInspectorInNewWindow(tabs: BrowserLaunchConfiguration.defaultInspectorTabs)
     }
 
     func refreshInspectorControlsForTesting() {

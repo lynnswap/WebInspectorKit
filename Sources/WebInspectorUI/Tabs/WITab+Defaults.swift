@@ -39,4 +39,16 @@ extension WITab {
             role: .inspector
         )
     }
+
+    public static func console(
+        title: String? = nil,
+        systemImage: String? = nil
+    ) -> WITab {
+        WITab(
+            id: consoleTabID,
+            title: title ?? wiLocalized("inspector.tab.console", default: "Console"),
+            systemImage: systemImage ?? "terminal",
+            role: .inspector
+        )
+    }
 }

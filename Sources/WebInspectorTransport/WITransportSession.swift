@@ -3,6 +3,13 @@ import WebKit
 
 @MainActor
 public final class WITransportSession {
+    private struct InspectabilityEntry {
+        let originalValue: Bool
+        var retainCount: Int
+    }
+
+    private static var inspectabilityEntries: [ObjectIdentifier: InspectabilityEntry] = [:]
+
     public enum State: String, Sendable {
         case detached
         case attaching
@@ -21,6 +28,7 @@ public final class WITransportSession {
     package var onStateTransitionForTesting: (@MainActor (State) -> Void)?
 
     private weak var webView: WKWebView?
+    private var webViewObjectIdentifier: ObjectIdentifier?
     private var originalInspectability: Bool?
     private var backend: (any WITransportPlatformBackend)?
     private var backendMessageSink: WITransportSessionMessageSink?
@@ -52,6 +60,7 @@ public final class WITransportSession {
 
         let originalInspectability = prepareInspectability(for: webView)
         self.originalInspectability = originalInspectability
+        self.webViewObjectIdentifier = ObjectIdentifier(webView)
 
         let backend = backendFactory(configuration)
         supportSnapshot = backend.supportSnapshot
@@ -85,6 +94,7 @@ public final class WITransportSession {
             self.backend = nil
             disconnectTransportState()
             self.webView = nil
+            self.webViewObjectIdentifier = nil
             transition(to: .detached)
             restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
             self.originalInspectability = nil
@@ -111,6 +121,7 @@ public final class WITransportSession {
         disconnectTransportState()
         restoreInspectabilityIfNeeded()
         webView = nil
+        webViewObjectIdentifier = nil
         transition(to: .detached)
         log("detached")
     }
@@ -675,17 +686,41 @@ private extension WITransportSession {
             return nil
         }
 
-        let originalInspectability = webView.isInspectable
+        let objectIdentifier = ObjectIdentifier(webView)
+        let originalInspectability: Bool
+        if var entry = Self.inspectabilityEntries[objectIdentifier] {
+            entry.retainCount += 1
+            Self.inspectabilityEntries[objectIdentifier] = entry
+            originalInspectability = entry.originalValue
+        } else {
+            originalInspectability = webView.isInspectable
+            Self.inspectabilityEntries[objectIdentifier] = .init(
+                originalValue: originalInspectability,
+                retainCount: 1
+            )
+        }
         webView.isInspectable = true
         return originalInspectability
     }
 
     func restoreInspectabilityIfNeeded() {
         guard let webView else {
+            if let webViewObjectIdentifier,
+               var entry = Self.inspectabilityEntries[webViewObjectIdentifier] {
+                entry.retainCount -= 1
+                if entry.retainCount <= 0 {
+                    Self.inspectabilityEntries.removeValue(forKey: webViewObjectIdentifier)
+                } else {
+                    Self.inspectabilityEntries[webViewObjectIdentifier] = entry
+                }
+            }
             originalInspectability = nil
+            webViewObjectIdentifier = nil
             return
         }
         restoreInspectabilityIfNeeded(on: webView, originalValue: originalInspectability)
+        originalInspectability = nil
+        webViewObjectIdentifier = nil
     }
 
     func restoreInspectabilityIfNeeded(on webView: WKWebView, originalValue: Bool?) {
@@ -693,7 +728,19 @@ private extension WITransportSession {
             return
         }
 
-        webView.isInspectable = originalValue
+        let objectIdentifier = ObjectIdentifier(webView)
+        guard var entry = Self.inspectabilityEntries[objectIdentifier] else {
+            webView.isInspectable = originalValue
+            return
+        }
+
+        entry.retainCount -= 1
+        if entry.retainCount <= 0 {
+            Self.inspectabilityEntries.removeValue(forKey: objectIdentifier)
+            webView.isInspectable = entry.originalValue
+        } else {
+            Self.inspectabilityEntries[objectIdentifier] = entry
+        }
     }
 
     func transition(to newState: State) {

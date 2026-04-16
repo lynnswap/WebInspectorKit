@@ -64,7 +64,7 @@ struct WITransportSessionTests {
             ),
             supportSnapshotAfterAttach: .supported(
                 backendKind: .macOSNativeInspector,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .consoleDomain]
             )
         )
         let session = WITransportSession(
@@ -78,6 +78,7 @@ struct WITransportSessionTests {
         #expect(session.supportSnapshot.backendKind == .macOSNativeInspector)
         #expect(session.supportSnapshot.capabilities.contains(.domDomain))
         #expect(session.supportSnapshot.capabilities.contains(.networkDomain))
+        #expect(session.supportSnapshot.capabilities.contains(.consoleDomain))
         #expect(session.supportSnapshot.failureReason == nil)
     }
 
@@ -94,6 +95,37 @@ struct WITransportSessionTests {
 
         #expect(session.state == .attached)
         #expect(session.currentPageTargetIdentifier() == nil)
+    }
+
+    @Test
+    func inspectabilityRemainsEnabledUntilLastSessionDetaches() async throws {
+        guard #available(iOS 16.4, macOS 13.3, *) else {
+            return
+        }
+
+        let firstBackend = FakeSessionBackend()
+        let secondBackend = FakeSessionBackend()
+        let firstSession = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in firstBackend }
+        )
+        let secondSession = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in secondBackend }
+        )
+        let webView = makeIsolatedTestWebView()
+        webView.isInspectable = false
+
+        try await firstSession.attach(to: webView)
+        #expect(webView.isInspectable)
+
+        try await secondSession.attach(to: webView)
+        #expect(webView.isInspectable)
+
+        firstSession.detach()
+        #expect(webView.isInspectable)
+
+        secondSession.detach()
     }
 
     @Test

@@ -214,6 +214,8 @@ final class WIRegularTabHostViewController: UINavigationController {
                 viewController = WIDOMDetailViewController(inspector: inspector.dom)
             case WITab.networkTabID:
                 viewController = WINetworkViewController(inspector: inspector.network)
+            case WITab.consoleTabID:
+                viewController = WIConsoleViewController(inspector: inspector.console)
             default:
                 viewController = nil
             }

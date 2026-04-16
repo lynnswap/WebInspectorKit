@@ -16,6 +16,7 @@ public final class WITab: NSObject {
     public static let domTabID = "wi_dom"
     public static let elementTabID = "wi_element"
     public static let networkTabID = "wi_network"
+    public static let consoleTabID = "wi_console"
 
     public enum Role: Hashable, Sendable {
         case inspector

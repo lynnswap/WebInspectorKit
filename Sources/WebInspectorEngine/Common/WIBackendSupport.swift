@@ -9,6 +9,7 @@ public enum WIBackendKind: String, Sendable {
 public enum WIBackendCapability: String, Hashable, Sendable {
     case domDomain
     case networkDomain
+    case consoleDomain
     case pageTargetRouting
     case networkBootstrapSnapshot
 }

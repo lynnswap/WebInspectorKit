@@ -3,7 +3,7 @@ import WebKit
 import ObservationBridge
 @testable import WebInspectorUI
 @testable import WebInspectorEngine
-@testable import WebInspectorRuntime
+@_spi(Monocly) @testable import WebInspectorRuntime
 
 @MainActor
 struct WISessionStateTests {
@@ -263,6 +263,54 @@ struct WISessionStateTests {
 
         #expect(controller.selectedTab?.identifier == WITab.elementTabID)
         #expect(controller.tabs.map(\.identifier) == [WITab.domTabID, WITab.networkTabID])
+    }
+
+    @Test
+    func consoleHelperUsesInspectorRoleAndIdentifier() {
+        let consoleTab = WITab.console()
+
+        #expect(consoleTab.identifier == WITab.consoleTabID)
+        #expect(consoleTab.role == .inspector)
+    }
+
+    @Test
+    func consoleAttachesWhenConfiguredEvenIfAnotherTabIsSelected() async throws {
+        let controller = WIInspectorController()
+        controller.setTabs([.network(), .console()])
+        let networkTab = try #require(controller.tabs.first(where: { $0.identifier == WITab.networkTabID }))
+        controller.setSelectedTab(networkTab)
+        let webView = makeTestWebView()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+
+        #expect(controller.selectedTab?.identifier == WITab.networkTabID)
+        #expect(controller.console.isAttachedToPage)
+    }
+
+    @Test
+    func emptyTabsDoNotActivateConsoleByDefault() async {
+        let controller = WIInspectorController()
+        controller.setTabs([])
+        let webView = makeTestWebView()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+
+        #expect(controller.console.isAttachedToPage == false)
+    }
+
+    @Test
+    func tearDownForDeinitDetachesConsole() async {
+        let controller = WIInspectorController()
+        controller.setTabs([.console()])
+        let webView = makeTestWebView()
+
+        await controller.applyHostState(pageWebView: webView, visibility: .visible)
+        #expect(controller.console.isAttachedToPage)
+
+        controller.tearDownForDeinit()
+
+        #expect(controller.console.isAttachedToPage == false)
+        #expect(controller.console.session.hasAttachedPageWebView == false)
     }
 
     private func makeTestWebView() -> WKWebView {

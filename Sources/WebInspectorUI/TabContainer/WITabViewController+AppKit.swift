@@ -836,6 +836,8 @@ public final class WITabViewController: NSViewController, NSToolbarDelegate {
                     inspector: inspectorController.network,
                     queryModel: networkQueryModel
                 )
+            case WITab.consoleTabID:
+                viewController = WIConsoleViewController(inspector: inspectorController.console)
             default:
                 viewController = WIPlaceholderTabContentViewController()
             }

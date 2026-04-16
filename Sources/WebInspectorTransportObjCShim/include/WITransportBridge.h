@@ -15,6 +15,8 @@ typedef struct {
     uint64_t stringImplToNSStringAddress;
     uint64_t destroyStringImplAddress;
     uint64_t backendDispatcherDispatchAddress;
+    uint64_t targetAgentDidCreateFrontendAndBackendAddress;
+    uint8_t frontendAttachmentStrategy;
 } WITransportResolvedFunctions;
 
 typedef struct {
