@@ -140,51 +140,6 @@ struct ConsoleTransportDriverTests {
     }
 
     @Test
-    func iOSConsoleNativeDriverReceivesMessagesAcrossMainFrameNavigation() async {
-        let driver = ConsoleTransportDriver()
-        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
-        let window = makeHostWindow(with: webView)
-        defer {
-            tearDownHostWindow(window)
-        }
-
-        await driver.attachPageWebView(webView)
-        await loadHTML(
-            """
-            <html><body><script>console.log('first-load')</script></body></html>
-            """,
-            baseURL: URL(string: "https://example.com/first"),
-            in: webView
-        )
-
-        #expect(await waitForCondition {
-            driver.isReadyToReceiveConsole
-        })
-        await driver.evaluate("1 + 1")
-        #expect(await waitForCondition {
-            driver.store.entries.contains { $0.renderedText.contains("2") }
-        })
-
-        await loadHTML(
-            """
-            <html><body><script>console.log('second-load')</script></body></html>
-            """,
-            baseURL: URL(string: "https://example.com/second"),
-            in: webView
-        )
-
-        #expect(await waitForCondition {
-            driver.isReadyToReceiveConsole
-        })
-        await driver.evaluate("3 + 4")
-        #expect(await waitForCondition {
-            driver.store.entries.contains { $0.renderedText.contains("7") }
-        })
-
-        await driver.detachPageWebView()
-    }
-
-    @Test
     func iOSConsoleStaysUsableAlongsideNativeNetworkAcrossMainFrameNavigation() async {
         let consoleDriver = ConsoleTransportDriver()
         let networkDriver = NetworkTransportDriver()
@@ -232,35 +187,6 @@ struct ConsoleTransportDriverTests {
 
         await consoleDriver.detachPageWebView()
         await networkDriver.detachPageWebView(preparing: .stopped)
-    }
-
-    @Test
-    func consoleRuntimeDoesNotClearOnSameDocumentURLChange() async {
-        let backend = SpyConsoleBackend()
-        let runtime = WIConsoleRuntime(backend: backend)
-        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
-        let window = makeHostWindow(with: webView)
-        defer {
-            tearDownHostWindow(window)
-        }
-
-        await loadHTML(
-            """
-            <html><body>same document</body></html>
-            """,
-            baseURL: URL(string: "https://example.com/first")!,
-            in: webView
-        )
-
-        await runtime.attach(pageWebView: webView)
-        await runJavaScript(
-            "history.pushState({}, '', '/second#fragment')",
-            in: webView
-        )
-        await runtime.attach(pageWebView: webView)
-
-        #expect(backend.clearCallCount == 0)
-        await runtime.detach()
     }
     #endif
 
@@ -603,17 +529,26 @@ struct ConsoleTransportDriverTests {
 
     @Test
     func clearWithoutCurrentPageTargetSkipsBackendCommands() async {
+        let clock = TestClock()
         let backend = FakeConsoleRegistryBackend(
             attachHandler: { _ in }
         )
         let driver = ConsoleTransportDriver(
-            transportSessionFactory: makeTransportSessionFactory(using: backend)
+            transportSessionFactory: makeTransportSessionFactory(
+                using: backend,
+                clock: clock
+            )
         )
         let webView = makeIsolatedTestWebView()
 
         await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
-        await driver.clearConsole()
+        let clearTask = Task { @MainActor in
+            await driver.clearConsole()
+        }
+        await clock.sleep(untilSuspendedBy: 1)
+        clock.advance(by: .seconds(1))
+        await clearTask.value
 
         #expect(backend.sentPageMethods.contains(WITransportMethod.Runtime.releaseObjectGroup) == false)
         #expect(backend.sentPageMethods.contains(WITransportMethod.Console.clearMessages) == false)
@@ -933,17 +868,26 @@ struct ConsoleTransportDriverTests {
 
     @Test
     func evaluateWithoutCurrentPageTargetStaysLocalAndDoesNotRunLater() async {
+        let clock = TestClock()
         let backend = FakeConsoleRegistryBackend(
             attachHandler: { _ in }
         )
         let driver = ConsoleTransportDriver(
-            transportSessionFactory: makeTransportSessionFactory(using: backend)
+            transportSessionFactory: makeTransportSessionFactory(
+                using: backend,
+                clock: clock
+            )
         )
         let webView = makeIsolatedTestWebView()
 
         await driver.attachPageWebView(webView)
         await driver.waitForAttachForTesting()
-        await driver.evaluate("1 + 1")
+        let evaluateTask = Task { @MainActor in
+            await driver.evaluate("1 + 1")
+        }
+        await clock.sleep(untilSuspendedBy: 1)
+        clock.advance(by: .seconds(1))
+        await evaluateTask.value
 
         #expect(backend.sentPageMethods.contains(WITransportMethod.Runtime.evaluate) == false)
         #expect(await waitForCondition {
@@ -1217,12 +1161,14 @@ struct ConsoleTransportDriverTests {
 private extension ConsoleTransportDriverTests {
     func makeTransportSessionFactory(
         using backend: FakeConsoleRegistryBackend,
-        configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1))
+        configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1)),
+        clock: any Clock<Duration> = ContinuousClock()
     ) -> @MainActor () -> WITransportSession {
         {
             WITransportSession(
                 configuration: configuration,
-                backendFactory: { _ in backend }
+                backendFactory: { _ in backend },
+                clock: clock
             )
         }
     }
@@ -1255,14 +1201,6 @@ private extension ConsoleTransportDriverTests {
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: baseURL)
-        }
-    }
-
-    func runJavaScript(_ script: String, in webView: WKWebView) async {
-        await withCheckedContinuation { continuation in
-            webView.evaluateJavaScript(script) { _, _ in
-                continuation.resume()
-            }
         }
     }
 
@@ -1441,38 +1379,6 @@ private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
         let object = try JSONSerialization.jsonObject(with: data)
         return object as? [String: Any] ?? [:]
     }
-}
-
-@MainActor
-private final class SpyConsoleBackend: WIConsoleBackend {
-    weak var webView: WKWebView?
-    let store = ConsoleStore()
-    let support = WIBackendSupport(
-        availability: .supported,
-        backendKind: .nativeInspectorIOS,
-        capabilities: [.consoleDomain]
-    )
-
-    private(set) var clearCallCount = 0
-
-    func attachPageWebView(_ newWebView: WKWebView?) async {
-        webView = newWebView
-    }
-
-    func detachPageWebView(clearsStoreOnNextAttach: Bool) async {
-        _ = clearsStoreOnNextAttach
-        webView = nil
-    }
-
-    func clearConsole() async {
-        clearCallCount += 1
-    }
-
-    func evaluate(_ expression: String) async {
-        _ = expression
-    }
-
-    func tearDownForDeinit() {}
 }
 
 #if canImport(UIKit)

@@ -85,6 +85,103 @@ struct ControllerActivationTests {
         #expect(controller.network.session.mode == .stopped)
     }
 
+#if canImport(UIKit)
+    @Test
+    func consoleAndNetworkStayUsableAcrossMainFrameNavigation() async {
+        let controller = makeBoundSession(tabs: [.console(), .network()])
+        let webView = makeTestWebView()
+        let pageWindow = makeUIKitWindow(containing: webView)
+        defer {
+            tearDownUIKitWindow(pageWindow)
+        }
+        pageWindow.makeKeyAndVisible()
+
+        await controller.connect(to: webView)
+        #expect(await waitForCondition {
+            controller.console.isAttachedToPage
+                && controller.network.session.lastPageWebView === webView
+        })
+
+        await loadHTML(
+            """
+            <html><body><script>console.log('first-load')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/first"),
+            in: webView
+        )
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("first-load") }
+        })
+
+        await controller.console.evaluate("1 + 1")
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("2") }
+        })
+
+        await loadHTML(
+            """
+            <html><body><script>console.log('second-load')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/second"),
+            in: webView
+        )
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("second-load") }
+                && controller.network.session.lastPageWebView === webView
+        })
+
+        await controller.console.evaluate("3 + 4")
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("7") }
+        })
+    }
+
+    @Test
+    func reconnectAfterSameDocumentURLChangePreservesConsoleHistory() async {
+        let controller = makeBoundSession(tabs: [.console()])
+        let webView = makeTestWebView()
+        let pageWindow = makeUIKitWindow(containing: webView)
+        defer {
+            tearDownUIKitWindow(pageWindow)
+        }
+        pageWindow.makeKeyAndVisible()
+
+        await controller.connect(to: webView)
+        #expect(await waitForCondition {
+            controller.console.isAttachedToPage
+        })
+
+        await loadHTML(
+            """
+            <html><body>same document</body></html>
+            """,
+            baseURL: URL(string: "https://example.com/first"),
+            in: webView
+        )
+
+        await controller.console.evaluate("1 + 1")
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("2") }
+        })
+
+        await runJavaScript(
+            "history.pushState({}, '', '/second#fragment')",
+            in: webView
+        )
+        await controller.connect(to: webView)
+
+        #expect(await waitForCondition {
+            controller.console.isAttachedToPage
+                && controller.console.store.entries.contains { $0.renderedText.contains("2") }
+        })
+
+        await controller.console.evaluate("2 + 3")
+        #expect(await waitForCondition {
+            controller.console.store.entries.contains { $0.renderedText.contains("5") }
+        })
+    }
+#endif
+
     @Test
     func selectedTabSwitchesNetworkModeBetweenBufferingAndActive() async {
         let controller = makeBoundSession(tabs: [.dom(), .network()])
@@ -758,13 +855,21 @@ struct ControllerActivationTests {
         return controller
     }
 
-    private func loadHTML(_ html: String, in webView: WKWebView) async {
+    private func loadHTML(_ html: String, baseURL: URL? = nil, in webView: WKWebView) async {
         let navigationDelegate = NavigationDelegate()
         webView.navigationDelegate = navigationDelegate
 
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
-            webView.loadHTMLString(html, baseURL: nil)
+            webView.loadHTMLString(html, baseURL: baseURL)
+        }
+    }
+
+    private func runJavaScript(_ script: String, in webView: WKWebView) async {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { _, _ in
+                continuation.resume()
+            }
         }
     }
 
