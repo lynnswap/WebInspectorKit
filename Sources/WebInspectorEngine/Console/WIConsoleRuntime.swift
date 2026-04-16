@@ -5,7 +5,6 @@ import WebKit
 package final class WIConsoleRuntime {
     package let store: ConsoleStore
     package private(set) weak var lastPageWebView: WKWebView?
-    private var lastPageURL: String?
 
     private let backend: any WIConsoleBackend
 
@@ -23,13 +22,8 @@ package final class WIConsoleRuntime {
     }
 
     package func attach(pageWebView webView: WKWebView) async {
-        if lastPageWebView === webView,
-           lastPageURL != webView.url?.absoluteString {
-            await backend.clearConsole()
-        }
         await backend.attachPageWebView(webView)
         lastPageWebView = webView
-        lastPageURL = webView.url?.absoluteString
     }
 
     package func suspend() async {
@@ -39,7 +33,6 @@ package final class WIConsoleRuntime {
     package func detach() async {
         await backend.detachPageWebView(clearsStoreOnNextAttach: true)
         lastPageWebView = nil
-        lastPageURL = nil
     }
 
     package func clearConsole() async {
@@ -53,6 +46,5 @@ package final class WIConsoleRuntime {
     package func tearDownForDeinit() {
         backend.tearDownForDeinit()
         lastPageWebView = nil
-        lastPageURL = nil
     }
 }

@@ -907,6 +907,7 @@ private extension ConsoleTransportDriver {
             return true
         }
         return url.absoluteString == "about:blank"
+            && transportSession?.currentPageTargetIdentifier() == nil
     }
 
     func failCurrentTransportSession(

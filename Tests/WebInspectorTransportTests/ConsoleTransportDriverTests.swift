@@ -111,6 +111,35 @@ struct ConsoleTransportDriverTests {
 
     #if canImport(UIKit)
     @Test
+    func iOSConsoleNativeDriverEnablesPersistentAboutBlankPage() async {
+        let driver = ConsoleTransportDriver()
+        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
+        let window = makeHostWindow(with: webView)
+        defer {
+            tearDownHostWindow(window)
+        }
+
+        await driver.attachPageWebView(webView)
+        await loadHTML(
+            """
+            <html><body><script>console.log('blank-load')</script></body></html>
+            """,
+            baseURL: nil,
+            in: webView
+        )
+
+        #expect(await waitForCondition {
+            driver.isReadyToReceiveConsole
+        })
+        await driver.evaluate("1 + 2")
+        #expect(await waitForCondition {
+            driver.store.entries.contains { $0.renderedText.contains("3") }
+        })
+
+        await driver.detachPageWebView()
+    }
+
+    @Test
     func iOSConsoleNativeDriverReceivesMessagesAcrossMainFrameNavigation() async {
         let driver = ConsoleTransportDriver()
         let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
@@ -203,6 +232,35 @@ struct ConsoleTransportDriverTests {
 
         await consoleDriver.detachPageWebView()
         await networkDriver.detachPageWebView(preparing: .stopped)
+    }
+
+    @Test
+    func consoleRuntimeDoesNotClearOnSameDocumentURLChange() async {
+        let backend = SpyConsoleBackend()
+        let runtime = WIConsoleRuntime(backend: backend)
+        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
+        let window = makeHostWindow(with: webView)
+        defer {
+            tearDownHostWindow(window)
+        }
+
+        await loadHTML(
+            """
+            <html><body>same document</body></html>
+            """,
+            baseURL: URL(string: "https://example.com/first")!,
+            in: webView
+        )
+
+        await runtime.attach(pageWebView: webView)
+        await runJavaScript(
+            "history.pushState({}, '', '/second#fragment')",
+            in: webView
+        )
+        await runtime.attach(pageWebView: webView)
+
+        #expect(backend.clearCallCount == 0)
+        await runtime.detach()
     }
     #endif
 
@@ -1200,6 +1258,14 @@ private extension ConsoleTransportDriverTests {
         }
     }
 
+    func runJavaScript(_ script: String, in webView: WKWebView) async {
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { _, _ in
+                continuation.resume()
+            }
+        }
+    }
+
     func makeHostWindow(with webView: WKWebView) -> UIWindow {
         let viewController = UIViewController()
         viewController.loadViewIfNeeded()
@@ -1375,6 +1441,38 @@ private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
         let object = try JSONSerialization.jsonObject(with: data)
         return object as? [String: Any] ?? [:]
     }
+}
+
+@MainActor
+private final class SpyConsoleBackend: WIConsoleBackend {
+    weak var webView: WKWebView?
+    let store = ConsoleStore()
+    let support = WIBackendSupport(
+        availability: .supported,
+        backendKind: .nativeInspectorIOS,
+        capabilities: [.consoleDomain]
+    )
+
+    private(set) var clearCallCount = 0
+
+    func attachPageWebView(_ newWebView: WKWebView?) async {
+        webView = newWebView
+    }
+
+    func detachPageWebView(clearsStoreOnNextAttach: Bool) async {
+        _ = clearsStoreOnNextAttach
+        webView = nil
+    }
+
+    func clearConsole() async {
+        clearCallCount += 1
+    }
+
+    func evaluate(_ expression: String) async {
+        _ = expression
+    }
+
+    func tearDownForDeinit() {}
 }
 
 #if canImport(UIKit)
