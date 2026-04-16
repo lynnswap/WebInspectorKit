@@ -29,7 +29,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
     private var currentGroupDepth = 0
     private weak var lastRepeatableEntry: WIConsoleEntry?
     private var clearsStoreOnNextAttach = false
-    private var pendingFrontendClearEchoCount = 0
+    private var pendingFrontendClearEchoCountsByTarget: [String: Int] = [:]
     private var attachFailureSupport: WIBackendSupport?
     private var pendingRemoteClearOnNextEnable = false
     private var pageReadinessObservations: [NSKeyValueObservation] = []
@@ -124,7 +124,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
             return
         }
 
-        pendingFrontendClearEchoCount += 1
+        incrementPendingFrontendClearEcho(for: targetIdentifier)
         do {
             try await Self.releaseObjectGroupIfPossible(
                 using: transportSession,
@@ -137,7 +137,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
                 targetIdentifier: targetIdentifier
             )
         } catch {
-            pendingFrontendClearEchoCount = max(0, pendingFrontendClearEchoCount - 1)
+            decrementPendingFrontendClearEcho(for: targetIdentifier)
             logger.error("clear console failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -328,7 +328,7 @@ private extension ConsoleTransportDriver {
         transportSession = nil
         attachFailureSupport = nil
         self.clearsStoreOnNextAttach = clearsStoreOnNextAttach
-        pendingFrontendClearEchoCount = 0
+        pendingFrontendClearEchoCountsByTarget.removeAll()
         pendingRemoteClearOnNextEnable = false
         resetRuntimeState()
     }
@@ -430,25 +430,6 @@ private extension ConsoleTransportDriver {
             method: WITransportMethod.Runtime.enable,
             targetIdentifier: targetIdentifier
         )
-        if pendingRemoteClearOnNextEnable {
-            pendingFrontendClearEchoCount += 1
-            do {
-                try await Self.releaseObjectGroupIfPossible(
-                    using: session,
-                    codec: codec,
-                    objectGroup: consoleObjectGroup,
-                    targetIdentifier: targetIdentifier
-                )
-                _ = try await session.sendPageData(
-                    method: WITransportMethod.Console.clearMessages,
-                    targetIdentifier: targetIdentifier
-                )
-            } catch {
-                pendingFrontendClearEchoCount = max(0, pendingFrontendClearEchoCount - 1)
-                logger.error("deferred console clear failed: \(error.localizedDescription, privacy: .public)")
-            }
-            pendingRemoteClearOnNextEnable = false
-        }
         _ = try await session.sendPageData(
             method: WITransportMethod.Console.enable,
             targetIdentifier: targetIdentifier
@@ -538,8 +519,10 @@ private extension ConsoleTransportDriver {
                 return
             }
             let event = decodeParams(ConsoleWire.Transport.MessagesClearedEvent.self, from: envelope)
-            if event?.reason == .frontend, pendingFrontendClearEchoCount > 0 {
-                pendingFrontendClearEchoCount -= 1
+            if event?.reason == .frontend,
+               consumePendingFrontendClearEcho(
+                for: envelope.targetIdentifier ?? enabledTargetIdentifier
+               ) {
                 return
             }
             store.clear(reason: event?.reason)
@@ -822,7 +805,16 @@ private extension ConsoleTransportDriver {
                 await yieldToMainQueue()
 
                 if session.currentPageTargetIdentifier() == targetIdentifier {
-                    return targetIdentifier
+                    try await replayDeferredClearIfNeeded(
+                        on: targetIdentifier,
+                        session: session
+                    )
+                    await yieldToMainQueue()
+
+                    if session.currentPageTargetIdentifier() == targetIdentifier {
+                        pendingRemoteClearOnNextEnable = false
+                        return targetIdentifier
+                    }
                 }
 
                 targetIdentifier = try await session.waitForReplacementPageTarget(after: targetIdentifier)
@@ -844,6 +836,33 @@ private extension ConsoleTransportDriver {
             return currentPageTargetIdentifier
         }
         return try await session.waitForPageTarget()
+    }
+
+    func replayDeferredClearIfNeeded(
+        on targetIdentifier: String,
+        session: WITransportSession
+    ) async throws {
+        guard pendingRemoteClearOnNextEnable else {
+            return
+        }
+
+        incrementPendingFrontendClearEcho(for: targetIdentifier)
+        do {
+            try await Self.releaseObjectGroupIfPossible(
+                using: session,
+                codec: codec,
+                objectGroup: consoleObjectGroup,
+                targetIdentifier: targetIdentifier
+            )
+            _ = try await session.sendPageData(
+                method: WITransportMethod.Console.clearMessages,
+                targetIdentifier: targetIdentifier
+            )
+        } catch {
+            decrementPendingFrontendClearEcho(for: targetIdentifier)
+            logger.error("deferred console clear failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     func replacementTargetAfterEnableFailure(
@@ -925,6 +944,28 @@ private extension ConsoleTransportDriver {
             return enabledTargetIdentifier == targetIdentifier
         }
         return false
+    }
+
+    func incrementPendingFrontendClearEcho(for targetIdentifier: String) {
+        pendingFrontendClearEchoCountsByTarget[targetIdentifier, default: 0] += 1
+    }
+
+    func decrementPendingFrontendClearEcho(for targetIdentifier: String) {
+        let nextCount = max(0, pendingFrontendClearEchoCountsByTarget[targetIdentifier, default: 0] - 1)
+        if nextCount == 0 {
+            pendingFrontendClearEchoCountsByTarget.removeValue(forKey: targetIdentifier)
+        } else {
+            pendingFrontendClearEchoCountsByTarget[targetIdentifier] = nextCount
+        }
+    }
+
+    func consumePendingFrontendClearEcho(for targetIdentifier: String?) -> Bool {
+        guard let targetIdentifier,
+              pendingFrontendClearEchoCountsByTarget[targetIdentifier, default: 0] > 0 else {
+            return false
+        }
+        decrementPendingFrontendClearEcho(for: targetIdentifier)
+        return true
     }
 
     func resetRuntimeState() {
