@@ -8,6 +8,10 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
     weak var webView: WKWebView?
     let store = ConsoleStore()
 
+    var isReadyToReceiveConsole: Bool {
+        enabledTargetIdentifier != nil
+    }
+
     private let logger = Logger(subsystem: "WebInspectorKit", category: "ConsoleTransportDriver")
     private let codec = WITransportCodec.shared
     private let transportSessionFactory: @MainActor () -> WITransportSession
@@ -18,6 +22,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
     private var attachTask: Task<Void, Never>?
     private var pageEventTask: Task<Void, Never>?
     private var enableTask: Task<Void, Never>?
+    private var activeEnableTaskID: UUID?
     private var pendingDetachTask: Task<Void, Never>?
     private var enabledTargetIdentifier: String?
     private var executionContextsByIdentifier: [Int: ConsoleWire.Transport.ExecutionContextDescription] = [:]
@@ -27,6 +32,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
     private var pendingFrontendClearEchoCount = 0
     private var attachFailureSupport: WIBackendSupport?
     private var pendingRemoteClearOnNextEnable = false
+    private var pageReadinessObservations: [NSKeyValueObservation] = []
 
     init(
         transportSessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() },
@@ -77,6 +83,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
         detachTransportSession()
         await waitForPendingDetach()
         webView = newWebView
+        updatePageReadinessObservation(for: newWebView)
         clearsStoreOnNextAttach = false
 
         if shouldClearStoreOnReattach {
@@ -93,6 +100,7 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
     func detachPageWebView(clearsStoreOnNextAttach: Bool) async {
         detachTransportSession(clearsStoreOnNextAttach: clearsStoreOnNextAttach)
         webView = nil
+        updatePageReadinessObservation(for: nil)
     }
 
     func detachPageWebView() async {
@@ -108,7 +116,9 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
             return
         }
 
-        let targetIdentifier = transportSession.currentPageTargetIdentifier() ?? enabledTargetIdentifier
+        let targetIdentifier = await resolveEnabledTargetIdentifierForUserInteraction(
+            using: transportSession
+        )
         guard let targetIdentifier else {
             pendingRemoteClearOnNextEnable = true
             return
@@ -149,7 +159,9 @@ final class ConsoleTransportDriver: WIConsoleBackend, InspectorTransportCapabili
             return
         }
 
-        guard let targetIdentifier = transportSession.currentPageTargetIdentifier() ?? enabledTargetIdentifier else {
+        guard let targetIdentifier = await resolveEnabledTargetIdentifierForUserInteraction(
+            using: transportSession
+        ) else {
             appendSyntheticResultEntry(
                 renderedText: "Console is unavailable.",
                 level: .error,
@@ -214,6 +226,11 @@ extension ConsoleTransportDriver {
     package func waitForAttachForTesting() async {
         await attachTask?.value
     }
+
+    package func waitForEnableForTesting() async {
+        await attachTask?.value
+        await enableTask?.value
+    }
 }
 
 private extension ConsoleTransportDriver {
@@ -266,6 +283,11 @@ private extension ConsoleTransportDriver {
                 return
             }
 
+            guard self.transportSession === transportSession, Task.isCancelled == false else {
+                transportSession.detach()
+                return
+            }
+
             self.attachFailureSupport = nil
             self.startPageEventLoop(using: transportSession)
             self.scheduleDomainEnable(using: transportSession)
@@ -279,6 +301,7 @@ private extension ConsoleTransportDriver {
         pageEventTask = nil
         enableTask?.cancel()
         enableTask = nil
+        activeEnableTaskID = nil
 
         if let transportSession {
             let codec = self.codec
@@ -310,6 +333,39 @@ private extension ConsoleTransportDriver {
         resetRuntimeState()
     }
 
+    func updatePageReadinessObservation(for webView: WKWebView?) {
+        pageReadinessObservations.removeAll()
+        guard let webView else {
+            return
+        }
+
+        pageReadinessObservations = [
+            webView.observe(\.isLoading, options: [.initial, .new]) { _, _ in
+                let _ = Task { @MainActor [weak self, weak webView] in
+                    self?.handleObservedPageReadinessChange(for: webView)
+                }
+            },
+            webView.observe(\.url, options: [.initial, .new]) { _, _ in
+                let _ = Task { @MainActor [weak self, weak webView] in
+                    self?.handleObservedPageReadinessChange(for: webView)
+                }
+            },
+        ]
+    }
+
+    func handleObservedPageReadinessChange(for observedWebView: WKWebView?) {
+        guard let observedWebView,
+              webView === observedWebView,
+              let transportSession,
+              enabledTargetIdentifier == nil,
+              shouldWaitForPageReadinessBeforeEnable() == false,
+              activeEnableTaskID == nil
+        else {
+            return
+        }
+        scheduleDomainEnable(using: transportSession)
+    }
+
     func startPageEventLoop(using transportSession: WITransportSession) {
         pageEventTask?.cancel()
         let stream = transportSession.pageEvents()
@@ -333,53 +389,36 @@ private extension ConsoleTransportDriver {
 
     func scheduleDomainEnable(using transportSession: WITransportSession) {
         enableTask?.cancel()
+        let taskIdentifier = UUID()
+        activeEnableTaskID = taskIdentifier
         enableTask = Task { @MainActor [weak self, weak transportSession] in
             guard let self, let transportSession else {
                 return
             }
-
-            while self.transportSession === transportSession {
-                do {
-                    let targetIdentifier: String
-                    if let currentPageTargetIdentifier = transportSession.currentPageTargetIdentifier() {
-                        targetIdentifier = currentPageTargetIdentifier
-                    } else {
-                        targetIdentifier = try await transportSession.waitForPageTarget()
-                    }
-
-                    guard self.enabledTargetIdentifier != targetIdentifier else {
-                        return
-                    }
-
-                    try await self.enableDomains(on: targetIdentifier, session: transportSession)
-                    self.enabledTargetIdentifier = targetIdentifier
-                    return
-                } catch is CancellationError {
-                    return
-                } catch let error as WITransportError {
-                    guard self.shouldRetry(after: error) else {
-                        self.logger.error("console domain enable failed: \(error.localizedDescription, privacy: .public)")
-                        return
-                    }
-                    await self.yieldToMainQueue()
-                } catch {
-                    self.logger.error("console domain enable failed: \(error.localizedDescription, privacy: .public)")
-                    return
+            defer {
+                if self.activeEnableTaskID == taskIdentifier {
+                    self.activeEnableTaskID = nil
                 }
             }
-        }
-    }
 
-    func shouldRetry(after error: WITransportError) -> Bool {
-        switch error {
-        case .pageTargetUnavailable:
-            return true
-        case .requestTimedOut(let scope, let method):
-            return scope == .root && method == "Target.targetCreated"
-        case .remoteError(let scope, let method, _):
-            return scope == .root && method == "Target.sendMessageToTarget"
-        default:
-            return false
+            guard self.shouldWaitForPageReadinessBeforeEnable() == false else {
+                return
+            }
+
+            do {
+                let targetIdentifier = try await self.prepareEnabledPageTarget(using: transportSession)
+                guard self.transportSession === transportSession else {
+                    return
+                }
+                self.enabledTargetIdentifier = targetIdentifier
+            } catch is CancellationError {
+                return
+            } catch {
+                self.failCurrentTransportSession(
+                    using: transportSession,
+                    failureReason: error.localizedDescription
+                )
+            }
         }
     }
 
@@ -747,6 +786,131 @@ private extension ConsoleTransportDriver {
         await pendingDetachTask?.value
     }
 
+    func resolveEnabledTargetIdentifierForUserInteraction(
+        using session: WITransportSession
+    ) async -> String? {
+        if let attachTask {
+            await attachTask.value
+        }
+
+        if let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
+           currentPageTargetIdentifier == enabledTargetIdentifier {
+            return currentPageTargetIdentifier
+        }
+
+        if let enableTask {
+            await enableTask.value
+        }
+
+        guard let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
+              currentPageTargetIdentifier == enabledTargetIdentifier else {
+            return nil
+        }
+        return currentPageTargetIdentifier
+    }
+
+    func prepareEnabledPageTarget(using session: WITransportSession) async throws -> String {
+        var targetIdentifier = try await currentOrInitialPageTarget(using: session)
+
+        while true {
+            guard enabledTargetIdentifier != targetIdentifier else {
+                return targetIdentifier
+            }
+
+            do {
+                try await enableDomains(on: targetIdentifier, session: session)
+                await yieldToMainQueue()
+
+                if session.currentPageTargetIdentifier() == targetIdentifier {
+                    return targetIdentifier
+                }
+
+                targetIdentifier = try await session.waitForReplacementPageTarget(after: targetIdentifier)
+            } catch let error as WITransportError {
+                guard let replacementTargetIdentifier = try await replacementTargetAfterEnableFailure(
+                    after: error,
+                    targetIdentifier: targetIdentifier,
+                    session: session
+                ) else {
+                    throw error
+                }
+                targetIdentifier = replacementTargetIdentifier
+            }
+        }
+    }
+
+    func currentOrInitialPageTarget(using session: WITransportSession) async throws -> String {
+        if let currentPageTargetIdentifier = session.currentPageTargetIdentifier() {
+            return currentPageTargetIdentifier
+        }
+        return try await session.waitForPageTarget()
+    }
+
+    func replacementTargetAfterEnableFailure(
+        after error: WITransportError,
+        targetIdentifier: String,
+        session: WITransportSession
+    ) async throws -> String? {
+        switch error {
+        case .pageTargetUnavailable:
+            if let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
+               currentPageTargetIdentifier != targetIdentifier {
+                return currentPageTargetIdentifier
+            }
+            return try? await session.waitForReplacementPageTarget(after: targetIdentifier)
+
+        case .remoteError(let scope, _, let message):
+            guard scope == .root, Self.isTargetChurnMessage(message.lowercased()) else {
+                return nil
+            }
+            await yieldToMainQueue()
+            if let currentPageTargetIdentifier = session.currentPageTargetIdentifier(),
+               currentPageTargetIdentifier != targetIdentifier {
+                return currentPageTargetIdentifier
+            }
+            return try? await session.waitForReplacementPageTarget(after: targetIdentifier)
+
+        default:
+            return nil
+        }
+    }
+
+    func shouldWaitForPageReadinessBeforeEnable() -> Bool {
+        guard transportSession?.supportSnapshot.backendKind == .iOSNativeInspector,
+              enabledTargetIdentifier == nil,
+              let webView else {
+            return false
+        }
+
+        guard let url = webView.url else {
+            return true
+        }
+        if webView.isLoading {
+            return true
+        }
+        return url.absoluteString == "about:blank"
+    }
+
+    func failCurrentTransportSession(
+        using session: WITransportSession,
+        failureReason: String
+    ) {
+        guard transportSession === session else {
+            return
+        }
+        logger.error("console domain enable failed: \(failureReason, privacy: .public)")
+        attachFailureSupport = WIBackendSupport(
+            availability: .unsupported,
+            backendKind: initialSupport.backendKind,
+            capabilities: initialSupport.capabilities,
+            failureReason: failureReason
+        )
+        store.markUpdated()
+        session.detach()
+        transportSession = nil
+        resetRuntimeState()
+    }
+
     func shouldProcess(
         _ envelope: WITransportEventEnvelope,
         session: WITransportSession
@@ -787,5 +951,14 @@ private extension ConsoleTransportDriver {
             logger.error("console event decode failed method=\(envelope.method, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+}
+
+private extension ConsoleTransportDriver {
+    static func isTargetChurnMessage(_ message: String) -> Bool {
+        message.contains("not found")
+            || message.contains("no target")
+            || message.contains("closed")
+            || message.contains("destroyed")
     }
 }

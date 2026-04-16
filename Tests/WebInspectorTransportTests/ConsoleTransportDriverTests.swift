@@ -2,6 +2,9 @@ import Foundation
 import Testing
 import WebInspectorTestSupport
 import WebKit
+#if canImport(UIKit)
+import UIKit
+#endif
 @testable import WebInspectorEngine
 @testable import WebInspectorTransport
 
@@ -27,6 +30,181 @@ struct ConsoleTransportDriverTests {
 
         await driver.detachPageWebView()
     }
+
+    @Test
+    func initialEnableFollowsReplacementPageTargetDuringTargetChurn() async {
+        let backend = FakeConsoleRegistryBackend(
+            pageResultProvider: { method, _, backend in
+                guard method == WITransportMethod.Console.enable else {
+                    return nil
+                }
+
+                let consoleEnableAttempts = backend.sentPageMessages.filter {
+                    $0.method == WITransportMethod.Console.enable
+                }
+                if consoleEnableAttempts.count == 1 {
+                    #expect(consoleEnableAttempts.last?.targetIdentifier == "page-A")
+                    backend.emitRootEvent(
+                        method: "Target.targetCreated",
+                        params: [
+                            "targetInfo": [
+                                "targetId": "page-B",
+                                "type": "page",
+                                "isProvisional": false,
+                            ]
+                        ]
+                    )
+                    throw WITransportError.remoteError(
+                        scope: .root,
+                        method: "Target.sendMessageToTarget",
+                        message: "Target closed"
+                    )
+                }
+
+                #expect(consoleEnableAttempts.last?.targetIdentifier == "page-B")
+                return [:]
+            }
+        )
+        let driver = ConsoleTransportDriver(
+            transportSessionFactory: makeTransportSessionFactory(using: backend)
+        )
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForEnableForTesting()
+
+        #expect(driver.isReadyToReceiveConsole)
+        let consoleEnableTargets = backend.sentPageMessages
+            .filter { $0.method == WITransportMethod.Console.enable }
+            .map(\.targetIdentifier)
+        #expect(consoleEnableTargets.prefix(2) == ["page-A", "page-B"])
+        #expect(consoleEnableTargets.allSatisfy { $0 == "page-A" || $0 == "page-B" })
+
+        await driver.detachPageWebView()
+    }
+
+    @Test
+    func transportClosedDuringInitialEnableMarksConsoleUnavailable() async {
+        let backend = FakeConsoleRegistryBackend(
+            pageResultProvider: { method, _, _ in
+                guard method == WITransportMethod.Console.enable else {
+                    return nil
+                }
+                throw WITransportError.transportClosed
+            }
+        )
+        let driver = ConsoleTransportDriver(
+            transportSessionFactory: makeTransportSessionFactory(using: backend)
+        )
+        let webView = makeIsolatedTestWebView()
+
+        await driver.attachPageWebView(webView)
+        await driver.waitForEnableForTesting()
+
+        #expect(driver.isReadyToReceiveConsole == false)
+        #expect(driver.support.availability == .unsupported)
+        #expect(driver.support.failureReason == WITransportError.transportClosed.localizedDescription)
+        #expect(backend.attachCallCount == 1)
+
+        await driver.detachPageWebView()
+    }
+
+    #if canImport(UIKit)
+    @Test
+    func iOSConsoleNativeDriverReceivesMessagesAcrossMainFrameNavigation() async {
+        let driver = ConsoleTransportDriver()
+        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
+        let window = makeHostWindow(with: webView)
+        defer {
+            tearDownHostWindow(window)
+        }
+
+        await driver.attachPageWebView(webView)
+        await loadHTML(
+            """
+            <html><body><script>console.log('first-load')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/first"),
+            in: webView
+        )
+
+        #expect(await waitForCondition {
+            driver.isReadyToReceiveConsole
+        })
+        await driver.evaluate("1 + 1")
+        #expect(await waitForCondition {
+            driver.store.entries.contains { $0.renderedText.contains("2") }
+        })
+
+        await loadHTML(
+            """
+            <html><body><script>console.log('second-load')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/second"),
+            in: webView
+        )
+
+        #expect(await waitForCondition {
+            driver.isReadyToReceiveConsole
+        })
+        await driver.evaluate("3 + 4")
+        #expect(await waitForCondition {
+            driver.store.entries.contains { $0.renderedText.contains("7") }
+        })
+
+        await driver.detachPageWebView()
+    }
+
+    @Test
+    func iOSConsoleStaysUsableAlongsideNativeNetworkAcrossMainFrameNavigation() async {
+        let consoleDriver = ConsoleTransportDriver()
+        let networkDriver = NetworkTransportDriver()
+        let webView = makeIsolatedTestWebView(frame: UIScreen.main.bounds)
+        let window = makeHostWindow(with: webView)
+        defer {
+            tearDownHostWindow(window)
+        }
+
+        await networkDriver.attachPageWebView(webView)
+        await networkDriver.waitForAttachForTesting()
+        await consoleDriver.attachPageWebView(webView)
+
+        await loadHTML(
+            """
+            <html><body><script>console.log('network-console-first')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/network-first"),
+            in: webView
+        )
+
+        #expect(await waitForCondition {
+            consoleDriver.isReadyToReceiveConsole
+        })
+        await consoleDriver.evaluate("10 + 5")
+        #expect(await waitForCondition {
+            consoleDriver.store.entries.contains { $0.renderedText.contains("15") }
+        })
+
+        await loadHTML(
+            """
+            <html><body><script>console.log('network-console-second')</script></body></html>
+            """,
+            baseURL: URL(string: "https://example.com/network-second"),
+            in: webView
+        )
+
+        #expect(await waitForCondition {
+            consoleDriver.isReadyToReceiveConsole
+        })
+        await consoleDriver.evaluate("20 + 2")
+        #expect(await waitForCondition {
+            consoleDriver.store.entries.contains { $0.renderedText.contains("22") }
+        })
+
+        await consoleDriver.detachPageWebView()
+        await networkDriver.detachPageWebView(preparing: .stopped)
+    }
+    #endif
 
     @Test
     func consoleEnableReplaysBufferedMessagesIntoStore() async {
@@ -55,7 +233,7 @@ struct ConsoleTransportDriverTests {
         let webView = makeIsolatedTestWebView()
 
         await driver.attachPageWebView(webView)
-        await driver.waitForAttachForTesting()
+        await driver.waitForEnableForTesting()
 
         #expect(await waitForCondition {
             driver.store.entries.contains { $0.renderedText == "backlog message" }
@@ -291,34 +469,27 @@ struct ConsoleTransportDriverTests {
 
     @Test
     func provisionalTargetCreationDoesNotReplayCurrentPageBacklog() async {
-        let backend = FakeConsoleRegistryBackend(
-            pageResultProvider: { method, _, backend in
-                guard method == WITransportMethod.Console.enable else {
-                    return nil
-                }
-                backend.emitPageEvent(
-                    method: "Console.messageAdded",
-                    params: [
-                        "message": [
-                            "source": "javascript",
-                            "level": "log",
-                            "text": "backlog message",
-                            "type": "log",
-                        ]
-                    ]
-                )
-                return [:]
-            }
-        )
+        let backend = FakeConsoleRegistryBackend()
         let driver = ConsoleTransportDriver(
             transportSessionFactory: makeTransportSessionFactory(using: backend)
         )
         let webView = makeIsolatedTestWebView()
 
         await driver.attachPageWebView(webView)
-        await driver.waitForAttachForTesting()
+        await driver.waitForEnableForTesting()
+        backend.emitPageEvent(
+            method: "Console.messageAdded",
+            params: [
+                "message": [
+                    "source": "javascript",
+                    "level": "log",
+                    "text": "current page message",
+                    "type": "log",
+                ]
+            ]
+        )
         #expect(await waitForCondition {
-            driver.store.entries.map(\.renderedText) == ["backlog message"]
+            driver.store.entries.map(\.renderedText) == ["current page message"]
         })
 
         backend.emitRootEvent(
@@ -333,7 +504,7 @@ struct ConsoleTransportDriverTests {
         )
 
         #expect(await waitForCondition {
-            driver.store.entries.map(\.renderedText) == ["backlog message"]
+            driver.store.entries.map(\.renderedText) == ["current page message"]
         })
 
         await driver.detachPageWebView()
@@ -976,15 +1147,57 @@ private extension ConsoleTransportDriverTests {
         }
         return await condition()
     }
+
+    #if canImport(UIKit)
+    func loadHTML(_ html: String, baseURL: URL?, in webView: WKWebView) async {
+        let navigationDelegate = NavigationDelegate()
+        webView.navigationDelegate = navigationDelegate
+
+        await withCheckedContinuation { continuation in
+            navigationDelegate.continuation = continuation
+            webView.loadHTMLString(html, baseURL: baseURL)
+        }
+    }
+
+    func makeHostWindow(with webView: WKWebView) -> UIWindow {
+        let viewController = UIViewController()
+        viewController.loadViewIfNeeded()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        viewController.view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: viewController.view.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+        ])
+
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = viewController
+        window.isHidden = false
+        return window
+    }
+
+    func tearDownHostWindow(_ window: UIWindow) {
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+    #endif
 }
 
 @MainActor
 private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
     typealias PageResultProvider = (String, [String: Any], FakeConsoleRegistryBackend) throws -> [String: Any]?
 
+    struct SentPageMessage: Equatable {
+        let method: String
+        let targetIdentifier: String
+    }
+
     var supportSnapshot: WITransportSupportSnapshot
 
     private(set) var sentPageMethods: [String] = []
+    private(set) var sentPageMessages: [SentPageMessage] = []
+    private(set) var attachCallCount = 0
     private var messageSink: (any WITransportBackendMessageSink)?
     private let pageResultProvider: PageResultProvider?
     private let attachHandler: ((any WITransportBackendMessageSink) async -> Void)?
@@ -1013,6 +1226,7 @@ private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
     }
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
+        attachCallCount += 1
         if isWebKitTestIsolationActive {
             ownsWebKitTestIsolation = false
         } else {
@@ -1059,6 +1273,9 @@ private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
             return
         }
         sentPageMethods.append(method)
+        sentPageMessages.append(
+            SentPageMessage(method: method, targetIdentifier: targetIdentifier)
+        )
 
         let result = try pageResultProvider?(method, payload, self) ?? [:]
         guard let identifier = payload["id"] as? Int else {
@@ -1118,3 +1335,24 @@ private final class FakeConsoleRegistryBackend: WITransportPlatformBackend {
         return object as? [String: Any] ?? [:]
     }
 }
+
+#if canImport(UIKit)
+private final class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+#endif
