@@ -466,7 +466,10 @@ private extension ConsoleTransportDriver {
     ) async {
         switch envelope.method {
         case "Target.targetCreated":
-            break
+            guard enabledTargetIdentifier == nil else {
+                return
+            }
+            scheduleDomainEnable(using: session)
 
         case "Target.targetDestroyed":
             guard envelope.targetIdentifier == enabledTargetIdentifier else {
@@ -580,7 +583,6 @@ private extension ConsoleTransportDriver {
             nestingLevel: 0
         )
         store.append(entry)
-        lastRepeatableEntry = nil
     }
 
     func appendSyntheticResultEntry(
@@ -601,7 +603,6 @@ private extension ConsoleTransportDriver {
             nestingLevel: 0
         )
         store.append(entry)
-        lastRepeatableEntry = nil
     }
 
     func render(message: ConsoleWire.Transport.ConsoleMessage) -> String {

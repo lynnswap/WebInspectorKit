@@ -844,7 +844,7 @@ struct ConsoleTransportDriverTests {
     }
 
     @Test
-    func repeatCountIgnoresSyntheticEntriesAppendedAfterRemoteMessage() async throws {
+    func repeatCountUpdatesLastRemoteEntryAcrossLocalCommandAndResultEntries() async throws {
         let backend = FakeConsoleRegistryBackend(
             pageResultProvider: { method, _, _ in
                 guard method == WITransportMethod.Runtime.evaluate else {
@@ -894,7 +894,7 @@ struct ConsoleTransportDriverTests {
         )
 
         #expect(await waitForCondition {
-            pageEntry.repeatCount == 1 && resultEntry.repeatCount == 1
+            pageEntry.repeatCount == 3 && resultEntry.repeatCount == 1
         })
 
         await driver.detachPageWebView()
