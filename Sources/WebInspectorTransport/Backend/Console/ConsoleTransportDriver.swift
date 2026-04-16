@@ -329,7 +329,6 @@ private extension ConsoleTransportDriver {
         attachFailureSupport = nil
         self.clearsStoreOnNextAttach = clearsStoreOnNextAttach
         pendingFrontendClearEchoCountsByTarget.removeAll()
-        pendingRemoteClearOnNextEnable = false
         resetRuntimeState()
     }
 

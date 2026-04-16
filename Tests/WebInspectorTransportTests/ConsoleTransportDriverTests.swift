@@ -645,6 +645,47 @@ struct ConsoleTransportDriverTests {
     }
 
     @Test
+    func deferredClearSurvivesDetachUntilNextEnable() async {
+        let backend = FakeConsoleRegistryBackend(
+            attachHandler: { _ in }
+        )
+        let driver = ConsoleTransportDriver(
+            transportSessionFactory: makeTransportSessionFactory(using: backend)
+        )
+        let firstWebView = makeIsolatedTestWebView()
+        let secondWebView = makeIsolatedTestWebView()
+
+        await driver.clearConsole()
+
+        await driver.attachPageWebView(firstWebView)
+        await driver.waitForAttachForTesting()
+        await driver.detachPageWebView()
+
+        await driver.attachPageWebView(secondWebView)
+        await driver.waitForAttachForTesting()
+
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-A",
+                    "type": "page",
+                    "isProvisional": false,
+                ]
+            ]
+        )
+        await driver.waitForEnableForTesting()
+
+        #expect(
+            backend.sentPageMessages.contains {
+                $0.method == WITransportMethod.Console.clearMessages && $0.targetIdentifier == "page-A"
+            }
+        )
+
+        await driver.detachPageWebView()
+    }
+
+    @Test
     func detachReleasesConsoleObjectGroup() async {
         let backend = FakeConsoleRegistryBackend(
             pageResultProvider: { method, _, _ in
