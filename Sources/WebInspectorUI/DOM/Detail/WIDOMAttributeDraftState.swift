@@ -52,23 +52,62 @@ package struct WIDOMAttributeDraftState: Equatable, Sendable {
         phase = .clean
     }
 
-    package mutating func updateDraft(_ value: String) {
+    package mutating func userEditedDraft(_ value: String) {
         draftValue = value
         syncPhaseToCurrentBaseline()
     }
 
     @discardableResult
-    package mutating func reconcile(externalValue: String?) -> WIDOMAttributeDraftReconcileResult {
-        switch phase {
-        case let .awaitingModelEcho(submittedValue, previousValue):
-            return reconcileAwaitingModelEcho(
-                externalValue: externalValue,
-                submittedValue: submittedValue,
-                previousValue: previousValue
-            )
-        case .clean, .editing:
-            return reconcileLocalDraft(externalValue: externalValue)
+    package mutating func externalBaselineAdvanced(
+        _ externalValue: String
+    ) -> WIDOMAttributeDraftReconcileResult {
+        if !isDirty {
+            begin(value: externalValue)
+            return .refreshClean
         }
+
+        baselineValue = externalValue
+        baselineExists = true
+        preservesDeletedBaseline = false
+        if draftValue == externalValue {
+            begin(value: externalValue)
+            return .refreshClean
+        }
+        phase = .editing
+        return .preserveDirty
+    }
+
+    @discardableResult
+    package mutating func modelEchoMatched(
+        submittedValue: String
+    ) -> WIDOMAttributeDraftReconcileResult {
+        baselineValue = submittedValue
+        baselineExists = true
+        preservesDeletedBaseline = false
+        if draftValue == submittedValue {
+            begin(value: submittedValue)
+            return .refreshClean
+        }
+        phase = .editing
+        return .preserveDirty
+    }
+
+    @discardableResult
+    package mutating func selectionOrAttributeInvalidated(
+        exists: Bool
+    ) -> WIDOMAttributeDraftReconcileResult {
+        guard exists == false else {
+            return isDirty ? .preserveDirty : .refreshClean
+        }
+
+        if isDirty {
+            baselineExists = false
+            preservesDeletedBaseline = true
+            phase = .editing
+            return .preserveDirty
+        }
+        clear()
+        return .clear
     }
 
     package mutating func markAwaitingModelEcho(
@@ -96,65 +135,29 @@ package struct WIDOMAttributeDraftState: Equatable, Sendable {
         phase = .clean
     }
 
-    private mutating func reconcileLocalDraft(
-        externalValue: String?
+    @discardableResult
+    package mutating func applyObservedExternalValue(
+        _ externalValue: String?
     ) -> WIDOMAttributeDraftReconcileResult {
-        guard let externalValue else {
-            if isDirty {
-                baselineExists = false
-                preservesDeletedBaseline = true
-                phase = .editing
-                return .preserveDirty
+        switch phase {
+        case let .awaitingModelEcho(submittedValue, _):
+            if let externalValue {
+                if externalValue == submittedValue {
+                    return modelEchoMatched(submittedValue: submittedValue)
+                }
+                return externalBaselineAdvanced(externalValue)
             }
-            clear()
-            return .clear
-        }
-
-        if isDirty {
-            baselineValue = externalValue
-            baselineExists = true
-            preservesDeletedBaseline = false
-            if matchesCurrentBaseline {
-                begin(value: externalValue)
-                return .refreshClean
+            return selectionOrAttributeInvalidated(exists: false)
+        case .clean, .editing:
+            if let externalValue {
+                return externalBaselineAdvanced(externalValue)
             }
-            phase = .editing
-            return .preserveDirty
+            return selectionOrAttributeInvalidated(exists: false)
         }
-
-        begin(value: externalValue)
-        return .refreshClean
     }
 
-    private mutating func reconcileAwaitingModelEcho(
-        externalValue: String?,
-        submittedValue: String,
-        previousValue: String?
-    ) -> WIDOMAttributeDraftReconcileResult {
-        guard let externalValue else {
-            baselineExists = false
-            preservesDeletedBaseline = true
-            phase = .editing
-            return .preserveDirty
-        }
-
-        baselineValue = externalValue
-        baselineExists = true
-        preservesDeletedBaseline = false
-        if externalValue == submittedValue {
-            begin(value: externalValue)
-            return .refreshClean
-        }
-        if let previousValue,
-           externalValue == previousValue {
-            return .preserveDirty
-        }
-        syncPhaseToCurrentBaseline(fallback: .editing)
-        if phase == .clean {
-            begin(value: externalValue)
-            return .refreshClean
-        }
-        return .preserveDirty
+    package mutating func updateDraft(_ value: String) {
+        userEditedDraft(value)
     }
 
     private var matchesCurrentBaseline: Bool {
@@ -209,8 +212,40 @@ package struct WIDOMAttributeDraftSession: Equatable, Sendable, Identifiable {
         draftState.isAwaitingModelEcho
     }
 
+    @discardableResult
+    package mutating func externalBaselineAdvanced(
+        _ externalValue: String
+    ) -> WIDOMAttributeDraftReconcileResult {
+        draftState.externalBaselineAdvanced(externalValue)
+    }
+
+    @discardableResult
+    package mutating func modelEchoMatched(
+        submittedValue: String
+    ) -> WIDOMAttributeDraftReconcileResult {
+        draftState.modelEchoMatched(submittedValue: submittedValue)
+    }
+
+    @discardableResult
+    package mutating func selectionOrAttributeInvalidated(
+        exists: Bool
+    ) -> WIDOMAttributeDraftReconcileResult {
+        draftState.selectionOrAttributeInvalidated(exists: exists)
+    }
+
+    @discardableResult
+    package mutating func applyObservedExternalValue(
+        _ externalValue: String?
+    ) -> WIDOMAttributeDraftReconcileResult {
+        draftState.applyObservedExternalValue(externalValue)
+    }
+
+    package mutating func userEditedDraft(_ value: String) {
+        draftState.userEditedDraft(value)
+    }
+
     package mutating func updateDraft(_ value: String) {
-        draftState.updateDraft(value)
+        userEditedDraft(value)
     }
 
     package mutating func markCommitted() {
@@ -225,11 +260,6 @@ package struct WIDOMAttributeDraftSession: Equatable, Sendable, Identifiable {
             submittedValue: submittedValue,
             previousValue: previousValue
         )
-    }
-
-    @discardableResult
-    package mutating func reconcile(externalValue: String?) -> WIDOMAttributeDraftReconcileResult {
-        draftState.reconcile(externalValue: externalValue)
     }
 }
 
@@ -248,7 +278,7 @@ package func reconcileAttributeDraftSession(
 
     var updatedSession = session
     let externalValue = selectedNode.attributes.first(where: { $0.name == session.key.attributeName })?.value
-    switch updatedSession.reconcile(externalValue: externalValue) {
+    switch updatedSession.applyObservedExternalValue(externalValue) {
     case .refreshClean, .preserveDirty:
         return .keep(updatedSession)
     case .clear:
