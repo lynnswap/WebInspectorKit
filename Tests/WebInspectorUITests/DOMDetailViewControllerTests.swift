@@ -448,14 +448,18 @@ struct DOMDetailViewControllerTests {
         defer { tearDown(window: window) }
 
         let collectionView = try #require(viewController.collectionView)
-        let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
         let selectedNodeID = try #require(inspector.document.selectedNode?.id)
+        let initialReady = await waitUntil {
+            self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2))?.text == "before"
+        }
+        #expect(initialReady)
 
-        let didBeginEditing = await beginEditing(textView)
-        #expect(didBeginEditing)
-
-        textView.text = "draft"
-        textView.delegate?.textViewDidChange?(textView)
+        viewController.installInlineDraftSessionForTesting(
+            nodeID: selectedNodeID,
+            name: "class",
+            baselineValue: "before",
+            draftValue: "draft"
+        )
         inspector.document.updateSelectedAttribute(name: "class", value: "server")
         let baselineAdvanced = await waitUntil {
             inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "server"
@@ -463,20 +467,23 @@ struct DOMDetailViewControllerTests {
         }
         #expect(baselineAdvanced)
 
-        textView.text = "before"
-        textView.delegate?.textViewDidChange?(textView)
+        viewController.applyInlineDraftForTesting(
+            nodeID: selectedNodeID,
+            name: "class",
+            value: "before"
+        )
         let draftReturnedToEditing = await waitUntil {
             viewController.inlineDraftPhaseForTesting(nodeID: selectedNodeID, name: "class") == .editing
-                && self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2))?.text == "before"
+                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftValue == "before"
+                && viewController.inlineDisplayedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
         }
         #expect(draftReturnedToEditing)
 
         let dirtyDraftPreserved = await waitUntil(maxTicks: 4096) {
-            guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
-                return false
-            }
             let modelValue = inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value
-            return modelValue == "server" && currentTextView.text == "before"
+            return modelValue == "server"
+                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftValue == "before"
+                && viewController.inlineDisplayedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "before"
         }
         #expect(dirtyDraftPreserved)
     }

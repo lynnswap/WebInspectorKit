@@ -1496,6 +1496,13 @@ extension WIDOMDetailViewController {
         )
     }
 
+    func inlineDisplayedAttributeValueForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) -> String? {
+        attributeValue(for: .init(nodeID: nodeID, name: name))
+    }
+
     func hasPendingInlineCommitForTesting(
         nodeID: DOMNodeModel.ID,
         name: String
@@ -1505,6 +1512,30 @@ extension WIDOMDetailViewController {
 
     func nextInlineCommitGenerationForTesting() -> UInt64 {
         nextInlineCommitGeneration
+    }
+
+    func applyInlineDraftForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String,
+        value: String
+    ) {
+        let key = ElementAttributeEditingKey(nodeID: nodeID, name: name)
+        editingAttributeKey = key
+        updateAttributeDraftSession(for: key, value: value)
+        refreshVisibleAttributeEditorsForSelectedNode()
+    }
+
+    func installInlineDraftSessionForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String,
+        baselineValue: String,
+        draftValue: String
+    ) {
+        let key = WIDOMAttributeDraftKey(nodeID: nodeID, attributeName: name)
+        var session = WIDOMAttributeDraftSession(key: key, value: baselineValue)
+        session.userEditedDraft(draftValue)
+        attributeDraftSession = session
+        refreshVisibleAttributeEditorsForSelectedNode()
     }
 
     func installStaleInlineEditingStateForTesting(nodeID: DOMNodeModel.ID, name: String) {
