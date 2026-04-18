@@ -445,6 +445,10 @@ private enum BrowserStoreSPI {
         webView.go(to: item)
     }
 
+    func load(url: URL) {
+        webView.load(URLRequest(url: url))
+    }
+
     func backHistoryItems(limit: Int = BrowserStoreSPI.maximumHistoryMenuItemCount) -> [BrowserHistoryMenuItem] {
         historyItems(direction: .back, limit: limit)
     }

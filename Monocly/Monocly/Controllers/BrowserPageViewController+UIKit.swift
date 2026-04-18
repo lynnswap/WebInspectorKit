@@ -491,7 +491,8 @@ final class BrowserPageViewController: UIViewController {
             from: navigationController ?? self,
             browserStore: store,
             inspectorController: inspectorController,
-            tabs: tabs
+            tabs: tabs,
+            launchConfiguration: launchConfiguration
         )
     }
 

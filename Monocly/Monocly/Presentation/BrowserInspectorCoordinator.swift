@@ -252,7 +252,7 @@ final class BrowserInspectorCoordinator {
 
     private static let inspectorWindowRegistry = InspectorWindowRegistry()
 
-    private weak var presentedSheetController: WITabViewController?
+    private weak var presentedSheetController: UIViewController?
     private let sheetObserver = InspectorSheetObserver()
     private var sceneActivationRequester = BrowserInspectorSceneActivationRequester.live
     private var supportsMultipleScenesProvider: @MainActor () -> Bool = { UIApplication.shared.supportsMultipleScenes }
@@ -263,32 +263,43 @@ final class BrowserInspectorCoordinator {
         from presenter: UIViewController,
         browserStore: BrowserStore,
         inspectorController: WIInspectorController,
-        tabs: [WITab] = [.dom(), .network()]
+        tabs: [WITab] = [.dom(), .network()],
+        launchConfiguration: BrowserLaunchConfiguration? = nil
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
-        let container = WITabViewController(
-            inspectorController,
-            webView: browserStore.webView,
-            tabs: tabs
-        )
-        container.modalPresentationStyle = .pageSheet
-        applyDefaultDetents(to: container)
-        presentedSheetController = container
-        sheetObserver.onDismiss = { [weak self, weak container] in
+        let sheetController: UIViewController
+        if let launchConfiguration, launchConfiguration.uiTestScenario != nil {
+            sheetController = BrowserInspectorSheetHostingController(
+                browserStore: browserStore,
+                inspectorController: inspectorController,
+                launchConfiguration: launchConfiguration,
+                tabs: tabs
+            )
+        } else {
+            sheetController = WITabViewController(
+                inspectorController,
+                webView: browserStore.webView,
+                tabs: tabs
+            )
+        }
+        sheetController.modalPresentationStyle = .pageSheet
+        applyDefaultDetents(to: sheetController)
+        presentedSheetController = sheetController
+        sheetObserver.onDismiss = { [weak self, weak sheetController] in
             guard let self else {
                 return
             }
-            if self.presentedSheetController === container {
+            if self.presentedSheetController === sheetController {
                 self.presentedSheetController = nil
                 self.notifyPresentationStateChanged()
             }
         }
-        anchor.present(container, animated: true)
-        container.presentationController?.delegate = sheetObserver
+        anchor.present(sheetController, animated: true)
+        sheetController.presentationController?.delegate = sheetObserver
         notifyPresentationStateChanged()
         return true
     }
@@ -509,10 +520,6 @@ final class BrowserInspectorCoordinator {
         private var releaseHandlersByInspectorControllerID: [ObjectIdentifier: () -> Void] = [:]
         private var closeObserver: NSObjectProtocol?
 
-        deinit {
-            removeCloseObserver()
-        }
-
         func setWindow(_ window: NSWindow?, inspectorController: WIInspectorController) {
             removeCloseObserver()
             self.window = window
@@ -528,13 +535,18 @@ final class BrowserInspectorCoordinator {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                let releaseHandler = self?.currentInspectorControllerID.flatMap {
-                    self?.releaseHandlersByInspectorControllerID[$0]
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    let releaseHandler = self.currentInspectorControllerID.flatMap {
+                        self.releaseHandlersByInspectorControllerID[$0]
+                    }
+                    self.window = nil
+                    self.currentInspectorControllerID = nil
+                    self.removeCloseObserver()
+                    releaseHandler?()
                 }
-                self?.window = nil
-                self?.currentInspectorControllerID = nil
-                self?.removeCloseObserver()
-                releaseHandler?()
             }
         }
 

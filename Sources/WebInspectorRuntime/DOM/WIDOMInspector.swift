@@ -241,6 +241,14 @@ public final class WIDOMInspector {
         clearDeleteUndoHistory()
     }
 
+    @_spi(Monocly) public func currentDocumentURLForDiagnostics() -> String? {
+        currentContext?.documentURL
+    }
+
+    @_spi(Monocly) public func currentContextIDForDiagnostics() -> DOMContextID? {
+        currentContext?.contextID
+    }
+
     public func copySelectedHTML() async throws -> String {
         try await copySelectionImpl(.html)
     }
