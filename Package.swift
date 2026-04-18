@@ -51,8 +51,8 @@ let package = Package(
             exact: "0.6.1"
         ),
         .package(
-            url: "https://github.com/lynnswap/MachOKit.git",
-            revision: "f5d856c6b7c04d43a8a023e5eb8e4dabd0ef65e1"
+            url: "https://github.com/p-x9/MachOKit.git",
+            exact: "0.49.0"
         )
     ],
     targets: [
