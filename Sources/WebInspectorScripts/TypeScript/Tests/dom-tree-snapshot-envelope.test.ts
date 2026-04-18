@@ -1,14 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { applySubtree, setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
-import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
-import type { SerializedNodeEnvelope } from "../UI/DOMTree/dom-tree-types";
+import { setSnapshot } from "../UI/DOMTree/dom-tree-snapshot";
+import { protocolState, treeState } from "../UI/DOMTree/dom-tree-state";
 
-type WebKitMockHandler = {
-    postMessage: ReturnType<typeof vi.fn>;
-};
-
-function resetTreeState() {
+function resetState(): void {
+    document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -21,229 +17,48 @@ function resetTreeState() {
     treeState.selectionChain = [];
     treeState.deferredChildRenders.clear();
     treeState.selectionRecoveryRequestKeys.clear();
-    dom.tree = null;
-    dom.empty = null;
-
-    if (renderState.frameId !== null) {
-        cancelAnimationFrame(renderState.frameId);
-    }
-    renderState.frameId = null;
-    renderState.pendingNodes.clear();
+    protocolState.contextID = 1;
 }
 
-function selectionHandler(): WebKitMockHandler {
-    return window.webkit?.messageHandlers?.webInspectorDomSelection as WebKitMockHandler;
-}
-
-describe("dom-tree-snapshot envelope conversion", () => {
+describe("dom-tree-snapshot-envelope", () => {
     beforeEach(() => {
-        resetTreeState();
-        document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+        resetState();
     });
 
-    it("converts serialized-node envelope into descriptor while preserving fallback ids", () => {
-        const section = document.createElement("section");
-        section.setAttribute("id", "target");
-        const span = document.createElement("span");
-        section.appendChild(span);
-
-        const envelope: SerializedNodeEnvelope = {
+    it("accepts a serialized envelope with fallback identifiers", () => {
+        const didApply = setSnapshot({
             type: "serialized-node-envelope",
-            node: section,
+            schemaVersion: 1,
+            node: document.createElement("main"),
             fallback: {
                 root: {
-                    nodeId: 101,
+                    nodeId: 11,
                     nodeType: 1,
-                    nodeName: "SECTION",
-                    localName: "section",
-                    attributes: ["id", "target"],
-                    childNodeCount: 3,
-                    children: [{
-                        nodeId: 102,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span",
-                        attributes: [],
-                        childNodeCount: 0,
-                        children: []
-                    }]
-                },
-                selectedNodeId: 102,
-                selectedNodePath: [0]
-            }
-        };
-
-        setSnapshot(envelope, { mode: "fresh" });
-
-        const root = treeState.snapshot?.root;
-        expect(root).not.toBeNull();
-        expect(root?.id).toBe(101);
-        expect(root?.childCount).toBe(3);
-        expect(root?.children.at(0)?.id).toBe(102);
-        expect(root?.children.at(-1)?.placeholderParentId).toBe(101);
-        expect(treeState.selectedNodeId).toBe(102);
-
-        const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
-            | undefined;
-        expect(messagePayload?.id).toBe(102);
-    });
-
-    it("keeps fallback child structure when serialized root is shallower than fallback", () => {
-        const section = document.createElement("section");
-        section.setAttribute("id", "target");
-
-        const envelope: SerializedNodeEnvelope = {
-            type: "serialized-node-envelope",
-            node: section,
-            fallback: {
-                root: {
-                    nodeId: 201,
-                    nodeType: 1,
-                    nodeName: "SECTION",
-                    localName: "section",
-                    attributes: ["id", "target"],
-                    childNodeCount: 1,
-                    children: [{
-                        nodeId: 202,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span",
-                        attributes: ["class", "leaf"],
-                        childNodeCount: 0,
-                        children: []
-                    }]
-                },
-                selectedNodeId: 202,
-                selectedNodePath: [0]
-            }
-        };
-
-        setSnapshot(envelope, { mode: "fresh" });
-
-        const root = treeState.snapshot?.root;
-        expect(root).not.toBeNull();
-        expect(root?.id).toBe(201);
-        expect(root?.children.length).toBe(1);
-        expect(root?.children.at(0)?.id).toBe(202);
-        expect(treeState.selectedNodeId).toBe(202);
-
-        const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
-            | undefined;
-        expect(messagePayload?.id).toBe(202);
-    });
-
-    it("resolves selection by path when selectedNodeId is missing", () => {
-        const section = document.createElement("section");
-
-        const envelope: SerializedNodeEnvelope = {
-            type: "serialized-node-envelope",
-            node: section,
-            fallback: {
-                root: {
-                    nodeId: 301,
-                    nodeType: 1,
-                    nodeName: "SECTION",
-                    localName: "section",
-                    attributes: [],
-                    childNodeCount: 1,
-                    children: [{
-                        nodeId: 302,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span",
-                        attributes: [],
-                        childNodeCount: 0,
-                        children: []
-                    }]
-                },
-                selectedNodeId: null,
-                selectedNodePath: [0]
-            }
-        };
-
-        setSnapshot(envelope, { mode: "fresh" });
-
-        expect(treeState.selectedNodeId).toBe(302);
-
-        const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { id?: number | null }
-            | undefined;
-        expect(messagePayload?.id).toBe(302);
-    });
-
-    it("falls back to descriptor payload when envelope schemaVersion is unsupported", () => {
-        const section = document.createElement("section");
-
-        const envelope: SerializedNodeEnvelope = {
-            type: "serialized-node-envelope",
-            schemaVersion: 999,
-            node: section,
-            fallback: {
-                root: {
-                    nodeId: 401,
-                    nodeType: 1,
-                    nodeName: "SECTION",
-                    localName: "section",
-                    attributes: ["id", "fallback"],
+                    nodeName: "MAIN",
+                    localName: "main",
+                    attributes: ["id", "root"],
                     childNodeCount: 0,
-                    children: []
+                    children: [],
                 },
-                selectedNodeId: 401,
-                selectedNodePath: []
-            }
-        };
-
-        setSnapshot(envelope, { mode: "fresh" });
-
-        const root = treeState.snapshot?.root;
-        expect(root).not.toBeNull();
-        expect(root?.id).toBe(401);
-        expect(treeState.selectedNodeId).toBe(401);
-    });
-
-    it("bumps style revision when a subtree refresh reselects the current node", () => {
-        setSnapshot({
-            root: {
-                nodeId: 1,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                attributes: [],
-                children: [{
-                    nodeId: 2,
-                    nodeType: 1,
-                    nodeName: "SPAN",
-                    localName: "span",
-                    attributes: [],
-                    childNodeCount: 0,
-                    children: []
-                }]
+                selectedNodeId: 11,
             },
-            selectedNodeId: 2,
-        }, { mode: "fresh" });
-
-        applySubtree({
-            nodeId: 1,
-            nodeType: 1,
-            nodeName: "DIV",
-            localName: "div",
-            attributes: [],
-            children: [{
-                nodeId: 2,
-                nodeType: 1,
-                nodeName: "SPAN",
-                localName: "span",
-                attributes: [],
-                childNodeCount: 0,
-                children: []
-            }]
+            selectedNodeId: 11,
         });
 
-        const messagePayload = selectionHandler().postMessage.mock.calls.at(-1)?.[0] as
-            | { styleRevision?: number }
-            | undefined;
-        expect(messagePayload?.styleRevision).toBe(1);
+        expect(didApply).toBe(true);
+        expect(treeState.snapshot?.root?.id).toBe(11);
+        expect(treeState.selectedNodeId).toBe(11);
+    });
+
+    it("rejects an invalid envelope without a resolvable root", () => {
+        const didApply = setSnapshot({
+            type: "serialized-node-envelope",
+            schemaVersion: 1,
+            node: null,
+            fallback: null,
+        });
+
+        expect(didApply).toBe(false);
+        expect(treeState.snapshot).toBeNull();
     });
 });

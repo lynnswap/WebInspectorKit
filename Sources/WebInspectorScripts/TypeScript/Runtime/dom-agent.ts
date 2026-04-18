@@ -3,12 +3,10 @@ import {
     captureDOMEnvelope,
     captureDOMSubtree,
     captureDOMSubtreeEnvelope,
-    consumePendingInitialSnapshotMode,
     createNodeHandle
 } from "./DOMAgent/dom-agent-dom-core";
-import {clearHighlight, highlightDOMNode, highlightDOMNodeHandle} from "./DOMAgent/dom-agent-overlay";
-import {cancelElementSelection, startElementSelection} from "./DOMAgent/dom-agent-selection";
-import {setPendingSelectionRestoreTarget} from "./DOMAgent/dom-agent-selection";
+import {clearHighlight, highlightDOMNode} from "./DOMAgent/dom-agent-overlay";
+import {cancelElementSelection, setPendingSelectionRestoreTarget, startElementSelection} from "./DOMAgent/dom-agent-selection";
 import {
     configureAutoSnapshot,
     disableAutoSnapshot,
@@ -26,39 +24,29 @@ import {
     debugStatus,
     outerHTMLForNode,
     redoRemoveNode,
-    removeNodeWithUndo,
     removeAttributeForNode,
     removeNode,
+    removeNodeWithUndo,
     selectorPathForNode,
     setAttributeForNode,
     undoRemoveNode,
     xpathForNode
 } from "./DOMAgent/dom-agent-dom-utils";
+
 function detachInspector() {
     cancelElementSelection();
     clearHighlight();
     disableAutoSnapshot();
 }
 
-function setPageEpoch(epoch: number): boolean {
-    if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
+function setContextID(contextID: number): boolean {
+    if (typeof contextID !== "number" || !Number.isFinite(contextID)) {
         return false;
     }
-    if (epoch !== inspector.pageEpoch) {
+    if (contextID !== inspector.contextID) {
         inspector.nextInitialSnapshotMode = "fresh";
     }
-    inspector.pageEpoch = epoch;
-    return true;
-}
-
-function setDocumentScopeID(documentScopeID: number): boolean {
-    if (typeof documentScopeID !== "number" || !Number.isFinite(documentScopeID)) {
-        return false;
-    }
-    if (documentScopeID !== inspector.documentScopeID) {
-        inspector.nextInitialSnapshotMode = "fresh";
-    }
-    inspector.documentScopeID = documentScopeID;
+    inspector.contextID = contextID;
     return true;
 }
 
@@ -85,12 +73,11 @@ function applyAutoSnapshotBootstrap(
 }
 
 function bootstrapDOMAgent(bootstrap?: DOMAgentBootstrapState | null): boolean {
-    const previousPageEpoch = inspector.pageEpoch;
-    const previousDocumentScopeID = inspector.documentScopeID;
+    const previousContextID = inspector.contextID;
     const nextBootstrap = bootstrap && typeof bootstrap === "object" ? bootstrap : readDOMAgentBootstrap();
     const didApplyContext = applyDOMAgentBootstrapContext(nextBootstrap);
     const hasAutoSnapshotBootstrap = Boolean(nextBootstrap.autoSnapshot && typeof nextBootstrap.autoSnapshot === "object");
-    if (didApplyContext && (inspector.pageEpoch !== previousPageEpoch || inspector.documentScopeID !== previousDocumentScopeID)) {
+    if (didApplyContext && inspector.contextID !== previousContextID) {
         inspector.nextInitialSnapshotMode = "fresh";
     }
     applyAutoSnapshotBootstrap(nextBootstrap.autoSnapshot, !hasAutoSnapshotBootstrap);
@@ -103,15 +90,10 @@ function scheduleInitialSnapshotIfNeededForCurrentDocument() {
     const normalizedDocumentURL = normalizeNavigationURL(inspector.documentURL || "");
     const documentURLChanged = !!inspector.documentURL && normalizedDocumentURL !== normalizedCurrentURL;
     const missingDOMMap = !(inspector.map && inspector.map.size);
-    if (documentURLChanged) {
+    if (documentURLChanged || missingDOMMap) {
         inspector.nextInitialSnapshotMode = "fresh";
-    } else if (missingDOMMap && !inspector.nextInitialSnapshotMode) {
-        inspector.nextInitialSnapshotMode = "preserve-ui-state";
     }
-    if (!inspector.snapshotAutoUpdateEnabled) {
-        return;
-    }
-    if (!inspector.nextInitialSnapshotMode && !documentURLChanged && !missingDOMMap) {
+    if (!inspector.snapshotAutoUpdateEnabled || !inspector.nextInitialSnapshotMode) {
         return;
     }
     triggerSnapshotUpdate("initial");
@@ -132,22 +114,19 @@ function normalizeNavigationURL(value: string): string {
 }
 
 if (!(window.webInspectorDOM && window.webInspectorDOM.__installed)) {
-    var webInspectorDOM = {
+    const webInspectorDOM = {
         captureSnapshot: captureDOM,
         captureSnapshotEnvelope: captureDOMEnvelope,
-        consumePendingInitialSnapshotMode: consumePendingInitialSnapshotMode,
         captureSubtree: captureDOMSubtree,
         captureSubtreeEnvelope: captureDOMSubtreeEnvelope,
         startSelection: startElementSelection,
         cancelSelection: cancelElementSelection,
         setPendingSelectionRestoreTarget: setPendingSelectionRestoreTarget,
         highlightNode: highlightDOMNode,
-        highlightNodeHandle: highlightDOMNodeHandle,
         clearHighlight: clearHighlight,
         configureAutoSnapshot: configureAutoSnapshot,
         disableAutoSnapshot: disableAutoSnapshot,
-        setPageEpoch: setPageEpoch,
-        setDocumentScopeID: setDocumentScopeID,
+        setContextID: setContextID,
         bootstrap: bootstrapDOMAgent,
         detach: detachInspector,
         triggerSnapshotUpdate: triggerSnapshotUpdate,

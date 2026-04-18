@@ -1,25 +1,12 @@
 import Foundation
 import Observation
 
-@available(*, deprecated, renamed: "DOMDocumentModel", message: "Use DOMDocumentModel.")
-public typealias DOMDocumentStore = DOMDocumentModel
-
 @MainActor
 @Observable
 public final class DOMDocumentModel {
     public private(set) var rootNode: DOMNodeModel?
     public private(set) var selectedNode: DOMNodeModel?
     public private(set) var errorMessage: String?
-
-    @available(*, deprecated, renamed: "rootNode", message: "Use rootNode.")
-    public var rootEntry: DOMNodeModel? {
-        rootNode
-    }
-
-    @available(*, deprecated, renamed: "selectedNode", message: "Use selectedNode.")
-    public var selectedEntry: DOMNodeModel? {
-        selectedNode
-    }
 
     package private(set) var documentIdentity = UUID()
 

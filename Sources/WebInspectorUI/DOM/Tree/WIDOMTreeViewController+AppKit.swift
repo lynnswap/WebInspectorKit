@@ -177,12 +177,15 @@ public final class WIDOMTreeViewController: NSViewController {
         }
         let undoManager = undoManager
         Task {
-            _ = await deleteContextMenuNode(
-                nodeID: nodeID,
-                nodeIdentity: nodeIdentity,
-                backendNodeID: backendNodeID,
-                undoManager: undoManager
-            )
+            do {
+                try await deleteContextMenuNode(
+                    nodeID: nodeID,
+                    nodeIdentity: nodeIdentity,
+                    backendNodeID: backendNodeID,
+                    undoManager: undoManager
+                )
+            } catch {
+            }
         }
     }
 
@@ -191,8 +194,8 @@ public final class WIDOMTreeViewController: NSViewController {
         nodeIdentity: DOMNodeModel.ID?,
         backendNodeID: Int? = nil,
         undoManager: UndoManager? = nil
-    ) async -> DOMMutationResult {
-        await deleteContextMenuNode(
+    ) async throws {
+        try await deleteContextMenuNode(
             nodeID: nodeID,
             nodeIdentity: nodeIdentity,
             backendNodeID: backendNodeID,
@@ -205,30 +208,38 @@ public final class WIDOMTreeViewController: NSViewController {
         nodeIdentity: DOMNodeModel.ID?,
         backendNodeID: Int?,
         undoManager: UndoManager?
-    ) async -> DOMMutationResult {
+    ) async throws {
         if let nodeIdentity {
-            let result = await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
-            guard result == .ignoredStaleContext, let backendNodeID else {
-                return result
+            do {
+                try await inspector.deleteNode(nodeID: nodeIdentity, undoManager: undoManager)
+                return
+            } catch DOMOperationError.invalidSelection, DOMOperationError.contextInvalidated {
+                guard let backendNodeID else {
+                    throw DOMOperationError.invalidSelection
+                }
+                try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+                return
             }
-            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
         }
         if let backendNodeID {
-            return await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+            try await inspector.deleteNode(nodeId: backendNodeID, undoManager: undoManager)
+            return
         }
         if let nodeID,
            let resolvedIdentity = nodeID >= 0
                 ? inspector.document.node(localID: UInt64(nodeID))?.id
                 : nil
         {
-            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            return
         }
         if let nodeID,
            let resolvedIdentity = inspector.document.node(stableBackendNodeID: nodeID)?.id
         {
-            return await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            try await inspector.deleteNode(nodeID: resolvedIdentity, undoManager: undoManager)
+            return
         }
-        return .failed
+        throw DOMOperationError.invalidSelection
     }
 
     private var contextActionNodeID: Int? {

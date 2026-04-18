@@ -134,7 +134,7 @@ struct WISessionStateTests {
         await finalizeTask.value
 
         #expect(controller.lifecycle == .disconnected)
-        #expect(controller.dom.session.pageWebView == nil)
+        #expect(controller.dom.hasPageWebView == false)
     }
 
     @Test

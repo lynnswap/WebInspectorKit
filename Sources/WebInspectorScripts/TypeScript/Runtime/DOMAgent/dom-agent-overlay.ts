@@ -8,10 +8,10 @@ import {
     type NodeTargetIdentifier
 } from "./dom-agent-dom-core";
 
-function matchesPageEpoch(expectedPageEpoch?: number) {
-    return typeof expectedPageEpoch !== "number"
-        || !Number.isFinite(expectedPageEpoch)
-        || expectedPageEpoch === inspector.pageEpoch;
+function matchesContext(expectedContextID?: number) {
+    return typeof expectedContextID !== "number"
+        || !Number.isFinite(expectedContextID)
+        || expectedContextID === inspector.contextID;
 }
 
 function ensureOverlay() {
@@ -189,26 +189,26 @@ function scrollRectIntoViewIfNeeded(rect: DOMRect | null) {
     return true;
 }
 
-export function highlightDOMNode(identifier: NodeTargetIdentifier, expectedPageEpoch?: number, reveal = true) {
-    if (!matchesPageEpoch(expectedPageEpoch)) {
+export function highlightDOMNode(identifier: NodeTargetIdentifier, expectedContextID?: number, reveal = true) {
+    if (!matchesContext(expectedContextID)) {
         return false;
     }
     var node = resolveNodeTarget(identifier);
-    return highlightResolvedNode(node as AnyNode | null, expectedPageEpoch, reveal);
+    return highlightResolvedNode(node as AnyNode | null, expectedContextID, reveal);
 }
 
-export function highlightDOMNodeHandle(handle: unknown, expectedPageEpoch?: number, reveal = true) {
-    if (!matchesPageEpoch(expectedPageEpoch)) {
+export function highlightDOMNodeHandle(handle: unknown, expectedContextID?: number, reveal = true) {
+    if (!matchesContext(expectedContextID)) {
         return false;
     }
     if (!handle || typeof handle !== "object") {
         return false;
     }
-    return highlightResolvedNode(handle as AnyNode, expectedPageEpoch, reveal);
+    return highlightResolvedNode(handle as AnyNode, expectedContextID, reveal);
 }
 
-function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number, reveal = true) {
-    if (!matchesPageEpoch(expectedPageEpoch)) {
+function highlightResolvedNode(node: AnyNode | null, expectedContextID?: number, reveal = true) {
+    if (!matchesContext(expectedContextID)) {
         return false;
     }
     if (!node) {
@@ -226,8 +226,8 @@ function highlightResolvedNode(node: AnyNode | null, expectedPageEpoch?: number,
     return true;
 }
 
-export function clearHighlight(expectedPageEpoch?: number) {
-    if (!matchesPageEpoch(expectedPageEpoch)) {
+export function clearHighlight(expectedContextID?: number) {
+    if (!matchesContext(expectedContextID)) {
         return false;
     }
     setOverlayTarget(null);

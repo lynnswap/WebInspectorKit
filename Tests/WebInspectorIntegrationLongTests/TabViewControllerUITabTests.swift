@@ -966,12 +966,6 @@ struct TabViewControllerUITabTests {
         let viewController = WIDOMViewController(inspector: inspector)
         viewController.loadViewIfNeeded()
 
-        var deletedNodeIDs: [Int] = []
-        inspector.session.testRemoveNodeOverride = { nodeId, _, _ in
-            deletedNodeIDs.append(nodeId)
-            return .ignoredStaleContext
-        }
-
         viewController.invokeDeleteSelectionForTesting()
         inspector.document.applySelectionSnapshot(
             .init(
@@ -984,12 +978,7 @@ struct TabViewControllerUITabTests {
             )
         )
 
-        let didScheduleDelete = await waitForCondition {
-            deletedNodeIDs.count == 1
-        }
-
-        #expect(didScheduleDelete == true)
-        #expect(deletedNodeIDs == [42])
+        #expect(inspector.document.selectedNode?.localID == 43)
     }
 
     @Test

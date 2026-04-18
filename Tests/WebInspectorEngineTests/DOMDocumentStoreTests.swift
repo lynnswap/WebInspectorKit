@@ -373,21 +373,6 @@ struct DOMDocumentModelTests {
         #expect(model.errorMessage == nil)
     }
 
-    @Test
-    @available(*, deprecated, message: "Legacy API compatibility coverage.")
-    func deprecatedDocumentStoreAliasesForwardToCurrentProperties() {
-        let model = DOMDocumentModel()
-        model.replaceDocument(
-            with: .init(
-                root: makeNode(localID: 1, children: [makeNode(localID: 2)]),
-                selectedLocalID: 2
-            )
-        )
-
-        #expect(legacyRootEntry(in: model)?.backendNodeID == model.rootNode?.backendNodeID)
-        #expect(legacySelectedEntry(in: model)?.backendNodeID == model.selectedNode?.backendNodeID)
-    }
-
     private func makeNode(
         localID: UInt64,
         backendNodeID: Int? = nil,
@@ -414,16 +399,4 @@ struct DOMDocumentModelTests {
             children: children
         )
     }
-}
-
-@available(*, deprecated, message: "Legacy API compatibility coverage.")
-@MainActor
-private func legacyRootEntry(in model: DOMDocumentStore) -> DOMNodeModel? {
-    model.rootEntry
-}
-
-@available(*, deprecated, message: "Legacy API compatibility coverage.")
-@MainActor
-private func legacySelectedEntry(in model: DOMDocumentStore) -> DOMNodeModel? {
-    model.selectedEntry
 }

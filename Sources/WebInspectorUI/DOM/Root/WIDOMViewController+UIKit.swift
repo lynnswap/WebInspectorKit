@@ -388,11 +388,11 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
             },
             onReloadInspector: { [weak self] in
                 guard let self else { return }
-                Task { _ = await self.inspector.reloadDocument() }
+                Task { try? await self.inspector.reloadDocument() }
             },
             onReloadPage: { [weak self] in
                 guard let self else { return }
-                Task { _ = await self.inspector.reloadPage() }
+                Task { try? await self.inspector.reloadPage() }
             },
             onDeleteNode: { [weak self] in
                 self?.deleteSelection()
@@ -411,7 +411,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         let undoManager = undoManager
         let selectedNodeID = inspector.document.selectedNode?.id
         Task {
-            _ = await inspector.deleteNode(nodeID: selectedNodeID, undoManager: undoManager)
+            try? await inspector.deleteNode(nodeID: selectedNodeID, undoManager: undoManager)
         }
     }
 

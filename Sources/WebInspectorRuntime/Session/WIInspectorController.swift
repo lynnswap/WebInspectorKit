@@ -109,7 +109,6 @@ public final class WIInspectorController {
 #endif
 
     public init(configuration: WIModelConfiguration = .init()) {
-        let domSession = DOMSession(configuration: configuration.dom)
         let networkBackend = WIBackendFactory.makeNetworkBackend(
             configuration: configuration.network
         )
@@ -118,7 +117,7 @@ public final class WIInspectorController {
             backend: networkBackend
         )
 
-        dom = WIDOMInspector(session: domSession)
+        dom = WIDOMInspector(configuration: configuration.dom)
         network = WINetworkModel(session: networkSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in

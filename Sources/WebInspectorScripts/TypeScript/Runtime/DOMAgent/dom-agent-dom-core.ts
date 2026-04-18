@@ -693,17 +693,6 @@ export function captureDOMEnvelope(maxDepth?: number, options?: SnapshotCaptureO
     return snapshot;
 }
 
-export function consumePendingInitialSnapshotMode(expectedPageEpoch?: number, expectedDocumentScopeID?: number) {
-    if (typeof expectedPageEpoch === "number" && inspector.pageEpoch !== expectedPageEpoch) {
-        return false;
-    }
-    if (typeof expectedDocumentScopeID === "number" && inspector.documentScopeID !== expectedDocumentScopeID) {
-        return false;
-    }
-    inspector.nextInitialSnapshotMode = null;
-    return true;
-}
-
 export function captureDOMSubtree(identifier: NodeTargetIdentifier, maxDepth?: number) {
     const payload = captureDOMSubtreePayload(identifier, maxDepth);
     if (!payload) {

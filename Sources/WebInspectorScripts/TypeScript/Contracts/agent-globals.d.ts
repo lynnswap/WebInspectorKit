@@ -6,10 +6,9 @@ type WebKitMessageHandler = {
 
 declare global {
     interface Window {
-        __wiDOMFrontendInitialPageEpoch?: number;
+        __wiDOMFrontendInitialContextID?: number;
         __wiDOMAgentBootstrap?: {
-            pageEpoch?: number;
-            documentScopeID?: number;
+            contextID?: number;
             autoSnapshot?: {
                 enabled?: boolean;
                 maxDepth?: number;
@@ -23,28 +22,20 @@ declare global {
                 autoUpdateDebounce?: number;
             };
             context?: {
-                pageEpoch?: number;
-                documentScopeID?: number;
-            };
-            preferredDepth?: number;
-            pendingDocumentRequest?: {
-                depth?: number;
-                mode?: "fresh" | "preserve-ui-state";
-                pageEpoch?: number;
+                contextID?: number;
             } | null;
         };
         webInspectorDOM?: {
             __installed?: boolean;
             detach?: () => void;
-            setPageEpoch?: (epoch: number) => void;
+            setContextID?: (contextID: number) => void;
             setPendingSelectionRestoreTarget?: (
                 path: number[] | null,
                 localId?: number | null,
                 backendNodeId?: number | null
             ) => boolean;
             bootstrap?: (bootstrap?: {
-                pageEpoch?: number;
-                documentScopeID?: number;
+                contextID?: number;
                 autoSnapshot?: {
                     enabled?: boolean;
                     maxDepth?: number;
@@ -64,7 +55,6 @@ declare global {
             messageHandlers?: {
                 webInspectorDOMSnapshot?: WebKitMessageHandler;
                 webInspectorDOMMutations?: WebKitMessageHandler;
-                webInspectorDomRequestDocument?: WebKitMessageHandler;
                 webInspectorDomRequestChildren?: WebKitMessageHandler;
                 webInspectorDomHighlight?: WebKitMessageHandler;
                 webInspectorDomHideHighlight?: WebKitMessageHandler;

@@ -210,9 +210,15 @@ private struct ElementDetailsMacRootView: View {
         let preservedDraftSession = draftSession?.key == key ? draftSession : nil
         let inspector = inspector
         Task {
-            let result = await inspector.removeAttribute(nodeID: selectedNode.id, name: attribute.name)
+            let didApply: Bool
+            do {
+                try await inspector.removeAttribute(nodeID: selectedNode.id, name: attribute.name)
+                didApply = true
+            } catch {
+                didApply = false
+            }
             await MainActor.run {
-                if result == .applied {
+                if didApply {
                     if self.draftSession?.key == key {
                         self.clearDraftSession()
                     }
@@ -237,14 +243,20 @@ private struct ElementDetailsMacRootView: View {
         let submittedValue = draftSession.draftValue
         let inspector = inspector
         Task {
-            let result = await inspector.setAttribute(
-                nodeID: key.nodeID,
-                name: key.attributeName,
-                value: submittedValue
-            )
+            let didApply: Bool
+            do {
+                try await inspector.setAttribute(
+                    nodeID: key.nodeID,
+                    name: key.attributeName,
+                    value: submittedValue
+                )
+                didApply = true
+            } catch {
+                didApply = false
+            }
             await MainActor.run {
                 self.isDraftSaveInFlight = false
-                guard result == .applied else {
+                guard didApply else {
                     return
                 }
                 self.draftSession = resolveAttributeSheetDraftSessionAfterSuccessfulSave(

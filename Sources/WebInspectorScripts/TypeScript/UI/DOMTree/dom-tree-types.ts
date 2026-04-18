@@ -122,13 +122,11 @@ export interface DOMSelectionRestoreTarget {
 export interface ProtocolState {
     snapshotDepth: number;
     subtreeDepth: number;
-    pageEpoch: number;
-    documentScopeID: number;
+    contextID: number;
 }
 
 export interface DOMDocumentContext {
-    pageEpoch?: number;
-    documentScopeID?: number;
+    contextID?: number;
 }
 
 /** Protocol configuration options */
@@ -141,8 +139,6 @@ export interface ProtocolConfig {
 export interface DOMFrontendBootstrapState {
     config?: ProtocolConfig;
     context?: DOMDocumentContext;
-    preferredDepth?: number;
-    pendingDocumentRequest?: RequestDocumentOptions | null;
 }
 
 // =============================================================================
@@ -293,7 +289,6 @@ export interface WebKitMessageHandler {
 
 /** WebKit message handlers collection */
 export interface WebKitMessageHandlers {
-    webInspectorDomRequestDocument?: WebKitMessageHandler;
     webInspectorDomRequestChildren?: WebKitMessageHandler;
     webInspectorDomHighlight?: WebKitMessageHandler;
     webInspectorDomHideHighlight?: WebKitMessageHandler;
@@ -319,23 +314,9 @@ export interface MutationBundle {
     version?: number;
     kind?: "snapshot" | "mutation";
     snapshot?: string | RawNodeDescriptor | SerializedNodeEnvelope | DOMSnapshotEnvelopePayload | null;
-    snapshotMode?: RequestDocumentMode;
     events?: DOMEventEntry[];
     bundle?: string | MutationBundle;
-    mode?: RequestDocumentMode;
-    pageEpoch?: number;
-    documentScopeID?: number;
-}
-
-export type RequestDocumentMode = "fresh" | "preserve-ui-state";
-
-/** Request document options */
-export interface RequestDocumentOptions {
-    depth?: number;
-    mode?: RequestDocumentMode;
-    pageEpoch?: number;
-    documentScopeID?: number;
-    selectionRestoreTarget?: DOMSelectionRestoreTarget | null;
+    contextID?: number;
 }
 
 // =============================================================================
@@ -362,30 +343,17 @@ export const REFRESH_RETRY_WINDOW = 2000;
 
 /** Public frontend API */
 export interface WebInspectorDOMFrontend {
-    applyFullSnapshot(
-        snapshot: unknown,
-        mode?: RequestDocumentMode,
-        pageEpoch?: number,
-        documentScopeID?: number
-    ): void;
+    applyFullSnapshot(snapshot: unknown, contextID?: number): void;
     applySelectionPayload(
         payload: number | DOMSelectionSyncPayload,
-        pageEpoch?: number,
-        documentScopeID?: number
+        contextID?: number
     ): boolean;
-    applySubtreePayload(payload: unknown, pageEpoch?: number, documentScopeID?: number): void;
-    completeChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
-    rejectChildNodeRequest(nodeId: number, pageEpoch?: number, documentScopeID?: number): void;
-    retryQueuedChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
-    resetChildNodeRequests(pageEpoch?: number, documentScopeID?: number): void;
-    resetDocumentRequestState(pageEpoch?: number, documentScopeID?: number): void;
-    rejectDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
-    completeDocumentRequest(pageEpoch?: number, documentScopeID?: number): void;
-    applyMutationBundle(bundle: string | MutationBundle, pageEpoch?: number): void;
-    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], pageEpoch?: number): void;
-    applyMutationBuffer(bufferName: string, pageEpoch?: number): boolean;
+    applySubtreePayload(payload: unknown, contextID?: number): void;
+    finishChildNodeRequest(nodeId: number, success: boolean, contextID?: number): void;
+    applyMutationBundle(bundle: string | MutationBundle, contextID?: number): void;
+    applyMutationBundles(bundles: string | MutationBundle | MutationBundle[], contextID?: number): void;
+    applyMutationBuffer(bufferName: string, contextID?: number): boolean;
     setSearchTerm(value: string): void;
-    setPreferredDepth(depth: number, pageEpoch?: number): void;
     updateConfig(partial: ProtocolConfig): void;
     adoptDocumentContext(context: DOMDocumentContext): boolean;
     __installed?: boolean;

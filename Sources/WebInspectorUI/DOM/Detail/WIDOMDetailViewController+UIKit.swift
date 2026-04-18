@@ -267,7 +267,12 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             },
             onReloadPage: { [weak self] in
                 guard let self else { return }
-                Task { _ = await self.inspector.reloadPage() }
+                Task {
+                    do {
+                        try await self.inspector.reloadPage()
+                    } catch {
+                    }
+                }
             },
             onDeleteNode: { [weak self] in
                 self?.deleteNode()
@@ -769,7 +774,8 @@ public final class WIDOMDetailViewController: UICollectionViewController {
             name: name,
             value: attributeValue(for: key) ?? "",
             entry: inspector.document.selectedNode,
-            activateEditor: (isInlineEditingActive && editingAttributeKey == key) || pendingFocusRestoreKey == key
+            activateEditor: (isInlineEditingActive && editingAttributeKey == key) || pendingFocusRestoreKey == key,
+            preserveFocusedText: isInlineEditingActive && editingAttributeKey == key && isAttributeDraftDirty(for: key)
         )
     }
 
@@ -847,8 +853,14 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         }
         let inspector = inspector
         Task { @MainActor [weak self] in
-            let result = await inspector.removeAttribute(nodeID: key.nodeID, name: key.name)
-            guard let self, result != .applied, self.attributeValue(for: key) != nil else {
+            let didFail: Bool
+            do {
+                try await inspector.removeAttribute(nodeID: key.nodeID, name: key.name)
+                didFail = false
+            } catch {
+                didFail = true
+            }
+            guard let self, didFail, self.attributeValue(for: key) != nil else {
                 return
             }
             if let preservedDraftSession {
@@ -970,7 +982,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private func reloadDocument() {
         let inspector = inspector
         Task {
-            _ = await inspector.reloadDocument()
+            try? await inspector.reloadDocument()
         }
     }
 
@@ -979,7 +991,7 @@ public final class WIDOMDetailViewController: UICollectionViewController {
         let inspector = inspector
         let undoManager = undoManager
         Task {
-            _ = await inspector.deleteSelection(undoManager: undoManager)
+            try? await inspector.deleteSelection(undoManager: undoManager)
         }
     }
 
@@ -1081,13 +1093,19 @@ extension WIDOMDetailViewController: ElementAttributeEditorCellDelegate {
         let inspector = inspector
         let submittedValue = value
         Task {
-            let result = await inspector.setAttribute(
-                nodeID: key.nodeID,
-                name: key.name,
-                value: submittedValue
-            )
+            let didApply: Bool
+            do {
+                try await inspector.setAttribute(
+                    nodeID: key.nodeID,
+                    name: key.name,
+                    value: submittedValue
+                )
+                didApply = true
+            } catch {
+                didApply = false
+            }
             await MainActor.run {
-                guard result == .applied else {
+                guard didApply else {
                     if self.pendingInlineCommitMarker == commitMarker {
                         self.pendingInlineCommitMarker = nil
                     }
@@ -1201,10 +1219,6 @@ private extension WIDOMDetailViewController {
         guard var attributeDraftSession else {
             return
         }
-        let externalValue = inspector.document.selectedNode?.id == key.nodeID
-            ? inspector.document.selectedNode?.attributes.first(where: { $0.name == key.name })?.value
-            : nil
-        _ = attributeDraftSession.reconcile(externalValue: externalValue)
         attributeDraftSession.updateDraft(value)
         self.attributeDraftSession = attributeDraftSession
     }
@@ -1273,7 +1287,8 @@ private extension WIDOMDetailViewController {
                     name: restoreKey.name,
                     value: attributeDraftSession.draftValue,
                     entry: selectedEntry,
-                    activateEditor: shouldRestoreFocus
+                    activateEditor: shouldRestoreFocus,
+                    preserveFocusedText: shouldRestoreFocus && attributeDraftSession.isDirty
                 )
             }
             if shouldRestoreFocus {
@@ -1423,6 +1438,35 @@ private final class DOMObservingListCell: UICollectionViewListCell {
 
 #if DEBUG
 extension WIDOMDetailViewController {
+    func inlineDraftPhaseForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) -> WIDOMAttributeDraftPhase? {
+        currentAttributeDraftSession(
+            for: .init(nodeID: nodeID, name: name)
+        )?.phase
+    }
+
+    func inlineDraftSessionForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) -> WIDOMAttributeDraftSession? {
+        currentAttributeDraftSession(
+            for: .init(nodeID: nodeID, name: name)
+        )
+    }
+
+    func hasPendingInlineCommitForTesting(
+        nodeID: DOMNodeModel.ID,
+        name: String
+    ) -> Bool {
+        pendingInlineCommitMarker?.key == .init(nodeID: nodeID, name: name)
+    }
+
+    func nextInlineCommitGenerationForTesting() -> UInt64 {
+        nextInlineCommitGeneration
+    }
+
     func installStaleInlineEditingStateForTesting(nodeID: DOMNodeModel.ID, name: String) {
         editingAttributeKey = ElementAttributeEditingKey(nodeID: nodeID, name: name)
         isInlineEditingActive = true
@@ -1460,7 +1504,8 @@ extension WIDOMDetailViewController {
                     name: cachedEditingKey.name,
                     value: liveValue,
                     entry: selectedEntry,
-                    activateEditor: false
+                    activateEditor: false,
+                    preserveFocusedText: false
                 )
                 _ = editorCell.suppressNextCommitAndEndEditing()
             }
@@ -1547,14 +1592,15 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         name: String,
         value: String,
         entry: DOMNodeModel?,
-        activateEditor: Bool
+        activateEditor: Bool,
+        preserveFocusedText: Bool
     ) {
         observationHandles.removeAll()
         editingKey = key
         observedEntry = entry
         nameLabel.text = name
 
-        if valueTextView.text != value {
+        if !(valueTextView.isFirstResponder && preserveFocusedText), valueTextView.text != value {
             isApplyingValue = true
             valueTextView.text = value
             isApplyingValue = false
@@ -1751,7 +1797,9 @@ private final class ElementAttributeEditorCell: UICollectionViewListCell, UIText
         contentView.addSubview(stackView)
 
         let valueHeightConstraint = valueTextView.heightAnchor.constraint(equalToConstant: ceil(UIFont.preferredFont(forTextStyle: .footnote).lineHeight))
-        valueHeightConstraint.priority = .required
+        // The collection view may apply a transient encapsulated height during list updates.
+        // Keep the editor height strong enough for self-sizing, but allow that transient pass.
+        valueHeightConstraint.priority = UILayoutPriority(999)
         self.valueHeightConstraint = valueHeightConstraint
 
         NSLayoutConstraint.activate([

@@ -9,6 +9,14 @@ import XCTest
 @testable import WebInspectorUI
 
 final class BrowserNavigationChromeTests: XCTestCase {
+    private final class ChallengeSender: NSObject, URLAuthenticationChallengeSender {
+        func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+        func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+        func cancel(_ challenge: URLAuthenticationChallenge) {}
+        func performDefaultHandling(for challenge: URLAuthenticationChallenge) {}
+        func rejectProtectionSpaceAndContinue(with challenge: URLAuthenticationChallenge) {}
+    }
+
     private var retainedWindows: [UIWindow] = []
 
     override func tearDown() {
@@ -23,6 +31,39 @@ final class BrowserNavigationChromeTests: XCTestCase {
             XCTFail("Timed out while resetting the window context store.")
         }
         super.tearDown()
+    }
+
+    @MainActor
+    func testAuthenticationChallengeUsesDefaultHandling() async {
+        let store = BrowserStore(
+            url: URL(string: "https://example.com")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let protectionSpace = URLProtectionSpace(
+            host: "example.com",
+            port: 443,
+            protocol: NSURLProtectionSpaceHTTPS,
+            realm: nil,
+            authenticationMethod: NSURLAuthenticationMethodServerTrust
+        )
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: protectionSpace,
+            proposedCredential: nil,
+            previousFailureCount: 0,
+            failureResponse: nil,
+            error: nil,
+            sender: ChallengeSender()
+        )
+
+        let response: (URLSession.AuthChallengeDisposition, URLCredential?) = await store.webView(
+            store.webView,
+            respondTo: challenge
+        )
+        let disposition = response.0
+        let credential = response.1
+
+        XCTAssertEqual(disposition, URLSession.AuthChallengeDisposition.performDefaultHandling)
+        XCTAssertNil(credential)
     }
 
     private struct HostedRootViewControllerFixture {

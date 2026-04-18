@@ -21,7 +21,7 @@ var removedNodeUndoOrder: number[] = [];
 var maxRemovedNodeUndoEntries = 128;
 
 type MutationResult = {
-    status: "applied" | "ignoredStaleContext" | "failed";
+    status: "applied" | "contextInvalidated" | "failed";
     undoToken?: number;
 };
 
@@ -47,18 +47,12 @@ function resolveHandleNode(handle: unknown): AnyNode | null {
     return handle as AnyNode;
 }
 
-function matchesExpectedPageContext(
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+function matchesExpectedContext(
+    expectedContextID?: number | null
 ) {
-    if (typeof expectedPageEpoch === "number"
-        && Number.isFinite(expectedPageEpoch)
-        && expectedPageEpoch !== inspector.pageEpoch) {
-        return false;
-    }
-    if (typeof expectedDocumentScopeID === "number"
-        && Number.isFinite(expectedDocumentScopeID)
-        && expectedDocumentScopeID !== inspector.documentScopeID) {
+    if (typeof expectedContextID === "number"
+        && Number.isFinite(expectedContextID)
+        && expectedContextID !== inspector.contextID) {
         return false;
     }
     return true;
@@ -372,11 +366,10 @@ export function xpathForNode(identifier: NodeTargetIdentifier) {
 
 export function removeNode(
     identifier: NodeTargetIdentifier,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var node = resolveNode(identifier);
     return mutationResult(removeResolvedNode(node) ? "applied" : "failed");
@@ -384,11 +377,10 @@ export function removeNode(
 
 export function removeNodeWithUndo(
     identifier: NodeTargetIdentifier,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var node = resolveNode(identifier);
     var undoToken = removeResolvedNodeWithUndo(node);
@@ -400,11 +392,10 @@ export function removeNodeWithUndo(
 
 export function undoRemoveNode(
     token: number | null | undefined,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var resolvedToken = normalizeUndoToken(token);
     if (!resolvedToken) {
@@ -450,11 +441,10 @@ export function undoRemoveNode(
 
 export function redoRemoveNode(
     token: number | null | undefined,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var resolvedToken = normalizeUndoToken(token);
     if (!resolvedToken) {
@@ -572,11 +562,10 @@ export function setAttributeForNode(
     identifier: NodeTargetIdentifier,
     name: string | null | undefined,
     value: string | null | undefined,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var node = resolveNode(identifier);
     return mutationResult(setAttributeForResolvedNode(node, name, value) ? "applied" : "failed");
@@ -604,11 +593,10 @@ function setAttributeForResolvedNode(node: AnyNode | null, name: string | null |
 export function removeAttributeForNode(
     identifier: NodeTargetIdentifier,
     name: string | null | undefined,
-    expectedPageEpoch?: number | null,
-    expectedDocumentScopeID?: number | null
+    expectedContextID?: number | null
 ) {
-    if (!matchesExpectedPageContext(expectedPageEpoch, expectedDocumentScopeID)) {
-        return mutationResult("ignoredStaleContext");
+    if (!matchesExpectedContext(expectedContextID)) {
+        return mutationResult("contextInvalidated");
     }
     var node = resolveNode(identifier);
     return mutationResult(removeAttributeForResolvedNode(node, name) ? "applied" : "failed");
@@ -643,8 +631,7 @@ export function debugStatus() {
         selectionActive: !!inspector.selectionState,
         nextInitialSnapshotMode: inspector.nextInitialSnapshotMode,
         documentURL: inspector.documentURL || document.URL || "",
-        pageEpoch: inspector.pageEpoch,
-        documentScopeID: inspector.documentScopeID
+        contextID: inspector.contextID
     };
     console.log("[webInspectorDOM] status:", status);
     return status;

@@ -1079,8 +1079,7 @@ function notifyNativeSelection(node: DOMNode | null): void {
                   : [],
               path: buildSelectionPath(node),
               styleRevision: treeState.styleRevision,
-              pageEpoch: protocolState.pageEpoch,
-              documentScopeID: protocolState.documentScopeID,
+              contextID: protocolState.contextID,
           }
         : {
               id: null,
@@ -1088,8 +1087,7 @@ function notifyNativeSelection(node: DOMNode | null): void {
               attributes: [],
               path: [],
               styleRevision: treeState.styleRevision,
-              pageEpoch: protocolState.pageEpoch,
-              documentScopeID: protocolState.documentScopeID,
+              contextID: protocolState.contextID,
           };
     try {
         handler.postMessage(payload);

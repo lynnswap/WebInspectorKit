@@ -12,7 +12,7 @@ export type SelectionState = {
     cancel?: () => void;
 };
 
-export type InitialSnapshotMode = "fresh" | "preserve-ui-state";
+export type InitialSnapshotMode = "fresh";
 
 export type PendingSelectionRestoreTarget = {
     path: number[] | null;
@@ -51,8 +51,7 @@ export type InspectorState = {
     snapshotAutoUpdatePendingReason: string | null;
     nextInitialSnapshotMode: InitialSnapshotMode | null;
     documentURL: string | null;
-    pageEpoch: number;
-    documentScopeID: number;
+    contextID: number;
 };
 
 export type DOMAgentAutoSnapshotBootstrap = {
@@ -62,8 +61,7 @@ export type DOMAgentAutoSnapshotBootstrap = {
 };
 
 export type DOMAgentBootstrapState = {
-    pageEpoch?: number;
-    documentScopeID?: number;
+    contextID?: number;
     autoSnapshot?: DOMAgentAutoSnapshotBootstrap;
 };
 
@@ -93,15 +91,14 @@ export function readDOMAgentBootstrap(): DOMAgentBootstrapState {
 }
 
 const initialBootstrap = readDOMAgentBootstrap();
-const initialPageEpoch =
-    readFiniteNumber(initialBootstrap.pageEpoch)
+const initialContextID =
+    readFiniteNumber(initialBootstrap.contextID)
     ?? (
-        typeof window.__wiDOMFrontendInitialPageEpoch === "number"
-        && Number.isFinite(window.__wiDOMFrontendInitialPageEpoch)
-            ? window.__wiDOMFrontendInitialPageEpoch
+        typeof window.__wiDOMFrontendInitialContextID === "number"
+        && Number.isFinite(window.__wiDOMFrontendInitialContextID)
+            ? window.__wiDOMFrontendInitialContextID
             : 0
     );
-const initialDocumentScopeID = readFiniteNumber(initialBootstrap.documentScopeID) ?? 0;
 const initialAutoSnapshot = initialBootstrap.autoSnapshot;
 
 export const inspector: InspectorState = {
@@ -135,30 +132,20 @@ export const inspector: InspectorState = {
     snapshotAutoUpdatePendingReason: null,
     nextInitialSnapshotMode: "fresh",
     documentURL: null,
-    pageEpoch: initialPageEpoch,
-    documentScopeID: initialDocumentScopeID
+    contextID: initialContextID,
 };
 
 export function applyDOMAgentBootstrapContext(bootstrap: DOMAgentBootstrapState | null | undefined): boolean {
     if (!bootstrap || typeof bootstrap !== "object") {
         return false;
     }
-    let didApply = false;
-    const pageEpoch = readFiniteNumber(bootstrap.pageEpoch);
-    if (pageEpoch !== null) {
-        if (pageEpoch !== inspector.pageEpoch) {
-            inspector.nextInitialSnapshotMode = "fresh";
-        }
-        inspector.pageEpoch = pageEpoch;
-        didApply = true;
+    const contextID = readFiniteNumber(bootstrap.contextID);
+    if (contextID === null) {
+        return false;
     }
-    const documentScopeID = readFiniteNumber(bootstrap.documentScopeID);
-    if (documentScopeID !== null) {
-        if (documentScopeID !== inspector.documentScopeID) {
-            inspector.nextInitialSnapshotMode = "fresh";
-        }
-        inspector.documentScopeID = documentScopeID;
-        didApply = true;
+    if (contextID !== inspector.contextID) {
+        inspector.nextInitialSnapshotMode = "fresh";
     }
-    return didApply;
+    inspector.contextID = contextID;
+    return true;
 }

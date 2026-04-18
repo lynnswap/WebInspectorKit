@@ -13,7 +13,7 @@ enum WIDOMPreviewFixtures {
     }
 
     static func makeInspector(mode: Mode) -> WIDOMInspector {
-        let inspector = WIDOMInspector(session: DOMSession())
+        let inspector = WIDOMInspector()
         applySampleTree(to: inspector)
         applySampleSelection(to: inspector, mode: mode)
         return inspector
@@ -92,16 +92,125 @@ enum WIDOMPreviewFixtures {
     }
 
     static func applySampleTree(to inspector: WIDOMInspector) {
-        guard
-            let data = try? JSONSerialization.data(withJSONObject: sampleSnapshotBundle, options: []),
-            let bundle = String(data: data, encoding: .utf8)
-        else {
-            return
-        }
-        inspector.enqueueMutationBundle(bundle, preservingInspectorState: true)
+        inspector.document.replaceDocument(with: sampleSnapshot(), isFreshDocument: true)
     }
 
     private static var pageLoaderByInspector: [ObjectIdentifier: WIDOMPreviewPageLoader] = [:]
+    private static func sampleSnapshot() -> DOMGraphSnapshot {
+        DOMGraphSnapshot(
+            root: .init(
+                localID: 1,
+                backendNodeID: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                nodeValue: "",
+                attributes: [],
+                childCount: 1,
+                layoutFlags: [],
+                isRendered: true,
+                children: [
+                    .init(
+                        localID: 2,
+                        backendNodeID: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        nodeValue: "",
+                        attributes: [DOMAttribute(name: "lang", value: "ja")],
+                        childCount: 2,
+                        layoutFlags: [],
+                        isRendered: true,
+                        children: [
+                            .init(
+                                localID: 3,
+                                backendNodeID: 3,
+                                nodeType: 1,
+                                nodeName: "HEAD",
+                                localName: "head",
+                                nodeValue: "",
+                                attributes: [],
+                                childCount: 0,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: []
+                            ),
+                            .init(
+                                localID: 4,
+                                backendNodeID: 4,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                nodeValue: "",
+                                attributes: [DOMAttribute(name: "class", value: "preview")],
+                                childCount: 2,
+                                layoutFlags: [],
+                                isRendered: true,
+                                children: [
+                                    .init(
+                                        localID: 5,
+                                        backendNodeID: 5,
+                                        nodeType: 1,
+                                        nodeName: "DIV",
+                                        localName: "div",
+                                        nodeValue: "",
+                                        attributes: [DOMAttribute(name: "id", value: "preview-root")],
+                                        childCount: 1,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: [
+                                            .init(
+                                                localID: 6,
+                                                backendNodeID: 6,
+                                                nodeType: 1,
+                                                nodeName: "SPAN",
+                                                localName: "span",
+                                                nodeValue: "",
+                                                attributes: [DOMAttribute(name: "aria-label", value: "スノーボード")],
+                                                childCount: 1,
+                                                layoutFlags: [],
+                                                isRendered: true,
+                                                children: [
+                                                    .init(
+                                                        localID: 7,
+                                                        backendNodeID: 7,
+                                                        nodeType: 3,
+                                                        nodeName: "#text",
+                                                        localName: "",
+                                                        nodeValue: "WebInspector Preview",
+                                                        attributes: [],
+                                                        childCount: 0,
+                                                        layoutFlags: [],
+                                                        isRendered: true,
+                                                        children: []
+                                                    )
+                                                ]
+                                            )
+                                        ]
+                                    ),
+                                    .init(
+                                        localID: 8,
+                                        backendNodeID: 8,
+                                        nodeType: 1,
+                                        nodeName: "SECTION",
+                                        localName: "section",
+                                        nodeValue: "",
+                                        attributes: [DOMAttribute(name: "class", value: "content")],
+                                        childCount: 0,
+                                        layoutFlags: [],
+                                        isRendered: true,
+                                        children: []
+                                    )
+                                ]
+                            )
+                        ]
+                    )
+                ]
+            ),
+            selectedLocalID: 6
+        )
+    }
+
     private static let sampleSnapshotBundle: NSDictionary = [
         "version": 1,
         "kind": "snapshot",
@@ -221,7 +330,7 @@ private final class WIDOMPreviewPageLoader: NSObject, WKNavigationDelegate {
             guard let inspector else {
                 return
             }
-            _ = await inspector.reloadDocumentPreservingInspectorState()
+            try? await inspector.reloadDocument()
         }
     }
 

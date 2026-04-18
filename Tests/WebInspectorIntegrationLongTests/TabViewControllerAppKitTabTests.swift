@@ -85,7 +85,7 @@ struct TabViewControllerAppKitTabTests {
 
         #expect(container.displayedTabIDsForTesting == [WITab.domTabID])
         #expect(controller.selectedTab?.identifier == WITab.elementTabID)
-        #expect(controller.dom.session.isAutoSnapshotEnabled == true)
+        #expect(controller.dom.hasPageWebView == true)
     }
 
     @Test

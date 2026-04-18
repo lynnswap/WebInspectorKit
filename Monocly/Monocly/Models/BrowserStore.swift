@@ -655,7 +655,6 @@ private enum BrowserStoreSPI {
 
 extension BrowserStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        logger.debug("\(#function) decide navigation policy (action)")
 #if canImport(AppKit)
         if navigationAction.navigationType == .linkActivated,
            navigationAction.modifierFlags.contains(.command),
@@ -671,7 +670,6 @@ extension BrowserStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        logger.debug("\(#function) provisional navigation started")
         isLoading = true
         estimatedProgress = .zero
         notifyStateObservers()
@@ -682,12 +680,10 @@ extension BrowserStore: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        logger.debug("\(#function) navigation committed")
     }
 
     func webView(_ webView: WKWebView, respondTo challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        logger.debug("\(#function) authentication challenge")
-        return (.useCredential, nil)
+        return (.performDefaultHandling, nil)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError navigationError: Error) {

@@ -10,8 +10,16 @@ private let domInspectorBridgeLogger = Logger(subsystem: "WebInspectorKit", cate
 
 @MainActor
 final class DOMInspectorBridge: NSObject {
-    enum HandlerName: String, CaseIterable {
-        case requestDocument = "webInspectorDomRequestDocument"
+    enum IncomingMessage {
+        case ready(contextID: DOMContextID)
+        case requestChildren(nodeID: Int, depth: Int, contextID: DOMContextID)
+        case highlight(nodeID: Int, reveal: Bool, contextID: DOMContextID)
+        case hideHighlight(contextID: DOMContextID)
+        case domSelection(payload: Any, contextID: DOMContextID)
+        case log(String)
+    }
+
+    private enum HandlerName: String, CaseIterable {
         case requestChildren = "webInspectorDomRequestChildren"
         case highlight = "webInspectorDomHighlight"
         case hideHighlight = "webInspectorDomHideHighlight"
@@ -20,29 +28,92 @@ final class DOMInspectorBridge: NSObject {
         case domSelection = "webInspectorDomSelection"
     }
 
-    weak var runtime: DOMInspectorRuntime?
-    private(set) var inspectorWebView: InspectorWebView?
+    var onMessage: (@MainActor (IncomingMessage) -> Void)?
 
-    func makeInspectorWebView() -> InspectorWebView {
+    private(set) var inspectorWebView: InspectorWebView?
+    private var bootstrapPayload: [String: Any] = DOMInspectorBridge.defaultBootstrapPayload()
+
+    func makeInspectorWebView(bootstrapPayload: [String: Any]) -> InspectorWebView {
+        self.bootstrapPayload = bootstrapPayload
         if let inspectorWebView {
             attachInspectorWebView(to: inspectorWebView)
+            applyBootstrap(on: inspectorWebView)
             return inspectorWebView
         }
 
-        let newWebView = InspectorWebView()
-        installInitialBootstrap(on: newWebView)
-        inspectorWebView = newWebView
-        attachInspectorWebView(to: newWebView)
-        loadInspector(in: newWebView)
-        return newWebView
+        let inspectorWebView = InspectorWebView()
+        installInitialBootstrap(on: inspectorWebView)
+        attachInspectorWebView(to: inspectorWebView)
+        loadInspector(in: inspectorWebView)
+        self.inspectorWebView = inspectorWebView
+        return inspectorWebView
+    }
+
+    func updateBootstrap(_ bootstrapPayload: [String: Any]) {
+        self.bootstrapPayload = bootstrapPayload
+        guard let inspectorWebView else {
+            return
+        }
+        applyBootstrap(on: inspectorWebView)
     }
 
     func detachInspectorWebView() {
         guard let inspectorWebView else {
             return
         }
-        detachInspectorWebView(ifMatches: inspectorWebView)
+        detachMessageHandlers(from: inspectorWebView)
         self.inspectorWebView = nil
+    }
+
+    func applyFullSnapshot(_ payload: Any, contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, contextID)",
+            arguments: [
+                "payload": payload,
+                "contextID": contextID,
+            ]
+        )
+    }
+
+    func applyMutationBundles(_ payload: Any, contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.applyMutationBundles?.(payload, contextID)",
+            arguments: [
+                "payload": payload,
+                "contextID": contextID,
+            ]
+        )
+    }
+
+    func applySubtreePayload(_ payload: Any, contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, contextID)",
+            arguments: [
+                "payload": payload,
+                "contextID": contextID,
+            ]
+        )
+    }
+
+    func applySelectionPayload(_ payload: Any, contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.applySelectionPayload?.(payload, contextID)",
+            arguments: [
+                "payload": payload,
+                "contextID": contextID,
+            ]
+        )
+    }
+
+    func finishChildNodeRequest(nodeID: Int, success: Bool, contextID: DOMContextID) async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.finishChildNodeRequest?.(nodeId, success, contextID)",
+            arguments: [
+                "nodeId": nodeID,
+                "success": success,
+                "contextID": contextID,
+            ]
+        )
     }
 
 #if canImport(AppKit)
@@ -50,8 +121,23 @@ final class DOMInspectorBridge: NSObject {
         inspectorWebView?.domContextMenuProvider = provider
     }
 #endif
+}
 
-    private func attachInspectorWebView(to inspectorWebView: InspectorWebView) {
+private extension DOMInspectorBridge {
+    static func defaultBootstrapPayload() -> [String: Any] {
+        [
+            "config": [
+                "snapshotDepth": 4,
+                "subtreeDepth": 3,
+                "autoUpdateDebounce": 0.6,
+            ],
+            "context": [
+                "contextID": 0,
+            ],
+        ]
+    }
+
+    func attachInspectorWebView(to inspectorWebView: InspectorWebView) {
         let controller = inspectorWebView.configuration.userContentController
         HandlerName.allCases.forEach {
             controller.removeScriptMessageHandler(forName: $0.rawValue)
@@ -60,54 +146,48 @@ final class DOMInspectorBridge: NSObject {
         inspectorWebView.navigationDelegate = self
     }
 
-    private func installInitialBootstrap(on inspectorWebView: InspectorWebView) {
+    func detachMessageHandlers(from inspectorWebView: InspectorWebView) {
         let controller = inspectorWebView.configuration.userContentController
-        let bootstrapPayload = runtime?.currentBootstrapPayload ?? [
-            "config": [
-                "snapshotDepth": 4,
-                "subtreeDepth": 3,
-                "autoUpdateDebounce": 0.6,
-            ],
-            "context": [
-                "pageEpoch": runtime?.currentPageEpoch ?? 0,
-                "documentScopeID": runtime?.currentDocumentScopeID ?? 0,
-            ],
-        ]
-        let bootstrapData = try? JSONSerialization.data(withJSONObject: bootstrapPayload)
-        let bootstrapJSON = bootstrapData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        let pageEpoch = runtime?.currentPageEpoch ?? 0
+        HandlerName.allCases.forEach {
+            controller.removeScriptMessageHandler(forName: $0.rawValue)
+        }
+        inspectorWebView.navigationDelegate = nil
+    }
+
+    func installInitialBootstrap(on inspectorWebView: InspectorWebView) {
+        let controller = inspectorWebView.configuration.userContentController
+        let bootstrapJSON = serializedBootstrapJSON()
         controller.addUserScript(
             WKUserScript(
-                source: """
-                window.__wiDOMFrontendInitialPageEpoch = \(pageEpoch);
-                window.__wiDOMFrontendBootstrap = \(bootstrapJSON);
-                """,
+                source: "window.__wiDOMFrontendBootstrap = \(bootstrapJSON);",
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             )
         )
     }
 
-    private func detachInspectorWebView(ifMatches inspectorWebView: InspectorWebView) {
-        guard self.inspectorWebView === inspectorWebView else {
-            return
-        }
-        detachMessageHandlers(from: inspectorWebView)
+    func applyBootstrap(on inspectorWebView: InspectorWebView) {
+        let bootstrapJSON = serializedBootstrapJSON()
+        inspectorWebView.evaluateJavaScript(
+            """
+            window.__wiDOMFrontendBootstrap = \(bootstrapJSON);
+            window.webInspectorDOMFrontend?.updateBootstrap?.(window.__wiDOMFrontendBootstrap);
+            """
+        )
     }
 
-    private func detachMessageHandlers(from inspectorWebView: InspectorWebView) {
-        let controller = inspectorWebView.configuration.userContentController
-        HandlerName.allCases.forEach {
-            controller.removeScriptMessageHandler(forName: $0.rawValue)
+    func serializedBootstrapJSON() -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: bootstrapPayload),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
         }
-        inspectorWebView.navigationDelegate = nil
-        domInspectorBridgeLogger.debug("detached inspector message handlers")
+        return string
     }
 
-    private func loadInspector(in inspectorWebView: InspectorWebView) {
-        guard
-            let mainURL = WIAssets.mainFileURL,
-            let baseURL = WIAssets.resourcesDirectory
+    func loadInspector(in inspectorWebView: InspectorWebView) {
+        guard let mainURL = WIAssets.mainFileURL,
+              let baseURL = WIAssets.resourcesDirectory
         else {
             domInspectorBridgeLogger.error("missing inspector resources")
             return
@@ -115,147 +195,35 @@ final class DOMInspectorBridge: NSObject {
         inspectorWebView.loadFileURL(mainURL, allowingReadAccessTo: baseURL)
     }
 
-    func refreshBootstrapPayloadIfPossible() {
+    func evaluateVoid(_ script: String, arguments: [String: Any]) async {
         guard let inspectorWebView else {
             return
         }
-        applyLatestBootstrapPayload(on: inspectorWebView)
+        do {
+            try await inspectorWebView.callAsyncVoidJavaScript(
+                script,
+                arguments: arguments,
+                contentWorld: .page
+            )
+        } catch {
+            domInspectorBridgeLogger.error("bridge dispatch failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
-    private func applyLatestBootstrapPayload(on inspectorWebView: InspectorWebView) {
-        let bootstrapPayload = runtime?.currentBootstrapPayload ?? [
-            "config": [
-                "snapshotDepth": 4,
-                "subtreeDepth": 3,
-                "autoUpdateDebounce": 0.6,
-            ],
-            "context": [
-                "pageEpoch": runtime?.currentPageEpoch ?? 0,
-                "documentScopeID": runtime?.currentDocumentScopeID ?? 0,
-            ],
-        ]
-        guard let bootstrapData = try? JSONSerialization.data(withJSONObject: bootstrapPayload),
-              let bootstrapJSON = String(data: bootstrapData, encoding: .utf8)
-        else {
-            return
-        }
-        let pageEpoch = runtime?.currentPageEpoch ?? 0
-        inspectorWebView.evaluateJavaScript(
-            """
-            window.__wiDOMFrontendInitialPageEpoch = \(pageEpoch);
-            window.__wiDOMFrontendBootstrap = \(bootstrapJSON);
-            if (window.webInspectorDOMFrontend?.updateConfig) {
-                const config = window.__wiDOMFrontendBootstrap?.config;
-                if (config && typeof config === "object") {
-                    window.webInspectorDOMFrontend.updateConfig(config);
-                }
-                const context = window.__wiDOMFrontendBootstrap?.context;
-                if (context && typeof context === "object" && window.webInspectorDOMFrontend?.adoptDocumentContext) {
-                    window.webInspectorDOMFrontend.adoptDocumentContext(context);
-                }
-            }
-            """
-        )
-    }
-
-    private func readPageEpoch(from payload: Any?) -> Int? {
-        if let dictionary = payload as? [String: Any] {
-            return parsePageEpochValue(dictionary["pageEpoch"])
-        }
-        if let dictionary = payload as? NSDictionary {
-            return parsePageEpochValue(dictionary["pageEpoch"])
-        }
-        if let string = payload as? String,
-           let data = string.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let dictionary = object as? [String: Any] {
-            return parsePageEpochValue(dictionary["pageEpoch"])
-        }
-        return nil
-    }
-
-    private func readDocumentScopeID(from payload: Any?) -> UInt64? {
-        if let dictionary = payload as? [String: Any] {
-            return parseUnsignedIntegerValue(dictionary["documentScopeID"])
-        }
-        if let dictionary = payload as? NSDictionary {
-            return parseUnsignedIntegerValue(dictionary["documentScopeID"])
-        }
-        if let string = payload as? String,
-           let data = string.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let dictionary = object as? [String: Any] {
-            return parseUnsignedIntegerValue(dictionary["documentScopeID"])
-        }
-        return nil
-    }
-
-    private func readNodeID(from payload: Any?) -> Int? {
-        if let dictionary = payload as? [String: Any] {
-            return parseIntegerValue(dictionary["nodeId"])
-        }
-        if let dictionary = payload as? NSDictionary {
-            return parseIntegerValue(dictionary["nodeId"])
-        }
-        if let string = payload as? String,
-           let data = string.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let dictionary = object as? [String: Any] {
-            return parseIntegerValue(dictionary["nodeId"])
-        }
-        return nil
-    }
-
-    private func readRevealFlag(from payload: Any?) -> Bool? {
-        if let dictionary = payload as? [String: Any] {
-            return parseBooleanValue(dictionary["reveal"])
-        }
-        if let dictionary = payload as? NSDictionary {
-            return parseBooleanValue(dictionary["reveal"])
-        }
-        if let string = payload as? String,
-           let data = string.data(using: .utf8),
-           let object = try? JSONSerialization.jsonObject(with: data),
-           let dictionary = object as? [String: Any] {
-            return parseBooleanValue(dictionary["reveal"])
-        }
-        return nil
-    }
-
-    private func parsePageEpochValue(_ value: Any?) -> Int? {
-        parseIntegerValue(value)
-    }
-
-    private func parseIntegerValue(_ value: Any?) -> Int? {
+    func parseInt(_ value: Any?) -> Int? {
         if let value = value as? Int {
             return value
         }
         if let value = value as? NSNumber {
             return value.intValue
         }
-        if let value = value as? String, let parsed = Int(value) {
-            return parsed
+        if let value = value as? String {
+            return Int(value)
         }
         return nil
     }
 
-    private func parseUnsignedIntegerValue(_ value: Any?) -> UInt64? {
-        if let value = value as? UInt64 {
-            return value
-        }
-        if let value = value as? Int, value >= 0 {
-            return UInt64(value)
-        }
-        if let value = value as? NSNumber, value.intValue >= 0 {
-            return value.uint64Value
-        }
-        if let value = value as? String, let parsed = UInt64(value) {
-            return parsed
-        }
-        return nil
-    }
-
-    private func parseBooleanValue(_ value: Any?) -> Bool? {
+    func parseBool(_ value: Any?) -> Bool? {
         if let value = value as? Bool {
             return value
         }
@@ -274,97 +242,77 @@ final class DOMInspectorBridge: NSObject {
         }
         return nil
     }
-}
 
-extension DOMInspectorBridge: DOMBundleSink {
-    func domDidEmit(bundle: DOMBundle) {
-        runtime?.handleDOMBundle(bundle)
+    func parseContextID(_ value: Any?) -> DOMContextID? {
+        if let value = value as? UInt64 {
+            return value
+        }
+        if let value = value as? NSNumber, value.intValue >= 0 {
+            return value.uint64Value
+        }
+        if let value = value as? Int, value >= 0 {
+            return UInt64(value)
+        }
+        if let value = value as? String {
+            return UInt64(value)
+        }
+        return nil
+    }
+
+    func dictionaryPayload(from body: Any) -> [String: Any]? {
+        if let dictionary = body as? [String: Any] {
+            return dictionary
+        }
+        if let dictionary = body as? NSDictionary {
+            return dictionary as? [String: Any]
+        }
+        return nil
     }
 }
 
 extension DOMInspectorBridge: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let handlerName = HandlerName(rawValue: message.name) else {
+        guard let handler = HandlerName(rawValue: message.name) else {
             return
         }
-        handleMessage(handlerName, body: message.body)
-    }
-}
-
-private extension DOMInspectorBridge {
-    func handleMessage(_ handlerName: HandlerName, body: Any) {
-        let pageEpoch = readPageEpoch(from: body)
-        let documentScopeID = readDocumentScopeID(from: body)
-        switch handlerName {
-        case .requestDocument:
-            guard runtime?.acceptsFrontendMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
-                runtime?.handleRejectedDocumentRequestMessage(
-                    pageEpoch: pageEpoch,
-                    documentScopeID: documentScopeID
-                )
-                return
-            }
-            runtime?.handleDocumentRequestMessage(body)
-        case .requestChildren:
-            guard runtime?.acceptsFrontendMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
-                runtime?.handleRejectedChildNodeRequestMessage(
-                    nodeID: readNodeID(from: body),
-                    pageEpoch: pageEpoch,
-                    documentScopeID: documentScopeID
-                )
-                return
-            }
-            runtime?.handleChildNodeRequestMessage(body)
-        case .highlight:
-            guard runtime?.acceptsFrontendMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
-                return
-            }
-            runtime?.handleHighlightRequestMessage(body)
-        case .hideHighlight:
-            guard runtime?.acceptsFrontendMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
-                return
-            }
-            runtime?.handleHideHighlightRequestMessage(body)
+        let body = message.body
+        switch handler {
         case .ready:
-            guard runtime?.acceptsReadyMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
+            let contextID = dictionaryPayload(from: body).flatMap { parseContextID($0["contextID"]) } ?? 0
+            onMessage?(.ready(contextID: contextID))
+        case .requestChildren:
+            guard let payload = dictionaryPayload(from: body),
+                  let nodeID = parseInt(payload["nodeId"]),
+                  let depth = parseInt(payload["depth"])
+            else {
                 return
             }
-            runtime?.handleReadyMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID)
-        case .log:
-            runtime?.handleLogMessage(body)
+            let contextID = parseContextID(payload["contextID"]) ?? 0
+            onMessage?(.requestChildren(nodeID: nodeID, depth: depth, contextID: contextID))
+        case .highlight:
+            guard let payload = dictionaryPayload(from: body),
+                  let nodeID = parseInt(payload["nodeId"])
+            else {
+                return
+            }
+            let reveal = parseBool(dictionaryPayload(from: body)?["reveal"]) ?? true
+            let contextID = parseContextID(dictionaryPayload(from: body)?["contextID"]) ?? 0
+            onMessage?(.highlight(nodeID: nodeID, reveal: reveal, contextID: contextID))
+        case .hideHighlight:
+            let contextID = dictionaryPayload(from: body).flatMap { parseContextID($0["contextID"]) } ?? 0
+            onMessage?(.hideHighlight(contextID: contextID))
         case .domSelection:
-            guard runtime?.acceptsFrontendMessage(pageEpoch: pageEpoch, documentScopeID: documentScopeID) == true else {
-                return
+            let payload = dictionaryPayload(from: body) ?? [:]
+            let contextID = parseContextID(payload["contextID"]) ?? 0
+            onMessage?(.domSelection(payload: body, contextID: contextID))
+        case .log:
+            if let payload = dictionaryPayload(from: body), let message = payload["message"] as? String {
+                onMessage?(.log(message))
+            } else if let message = body as? String {
+                onMessage?(.log(message))
             }
-            runtime?.handleDOMSelectionMessage(body)
         }
     }
 }
 
-#if DEBUG
-extension DOMInspectorBridge {
-    func testHandleMessage(named handlerName: String, body: Any) {
-        guard let handlerName = HandlerName(rawValue: handlerName) else {
-            return
-        }
-        handleMessage(handlerName, body: body)
-    }
-}
-#endif
-
-extension DOMInspectorBridge: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        guard let inspectorWebView = webView as? InspectorWebView else {
-            return
-        }
-        applyLatestBootstrapPayload(on: inspectorWebView)
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        domInspectorBridgeLogger.error("inspector navigation failed: \(error.localizedDescription, privacy: .public)")
-    }
-
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        domInspectorBridgeLogger.error("inspector load failed: \(error.localizedDescription, privacy: .public)")
-    }
-}
+extension DOMInspectorBridge: WKNavigationDelegate {}

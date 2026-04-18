@@ -218,12 +218,10 @@ function sendFullSnapshot(reason: string, maxDepthOverride?: number) {
             depth: maxDepth,
             documentURL: document.URL || "",
             snapshot: snapshot,
-            pageEpoch: inspector.pageEpoch,
-            documentScopeID: inspector.documentScopeID
+            contextID: inspector.contextID
         };
         handler.postMessage({
-            pageEpoch: inspector.pageEpoch,
-            documentScopeID: inspector.documentScopeID,
+            contextID: inspector.contextID,
             bundle: payload
         });
     } catch (error) {
@@ -501,12 +499,10 @@ function sendAutoSnapshotUpdate(reasonOverride?: string) {
                 kind: "mutation",
                 reason: reason,
                 events: messages.slice(offset, offset + chunkSize),
-                pageEpoch: inspector.pageEpoch,
-                documentScopeID: inspector.documentScopeID
+                contextID: inspector.contextID
             };
             mutationHandler.postMessage({
-                pageEpoch: inspector.pageEpoch,
-                documentScopeID: inspector.documentScopeID,
+                contextID: inspector.contextID,
                 bundle: payload
             });
         }
@@ -555,7 +551,7 @@ export function enableAutoSnapshot() {
     }
     inspector.snapshotAutoUpdateOverflow = false;
     if (!inspector.nextInitialSnapshotMode) {
-        inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        inspector.nextInitialSnapshotMode = "fresh";
     }
     connectAutoSnapshotObserver();
     scheduleSnapshotAutoUpdate("initial");
@@ -582,7 +578,7 @@ export function disableAutoSnapshot() {
     inspector.snapshotAutoUpdatePendingWhileSuppressed = false;
     inspector.snapshotAutoUpdatePendingReason = null;
     if (!inspector.nextInitialSnapshotMode) {
-        inspector.nextInitialSnapshotMode = "preserve-ui-state";
+        inspector.nextInitialSnapshotMode = "fresh";
     }
     disconnectAutoSnapshotObserver();
     return inspector.snapshotAutoUpdateEnabled;

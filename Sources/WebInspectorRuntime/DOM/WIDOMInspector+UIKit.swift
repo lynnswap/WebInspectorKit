@@ -55,8 +55,31 @@ package enum WIDOMUIKitSceneActivationEnvironment {
 }
 
 extension WIDOMInspector {
+    func disablePageScrollingForSelection() {
+        guard let pageWebView else {
+            return
+        }
+        let scrollView = pageWebView.scrollView
+        scrollBackup = (
+            isScrollEnabled: scrollView.isScrollEnabled,
+            isPanEnabled: scrollView.panGestureRecognizer.isEnabled
+        )
+        scrollView.isScrollEnabled = false
+        scrollView.panGestureRecognizer.isEnabled = false
+    }
+
+    func restorePageScrollingState() {
+        guard let pageWebView, let scrollBackup else {
+            self.scrollBackup = nil
+            return
+        }
+        pageWebView.scrollView.isScrollEnabled = scrollBackup.isScrollEnabled
+        pageWebView.scrollView.panGestureRecognizer.isEnabled = scrollBackup.isPanEnabled
+        self.scrollBackup = nil
+    }
+
     func activatePageWindowForSelectionIfPossible() {
-        guard let pageWindow = session.pageWebView?.window else {
+        guard let pageWindow = pageWebView?.window else {
             return
         }
 
@@ -80,7 +103,7 @@ extension WIDOMInspector {
     }
 
     func waitForPageWindowActivationIfNeeded() async {
-        guard let pageWindow = session.pageWebView?.window else {
+        guard let pageWindow = pageWebView?.window else {
             return
         }
         guard let pageScene = WIDOMUIKitSceneActivationEnvironment.sceneProvider(pageWindow) else {

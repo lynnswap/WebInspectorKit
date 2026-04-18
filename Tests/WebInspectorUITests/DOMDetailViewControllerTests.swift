@@ -340,13 +340,21 @@ struct DOMDetailViewControllerTests {
 
         let collectionView = try #require(viewController.collectionView)
         let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
+        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
 
+        let initialCommitGeneration = viewController.nextInlineCommitGenerationForTesting()
         textView.text = "draft"
         textView.delegate?.textViewDidChange?(textView)
-        try await Task.sleep(nanoseconds: 350_000_000)
+        let debouncedCommitSettled = await waitForInlineDebouncedCommitToSettle(
+            for: viewController,
+            nodeID: selectedNodeID,
+            name: "class",
+            initialGeneration: initialCommitGeneration
+        )
+        #expect(debouncedCommitSettled)
 
         inspector.document.applyMutationBundle(
             .init(
@@ -383,16 +391,28 @@ struct DOMDetailViewControllerTests {
 
         let collectionView = try #require(viewController.collectionView)
         let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
+        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
 
+        let initialCommitGeneration = viewController.nextInlineCommitGenerationForTesting()
         textView.text = "draft"
         textView.delegate?.textViewDidChange?(textView)
-        try await Task.sleep(nanoseconds: 350_000_000)
+        let debouncedCommitSettled = await waitForInlineDebouncedCommitToSettle(
+            for: viewController,
+            nodeID: selectedNodeID,
+            name: "class",
+            initialGeneration: initialCommitGeneration
+        )
+        #expect(debouncedCommitSettled)
 
         inspector.document.updateSelectedAttribute(name: "class", value: "draft")
-        try await Task.sleep(nanoseconds: 50_000_000)
+        let modelEchoApplied = await waitUntil {
+            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "draft"
+                && viewController.inlineDraftPhaseForTesting(nodeID: selectedNodeID, name: "class") == .clean
+        }
+        #expect(modelEchoApplied)
 
         inspector.document.applyMutationBundle(
             .init(
@@ -429,6 +449,7 @@ struct DOMDetailViewControllerTests {
 
         let collectionView = try #require(viewController.collectionView)
         let textView = try #require(await waitForVisibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)))
+        let selectedNodeID = try #require(inspector.document.selectedNode?.id)
 
         let didBeginEditing = await beginEditing(textView)
         #expect(didBeginEditing)
@@ -436,11 +457,19 @@ struct DOMDetailViewControllerTests {
         textView.text = "draft"
         textView.delegate?.textViewDidChange?(textView)
         inspector.document.updateSelectedAttribute(name: "class", value: "server")
-        try await Task.sleep(nanoseconds: 50_000_000)
+        let baselineAdvanced = await waitUntil {
+            inspector.document.selectedNode?.attributes.first(where: { $0.name == "class" })?.value == "server"
+                && viewController.inlineDraftSessionForTesting(nodeID: selectedNodeID, name: "class")?.draftState.baselineValue == "server"
+        }
+        #expect(baselineAdvanced)
 
         textView.text = "before"
         textView.delegate?.textViewDidChange?(textView)
-        try await Task.sleep(nanoseconds: 100_000_000)
+        let draftReturnedToEditing = await waitUntil {
+            viewController.inlineDraftPhaseForTesting(nodeID: selectedNodeID, name: "class") == .editing
+                && self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2))?.text == "before"
+        }
+        #expect(draftReturnedToEditing)
 
         let dirtyDraftPreserved = await waitUntil(maxTicks: 4096) {
             guard let currentTextView = self.visibleTextView(in: collectionView, at: IndexPath(item: 0, section: 2)) else {
@@ -770,6 +799,19 @@ struct DOMDetailViewControllerTests {
             await Task.yield()
         }
         return textView.isFirstResponder
+    }
+
+    private func waitForInlineDebouncedCommitToSettle(
+        for viewController: WIDOMDetailViewController,
+        nodeID: DOMNodeModel.ID,
+        name: String,
+        initialGeneration: UInt64,
+        maxTicks: Int = 1024
+    ) async -> Bool {
+        await waitUntil(maxTicks: maxTicks) {
+            viewController.nextInlineCommitGenerationForTesting() > initialGeneration
+                && !viewController.hasPendingInlineCommitForTesting(nodeID: nodeID, name: name)
+        }
     }
 
     private func firstSubview<ViewType: UIView>(of type: ViewType.Type, in view: UIView) -> ViewType? {
