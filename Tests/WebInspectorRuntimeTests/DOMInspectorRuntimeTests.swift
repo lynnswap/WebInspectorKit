@@ -543,10 +543,11 @@ struct DOMInspectorRuntimeTests {
 
         await store.updateConfiguration(configuration)
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 9, mode: .fresh)
 
         #expect(events.isEmpty)
         #expect(documentRequests.isEmpty)
+        #expect(didRequestDocument == true)
 
         store.testSetReady(true)
         await store.testWaitForBootstrapForTesting()
@@ -679,7 +680,12 @@ struct DOMInspectorRuntimeTests {
         }
 
         await store.performPageTransition { nextPageEpoch in
-            await store.requestDocument(depth: 9, mode: .preserveUIState, expectedPageEpoch: nextPageEpoch)
+            let didRequestDocument = await store.requestDocument(
+                depth: 9,
+                mode: .preserveUIState,
+                expectedPageEpoch: nextPageEpoch
+            )
+            #expect(didRequestDocument == true)
             #expect(documentRequests.isEmpty)
         }
         await store.testWaitForBootstrapForTesting()
@@ -694,9 +700,10 @@ struct DOMInspectorRuntimeTests {
         let store = makeStore(autoUpdateDebounce: 0.4)
 
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 9, mode: .fresh)
 
         let payload = store.currentBootstrapPayload
+        #expect(didRequestDocument == true)
         #expect(payload["preferredDepth"] as? Int == 9)
         let request = payload["pendingDocumentRequest"] as? [String: Any]
         #expect(request?["depth"] as? Int == 9)
@@ -879,7 +886,7 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "before")
 
         await harness.resume()
-        await requestTask.value
+        #expect(await requestTask.value == true)
         await store.testWaitForBootstrapForTesting()
 
         #expect(store.currentDocumentModel.rootNode?.attributes.first?.value == "mutation")
@@ -1182,8 +1189,9 @@ struct DOMInspectorRuntimeTests {
             isLoading: false
         )
 
-        await store.requestDocument(depth: 4, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
+        #expect(didRequestDocument == true)
         #expect(store.currentDocumentModel.selectedNode == nil)
     }
 
@@ -1229,7 +1237,7 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentScopeID == initialProjectedScopeID)
 
         await harness.resume()
-        await requestTask.value
+        #expect(await requestTask.value == true)
 
         #expect(store.currentDocumentModel.selectedNode == nil)
         #expect(store.currentPageEpoch == initialProjectedPageEpoch)
@@ -1298,7 +1306,7 @@ struct DOMInspectorRuntimeTests {
         #expect(store.currentDocumentModel.selectedNode == nil)
 
         await harness.resume()
-        await requestTask.value
+        #expect(await requestTask.value == false)
 
         #expect(resetRequestCount == 1)
         #expect(store.currentPageEpoch == transitionedPageEpoch)
@@ -1337,7 +1345,12 @@ struct DOMInspectorRuntimeTests {
             let expectedPageEpoch = store.currentPageEpoch
             await store.updateConfiguration(configuration, expectedPageEpoch: expectedPageEpoch)
             await store.setPreferredDepth(9, expectedPageEpoch: expectedPageEpoch)
-            await store.requestDocument(depth: 9, mode: .fresh, expectedPageEpoch: expectedPageEpoch)
+            let didRequestDocument = await store.requestDocument(
+                depth: 9,
+                mode: .fresh,
+                expectedPageEpoch: expectedPageEpoch
+            )
+            #expect(didRequestDocument == false)
         }
 
         await harness.waitUntilStarted()
@@ -1409,8 +1422,9 @@ struct DOMInspectorRuntimeTests {
             isLoading: false
         )
 
-        await store.requestDocument(depth: 4, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
+        #expect(didRequestDocument == true)
         #expect(store.currentDocumentModel.selectedNode == nil)
     }
 
@@ -1419,8 +1433,9 @@ struct DOMInspectorRuntimeTests {
         let store = makeStore(autoUpdateDebounce: 0.4)
         store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
 
-        await store.requestDocument(depth: 4, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
+        #expect(didRequestDocument == true)
         #expect(store.pendingMutationBundleCount == 0)
     }
 
@@ -1437,8 +1452,9 @@ struct DOMInspectorRuntimeTests {
             return true
         }
 
-        await store.requestDocument(depth: 4, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
+        #expect(didRequestDocument == true)
         #expect(resetPayloads.count == 1)
         #expect(resetPayloads.first?["documentScopeID"] as? UInt64 == currentDocumentScopeID)
     }
@@ -1489,8 +1505,9 @@ struct DOMInspectorRuntimeTests {
         }
         store.enqueueMutationBundle("{\"kind\":\"mutation\"}", preservingInspectorState: true)
 
-        await store.requestDocument(depth: 4, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
+        #expect(didRequestDocument == false)
         #expect(store.pendingMutationBundleCount == 1)
     }
 
@@ -1498,17 +1515,13 @@ struct DOMInspectorRuntimeTests {
     func freshRequestDocumentResetFailurePreservesDeferredBootstrapDOMBundles() async {
         let store = makeStore(autoUpdateDebounce: 0.4)
         let initialScopeID = store.currentDocumentScopeID
-        var didStartConfigurationPass = false
-        var allowConfigurationPassToFinish = false
+        let configurationHarness = BootstrapHarness()
 
         replaceDocument(in: store, root: makeNode(localID: 1))
 
         store.testSetReady(true)
         store.testConfigurationApplyOverride = { _ in
-            didStartConfigurationPass = true
-            while allowConfigurationPassToFinish == false, Task.isCancelled == false {
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
+            await configurationHarness.blockUntilResumed()
         }
         store.testFrontendDispatchOverride = { payload in
             let body = (payload as? [String: Any]) ?? [:]
@@ -1521,10 +1534,7 @@ struct DOMInspectorRuntimeTests {
             )
         }
 
-        let didStartBootstrap = await waitForCondition {
-            didStartConfigurationPass
-        }
-        #expect(didStartBootstrap == true)
+        await configurationHarness.waitUntilStarted()
         store.domDidEmit(
             bundle: .init(
                 objectEnvelope: [
@@ -1555,7 +1565,7 @@ struct DOMInspectorRuntimeTests {
 
         let didRequestDocument = await store.requestDocument(depth: 4, mode: .fresh)
 
-        allowConfigurationPassToFinish = true
+        await configurationHarness.resume()
         await bootstrapTask.value
         await store.testWaitForBootstrapForTesting()
 
@@ -3488,18 +3498,14 @@ struct DOMInspectorRuntimeTests {
         let syncHarness = BootstrapHarness()
         let initialScopeID = store.currentDocumentScopeID
         var syncedScopeID: UInt64?
-        var didStartConfigurationPass = false
-        var allowConfigurationPassToFinish = false
+        let configurationHarness = BootstrapHarness()
         var flushedBundles: [Any] = []
 
         replaceDocument(in: store, root: makeNode(localID: 1))
 
         store.testSetReady(true)
         store.testConfigurationApplyOverride = { _ in
-            didStartConfigurationPass = true
-            while allowConfigurationPassToFinish == false, Task.isCancelled == false {
-                try? await Task.sleep(nanoseconds: 1_000_000)
-            }
+            await configurationHarness.blockUntilResumed()
         }
         store.testFrontendDispatchOverride = { _ in true }
         store.testDocumentScopeSyncOverride = { scopeID in
@@ -3516,10 +3522,7 @@ struct DOMInspectorRuntimeTests {
             )
         }
 
-        let didStartBootstrap = await waitForCondition {
-            didStartConfigurationPass
-        }
-        #expect(didStartBootstrap == true)
+        await configurationHarness.waitUntilStarted()
         store.domDidEmit(
             bundle: .init(
                 objectEnvelope: [
@@ -3558,7 +3561,7 @@ struct DOMInspectorRuntimeTests {
         await syncHarness.resume()
         _ = await requestTask.value
 
-        allowConfigurationPassToFinish = true
+        await configurationHarness.resume()
         await bootstrapTask.value
 
         store.testSetReady(true)
@@ -3608,11 +3611,12 @@ struct DOMInspectorRuntimeTests {
         }
 
         await store.setPreferredDepth(9)
-        await store.requestDocument(depth: 9, mode: .fresh)
+        let didRequestDocument = await store.requestDocument(depth: 9, mode: .fresh)
         store.testResetInspectorStateForTesting()
         store.testSetReady(true)
         await store.testWaitForBootstrapForTesting()
 
+        #expect(didRequestDocument == true)
         #expect(documentRequests.isEmpty)
     }
 

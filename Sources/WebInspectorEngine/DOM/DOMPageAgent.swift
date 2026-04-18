@@ -198,7 +198,7 @@ extension DOMPageAgent: WKScriptMessageHandler {
         guard message.frameInfo.isMainFrame else {
             return
         }
-        guard let handlerName = HandlerName(rawValue: message.name) else {
+        guard HandlerName(rawValue: message.name) != nil else {
             return
         }
         guard let payload = message.body as? NSDictionary,
@@ -212,13 +212,6 @@ extension DOMPageAgent: WKScriptMessageHandler {
         let payloadDocumentScopeID = (payload["documentScopeID"] as? NSNumber)?.uint64Value
             ?? (payload["documentScopeID"] as? UInt64)
             ?? documentScopeID
-        let payloadKind = if let dictionary = bundle as? NSDictionary {
-            dictionary["kind"] as? String ?? "unknown"
-        } else if let dictionary = bundle as? [String: Any] {
-            dictionary["kind"] as? String ?? "unknown"
-        } else {
-            "raw"
-        }
 
         if let rawJSON = bundle as? String, !rawJSON.isEmpty {
             sink?.domDidEmit(
@@ -469,7 +462,7 @@ extension DOMPageAgent {
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            return parseMutationExecutionResult(rawValue)
+            return parseMutationExecutionResult(rawValue as Any)
         } catch {
             domLogger.error("undo remove node failed: \(error.localizedDescription, privacy: .public)")
             return .failed
@@ -497,7 +490,7 @@ extension DOMPageAgent {
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            let result = parseMutationExecutionResult(rawValue)
+            let result = parseMutationExecutionResult(rawValue as Any)
             if case .applied = result, let nodeId {
                 handleCache.removeHandle(for: nodeId)
             }
@@ -542,7 +535,7 @@ extension DOMPageAgent {
                     in: nil,
                     contentWorld: self.bridgeWorld
                 )
-                return self.parseMutationExecutionResult(rawValue)
+                return self.parseMutationExecutionResult(rawValue as Any)
             } catch {
                 domLogger.error("set attribute failed: \(error.localizedDescription, privacy: .public)")
                 return .failed
@@ -588,7 +581,7 @@ extension DOMPageAgent {
                 in: nil,
                 contentWorld: bridgeWorld
             )
-            return parseMutationExecutionResult(rawValue)
+            return parseMutationExecutionResult(rawValue as Any)
         } catch {
             domLogger.error("remove attribute failed: \(error.localizedDescription, privacy: .public)")
             return .failed
@@ -880,30 +873,29 @@ extension DOMPageAgent {
 private extension DOMPageAgent {
     func observePageNavigationState(on webView: WKWebView) {
         pageNavigationObservations.removeAll()
-        let urlObservation = webView.observe(\.url, options: [.new]) { [weak self, weak webView] observedWebView, _ in
-            guard let self, let webView, self.webView === webView else {
-                return
-            }
-            guard !observedWebView.isLoading else {
-                return
-            }
-            guard self.shouldScheduleNavigationRefresh(for: observedWebView.url) else {
-                return
-            }
-            self.scheduleNavigationRefreshIfNeeded(on: webView)
-        }
-        let loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self, weak webView] observedWebView, _ in
-            guard let self, let webView else {
-                return
-            }
-            guard observedWebView.isLoading == false else {
-                return
-            }
+        let urlObservation = webView.observe(\.url, options: [.new]) { [weak self, weak webView] _, _ in
             Task { @MainActor [weak self, weak webView] in
                 guard let self, let webView, self.webView === webView else {
                     return
                 }
-                if self.shouldScheduleNavigationRefresh(for: observedWebView.url) {
+                guard webView.isLoading == false else {
+                    return
+                }
+                guard self.shouldScheduleNavigationRefresh(for: webView.url) else {
+                    return
+                }
+                self.scheduleNavigationRefreshIfNeeded(on: webView)
+            }
+        }
+        let loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self, weak webView] _, _ in
+            Task { @MainActor [weak self, weak webView] in
+                guard let self, let webView, self.webView === webView else {
+                    return
+                }
+                guard webView.isLoading == false else {
+                    return
+                }
+                if self.shouldScheduleNavigationRefresh(for: webView.url) {
                     self.scheduleNavigationRefreshIfNeeded(on: webView)
                     return
                 }
