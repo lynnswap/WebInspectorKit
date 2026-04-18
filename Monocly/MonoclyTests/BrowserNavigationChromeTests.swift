@@ -679,6 +679,34 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testRapidSuccessiveLoadsDoNotLeaveCancelledNavigationErrorState() throws {
+        let firstURL = try makeTemporaryHTMLURL(named: "first-cancelled", title: "First Cancelled Page")
+        let secondURL = try makeTemporaryHTMLURL(named: "second-final", title: "Second Final Page")
+
+        let fixture = try makeHostedRootViewController()
+        let store = fixture.rootViewController.store
+
+        XCTAssertTrue(waitForNavigation(to: URL(string: "about:blank")!, minimumDidFinishCount: 1, in: store))
+
+        let initialCommitCount = store.didCommitNavigationCount
+        let initialFinishCount = store.didFinishNavigationCount
+
+        store.load(url: firstURL)
+        store.load(url: secondURL)
+
+        let finalLoadCompleted = waitForCondition(description: "rapid successive load settles on final page") {
+            store.currentURL == secondURL
+                && store.didCommitNavigationCount > initialCommitCount
+                && store.didFinishNavigationCount > initialFinishCount
+                && store.isLoading == false
+        }
+        XCTAssertTrue(finalLoadCompleted, "The browser did not settle on the final navigation target after cancelling the earlier request.")
+        XCTAssertEqual(store.currentURL, secondURL)
+        XCTAssertNil(store.lastNavigationErrorDescription)
+        XCTAssertGreaterThan(store.didCommitNavigationCount, initialCommitCount)
+    }
+
+    @MainActor
     func testForwardHistoryMenuAppearsAfterGoingBack() throws {
         let firstURL = try makeTemporaryHTMLURL(named: "first", title: "First Page")
         let secondURL = try makeTemporaryHTMLURL(named: "second", title: "Second Page")

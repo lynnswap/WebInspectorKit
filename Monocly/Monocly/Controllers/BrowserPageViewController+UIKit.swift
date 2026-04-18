@@ -173,6 +173,14 @@ final class BrowserPageViewController: UIViewController {
         }
 
         if launchConfiguration.shouldShowDiagnostics {
+            if launchConfiguration.uiTestScenario == .domOpenInspectorAfterInitialLoad {
+                diagnosticsPanel.configureInspectorOpenAction { [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    _ = self.openInspectorAsSheet(tabs: [.dom()])
+                }
+            }
             diagnosticsPanel.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(diagnosticsPanel)
             constraints.append(contentsOf: [
@@ -533,11 +541,9 @@ final class BrowserPageViewController: UIViewController {
             for _ in 0..<100 {
                 if self.inspectorController.dom.hasPageWebView {
                     do {
-                        let result = try await self.inspectorController.dom.beginSelectionMode()
-                        didCompleteAutoStart = !result.cancelled
-                        if didCompleteAutoStart {
-                            return
-                        }
+                        try await self.inspectorController.dom.beginSelectionMode()
+                        didCompleteAutoStart = true
+                        return
                     } catch {
                         // Keep retrying until the page bridge is ready or we time out.
                     }
@@ -660,6 +666,7 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
     private let didFinishCountLabel = UILabel()
     private let currentURLLabel = UILabel()
     private let lastErrorLabel = UILabel()
+    private let openInspectorButton = UIButton(type: .system)
 
     init() {
         super.init(effect: UIBlurEffect(style: .systemThinMaterial))
@@ -668,12 +675,19 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         clipsToBounds = true
         accessibilityIdentifier = "Monocly.diagnostics.panel"
 
-        let stackView = UIStackView(arrangedSubviews: [
+        var arrangedSubviews: [UIView] = [
             terminationCountLabel,
             didFinishCountLabel,
             currentURLLabel,
             lastErrorLabel
-        ])
+        ]
+        openInspectorButton.configuration = .tinted()
+        openInspectorButton.configuration?.title = "Open Inspector"
+        openInspectorButton.accessibilityIdentifier = "Monocly.inspectorHarness.openInspector"
+        openInspectorButton.isHidden = true
+        arrangedSubviews.append(openInspectorButton)
+
+        let stackView = UIStackView(arrangedSubviews: arrangedSubviews)
         stackView.axis = .vertical
         stackView.alignment = .leading
         stackView.spacing = 4
@@ -708,6 +722,17 @@ private final class BrowserDiagnosticsOverlayView: UIVisualEffectView {
         didFinishCountLabel.text = "didFinishCount=\(store.didFinishNavigationCount)"
         currentURLLabel.text = "currentURL=\(store.currentURL?.absoluteString ?? "n/a")"
         lastErrorLabel.text = "lastError=\(store.lastNavigationErrorDescription ?? "n/a")"
+    }
+
+    func configureInspectorOpenAction(_ action: @escaping () -> Void) {
+        openInspectorButton.isHidden = false
+        openInspectorButton.removeTarget(nil, action: nil, for: .primaryActionTriggered)
+        openInspectorButton.addAction(
+            UIAction { _ in
+                action()
+            },
+            for: .primaryActionTriggered
+        )
     }
 }
 #endif

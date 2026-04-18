@@ -60,7 +60,6 @@ export function ensureTreeEventHandlers(): void {
     }
     dom.tree.addEventListener("click", handleTreeClick);
     dom.tree.addEventListener("contextmenu", handleTreeContextMenu);
-    dom.tree.addEventListener("keydown", handleTreeKeydown);
     dom.tree.addEventListener("mouseover", handleTreeMouseOver);
     dom.tree.addEventListener("mouseout", handleTreeMouseOut);
     dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
@@ -105,6 +104,15 @@ function updateNodeElementState(element: HTMLElement | null, node: DOMNode): voi
     element.classList.toggle("is-unrendered", !rendered);
 }
 
+function displayDepthForNode(node: DOMNode): number {
+    const rawDepth = typeof node.depth === "number" ? node.depth : 0;
+    const snapshotRoot = treeState.snapshot?.root;
+    if (snapshotRoot?.nodeType === NODE_TYPES.DOCUMENT_NODE) {
+        return Math.max(0, rawDepth - 1);
+    }
+    return rawDepth;
+}
+
 // =============================================================================
 // Node Building
 // =============================================================================
@@ -114,8 +122,9 @@ export function buildNode(node: DOMNode): HTMLElement {
     const container = document.createElement("div");
     container.className = "tree-node";
     container.dataset.nodeId = String(node.id);
-    container.style.setProperty("--depth", String(node.depth || 0));
-    container.style.setProperty("--indent-depth", String(clampIndentDepth(node.depth || 0)));
+    const displayDepth = displayDepthForNode(node);
+    container.style.setProperty("--depth", String(displayDepth));
+    container.style.setProperty("--indent-depth", String(clampIndentDepth(displayDepth)));
     updateNodeElementState(container, node);
 
     const row = createNodeRow(node);
@@ -145,10 +154,9 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
     const row = document.createElement("div");
     row.className = "tree-node__row";
     row.setAttribute("role", "treeitem");
-    row.setAttribute("aria-level", String((node.depth || 0) + 1));
+    row.setAttribute("aria-level", String(displayDepthForNode(node) + 1));
 
-    const hasChildren = Array.isArray(node.children) && node.children.length > 0;
-    const isPlaceholder = node.nodeType === 0 && node.childCount > 0;
+    const hasChildren = node.childCount > 0 || (Array.isArray(node.children) && node.children.length > 0);
 
     if (hasChildren) {
         const disclosure = document.createElement("button");
@@ -165,40 +173,10 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
 
     const label = document.createElement("div");
     label.className = "tree-node__label";
-
-    if (isPlaceholder) {
-        row.classList.add("tree-node__row--placeholder");
-
-        const placeholderButton = document.createElement("button");
-        placeholderButton.type = "button";
-        placeholderButton.className = "tree-node__placeholder-button";
-        placeholderButton.dataset.role = "load-placeholder";
-        placeholderButton.textContent = `… ${node.childCount} more nodes`;
-        placeholderButton.setAttribute("aria-label", `Load remaining ${node.childCount} nodes`);
-
-        label.appendChild(placeholderButton);
-    } else {
-        label.appendChild(createPrimaryLabel(node, { modifiedAttributes }));
-    }
+    label.appendChild(createPrimaryLabel(node, { modifiedAttributes }));
     row.appendChild(label);
 
     return row;
-}
-
-/** Create placeholder element for loading more nodes */
-function createPlaceholderElement(node: DOMNode): HTMLElement {
-    const wrapper = document.createElement("div");
-    wrapper.className = "tree-node__placeholder";
-    wrapper.style.padding = "0 16px 16px 16px";
-
-    const placeholderButton = document.createElement("button");
-    placeholderButton.textContent = "Load";
-    placeholderButton.className = "control-button";
-    placeholderButton.style.width = "auto";
-    placeholderButton.dataset.role = "load-placeholder";
-
-    wrapper.appendChild(placeholderButton);
-    return wrapper;
 }
 
 // =============================================================================
@@ -215,12 +193,6 @@ export function renderChildren(
         return;
     }
 
-    const isPlaceholder = node.nodeType === 0 && node.childCount > 0;
-    if (isPlaceholder) {
-        container.replaceChildren(createPlaceholderElement(node));
-        return;
-    }
-
     if (initialRender) {
         container.innerHTML = "";
         if (Array.isArray(node.children)) {
@@ -230,10 +202,6 @@ export function renderChildren(
         }
         return;
     }
-
-    container.querySelectorAll(":scope > .tree-node__placeholder").forEach((element) =>
-        element.remove()
-    );
 
     const existingElements = new Map<number, Element>();
     container.querySelectorAll(":scope > .tree-node").forEach((element) => {
@@ -282,9 +250,10 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
         return;
     }
 
+    const displayDepth = displayDepthForNode(node);
     element.dataset.nodeId = String(node.id);
-    element.style.setProperty("--depth", String(node.depth || 0));
-    element.style.setProperty("--indent-depth", String(clampIndentDepth(node.depth || 0)));
+    element.style.setProperty("--depth", String(displayDepth));
+    element.style.setProperty("--indent-depth", String(clampIndentDepth(displayDepth)));
     updateNodeElementState(element, node);
 
     const newRow = createNodeRow(node, { modifiedAttributes });
@@ -438,7 +407,7 @@ export function nodeShouldBeExpanded(node: DOMNode): boolean {
     if (shouldCollapseByDefault(node)) {
         return false;
     }
-    return (node.depth || 0) <= 1;
+    return (node.depth || 0) <= 2;
 }
 
 /** Check if node should be collapsed by default (e.g., head element) */
@@ -493,7 +462,11 @@ export function toggleNode(nodeId: number): void {
         return;
     }
     const current = nodeShouldBeExpanded(node);
-    setNodeExpanded(nodeId, !current);
+    const next = !current;
+    setNodeExpanded(nodeId, next);
+    if (next && node.childCount > node.children.length) {
+        void requestChildren(node);
+    }
 }
 
 // =============================================================================
@@ -533,16 +506,6 @@ function handleTreeClick(event: MouseEvent): void {
         return;
     }
 
-    const placeholderButton = target.closest("[data-role='load-placeholder']");
-    if (placeholderButton) {
-        event.stopPropagation();
-        const node = resolveNodeFromElement(placeholderButton);
-        if (node) {
-            void requestChildren(node);
-        }
-        return;
-    }
-
     const row = target.closest(".tree-node__row");
     if (!row) {
         return;
@@ -573,26 +536,6 @@ function handleTreeContextMenu(event: MouseEvent): void {
     }
     (window as any).__wiLastDOMTreeContextNodeId = node.id;
     selectNode(node.id);
-}
-
-/** Handle delegated placeholder keyboard activation */
-function handleTreeKeydown(event: KeyboardEvent): void {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target) {
-        return;
-    }
-    const placeholderButton = target.closest("[data-role='load-placeholder']");
-    if (!placeholderButton) {
-        return;
-    }
-    if (event.key !== "Enter" && event.key !== " ") {
-        return;
-    }
-    event.preventDefault();
-    const node = resolveNodeFromElement(placeholderButton);
-    if (node) {
-        void requestChildren(node);
-    }
 }
 
 /** Handle delegated row hover */
@@ -642,10 +585,6 @@ function handleTreeMouseLeave(): void {
 
 /** Handle row click */
 function handleRowClick(event: MouseEvent, node: DOMNode): void {
-    if (node.nodeType === 0 && node.childCount > 0) {
-        requestChildren(node);
-        return;
-    }
     selectNode(node.id);
 }
 
@@ -911,20 +850,11 @@ export function selectNodeByPath(
 
 /** Request children for a node */
 export async function requestChildren(node: DOMNode): Promise<void> {
-    if (!node.placeholderParentId && node.id > 0) {
-        try {
-            await requestChildNodes(node.id, childRequestDepth());
-        } catch (error) {
-            if (isExpectedStaleProtocolResponseError(error)) {
-                return;
-            }
-            reportInspectorError("requestChildNodes", error);
-        }
+    if (node.id <= 0) {
         return;
     }
-    const parent = node.placeholderParentId || node.parentId || node.id;
     try {
-        await requestChildNodes(parent, childRequestDepth());
+        await requestChildNodes(node.id, childRequestDepth());
     } catch (error) {
         if (isExpectedStaleProtocolResponseError(error)) {
             return;
@@ -994,9 +924,18 @@ function createPrimaryLabel(node: DOMNode, options: NodeRenderOptions = {}): Doc
         return fragment;
     }
 
+    if (node.nodeType === NODE_TYPES.DOCUMENT_TYPE_NODE) {
+        const span = document.createElement("span");
+        span.className = "tree-node__name";
+        span.textContent = `<!DOCTYPE ${node.displayName || "html"}>`;
+        fragment.appendChild(span);
+        return fragment;
+    }
+
+    const tagName = (node.displayName || node.nodeName || "").toLowerCase();
     const tag = document.createElement("span");
     tag.className = "tree-node__name";
-    tag.textContent = `<${node.displayName}`;
+    tag.textContent = `<${tagName}`;
     fragment.appendChild(tag);
 
     let didHighlight = false;
@@ -1118,12 +1057,14 @@ export function renderPreview(node: DOMNode): string {
             return trimText(node.textContent || "");
         case NODE_TYPES.COMMENT_NODE:
             return `<!-- ${trimText(node.textContent || "")} -->`;
+        case NODE_TYPES.DOCUMENT_TYPE_NODE:
+            return `<!DOCTYPE ${node.displayName || "html"}>`;
         default: {
             const attrs = (node.attributes || [])
                 .map((attr) => `${attr.name}="${attr.value}"`)
                 .join(" ");
             const attrText = attrs ? " " + attrs : "";
-            return `<${node.displayName}${attrText}>`;
+            return `<${(node.displayName || node.nodeName || "").toLowerCase()}${attrText}>`;
         }
     }
 }

@@ -271,12 +271,16 @@ final class BrowserInspectorCoordinator {
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
+        let configuration = launchConfiguration ?? BrowserLaunchConfiguration(
+            initialURL: browserStore.currentURL ?? URL(string: "about:blank")!
+        )
+
         let sheetController: UIViewController
         if let launchConfiguration, launchConfiguration.uiTestScenario != nil {
             sheetController = BrowserInspectorSheetHostingController(
                 browserStore: browserStore,
                 inspectorController: inspectorController,
-                launchConfiguration: launchConfiguration,
+                launchConfiguration: configuration,
                 tabs: tabs
             )
         } else {
@@ -458,7 +462,7 @@ final class BrowserInspectorCoordinator {
             return
         }
         sheet.detents = [.medium(), .large()]
-        sheet.selectedDetentIdentifier = .medium
+        sheet.selectedDetentIdentifier = .large
         sheet.prefersGrabberVisible = false
         sheet.prefersScrollingExpandsWhenScrolledToEdge = false
         sheet.largestUndimmedDetentIdentifier = .large

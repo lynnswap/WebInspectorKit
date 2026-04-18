@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function resetEnvironment(): Promise<typeof import("../UI/DOMTree/dom-tree-state")> {
     const state = await import("../UI/DOMTree/dom-tree-state");
-    const { protocolState, treeState } = state;
+    const { dom, protocolState, treeState } = state;
     document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
+    dom.tree = null;
+    dom.empty = null;
     treeState.snapshot = null;
     treeState.nodes.clear();
     treeState.elements.clear();
@@ -84,6 +86,169 @@ describe("dom-tree-view", () => {
         }, 999);
 
         expect(treeState.snapshot).toBeNull();
+    });
+
+    it("renders document snapshots without a #document row", async () => {
+        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 2,
+                children: [
+                    {
+                        nodeId: 10,
+                        nodeType: 10,
+                        nodeName: "html",
+                        localName: "html",
+                        nodeValue: "",
+                        childNodeCount: 0,
+                        children: [],
+                    },
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 2,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "HEAD",
+                                localName: "head",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                            {
+                                nodeId: 4,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 1,
+                                children: [
+                                    {
+                                        nodeId: 5,
+                                        nodeType: 1,
+                                        nodeName: "MAIN",
+                                        localName: "main",
+                                        childNodeCount: 0,
+                                        children: [],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, 1);
+
+        expect(treeState.snapshot?.root?.nodeName).toBe("#document");
+        expect(document.getElementById("dom-tree")?.textContent).not.toContain("#document");
+        const names = Array.from(document.querySelectorAll(".tree-node__name"))
+            .map((element) => element.textContent);
+        expect(names).toContain("<!DOCTYPE html>");
+        expect(names).toContain("<html");
+        expect(names).toContain("<body");
+        expect(names).toContain("<main");
+        expect(document.querySelector(".tree-node__attribute")?.textContent).toBe(" lang");
+        expect(document.querySelector(".tree-node__value")?.textContent).toBe("=\"ja\"");
+        expect(document.querySelector(".tree-node.is-unrendered")).toBeNull();
+    });
+
+    it("does not render placeholder rows for partially loaded nodes", async () => {
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        attributes: ["lang", "ja"],
+                        childNodeCount: 2,
+                        children: [],
+                    },
+                ],
+            },
+        }, 1);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).not.toContain("Load");
+        expect(treeText).not.toContain("more nodes");
+        expect(document.querySelector("[data-role='load-placeholder']")).toBeNull();
+
+        const disclosure = document.querySelector(".tree-node[data-node-id='2'] .tree-node__disclosure") as HTMLButtonElement | null;
+        expect(disclosure).not.toBeNull();
+
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(2);
+        toggleNode(2);
+
+        const requestHandler = window.webkit?.messageHandlers?.webInspectorDomRequestChildren?.postMessage as ReturnType<typeof vi.fn>;
+        expect(requestHandler).toHaveBeenCalledWith({
+            nodeId: 2,
+            depth: 3,
+            contextID: 1,
+        });
+    });
+
+    it("drops inspector overlay nodes from the rendered tree", async () => {
+        const { treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 2,
+                        children: [
+                            {
+                                nodeId: 90,
+                                nodeType: 1,
+                                nodeName: "DIV",
+                                localName: "div",
+                                attributes: ["data-web-inspector-overlay", "true"],
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 0,
+                                children: [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, 1);
+
+        expect(treeState.nodes.has(90)).toBe(false);
+        expect(document.getElementById("dom-tree")?.textContent).not.toContain("data-web-inspector-overlay");
     });
 
     it("updates bootstrap by adopting a new context", async () => {

@@ -656,7 +656,6 @@ struct DOMDetailViewControllerTests {
         let webView = makeTestWebView()
 
         await inspector.attach(to: webView)
-        await loadHTML("<html><body><div id=\"target\">Target</div></body></html>", in: webView)
 
         let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
         defer { tearDown(window: window) }
@@ -671,7 +670,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialStateReady)
 
-        inspector.requestSelectionModeToggle()
+        inspector.setSelectionModeActiveForTesting(true)
         #expect(inspector.isSelectingElement)
 
         let activeStateReady = await waitUntil {
@@ -679,7 +678,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(activeStateReady)
 
-        inspector.requestSelectionModeToggle()
+        inspector.setSelectionModeActiveForTesting(false)
         #expect(inspector.isSelectingElement == false)
 
         let restoredStateReady = await waitUntil {

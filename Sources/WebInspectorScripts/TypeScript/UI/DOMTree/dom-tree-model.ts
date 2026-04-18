@@ -22,6 +22,8 @@ import {
     applyLayoutState,
 } from "./dom-tree-utilities";
 
+const INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE = "data-web-inspector-overlay";
+
 // =============================================================================
 // Node Normalization
 // =============================================================================
@@ -35,6 +37,10 @@ export function normalizeNodeDescriptor(
     parentRendered = true
 ): DOMNode | null {
     if (!descriptor || typeof descriptor !== "object") {
+        return null;
+    }
+
+    if (shouldOmitDescriptor(descriptor)) {
         return null;
     }
 
@@ -77,7 +83,7 @@ export function normalizeNodeDescriptor(
     let filteredChildren = 0;
 
     for (const child of rawChildren) {
-        if (isIgnorableTextDescriptor(child)) {
+        if (shouldOmitDescriptor(child)) {
             filteredChildren += 1;
             continue;
         }
@@ -88,12 +94,6 @@ export function normalizeNodeDescriptor(
     }
 
     const visibleChildCount = Math.max(children.length, rawChildCount - filteredChildren);
-
-    if (visibleChildCount > children.length) {
-        children.push(
-            createPlaceholderNode(resolvedId, visibleChildCount - children.length, isRendered)
-        );
-    }
 
     return {
         id: resolvedId,
@@ -107,7 +107,6 @@ export function normalizeNodeDescriptor(
         isRendered,
         children,
         childCount: visibleChildCount,
-        placeholderParentId: null,
     };
 }
 
@@ -170,6 +169,35 @@ export function isIgnorableTextDescriptor(
     return shouldOmitTextNode(nodeType, textContent);
 }
 
+function shouldOmitDescriptor(
+    descriptor: RawNodeDescriptor | null | undefined
+): boolean {
+    if (!descriptor || typeof descriptor !== "object") {
+        return false;
+    }
+
+    if (isIgnorableTextDescriptor(descriptor)) {
+        return true;
+    }
+
+    return hasInternalOverlayMarker(descriptor.attributes);
+}
+
+function hasInternalOverlayMarker(
+    rawAttributes: (string | undefined)[] | undefined
+): boolean {
+    if (!Array.isArray(rawAttributes)) {
+        return false;
+    }
+
+    for (let index = 0; index + 1 < rawAttributes.length; index += 2) {
+        if (rawAttributes[index] === INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE) {
+            return rawAttributes[index + 1] === "true";
+        }
+    }
+    return false;
+}
+
 // =============================================================================
 // Display Name Computation
 // =============================================================================
@@ -190,32 +218,6 @@ export function computeDisplayName(
         return "#comment";
     }
     return nodeName || "";
-}
-
-// =============================================================================
-// Placeholder Nodes
-// =============================================================================
-
-/** Create a placeholder node for unexpanded children */
-export function createPlaceholderNode(
-    parentId: number,
-    remainingCount: number,
-    parentRendered = true
-): DOMNode {
-    return {
-        id: -Math.abs(parentId || 0) || -1,
-        nodeName: "...",
-        displayName: "…",
-        nodeType: 0,
-        attributes: [],
-        textContent: null,
-        children: [],
-        childCount: remainingCount,
-        layoutFlags: [],
-        renderedSelf: true,
-        isRendered: parentRendered,
-        placeholderParentId: parentId || null,
-    };
 }
 
 // =============================================================================
@@ -272,7 +274,6 @@ export function mergeNodeWithSource(
             : Array.isArray(source.children)
               ? source.children.length
               : 0;
-    target.placeholderParentId = source.placeholderParentId || null;
 
     const parent =
         typeof target.parentId === "number" ? treeState.nodes.get(target.parentId) : null;

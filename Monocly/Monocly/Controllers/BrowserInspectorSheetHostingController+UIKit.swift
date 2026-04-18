@@ -1,7 +1,9 @@
 #if canImport(UIKit)
+import OSLog
 import UIKit
 @_spi(Monocly) import WebInspectorKit
 
+private let inspectorHarnessLogger = Logger(subsystem: "Monocly", category: "InspectorHarness")
 @MainActor
 final class BrowserInspectorSheetHostingController: UIViewController {
     private let browserStore: BrowserStore
@@ -28,11 +30,29 @@ final class BrowserInspectorSheetHostingController: UIViewController {
             webView: browserStore.webView,
             tabs: tabs
         )
-        if launchConfiguration.uiTestScenario == .domNavigationBackForward {
+        if launchConfiguration.uiTestScenario?.showsInspectorHarnessPanel == true {
             self.harnessPanel = BrowserInspectorUITestHarnessPanel(
                 fixturePages: launchConfiguration.uiTestFixturePages,
                 onLoadPage: { [weak browserStore] page in
                     browserStore?.load(url: page.url)
+                },
+                onSelectNode: { [weak inspectorController] target in
+                    Task { @MainActor in
+                        inspectorHarnessLogger.notice("selectNode tapped selector=\(target.selector, privacy: .public)")
+                        do {
+                            try await inspectorController?.dom.selectNodeForTesting(
+                                preview: target.expectedPreview,
+                                selectorPath: target.expectedSelector
+                            )
+                        } catch {
+                            inspectorHarnessLogger.error("selectNode failed selector=\(target.selector, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                        }
+                        if let dom = inspectorController?.dom {
+                            inspectorHarnessLogger.notice(
+                                "selectNode finished selector=\(target.selector, privacy: .public) selectedPreview=\(dom.currentSelectedNodePreviewForDiagnostics() ?? "nil", privacy: .public) selectedSelector=\(dom.currentSelectedNodeSelectorForDiagnostics() ?? "nil", privacy: .public) error=\(dom.document.errorMessage ?? "nil", privacy: .public)"
+                            )
+                        }
+                    }
                 },
                 onGoBack: { [weak browserStore] in
                     browserStore?.goBack()
@@ -114,6 +134,10 @@ final class BrowserInspectorSheetHostingController: UIViewController {
                 browserURL: browserStore.currentURL?.absoluteString ?? "n/a",
                 domDocumentURL: inspectorController.dom.currentDocumentURLForDiagnostics() ?? "n/a",
                 domContextID: inspectorController.dom.currentContextIDForDiagnostics().map(String.init) ?? "n/a",
+                domIsSelecting: inspectorController.dom.isSelectingElement,
+                domSelectedPreview: inspectorController.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
+                domSelectedSelector: inspectorController.dom.currentSelectedNodeSelectorForDiagnostics() ?? "n/a",
+                domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
                 domRootReady: inspectorController.dom.document.rootNode != nil,
                 domError: inspectorController.dom.document.errorMessage ?? "n/a",
                 canGoBack: browserStore.canGoBack,
@@ -127,6 +151,10 @@ private struct BrowserInspectorUITestHarnessState {
     let browserURL: String
     let domDocumentURL: String
     let domContextID: String
+    let domIsSelecting: Bool
+    let domSelectedPreview: String
+    let domSelectedSelector: String
+    let domSelectionDebug: String
     let domRootReady: Bool
     let domError: String
     let canGoBack: Bool
@@ -137,15 +165,21 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
     private let browserURLLabel = UILabel()
     private let domDocumentURLLabel = UILabel()
     private let domContextIDLabel = UILabel()
+    private let domIsSelectingLabel = UILabel()
+    private let domSelectedPreviewLabel = UILabel()
+    private let domSelectedSelectorLabel = UILabel()
+    private let domSelectionDebugLabel = UILabel()
     private let domRootStateLabel = UILabel()
     private let domErrorLabel = UILabel()
     private let backButton = UIButton(type: .system)
     private let forwardButton = UIButton(type: .system)
     private var pageButtons: [UIButton] = []
+    private var selectionButtons: [UIButton] = []
 
     init(
         fixturePages: [BrowserUITestFixturePage],
         onLoadPage: @escaping (BrowserUITestFixturePage) -> Void,
+        onSelectNode: @escaping (BrowserUITestSelectionTarget) -> Void,
         onGoBack: @escaping () -> Void,
         onGoForward: @escaping () -> Void
     ) {
@@ -173,6 +207,28 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
             )
             pageButtons.append(button)
             pageButtonStack.addArrangedSubview(button)
+        }
+
+        let selectionButtonStack = UIStackView()
+        selectionButtonStack.axis = .horizontal
+        selectionButtonStack.alignment = .fill
+        selectionButtonStack.distribution = .fillEqually
+        selectionButtonStack.spacing = 8
+
+        let selectionTargets = fixturePages.flatMap(\.selectionTargets)
+        for (index, target) in selectionTargets.enumerated() {
+            let button = UIButton(type: .system)
+            button.configuration = .tinted()
+            button.configuration?.title = "Select \(index + 1)"
+            button.accessibilityIdentifier = "Monocly.inspectorHarness.selectNode\(index + 1)"
+            button.addAction(
+                UIAction { _ in
+                    onSelectNode(target)
+                },
+                for: .primaryActionTriggered
+            )
+            selectionButtons.append(button)
+            selectionButtonStack.addArrangedSubview(button)
         }
 
         backButton.configuration = .tinted()
@@ -205,6 +261,10 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
             browserURLLabel,
             domDocumentURLLabel,
             domContextIDLabel,
+            domIsSelectingLabel,
+            domSelectedPreviewLabel,
+            domSelectedSelectorLabel,
+            domSelectionDebugLabel,
             domRootStateLabel,
             domErrorLabel
         ])
@@ -214,6 +274,7 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
 
         let rootStack = UIStackView(arrangedSubviews: [
             pageButtonStack,
+            selectionButtonStack,
             navigationButtonStack,
             labelStack
         ])
@@ -223,15 +284,20 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         rootStack.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(rootStack)
 
-        for label in [browserURLLabel, domDocumentURLLabel, domContextIDLabel, domRootStateLabel, domErrorLabel] {
+        for label in [browserURLLabel, domDocumentURLLabel, domContextIDLabel, domIsSelectingLabel, domSelectedPreviewLabel, domSelectedSelectorLabel, domSelectionDebugLabel, domRootStateLabel, domErrorLabel] {
             label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
             label.numberOfLines = 2
             label.textColor = .label
         }
+        domSelectionDebugLabel.numberOfLines = 5
 
         browserURLLabel.accessibilityIdentifier = "Monocly.inspectorHarness.browserURL"
         domDocumentURLLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domDocumentURL"
         domContextIDLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domContextID"
+        domIsSelectingLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domIsSelecting"
+        domSelectedPreviewLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectedPreview"
+        domSelectedSelectorLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectedSelector"
+        domSelectionDebugLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectionDebug"
         domRootStateLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domRootState"
         domErrorLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domError"
 
@@ -253,6 +319,10 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         browserURLLabel.text = "browserURL=\(state.browserURL)"
         domDocumentURLLabel.text = "domDocumentURL=\(state.domDocumentURL)"
         domContextIDLabel.text = "domContextID=\(state.domContextID)"
+        domIsSelectingLabel.text = "domIsSelecting=\(state.domIsSelecting ? 1 : 0)"
+        domSelectedPreviewLabel.text = "domSelectedPreview=\(state.domSelectedPreview)"
+        domSelectedSelectorLabel.text = "domSelectedSelector=\(state.domSelectedSelector)"
+        domSelectionDebugLabel.text = "domSelectionDebug=\(state.domSelectionDebug)"
         domRootStateLabel.text = "domRootReady=\(state.domRootReady ? 1 : 0)"
         domErrorLabel.text = "domError=\(state.domError)"
         backButton.isEnabled = state.canGoBack

@@ -29,11 +29,6 @@ declare global {
             __installed?: boolean;
             detach?: () => void;
             setContextID?: (contextID: number) => void;
-            setPendingSelectionRestoreTarget?: (
-                path: number[] | null,
-                localId?: number | null,
-                backendNodeId?: number | null
-            ) => boolean;
             bootstrap?: (bootstrap?: {
                 contextID?: number;
                 autoSnapshot?: {

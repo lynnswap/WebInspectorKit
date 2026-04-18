@@ -78,6 +78,68 @@ extension WIDOMInspector {
         self.scrollBackup = nil
     }
 
+    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
+        guard NSClassFromString("XCTestCase") == nil,
+              !Bundle.main.bundlePath.hasSuffix(".xctest") else {
+            return
+        }
+
+        if enabled {
+            installSelectionHitTestOverlay()
+        } else {
+            removeSelectionHitTestOverlay()
+        }
+
+        guard let pageWebView,
+              let contentView = findWKContentView(in: pageWebView)
+        else {
+            return
+        }
+
+        let selector = NSSelectorFromString(enabled ? "_enableInspectorNodeSearch" : "_disableInspectorNodeSearch")
+        guard contentView.responds(to: selector) else {
+            return
+        }
+        contentView.perform(selector)
+    }
+
+    private func installSelectionHitTestOverlay() {
+        guard let pageWebView else {
+            return
+        }
+
+        if selectionHitTestOverlay?.superview === pageWebView {
+            selectionHitTestOverlay?.frame = pageWebView.bounds
+            return
+        }
+
+        removeSelectionHitTestOverlay()
+        let overlay = WIDOMSelectionHitTestOverlay(inspector: self)
+        overlay.frame = pageWebView.bounds
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        pageWebView.addSubview(overlay)
+        selectionHitTestOverlay = overlay
+    }
+
+    private func removeSelectionHitTestOverlay() {
+        selectionHitTestOverlay?.removeFromSuperview()
+        selectionHitTestOverlay = nil
+    }
+
+    private func findWKContentView(in view: UIView) -> UIView? {
+        if NSStringFromClass(type(of: view)).contains("WKContentView") {
+            return view
+        }
+
+        for subview in view.subviews {
+            if let contentView = findWKContentView(in: subview) {
+                return contentView
+            }
+        }
+
+        return nil
+    }
+
     func activatePageWindowForSelectionIfPossible() {
         guard let pageWindow = pageWebView?.window else {
             return
@@ -118,6 +180,37 @@ extension WIDOMInspector {
                 return
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+}
+
+private final class WIDOMSelectionHitTestOverlay: UIView {
+    private weak var inspector: WIDOMInspector?
+
+    init(inspector: WIDOMInspector) {
+        self.inspector = inspector
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        isOpaque = false
+
+        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        addGestureRecognizer(tapRecognizer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    @objc
+    private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let inspector else {
+            return
+        }
+        let point = recognizer.location(in: self)
+        Task { @MainActor in
+            await inspector.handlePointerInspectSelection(at: point)
         }
     }
 }

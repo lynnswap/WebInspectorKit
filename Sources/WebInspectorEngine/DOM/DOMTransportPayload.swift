@@ -56,6 +56,7 @@ package struct DOMGraphSnapshot: Sendable {
 package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
     case local(UInt64)
     case backend(Int)
+    case selector(String)
 
     package var jsArgument: NSDictionary? {
         switch self {
@@ -72,6 +73,11 @@ package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
                 "kind": "backend",
                 "value": NSNumber(value: backendNodeID),
             ])
+        case let .selector(selectorPath):
+            return NSDictionary(dictionary: [
+                "kind": "selector",
+                "value": selectorPath,
+            ])
         }
     }
 
@@ -84,6 +90,8 @@ package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
             return Int(localID)
         case let .backend(backendNodeID):
             return backendNodeID
+        case .selector:
+            return nil
         }
     }
 
@@ -91,14 +99,14 @@ package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
         switch self {
         case let .local(localID):
             return localID
-        case .backend:
+        case .backend, .selector:
             return nil
         }
     }
 
     package var backendNodeID: Int? {
         switch self {
-        case .local:
+        case .local, .selector:
             return nil
         case let .backend(backendNodeID):
             return backendNodeID

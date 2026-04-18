@@ -3,6 +3,9 @@ import AppKit
 import WebInspectorBridge
 
 extension WIDOMInspector {
+    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
+    }
+
     func activatePageWindowForSelectionIfPossible() {
         guard
             let pageWebView,

@@ -14,6 +14,8 @@ export const NODE_TYPES = {
     ELEMENT_NODE: 1,
     TEXT_NODE: 3,
     COMMENT_NODE: 8,
+    DOCUMENT_NODE: 9,
+    DOCUMENT_TYPE_NODE: 10,
 } as const;
 
 export type NodeTypeValue = (typeof NODE_TYPES)[keyof typeof NODE_TYPES];
@@ -40,7 +42,6 @@ export interface DOMNode {
     isRendered: boolean;
     children: DOMNode[];
     childCount: number;
-    placeholderParentId: number | null;
     depth?: number;
     parentId?: number | null;
     childIndex?: number;

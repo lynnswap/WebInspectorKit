@@ -2,11 +2,9 @@ import {inspector, type AnyNode} from "./dom-agent-state";
 import { WI_DOM_SNAPSHOT_SCHEMA_VERSION } from "../../Contracts/agent-contract";
 
 export const INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE = "data-web-inspector-overlay";
-export const INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE = "data-web-inspector-selection-shield";
 
 const inspectorInternalAttributes = [
-    INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE,
-    INSPECTOR_INTERNAL_SELECTION_SHIELD_ATTRIBUTE
+    INSPECTOR_INTERNAL_OVERLAY_ATTRIBUTE
 ];
 
 type DOMNodeDescriptor = {
@@ -29,10 +27,11 @@ type SnapshotCaptureOptions = {
 };
 
 export type NodeTargetIdentifier = number | {
-    kind?: "local" | "backend";
-    value?: number;
+    kind?: "local" | "backend" | "selector";
+    value?: number | string;
     localID?: number;
     backendNodeID?: number;
+    selectorPath?: string;
 };
 
 type SerializedNodeEnvelope = {
@@ -232,6 +231,21 @@ export function resolveNodeTarget(identifier: NodeTargetIdentifier | null | unde
     if (identifier.kind === "backend") {
         const backendNodeID = targetValue(identifier.value ?? identifier.backendNodeID);
         return backendNodeID ? findNodeByStableIdentifier(backendNodeID) : null;
+    }
+    if (identifier.kind === "selector") {
+        const selectorPath = typeof identifier.value === "string"
+            ? identifier.value
+            : typeof identifier.selectorPath === "string"
+                ? identifier.selectorPath
+                : "";
+        if (!selectorPath) {
+            return null;
+        }
+        try {
+            return document.querySelector(selectorPath) as AnyNode | null;
+        } catch {
+            return null;
+        }
     }
 
     const localID = targetValue(identifier.localID ?? identifier.value);

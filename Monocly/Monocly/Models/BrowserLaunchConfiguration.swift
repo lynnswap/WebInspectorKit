@@ -4,20 +4,39 @@ import WebInspectorKit
 struct BrowserUITestFixturePage {
     let identifier: String
     let url: URL
+    let selectionTargets: [BrowserUITestSelectionTarget]
+}
+
+struct BrowserUITestSelectionTarget {
+    let identifier: String
+    let selector: String
+    let expectedPreview: String
+    let expectedSelector: String
 }
 
 enum BrowserUITestScenario: String {
     case domNavigationBackForward = "domNavigationBackForward"
+    case domOpenInspectorAfterInitialLoad = "domOpenInspectorAfterInitialLoad"
 
     struct FixtureDefinition {
+        struct SelectionTargetDefinition {
+            let identifier: String
+            let selector: String
+            let expectedPreview: String
+            let expectedSelector: String
+        }
+
         let identifier: String
         let filename: String
         let html: String
+        let selectionTargets: [SelectionTargetDefinition]
     }
 
     var defaultInspectorTabs: [WITab] {
         switch self {
         case .domNavigationBackForward:
+            [.dom()]
+        case .domOpenInspectorAfterInitialLoad:
             [.dom()]
         }
     }
@@ -26,6 +45,8 @@ enum BrowserUITestScenario: String {
         switch self {
         case .domNavigationBackForward:
             true
+        case .domOpenInspectorAfterInitialLoad:
+            false
         }
     }
 
@@ -33,12 +54,21 @@ enum BrowserUITestScenario: String {
         switch self {
         case .domNavigationBackForward:
             true
+        case .domOpenInspectorAfterInitialLoad:
+            true
+        }
+    }
+
+    var showsInspectorHarnessPanel: Bool {
+        switch self {
+        case .domNavigationBackForward, .domOpenInspectorAfterInitialLoad:
+            true
         }
     }
 
     var fixtureDefinitions: [FixtureDefinition] {
         switch self {
-        case .domNavigationBackForward:
+        case .domNavigationBackForward, .domOpenInspectorAfterInitialLoad:
             [
                 .init(
                     identifier: "page1",
@@ -57,7 +87,15 @@ enum BrowserUITestScenario: String {
                         </main>
                     </body>
                     </html>
-                    """
+                    """,
+                    selectionTargets: [
+                        .init(
+                            identifier: "node1",
+                            selector: "html",
+                            expectedPreview: "<html>",
+                            expectedSelector: "html"
+                        )
+                    ]
                 ),
                 .init(
                     identifier: "page2",
@@ -76,7 +114,15 @@ enum BrowserUITestScenario: String {
                         </main>
                     </body>
                     </html>
-                    """
+                    """,
+                    selectionTargets: [
+                        .init(
+                            identifier: "node1",
+                            selector: "p",
+                            expectedPreview: "<p>",
+                            expectedSelector: "p"
+                        )
+                    ]
                 )
             ]
         }
@@ -214,7 +260,18 @@ struct BrowserLaunchConfiguration {
             let fileURL = fixturesDirectoryURL.appendingPathComponent(definition.filename)
             do {
                 try definition.html.write(to: fileURL, atomically: true, encoding: .utf8)
-                return BrowserUITestFixturePage(identifier: definition.identifier, url: fileURL)
+                return BrowserUITestFixturePage(
+                    identifier: definition.identifier,
+                    url: fileURL,
+                    selectionTargets: definition.selectionTargets.map {
+                        BrowserUITestSelectionTarget(
+                            identifier: $0.identifier,
+                            selector: $0.selector,
+                            expectedPreview: $0.expectedPreview,
+                            expectedSelector: $0.expectedSelector
+                        )
+                    }
+                )
             } catch {
                 return nil
             }

@@ -912,7 +912,7 @@ struct WITransportAttachSymbolResolution: Sendable {
         if isSupported {
             .supported(
                 backendKind: backendKind,
-                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain, .networkBootstrapSnapshot]
+                capabilities: [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain, .networkDomain]
             )
         } else {
             .unsupported(reason: failureReason ?? "inspector backend unavailable")

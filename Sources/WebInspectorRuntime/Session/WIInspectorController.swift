@@ -104,20 +104,23 @@ public final class WIInspectorController {
     @ObservationIgnored private var runtimeApplyTask: Task<Void, Never>?
     @ObservationIgnored private var isTearingDown = false
     @ObservationIgnored private var suppressesDirectHostActivation = false
+    @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
 #if DEBUG
     @ObservationIgnored var testRuntimeLifecycleCommitHook: (@MainActor (WISessionLifecycle) async -> Void)?
 #endif
 
     public init(configuration: WIModelConfiguration = .init()) {
+        sharedTransport = WISharedInspectorTransport()
         let networkBackend = WIBackendFactory.makeNetworkBackend(
-            configuration: configuration.network
+            configuration: configuration.network,
+            sharedTransport: sharedTransport
         )
         let networkSession = NetworkSession(
             configuration: configuration.network,
             backend: networkBackend
         )
 
-        dom = WIDOMInspector(configuration: configuration.dom)
+        dom = WIDOMInspector(configuration: configuration.dom, sharedTransport: sharedTransport)
         network = WINetworkModel(session: networkSession)
 
         dom.setRecoverableErrorHandler { [weak self] message in

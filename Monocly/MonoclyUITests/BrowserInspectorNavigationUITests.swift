@@ -3,13 +3,18 @@ import XCTest
 
 final class BrowserInspectorNavigationUITests: XCTestCase {
     private enum AccessibilityID {
+        static let currentURL = "Monocly.diagnostics.currentURL"
+        static let openInspector = "Monocly.inspectorHarness.openInspector"
         static let browserURL = "Monocly.inspectorHarness.browserURL"
         static let domDocumentURL = "Monocly.inspectorHarness.domDocumentURL"
         static let domContextID = "Monocly.inspectorHarness.domContextID"
+        static let domSelectedPreview = "Monocly.inspectorHarness.domSelectedPreview"
+        static let domSelectedSelector = "Monocly.inspectorHarness.domSelectedSelector"
         static let domRootState = "Monocly.inspectorHarness.domRootState"
         static let domError = "Monocly.inspectorHarness.domError"
         static let loadPage1 = "Monocly.inspectorHarness.loadPage1"
         static let loadPage2 = "Monocly.inspectorHarness.loadPage2"
+        static let selectNode1 = "Monocly.inspectorHarness.selectNode1"
         static let goBack = "Monocly.inspectorHarness.goBack"
         static let goForward = "Monocly.inspectorHarness.goForward"
     }
@@ -71,6 +76,140 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
         XCTAssertNotEqual(forwardContextLabel, backContextLabel)
+    }
+
+    @MainActor
+    func testDOMInspectorLoadsCurrentDocumentWhenOpenedAfterInitialPageLoad() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            },
+            "Initial page did not finish loading before inspector open: \(currentURLLabel.label)"
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+    }
+
+    @MainActor
+    func testDOMInspectorSelectionHarnessSelectsExpectedNode() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            }
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        let selectNodeButton = app.buttons[AccessibilityID.selectNode1]
+        XCTAssertTrue(selectNodeButton.waitForExistence(timeout: 10))
+        selectNodeButton.tap()
+
+        let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domSelectedSelectorLabel = app.staticTexts[AccessibilityID.domSelectedSelector]
+        let domErrorLabel = app.staticTexts[AccessibilityID.domError]
+
+        let resolved = waitForCondition(timeout: 15) {
+            domSelectedPreviewLabel.exists
+                && domSelectedSelectorLabel.exists
+                && domSelectedPreviewLabel.label.contains("<html>")
+                && domSelectedSelectorLabel.label.contains("html")
+                && domErrorLabel.label == "domError=n/a"
+        }
+
+        XCTAssertTrue(
+            resolved,
+            """
+            Harness did not resolve the expected selected node.
+            selectedPreview=\(domSelectedPreviewLabel.label)
+            selectedSelector=\(domSelectedSelectorLabel.label)
+            domError=\(domErrorLabel.label)
+            """
+        )
+    }
+
+    @MainActor
+    func testDOMInspectorStaysStableAcrossRapidSwitchesAndRepeatedHistoryTraversal() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domNavigationBackForward"
+        app.launch()
+
+        XCTAssertTrue(app.buttons[AccessibilityID.loadPage1].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons[AccessibilityID.loadPage2].waitForExistence(timeout: 10))
+
+        let initialContextLabel = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        app.buttons[AccessibilityID.loadPage2].tap()
+        app.buttons[AccessibilityID.loadPage1].tap()
+
+        let reloadedPage1ContextLabel = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: true,
+            canGoForward: false
+        )
+        XCTAssertNotEqual(reloadedPage1ContextLabel, initialContextLabel)
+
+        var currentPage1ContextLabel = reloadedPage1ContextLabel
+        for _ in 0..<2 {
+            let backButton = app.buttons[AccessibilityID.goBack]
+            XCTAssertTrue(backButton.isEnabled)
+            backButton.tap()
+
+            let page2ContextLabel = try waitForHarnessState(
+                in: app,
+                pageFilename: "dom-page-2.html",
+                canGoBack: true,
+                canGoForward: true
+            )
+            XCTAssertNotEqual(page2ContextLabel, currentPage1ContextLabel)
+
+            let forwardButton = app.buttons[AccessibilityID.goForward]
+            XCTAssertTrue(forwardButton.isEnabled)
+            forwardButton.tap()
+
+            currentPage1ContextLabel = try waitForHarnessState(
+                in: app,
+                pageFilename: "dom-page-1.html",
+                canGoBack: true,
+                canGoForward: false
+            )
+            XCTAssertNotEqual(currentPage1ContextLabel, page2ContextLabel)
+        }
     }
 
     @MainActor

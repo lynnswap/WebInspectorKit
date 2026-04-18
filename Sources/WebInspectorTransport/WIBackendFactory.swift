@@ -4,7 +4,8 @@ import WebInspectorEngine
 package enum WIBackendFactory {
     package static func makeNetworkBackend(
         configuration: NetworkConfiguration,
-        supportSnapshot: WITransportSupportSnapshot? = nil
+        supportSnapshot: WITransportSupportSnapshot? = nil,
+        sharedTransport: WISharedInspectorTransport? = nil
     ) -> any WINetworkBackend {
         let resolvedSupport = WIBackendFactoryTesting.networkSupportSnapshotOverride
             ?? supportSnapshot
@@ -14,6 +15,7 @@ package enum WIBackendFactory {
             return NetworkPageAgent()
         }
         return NetworkTransportDriver(
+            sharedTransport: sharedTransport,
             initialSupport: resolvedSupport.backendSupport
         )
     }

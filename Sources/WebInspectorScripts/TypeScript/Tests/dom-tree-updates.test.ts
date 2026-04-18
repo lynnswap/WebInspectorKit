@@ -20,7 +20,6 @@ function makeNode(id: number, children: DOMNode[] = []): DOMNode {
         isRendered: true,
         children,
         childCount: children.length,
-        placeholderParentId: null,
         depth: 0,
         parentId: null,
         childIndex: 0

@@ -29,6 +29,7 @@ public final class WITransportSession {
     private var pageEventStreamContinuation: AsyncStream<WITransportEventEnvelope>.Continuation?
     private var pageEventQueueClosed = true
     private var hasAttachedPageEventConsumer = false
+    private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
 
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
@@ -65,6 +66,7 @@ public final class WITransportSession {
         self.webView = webView
         self.backend = backend
         resetTransportStateForAttach()
+        stableNetworkBootstrapAvailability = .unknown
 
         let messageSink = WITransportSessionMessageSink(session: self)
         backendMessageSink = messageSink
@@ -303,6 +305,218 @@ public final class WITransportSession {
         transition(to: .detached)
         originalInspectability = nil
     }
+
+    package func shouldAttemptStableNetworkBootstrap() -> Bool {
+        stableNetworkBootstrapAvailability != .unavailable
+    }
+
+    @discardableResult
+    package func markStableNetworkBootstrapUnavailable() -> Bool {
+        let wasUnavailable = stableNetworkBootstrapAvailability == .unavailable
+        stableNetworkBootstrapAvailability = .unavailable
+        return !wasUnavailable
+    }
+
+    package func markStableNetworkBootstrapAvailable() {
+        stableNetworkBootstrapAvailability = .available
+    }
+}
+
+private extension WITransportSession {
+    enum StableNetworkBootstrapAvailability {
+        case unknown
+        case available
+        case unavailable
+    }
+}
+
+package enum WISharedInspectorTransportClient: Hashable, Sendable {
+    case dom
+    case network
+}
+
+package typealias WISharedInspectorTransportEventHandler = @MainActor (WITransportEventEnvelope) async -> Void
+
+@MainActor
+package final class WISharedInspectorTransport {
+    private enum ClientDemand {
+        case attached
+        case suspended
+    }
+
+    private struct ClientState {
+        weak var webView: WKWebView?
+        let demand: ClientDemand
+        let sequence: Int
+    }
+
+    private let sessionFactory: @MainActor () -> WITransportSession
+    private var clientStates: [WISharedInspectorTransportClient: ClientState] = [:]
+    private var eventHandlers: [WISharedInspectorTransportClient: WISharedInspectorTransportEventHandler] = [:]
+    private var session: WITransportSession?
+    private var attachTask: Task<Void, Never>?
+    private var eventTask: Task<Void, Never>?
+    private weak var attachedWebView: WKWebView?
+    private var nextSequence = 1
+
+    package private(set) var supportSnapshot: WITransportSupportSnapshot
+
+    package init(
+        sessionFactory: @escaping @MainActor () -> WITransportSession = { WITransportSession() }
+    ) {
+        self.sessionFactory = sessionFactory
+        self.supportSnapshot = sessionFactory().supportSnapshot
+    }
+
+    isolated deinit {
+        attachTask?.cancel()
+        eventTask?.cancel()
+    }
+
+    package func setEventHandler(
+        _ handler: WISharedInspectorTransportEventHandler?,
+        for client: WISharedInspectorTransportClient
+    ) {
+        eventHandlers[client] = handler
+    }
+
+    package func attach(
+        client: WISharedInspectorTransportClient,
+        to webView: WKWebView
+    ) async {
+        clientStates[client] = ClientState(
+            webView: webView,
+            demand: .attached,
+            sequence: nextDemandSequence()
+        )
+        await reconcileAttachment()
+    }
+
+    package func suspend(client: WISharedInspectorTransportClient) async {
+        clientStates[client] = ClientState(
+            webView: nil,
+            demand: .suspended,
+            sequence: nextDemandSequence()
+        )
+        await reconcileAttachment()
+    }
+
+    package func detach(client: WISharedInspectorTransportClient) async {
+        clientStates.removeValue(forKey: client)
+        await reconcileAttachment()
+    }
+
+    package func attachedSession() async -> WITransportSession? {
+        await attachTask?.value
+        return session
+    }
+
+    package func waitForAttachForTesting() async {
+        await attachTask?.value
+    }
+
+    package func currentPageTargetIdentifier() -> String? {
+        session?.currentPageTargetIdentifier()
+    }
+}
+
+private extension WISharedInspectorTransport {
+    func nextDemandSequence() -> Int {
+        defer { nextSequence += 1 }
+        return nextSequence
+    }
+
+    func reconcileAttachment() async {
+        let desiredWebView = desiredAttachedWebView()
+
+        guard let desiredWebView else {
+            attachTask?.cancel()
+            attachTask = nil
+            eventTask?.cancel()
+            eventTask = nil
+            session?.detach()
+            session = nil
+            attachedWebView = nil
+            supportSnapshot = sessionFactory().supportSnapshot
+            return
+        }
+
+        if attachedWebView === desiredWebView,
+           session != nil,
+           attachTask == nil {
+            return
+        }
+
+        attachTask?.cancel()
+        attachTask = nil
+        eventTask?.cancel()
+        eventTask = nil
+        session?.detach()
+
+        let session = sessionFactory()
+        self.session = session
+        attachedWebView = desiredWebView
+        supportSnapshot = session.supportSnapshot
+
+        attachTask = Task { @MainActor [weak self, weak session] in
+            guard let self, let session else {
+                return
+            }
+
+            do {
+                try await session.attach(to: desiredWebView)
+            } catch {
+                guard self.session === session else {
+                    return
+                }
+                self.session = nil
+                self.attachedWebView = nil
+                self.supportSnapshot = self.sessionFactory().supportSnapshot
+                return
+            }
+
+            guard self.session === session else {
+                session.detach()
+                return
+            }
+
+            self.supportSnapshot = session.supportSnapshot
+            self.startEventLoop(using: session)
+            self.attachTask = nil
+        }
+    }
+
+    func desiredAttachedWebView() -> WKWebView? {
+        clientStates
+            .values
+            .filter { $0.demand == .attached && $0.webView != nil }
+            .max(by: { $0.sequence < $1.sequence })?
+            .webView
+    }
+
+    func startEventLoop(using session: WITransportSession) {
+        eventTask?.cancel()
+        let stream = session.pageEvents()
+        eventTask = Task { @MainActor [weak self, weak session] in
+            guard let self, let session else {
+                return
+            }
+            for await envelope in stream {
+                guard self.session === session else {
+                    break
+                }
+                for client in [WISharedInspectorTransportClient.network, .dom] {
+                    guard let handler = self.eventHandlers[client] else {
+                        continue
+                    }
+                    await handler(envelope)
+                }
+            }
+            if self.session === session {
+                self.eventTask = nil
+            }
+        }
+    }
 }
 
 private extension WITransportSession {
@@ -399,6 +613,15 @@ private extension WITransportSession {
             return
         }
 
+        if method == "DOM.inspect" {
+            enqueuePageEvent(
+                method: method,
+                targetIdentifier: pageTargetTracker.currentIdentifier,
+                paramsObject: parsed.params
+            )
+            return
+        }
+
         emitSyntheticPageEventIfNeeded(method: method, paramsObject: parsed.params)
     }
 
@@ -431,6 +654,10 @@ private extension WITransportSession {
 
         guard let method = parsed.method else {
             return
+        }
+
+        if method.hasPrefix("DOM.") || method.hasPrefix("Target.") {
+            log("received page event method=\(method) target=\(targetIdentifier)")
         }
 
         enqueuePageEvent(

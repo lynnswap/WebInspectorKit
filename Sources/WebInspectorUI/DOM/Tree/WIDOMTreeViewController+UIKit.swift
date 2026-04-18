@@ -151,6 +151,57 @@ public final class WIDOMTreeViewController: UIViewController {
 
 #if DEBUG
 extension WIDOMTreeViewController {
+    func frontendIsReadyForTesting() async -> Bool {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return false
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            "return Boolean(window.webInspectorDOMFrontend && document.getElementById('dom-tree'));",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        if let value = rawValue as? Bool {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.boolValue
+        }
+        return false
+    }
+
+    func treeTextContentForTesting() async -> String? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            "return document.getElementById('dom-tree')?.textContent ?? null;",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawValue as? String
+    }
+
+    func selectedNodeTextForTesting() async -> String? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            "return document.querySelector('.tree-node.is-selected .tree-node__row')?.textContent ?? null;",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        return rawValue as? String
+    }
+
     var isInspectorWebViewAttachedForTesting: Bool {
         guard let attachedInspectorWebView else {
             return false

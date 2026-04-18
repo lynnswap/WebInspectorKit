@@ -21,7 +21,6 @@ function makeNode(id: number): DOMNode {
         isRendered: true,
         children: [],
         childCount: 0,
-        placeholderParentId: null,
         depth: 1,
         parentId: 1,
         childIndex: 0

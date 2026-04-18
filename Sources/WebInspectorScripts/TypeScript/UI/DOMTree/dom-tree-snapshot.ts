@@ -12,6 +12,7 @@ import {
     DOMEventEntry,
     DOMNode,
     DOM_SNAPSHOT_SCHEMA_VERSION,
+    NODE_TYPES,
     DOMSnapshot,
     DOMSnapshotEnvelopePayload,
     MutationBundle,
@@ -61,6 +62,16 @@ import {
     updateDetails,
 } from "./dom-tree-view-support";
 import { applyMutationBundlesFromBuffer } from "./dom-tree-buffer-transport";
+
+function renderableRootNodes(root: DOMNode | null | undefined): DOMNode[] {
+    if (!root) {
+        return [];
+    }
+    if (root.nodeType === NODE_TYPES.DOCUMENT_NODE) {
+        return Array.isArray(root.children) ? root.children : [];
+    }
+    return [root];
+}
 
 function readNumber(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -359,8 +370,10 @@ function ensureRenderedSnapshotIfNeeded(): void {
         treeState.nodes.clear();
         indexNode(root, 0, null);
     }
-    const rootElement = treeState.elements.get(root.id) ?? buildNode(root);
-    dom.tree.appendChild(rootElement);
+    for (const rootNode of renderableRootNodes(root)) {
+        const rootElement = treeState.elements.get(rootNode.id) ?? buildNode(rootNode);
+        dom.tree.appendChild(rootElement);
+    }
     if (dom.empty) {
         dom.empty.hidden = true;
     }
@@ -620,7 +633,9 @@ export function setSnapshot(
             snapshot.root = normalizedRoot;
             indexNode(normalizedRoot, 0, null);
             if (dom.tree) {
-                dom.tree.appendChild(buildNode(normalizedRoot));
+                for (const rootNode of renderableRootNodes(normalizedRoot)) {
+                    dom.tree.appendChild(buildNode(rootNode));
+                }
             }
             ensureRenderedSnapshotIfNeeded();
         }
@@ -825,7 +840,6 @@ function applySetChildNodes(params: {
         ...parent,
         children: normalizedChildren,
         childCount: normalizedChildren.length,
-        placeholderParentId: null,
     };
 
     const preservedExpansion = preserveExpansionState(normalizedParent, new Map());
