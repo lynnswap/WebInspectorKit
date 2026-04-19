@@ -832,6 +832,7 @@ private extension WITransportSession {
                 return
             case .dropped:
                 enqueuedPageEventCount &+= 1
+                deliveredPageEventCount &+= 1
                 return
             case .terminated:
                 self.pageEventStreamContinuation = nil
