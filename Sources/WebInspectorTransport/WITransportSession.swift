@@ -826,7 +826,13 @@ private extension WITransportSession {
             enqueuedPageEventCount &+= 1
             queuedPageEvents.append(envelope)
             if queuedPageEvents.count > configuration.eventBufferLimit {
-                queuedPageEvents.removeFirst(queuedPageEvents.count - configuration.eventBufferLimit)
+                let droppedCount = queuedPageEvents.count - configuration.eventBufferLimit
+                queuedPageEvents.removeFirst(droppedCount)
+                if enqueuedPageEventCount >= UInt64(droppedCount) {
+                    enqueuedPageEventCount &-= UInt64(droppedCount)
+                } else {
+                    enqueuedPageEventCount = deliveredPageEventCount
+                }
             }
         }
     }

@@ -1754,37 +1754,77 @@ private extension WIDOMInspector {
         selectorPath: String?,
         transaction: SelectionTransaction?
     ) async throws {
-        guard let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID),
-              currentContext?.contextID == contextID,
+        guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
-            logSelectionDiagnostics(
-                "applyInspectedNode could not resolve transport node",
-                selector: selectorPath,
-                extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil")",
-                level: .error
-            )
-            await clearSelectionForFailedResolution(
-                contextID: contextID,
-                transaction: transaction,
-                errorMessage: "Failed to resolve selected element."
-            )
-            throw DOMOperationError.invalidSelection
+            return
         }
+
+        if let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
+            logSelectionDiagnostics(
+                "applyInspectedNode resolved transport node",
+                selector: selectorPath,
+                extra: selectionNodeSummary(node)
+            )
+            await applySelection(
+                to: node,
+                selectorPath: selectorPath,
+                contextID: contextID
+            )
+            applyRecoverableError(nil)
+            return
+        }
+
+        if let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() {
+            pendingInspectSelection = PendingInspectSelection(
+                nodeID: nodeID,
+                contextID: contextID,
+                selectorPath: selectorPath,
+                transaction: transaction
+            )
+            await materializePendingInspectSelection(
+                contextID: contextID,
+                targetIdentifier: targetIdentifier,
+                transaction: transaction
+            )
+            await awaitTransportMessagesToDrain()
+            await applyPendingInspectSelectionIfPossible()
+            if pendingInspectSelection?.nodeID == nodeID,
+               pendingInspectSelection?.contextID == contextID {
+                pendingInspectSelection = nil
+            }
+            if let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID),
+               selectionTransactionIsCurrent(transaction) {
+                logSelectionDiagnostics(
+                    "applyInspectedNode resolved transport node",
+                    selector: selectorPath,
+                    extra: selectionNodeSummary(node)
+                )
+                await applySelection(
+                    to: node,
+                    selectorPath: selectorPath,
+                    contextID: contextID
+                )
+                applyRecoverableError(nil)
+                return
+            }
+        }
+
         guard selectionTransactionIsCurrent(transaction) else {
             return
         }
 
         logSelectionDiagnostics(
-            "applyInspectedNode resolved transport node",
+            "applyInspectedNode could not resolve transport node",
             selector: selectorPath,
-            extra: selectionNodeSummary(node)
+            extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil")",
+            level: .error
         )
-        await applySelection(
-            to: node,
-            selectorPath: selectorPath,
-            contextID: contextID
+        await clearSelectionForFailedResolution(
+            contextID: contextID,
+            transaction: transaction,
+            errorMessage: "Failed to resolve selected element."
         )
-        applyRecoverableError(nil)
+        throw DOMOperationError.invalidSelection
     }
 
     private func materializePendingInspectSelection(
