@@ -1535,9 +1535,7 @@ private extension WIDOMInspector {
                 parameters: DOMSetInspectModeEnabledParameters.enabled
             )
 #if canImport(UIKit)
-            if usesCustomSelectionHitTestOverlay {
-                setNativeInspectorNodeSearchEnabled(true)
-            }
+            setNativeInspectorNodeSearchEnabled(true)
 #endif
         } else {
             _ = try await sendDOMCommand(

@@ -25,6 +25,8 @@ private enum WIDOMUIKitPrivateRuntimeNames {
     static let inspectorNodeSearchEnabledIvarName = WIDOMUIKitPrivateRuntimeObfuscation.deobfuscate(["Enabled", "Search", "Node", "inspector", "_"])
     // _disableInspectorNodeSearch
     static let disableInspectorNodeSearchSelectorName = WIDOMUIKitPrivateRuntimeObfuscation.deobfuscate(["Search", "Node", "Inspector", "disable", "_"])
+    // _enableInspectorNodeSearch
+    static let enableInspectorNodeSearchSelectorName = WIDOMUIKitPrivateRuntimeObfuscation.deobfuscate(["Search", "Node", "Inspector", "enable", "_"])
 }
 
 @MainActor
@@ -79,13 +81,24 @@ package enum WIDOMUIKitSceneActivationEnvironment {
 
 extension WIDOMInspector {
     func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
-        guard usesCustomSelectionHitTestOverlay else {
+        if usesCustomSelectionHitTestOverlay {
+            if enabled {
+                installSelectionHitTestOverlay()
+            } else {
+                removeSelectionHitTestOverlay()
+            }
             return
         }
+
+        guard let pageWebView,
+              let contentView = findWKContentView(in: pageWebView) else {
+            return
+        }
+
         if enabled {
-            installSelectionHitTestOverlay()
+            enableNativeInspectorNodeSearch(on: contentView)
         } else {
-            removeSelectionHitTestOverlay()
+            disableNativeInspectorNodeSearch(on: contentView)
         }
     }
 
@@ -150,12 +163,41 @@ extension WIDOMInspector {
         guard pageScene.activationState != .foregroundActive else {
             return
         }
+        guard let uiScene = pageScene as? UIScene else {
+            return
+        }
 
-        for _ in 0..<40 {
-            if pageScene.activationState == .foregroundActive {
-                return
+        await withCheckedContinuation { continuation in
+            final class TokenBox {
+                var token: NSObjectProtocol?
             }
-            await Task.yield()
+            let center = NotificationCenter.default
+            let tokenBox = TokenBox()
+            var resumed = false
+            let finish: @MainActor () -> Void = {
+                guard resumed == false else {
+                    return
+                }
+                resumed = true
+                if let token = tokenBox.token {
+                    center.removeObserver(token)
+                }
+                continuation.resume()
+            }
+
+            tokenBox.token = center.addObserver(
+                forName: UIScene.didActivateNotification,
+                object: uiScene,
+                queue: nil
+            ) { _ in
+                Task { @MainActor in
+                    finish()
+                }
+            }
+
+            if pageScene.activationState == .foregroundActive {
+                finish()
+            }
         }
     }
 
@@ -174,13 +216,16 @@ extension WIDOMInspector {
             disableNativeInspectorNodeSearch(on: contentView)
         }
 
-        for _ in 0..<120 {
-            let nativeSelectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)
-            let contentViewActive = nativeInspectorNodeSearchIsActive(in: contentView)
-            if nativeSelectionActive != true && contentViewActive == false {
+        if isNativeInspectorElementSelectionActive(on: pageWebView) == true {
+            await waitForNativeInspectorElementSelectionInactive(on: pageWebView)
+        }
+
+        for _ in 0..<8 {
+            if nativeInspectorNodeSearchIsActive(in: contentView) == false {
                 return
             }
-            await Task.yield()
+            disableNativeInspectorNodeSearch(on: contentView)
+            await awaitNextMainQueueDrain()
         }
 
         domWindowActivationLogger.error("native inspector node search teardown did not settle")
@@ -223,7 +268,7 @@ extension WIDOMInspector {
     private func isNativeInspectorElementSelectionActive(on webView: WKWebView) -> Bool? {
         let inspectorSelector = NSSelectorFromString(WIDOMUIKitPrivateRuntimeNames.webViewInspectorSelectorName)
         guard webView.responds(to: inspectorSelector),
-              let inspector = webView.perform(inspectorSelector)?.takeUnretainedValue() else {
+              let inspector = unsafe webView.perform(inspectorSelector)?.takeUnretainedValue() else {
             return nil
         }
 
@@ -253,6 +298,83 @@ extension WIDOMInspector {
             return
         }
         _ = unsafe contentView.perform(selector)
+    }
+
+    private func enableNativeInspectorNodeSearch(on contentView: UIView) {
+        let selector = NSSelectorFromString(WIDOMUIKitPrivateRuntimeNames.enableInspectorNodeSearchSelectorName)
+        guard contentView.responds(to: selector) else {
+            return
+        }
+        _ = unsafe contentView.perform(selector)
+    }
+
+    private func waitForNativeInspectorElementSelectionInactive(on webView: WKWebView) async {
+        guard let inspector = nativeInspectorObject(on: webView) else {
+            return
+        }
+        let keyPath = WIDOMUIKitPrivateRuntimeNames.inspectorElementSelectionActiveSelectorName
+        guard let currentValue = inspector.value(forKey: keyPath) as? NSNumber,
+              currentValue.boolValue else {
+            return
+        }
+
+        final class Observer: NSObject {
+            var onChange: ((NSNumber?) -> Void)?
+
+            override func observeValue(
+                forKeyPath keyPath: String?,
+                of object: Any?,
+                change: [NSKeyValueChangeKey : Any]?,
+                context: UnsafeMutableRawPointer?
+            ) {
+                guard keyPath == WIDOMUIKitPrivateRuntimeNames.inspectorElementSelectionActiveSelectorName else {
+                    return
+                }
+                let value = change?[.newKey] as? NSNumber
+                onChange?(value)
+            }
+        }
+
+        await withCheckedContinuation { continuation in
+            let observer = Observer()
+            var resumed = false
+            let finish: @MainActor () -> Void = {
+                guard resumed == false else {
+                    return
+                }
+                resumed = true
+                inspector.removeObserver(observer, forKeyPath: keyPath)
+                continuation.resume()
+            }
+
+            observer.onChange = { value in
+                if value?.boolValue != true {
+                    finish()
+                }
+            }
+
+            unsafe inspector.addObserver(observer, forKeyPath: keyPath, options: [.new], context: nil)
+            if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
+                finish()
+            }
+        }
+    }
+
+    private func nativeInspectorObject(on webView: WKWebView) -> NSObject? {
+        let inspectorSelector = NSSelectorFromString(WIDOMUIKitPrivateRuntimeNames.webViewInspectorSelectorName)
+        guard webView.responds(to: inspectorSelector),
+              let inspector = unsafe webView.perform(inspectorSelector)?.takeUnretainedValue() as? NSObject else {
+            return nil
+        }
+        return inspector
+    }
+
+    private func awaitNextMainQueueDrain() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
     }
 
     func nativeInspectorInteractionStateSummaryForDiagnostics() -> String? {
