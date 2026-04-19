@@ -17,6 +17,9 @@ typedef struct {
     NSInteger attachMode;
     uint64_t connectFrontendAddress;
     uint64_t disconnectFrontendAddress;
+    uint64_t inspectorTargetAgentVTableAddress;
+    uint64_t targetAgentDidCreateFrontendAndBackendAddress;
+    uint64_t targetAgentWillDestroyFrontendAndBackendAddress;
     uint64_t stringFromUTF8Address;
     uint64_t stringImplToNSStringAddress;
     uint64_t destroyStringImplAddress;

@@ -7,7 +7,6 @@
 #import <mach/mach.h>
 #import <algorithm>
 #import <atomic>
-#import <dlfcn.h>
 #import <memory>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -80,6 +79,9 @@ static WITransportResolvedFunctions emptyResolvedFunctions()
         .attachMode = WITransportAttachModeControllerWrapper,
         .connectFrontendAddress = 0,
         .disconnectFrontendAddress = 0,
+        .inspectorTargetAgentVTableAddress = 0,
+        .targetAgentDidCreateFrontendAndBackendAddress = 0,
+        .targetAgentWillDestroyFrontendAndBackendAddress = 0,
         .stringFromUTF8Address = 0,
         .stringImplToNSStringAddress = 0,
         .destroyStringImplAddress = 0,
@@ -97,8 +99,16 @@ static BOOL resolvedFunctionsAreComplete(WITransportResolvedFunctions resolvedFu
         return NO;
     }
 
+    BOOL hasRouterDirectTargetAgentFunctions = YES;
+    if (resolvedFunctions.attachMode == WITransportAttachModeFrontendRouterDirect) {
+        hasRouterDirectTargetAgentFunctions = resolvedFunctions.inspectorTargetAgentVTableAddress
+            && resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress
+            && resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress;
+    }
+
     return resolvedFunctions.connectFrontendAddress
         && resolvedFunctions.disconnectFrontendAddress
+        && hasRouterDirectTargetAgentFunctions
         && resolvedFunctions.stringFromUTF8Address
         && resolvedFunctions.stringImplToNSStringAddress
         && resolvedFunctions.destroyStringImplAddress
@@ -120,6 +130,14 @@ static NSString *missingResolvedFunctionNames(WITransportResolvedFunctions resol
         [names addObject:@"connectFrontend"];
     if (!resolvedFunctions.disconnectFrontendAddress)
         [names addObject:@"disconnectFrontend"];
+    if (resolvedFunctions.attachMode == WITransportAttachModeFrontendRouterDirect) {
+        if (!resolvedFunctions.inspectorTargetAgentVTableAddress)
+            [names addObject:@"inspectorTargetAgentVTable"];
+        if (!resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress)
+            [names addObject:@"targetAgentDidCreateFrontendAndBackend"];
+        if (!resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress)
+            [names addObject:@"targetAgentWillDestroyFrontendAndBackend"];
+    }
     if (!resolvedFunctions.stringFromUTF8Address)
         [names addObject:@"stringFromUTF8"];
     if (!resolvedFunctions.stringImplToNSStringAddress)
@@ -222,25 +240,12 @@ static uintptr_t stripPointerAuthentication(uintptr_t pointer)
 #endif
 }
 
-static uintptr_t runtimeSymbolAddress(const char *symbolName)
-{
-    void *symbol = dlsym(RTLD_DEFAULT, symbolName);
-    return symbol ? reinterpret_cast<uintptr_t>(symbol) : 0;
-}
-
-static uintptr_t runtimeSymbolAddress(NSArray<NSString *> *reverseTokens)
-{
-    NSString *symbolName = deobfuscateSymbol(reverseTokens);
-    return runtimeSymbolAddress(symbolName.UTF8String);
-}
-
-static void *inspectorTargetAgentPointer(void *controller)
+static void *inspectorTargetAgentPointer(void *controller, WITransportResolvedFunctions resolvedFunctions)
 {
     if (!controller)
         return nullptr;
 
-    // __ZTVN9Inspector20InspectorTargetAgentE
-    uintptr_t targetAgentVTableSymbol = runtimeSymbolAddress(@[@"E", @"20InspectorTargetAgent", @"N9Inspector", @"__ZTV"]);
+    uintptr_t targetAgentVTableSymbol = static_cast<uintptr_t>(resolvedFunctions.inspectorTargetAgentVTableAddress);
     if (!targetAgentVTableSymbol)
         return nullptr;
 
@@ -265,10 +270,9 @@ static void *inspectorTargetAgentPointer(void *controller)
     return nullptr;
 }
 
-static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, NSError **error)
+static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, WITransportResolvedFunctions resolvedFunctions, NSError **error)
 {
-    // __ZN9Inspector20InspectorTargetAgent27didCreateFrontendAndBackendEv
-    auto didCreateAddress = runtimeSymbolAddress(@[@"Ev", @"27didCreateFrontendAndBackend", @"20InspectorTargetAgent", @"9Inspector", @"__ZN"]);
+    auto didCreateAddress = static_cast<uintptr_t>(resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress);
     if (!didCreateAddress) {
         NSLog(@"[WebInspectorTransport] router-direct target activation failed reason=missing-didCreate");
         if (error) {
@@ -280,7 +284,7 @@ static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, NS
         return NO;
     }
 
-    void *targetAgent = inspectorTargetAgentPointer(controller);
+    void *targetAgent = inspectorTargetAgentPointer(controller, resolvedFunctions);
     if (!targetAgent) {
         NSLog(@"[WebInspectorTransport] router-direct target activation failed reason=missing-target-agent");
         if (error) {
@@ -298,14 +302,13 @@ static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, NS
     return YES;
 }
 
-static void deactivateInspectorTargetsForFrontendRouterAttach(void *controller)
+static void deactivateInspectorTargetsForFrontendRouterAttach(void *controller, WITransportResolvedFunctions resolvedFunctions)
 {
-    // __ZN9Inspector20InspectorTargetAgent29willDestroyFrontendAndBackendENS_16DisconnectReasonE
-    auto willDestroyAddress = runtimeSymbolAddress(@[@"E", @"NS_16DisconnectReason", @"29willDestroyFrontendAndBackendE", @"20InspectorTargetAgent", @"9Inspector", @"__ZN"]);
+    auto willDestroyAddress = static_cast<uintptr_t>(resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress);
     if (!willDestroyAddress)
         return;
 
-    void *targetAgent = inspectorTargetAgentPointer(controller);
+    void *targetAgent = inspectorTargetAgentPointer(controller, resolvedFunctions);
     if (!targetAgent)
         return;
 
@@ -845,7 +848,7 @@ private:
         auto *connectFrontend = reinterpret_cast<FrontendRouterConnectFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
         connectFrontend(_frontendConnectionTarget, *_frontendChannel);
         NSError *targetActivationError = nil;
-        if (!WITransportBridgePrivate::activateInspectorTargetsForFrontendRouterAttach(_controller, &targetActivationError)) {
+        if (!WITransportBridgePrivate::activateInspectorTargetsForFrontendRouterAttach(_controller, resolvedFunctions, &targetActivationError)) {
             if (error)
                 *error = targetActivationError;
             [self reportFatalFailure:targetActivationError.localizedDescription];
@@ -1004,7 +1007,7 @@ private:
             break;
         }
         case WITransportAttachModeFrontendRouterDirect: {
-            WITransportBridgePrivate::deactivateInspectorTargetsForFrontendRouterAttach(_controller);
+            WITransportBridgePrivate::deactivateInspectorTargetsForFrontendRouterAttach(_controller, _resolvedFunctions);
             auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_disconnectFrontendAddress));
             disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
             break;

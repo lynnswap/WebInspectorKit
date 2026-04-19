@@ -1831,7 +1831,7 @@ private extension WIDOMInspector {
         )
     }
 
-    private func selectionMaterializationCandidates(limit: Int = 96) -> [DOMNodeModel] {
+    private func selectionMaterializationCandidates() -> [DOMNodeModel] {
         guard let root = document.rootNode else {
             return []
         }
@@ -1839,7 +1839,7 @@ private extension WIDOMInspector {
         var queue: [DOMNodeModel] = [root]
         var collected: [DOMNodeModel] = []
 
-        while !queue.isEmpty, collected.count < limit {
+        while !queue.isEmpty {
             let node = queue.removeFirst()
             if node.nodeType == 9 || node.nodeType == 1 {
                 collected.append(node)
