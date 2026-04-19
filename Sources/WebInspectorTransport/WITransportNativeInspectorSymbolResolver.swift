@@ -345,7 +345,7 @@ private enum WITransportNativeInspectorResolver {
                 fallback: resolveLoadedImageSymbol(namedAnyOf: symbols.backendDispatcherDispatch, in: javaScriptCoreImage, text: javaScriptCoreText)
             )
         )
-        let loadedImageResultsWithFallback = resolveConnectDisconnectFallbackIfNeeded(
+        let loadedImageResultsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
             loadedImageResults,
             image: image,
             text: text,
@@ -514,7 +514,7 @@ private enum WITransportNativeInspectorResolver {
                             )
                         )
                     )
-                    let resolvedSymbolsWithFallback = resolveConnectDisconnectFallbackIfNeeded(
+                    let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
                         resolvedSymbols,
                         image: webKitImage,
                         text: text,
@@ -622,7 +622,7 @@ private enum WITransportNativeInspectorResolver {
                     )
                 )
             )
-            let resolvedSymbolsWithFallback = resolveConnectDisconnectFallbackIfNeeded(
+            let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
                 resolvedSymbols,
                 image: webKitImage,
                 text: text,
@@ -890,7 +890,7 @@ private enum WITransportNativeInspectorResolver {
         return outsideTextResult ?? .missing
     }
 
-    private static func resolveConnectDisconnectFallbackIfNeeded(
+    @unsafe private static func resolveConnectDisconnectFallbackIfNeeded(
         _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
         image: MachOImage,
         text: SegmentCommand64,
@@ -926,21 +926,21 @@ private enum WITransportNativeInspectorResolver {
         let webKitRouterDisconnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterDisconnect, in: image, text: text)
         let javaScriptCoreRouterConnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterConnect, in: javaScriptCoreImage, text: javaScriptCoreText)
         let javaScriptCoreRouterDisconnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterDisconnect, in: javaScriptCoreImage, text: javaScriptCoreText)
-        let webCoreConnectTargets = resolvedCallTargetAddresses(
+        let webCoreConnectTargets = unsafe resolvedCallTargetAddresses(
             symbolNames: symbols.inspectorControllerConnectTargets,
             in: webCoreImage,
             text: webCoreText
         )
-        let webCoreDisconnectTargets = resolvedCallTargetAddresses(
+        let webCoreDisconnectTargets = unsafe resolvedCallTargetAddresses(
             symbolNames: symbols.inspectorControllerDisconnectTargets,
             in: webCoreImage,
             text: webCoreText
         )
-        let webKitBoundConnectTargets = boundCallTargetAddresses(
+        let webKitBoundConnectTargets = unsafe boundCallTargetAddresses(
             symbolNames: symbols.inspectorControllerConnectTargets,
             in: image
         )
-        let webKitBoundDisconnectTargets = boundCallTargetAddresses(
+        let webKitBoundDisconnectTargets = unsafe boundCallTargetAddresses(
             symbolNames: symbols.inspectorControllerDisconnectTargets,
             in: image
         )
@@ -991,19 +991,19 @@ private enum WITransportNativeInspectorResolver {
             )
         }
 
-        let webKitHeaderAddress = UInt64(UInt(bitPattern: image.ptr))
+        let webKitHeaderAddress = unsafe UInt64(UInt(bitPattern: image.ptr))
         let textRange = webKitHeaderAddress ..< webKitHeaderAddress + UInt64(text.virtualMemorySize)
         let functionStartAddresses = functionStarts
             .map { webKitHeaderAddress + UInt64($0.offset) }
             .filter { textRange.contains($0) }
 
-        let resolvedConnect = resolvedFallbackFunctionStartAddress(
+        let resolvedConnect = unsafe resolvedFallbackFunctionStartAddress(
             in: image,
             text: text,
             functionStartAddresses: functionStartAddresses,
             callTargetAddresses: connectTargetAddresses
         )
-        let resolvedDisconnect = resolvedFallbackFunctionStartAddress(
+        let resolvedDisconnect = unsafe resolvedFallbackFunctionStartAddress(
             in: image,
             text: text,
             functionStartAddresses: functionStartAddresses,
@@ -1221,7 +1221,7 @@ private enum WITransportNativeInspectorResolver {
                     .resolvedAddressOutsideText,
                     phase: phase,
                     source: source,
-                    missingFunctions: missingFunctionNames(in: resolvedSymbols),
+                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                     usedConnectDisconnectFallback: usedConnectDisconnectFallback
                 )
             }
@@ -1249,13 +1249,13 @@ private enum WITransportNativeInspectorResolver {
                     .resolvedAddressImageMismatch,
                     phase: phase,
                     source: source,
-                    missingFunctions: missingFunctionNames(in: resolvedSymbols),
+                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                     usedConnectDisconnectFallback: usedConnectDisconnectFallback
                 )
             }
         }
 
-        let missingFunctions = missingFunctionNames(in: resolvedSymbols)
+        let missingFunctions = unsafe missingFunctionNames(in: resolvedSymbols)
         let missingConnectDisconnect = missingFunctions.filter {
             $0 == "connectFrontend" || $0 == "disconnectFrontend"
         }
@@ -1287,7 +1287,7 @@ private enum WITransportNativeInspectorResolver {
                 .runtimeFunctionSymbolMissing,
                 phase: phase,
                 source: source,
-                missingFunctions: missingFunctionNames(in: resolvedSymbols),
+                missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                 usedConnectDisconnectFallback: usedConnectDisconnectFallback
             )
         }
@@ -1464,7 +1464,7 @@ private enum WITransportNativeInspectorResolver {
         text: SegmentCommand64
     ) -> WITransportResolvedAddress {
         guard let symbol = image.symbol(named: symbolName, mangled: true, inSection: 0, isGlobalOnly: false) else {
-            return resolveLoadedImageExportedSymbol(
+            return unsafe resolveLoadedImageExportedSymbol(
                 named: symbolName,
                 in: image,
                 text: text
@@ -1483,7 +1483,7 @@ private enum WITransportNativeInspectorResolver {
         return .found(address)
     }
 
-    private static func resolveLoadedImageExportedSymbol(
+    @unsafe private static func resolveLoadedImageExportedSymbol(
         named symbolName: String,
         in image: MachOImage,
         text: SegmentCommand64
@@ -1520,7 +1520,7 @@ private enum WITransportNativeInspectorResolver {
             return .missing
         }
 
-        let expectedHeaderAddress = UInt(bitPattern: image.ptr)
+        let expectedHeaderAddress = unsafe UInt(bitPattern: image.ptr)
         guard resolvedAddress(address, belongsToAnyOf: [expectedHeaderAddress]) else {
             logLoadedImageExportLookup(
                 symbolName: symbolName,
@@ -1559,8 +1559,8 @@ private enum WITransportNativeInspectorResolver {
         failedReason: String
     ) {
         #if DEBUG
-        let headerAddress = UInt(bitPattern: image.ptr)
-        let dlsymDescription = dlsymAddress.map { String(format: "0x%llx", $0) } ?? "nil"
+        let headerAddress = unsafe UInt(bitPattern: image.ptr)
+        let dlsymDescription = dlsymAddress.map { unsafe String(format: "0x%llx", $0) } ?? "nil"
         NSLog(
             "[WebInspectorTransport] native inspector export lookup failed symbol=%@ header=0x%llx exportTrieAvailable=%@ exportTrieFound=%@ dlsym=%@ reason=%@",
             symbolName,
@@ -1655,7 +1655,7 @@ private enum WITransportNativeInspectorResolver {
         return addresses
     }
 
-    private static func resolvedCallTargetAddresses(
+    @unsafe private static func resolvedCallTargetAddresses(
         symbolNames: [String],
         in image: MachOImage?,
         text: SegmentCommand64?
@@ -1677,7 +1677,7 @@ private enum WITransportNativeInspectorResolver {
         return addresses
     }
 
-    private static func boundCallTargetAddresses(
+    @unsafe private static func boundCallTargetAddresses(
         symbolNames: [String],
         in image: MachOImage
     ) -> Set<UInt64> {
@@ -1720,7 +1720,7 @@ private enum WITransportNativeInspectorResolver {
         return addresses
     }
 
-    private static func resolvedFallbackFunctionStartAddress(
+    @unsafe private static func resolvedFallbackFunctionStartAddress(
         in image: MachOImage,
         text: SegmentCommand64,
         functionStartAddresses: [UInt64],
@@ -1747,7 +1747,7 @@ private enum WITransportNativeInspectorResolver {
         return .found(uniqueFunctionStart)
     }
 
-    fileprivate static func uniqueFunctionStartContainingCallTargets(
+    @unsafe fileprivate static func uniqueFunctionStartContainingCallTargets(
         architecture: String,
         textBaseAddress: UInt64,
         textPointer: UnsafePointer<UInt8>,
@@ -1773,7 +1773,7 @@ private enum WITransportNativeInspectorResolver {
             guard startOffset >= 0, endOffset <= textSize else {
                 continue
             }
-            if functionContainsCallTarget(
+            if unsafe functionContainsCallTarget(
                 architecture: architecture,
                 textBaseAddress: textBaseAddress,
                 textPointer: textPointer,
@@ -1882,7 +1882,7 @@ private enum WITransportNativeInspectorResolver {
         #endif
     }
 
-    private static func missingFunctionNames(
+    @unsafe private static func missingFunctionNames(
         in resolvedSymbols: WITransportNativeInspectorResolvedSymbols
     ) -> [String] {
         [
@@ -1910,9 +1910,9 @@ private enum WITransportNativeInspectorResolver {
     private static func debugResolvedAddress(_ result: WITransportResolvedAddress) -> String {
         switch result {
         case let .found(address):
-            return String(format: "found(0x%llx)", address)
+            return unsafe String(format: "found(0x%llx)", address)
         case let .outsideText(address):
-            return String(format: "outsideText(0x%llx)", address)
+            return unsafe String(format: "outsideText(0x%llx)", address)
         case .missing:
             return "missing"
         }

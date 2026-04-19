@@ -83,7 +83,7 @@ import MachO
                   let symbol = unsafe dlsym(handle, symbolName) else {
                 continue
             }
-            return unsafe UInt64(UInt(bitPattern: symbol))
+            return UInt64(UInt(bitPattern: symbol))
         }
         return nil
     }
