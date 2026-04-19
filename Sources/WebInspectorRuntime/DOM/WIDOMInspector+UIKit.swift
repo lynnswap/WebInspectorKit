@@ -135,22 +135,6 @@ extension WIDOMInspector {
         }
 
         pageWindow.makeKey()
-
-        guard let pageScene = WIDOMUIKitSceneActivationEnvironment.sceneProvider(pageWindow) else {
-            return
-        }
-        guard pageScene.activationState != .foregroundActive else {
-            return
-        }
-
-        let requestingScene = sceneActivationRequestingScene
-            ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
-        WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
-            of: pageScene,
-            requestingScene: requestingScene
-        ) { error in
-            domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
-        }
     }
 
     func waitForPageWindowActivationIfNeeded() async {
@@ -200,11 +184,14 @@ extension WIDOMInspector {
                 return
             }
 
-            DispatchQueue.main.async {
+            let requestingScene = sceneActivationRequestingScene
+                ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
+            WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
+                of: pageScene,
+                requestingScene: requestingScene
+            ) { error in
                 Task { @MainActor in
-                    if pageScene.activationState != .foregroundActive {
-                        domWindowActivationLogger.notice("page scene activation did not complete before selection startup; continuing")
-                    }
+                    domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
                     finish()
                 }
             }

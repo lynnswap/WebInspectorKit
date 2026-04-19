@@ -849,6 +849,11 @@ private:
         connectFrontend(_frontendConnectionTarget, *_frontendChannel);
         NSError *targetActivationError = nil;
         if (!WITransportBridgePrivate::activateInspectorTargetsForFrontendRouterAttach(_controller, resolvedFunctions, &targetActivationError)) {
+            if (_frontendChannel && _frontendConnectionTarget && _disconnectFrontendAddress) {
+                WITransportBridgePrivate::deactivateInspectorTargetsForFrontendRouterAttach(_controller, _resolvedFunctions);
+                auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_disconnectFrontendAddress));
+                disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
+            }
             if (error)
                 *error = targetActivationError;
             [self reportFatalFailure:targetActivationError.localizedDescription];

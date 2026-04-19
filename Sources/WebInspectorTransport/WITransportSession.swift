@@ -807,11 +807,13 @@ private extension WITransportSession {
             targetIdentifier: targetIdentifier,
             paramsData: dataForJSONObject(paramsObject)
         )
-        enqueuedPageEventCount &+= 1
 
         if let pageEventStreamContinuation {
             switch pageEventStreamContinuation.yield(envelope) {
-            case .enqueued, .dropped:
+            case .enqueued:
+                enqueuedPageEventCount &+= 1
+                return
+            case .dropped:
                 return
             case .terminated:
                 self.pageEventStreamContinuation = nil
@@ -821,6 +823,7 @@ private extension WITransportSession {
         }
 
         if !hasAttachedPageEventConsumer || !configuration.dropEventsWithoutSubscribers {
+            enqueuedPageEventCount &+= 1
             queuedPageEvents.append(envelope)
             if queuedPageEvents.count > configuration.eventBufferLimit {
                 queuedPageEvents.removeFirst(queuedPageEvents.count - configuration.eventBufferLimit)
