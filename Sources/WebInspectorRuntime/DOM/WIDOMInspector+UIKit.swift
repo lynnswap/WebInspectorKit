@@ -197,6 +197,16 @@ extension WIDOMInspector {
 
             if pageScene.activationState == .foregroundActive {
                 finish()
+                return
+            }
+
+            DispatchQueue.main.async {
+                Task { @MainActor in
+                    if pageScene.activationState != .foregroundActive {
+                        domWindowActivationLogger.notice("page scene activation did not complete before selection startup; continuing")
+                    }
+                    finish()
+                }
             }
         }
     }

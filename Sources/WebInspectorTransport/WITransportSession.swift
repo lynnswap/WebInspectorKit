@@ -29,6 +29,10 @@ public final class WITransportSession {
     private var pageEventStreamContinuation: AsyncStream<WITransportEventEnvelope>.Continuation?
     private var pageEventQueueClosed = true
     private var hasAttachedPageEventConsumer = false
+    private var enqueuedPageEventCount: UInt64 = 0
+    private var deliveredPageEventCount: UInt64 = 0
+    private var activePageEventDeliveryCount: UInt64 = 0
+    private var pageEventDrainWaiters: [CheckedContinuation<Void, Never>] = []
     private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
 
 #if DEBUG
@@ -262,6 +266,17 @@ public final class WITransportSession {
 
     package func waitForPendingMessages() async {
         await backendMessageSink?.waitForPendingMessages()
+    }
+
+    package func waitForPostActivePageEventsToDrain() async {
+        guard pendingQueuedPageEventCount > 0 else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            pageEventDrainWaiters.append(continuation)
+            resumePageEventDrainWaitersIfNeeded()
+        }
     }
 
     package func pageEvents() -> AsyncStream<WITransportEventEnvelope> {
@@ -533,12 +548,14 @@ private extension WISharedInspectorTransport {
                 guard self.session === session else {
                     break
                 }
+                session.beginPageEventDelivery()
                 for client in [WISharedInspectorTransportClient.network, .dom] {
                     guard let handler = self.eventHandlers[client] else {
                         continue
                     }
                     await handler(envelope)
                 }
+                session.finishPageEventDelivery()
             }
             if self.session === session {
                 self.eventTask = nil
@@ -790,6 +807,7 @@ private extension WITransportSession {
             targetIdentifier: targetIdentifier,
             paramsData: dataForJSONObject(paramsObject)
         )
+        enqueuedPageEventCount &+= 1
 
         if let pageEventStreamContinuation {
             switch pageEventStreamContinuation.yield(envelope) {
@@ -817,6 +835,10 @@ private extension WITransportSession {
         pageEventStreamContinuation = nil
         pageEventQueueClosed = false
         hasAttachedPageEventConsumer = false
+        enqueuedPageEventCount = 0
+        deliveredPageEventCount = 0
+        activePageEventDeliveryCount = 0
+        pageEventDrainWaiters.removeAll(keepingCapacity: true)
     }
 
     func disconnectTransportState() {
@@ -833,9 +855,47 @@ private extension WITransportSession {
 
         pageEventQueueClosed = true
         queuedPageEvents.removeAll(keepingCapacity: false)
+        let drainWaiters = pageEventDrainWaiters
+        pageEventDrainWaiters.removeAll(keepingCapacity: true)
         let continuation = pageEventStreamContinuation
         pageEventStreamContinuation = nil
         continuation?.finish()
+        for waiter in drainWaiters {
+            waiter.resume()
+        }
+    }
+
+    func beginPageEventDelivery() {
+        activePageEventDeliveryCount &+= 1
+    }
+
+    func finishPageEventDelivery() {
+        if activePageEventDeliveryCount > 0 {
+            activePageEventDeliveryCount &-= 1
+        }
+        deliveredPageEventCount &+= 1
+        resumePageEventDrainWaitersIfNeeded()
+    }
+
+    private var pendingQueuedPageEventCount: UInt64 {
+        guard enqueuedPageEventCount >= deliveredPageEventCount + activePageEventDeliveryCount else {
+            return 0
+        }
+        return enqueuedPageEventCount - deliveredPageEventCount - activePageEventDeliveryCount
+    }
+
+    func resumePageEventDrainWaitersIfNeeded() {
+        guard !pageEventDrainWaiters.isEmpty else {
+            return
+        }
+        guard pendingQueuedPageEventCount == 0 else {
+            return
+        }
+        let waiters = pageEventDrainWaiters
+        pageEventDrainWaiters.removeAll(keepingCapacity: true)
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     func parseMessage(

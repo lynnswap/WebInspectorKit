@@ -1136,6 +1136,10 @@ private extension WIDOMInspector {
                         contextID: context.contextID
                     )
                     applyRecoverableError(nil)
+                } else if selectionTransactionIsCurrent(transaction),
+                          document.selectedNode != nil {
+                    await syncSelectedNodeHighlight(contextID: context.contextID)
+                    applyRecoverableError(nil)
                 } else {
                     pendingInspectSelection = PendingInspectSelection(
                         nodeID: nodeID,
@@ -1571,6 +1575,13 @@ private extension WIDOMInspector {
             return
         }
 
+        if selectionTransactionIsCurrent(transaction),
+           document.selectedNode != nil {
+            await syncSelectedNodeHighlight(contextID: contextID)
+            applyRecoverableError(nil)
+            return
+        }
+
         pendingInspectSelection = PendingInspectSelection(
             nodeID: nodeID,
             contextID: contextID,
@@ -1780,7 +1791,6 @@ private extension WIDOMInspector {
 
         let candidates = selectionMaterializationCandidates()
         if candidates.isEmpty {
-            await applyPendingInspectSelectionIfPossible()
             return
         }
 
@@ -1814,38 +1824,13 @@ private extension WIDOMInspector {
                 )
             }
         }
-
-        await awaitTransportMessagesToDrain()
-        await applyPendingInspectSelectionIfPossible()
-        guard let pendingInspectSelection,
-              pendingInspectSelection.contextID == contextID,
-              selectionTransactionIsCurrent(transaction) else {
-            return
-        }
-        await clearSelectionForFailedResolution(
-            contextID: contextID,
-            transaction: transaction,
-            errorMessage: "Failed to resolve selected element."
-        )
     }
 
     private func selectionMaterializationCandidates() -> [DOMNodeModel] {
         guard let root = document.rootNode else {
             return []
         }
-
-        var queue: [DOMNodeModel] = [root]
-        var collected: [DOMNodeModel] = []
-
-        while !queue.isEmpty {
-            let node = queue.removeFirst()
-            if node.nodeType == 9 || node.nodeType == 1 {
-                collected.append(node)
-            }
-            queue.append(contentsOf: node.children)
-        }
-
-        return collected
+        return [root]
     }
 
     func applySelection(
@@ -2309,6 +2294,7 @@ private extension WIDOMInspector {
             return
         }
         await session.waitForPendingMessages()
+        await session.waitForPostActivePageEventsToDrain()
     }
 
     func syncSelectedNodeHighlight(contextID: DOMContextID) async {

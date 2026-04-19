@@ -207,7 +207,7 @@ struct WIDOMInspectorTests {
                 case WITransportMethod.DOM.getDocument:
                     return makeDocumentResult(url: "https://example.com/a")
                 case WITransportMethod.DOM.setInspectModeEnabled:
-                    inspectModePayload = payload["params"] as? [String: Any]
+                    inspectModePayload = runtimeTestDictionaryValue(payload["params"])
                     return [:]
                 default:
                     return [:]
@@ -240,7 +240,7 @@ struct WIDOMInspectorTests {
                 case WITransportMethod.DOM.getDocument:
                     return makeDocumentResult(url: "https://example.com/a")
                 case WITransportMethod.DOM.setInspectModeEnabled:
-                    let params = payload["params"] as? [String: Any]
+                    let params = runtimeTestDictionaryValue(payload["params"])
                     if (params?["enabled"] as? Bool) == false {
                         disableCount += 1
                     }
@@ -332,7 +332,7 @@ struct WIDOMInspectorTests {
                     didEvaluateHitTest = true
                     return ["result": ["objectId": "node-object-6"]]
                 case WITransportMethod.DOM.requestNode:
-                    let params = payload["params"] as? [String: Any]
+                    let params = runtimeTestDictionaryValue(payload["params"])
                     requestedObjectID = params?["objectId"] as? String
                     return ["nodeId": 6]
                 default:
@@ -432,27 +432,30 @@ struct WIDOMInspectorTests {
             case WITransportMethod.DOM.setInspectModeEnabled:
                 return [:]
             case WITransportMethod.DOM.requestChildNodes:
-                if let params = payload["params"] as? [String: Any],
-                   let nodeID = params["nodeId"] as? Int {
-                    requestedNodeIDs.append(nodeID)
-                    if nodeID == 1 {
-                        backend.emitPageEvent(
-                            method: "DOM.setChildNodes",
-                            params: [
-                                "parentId": 10,
-                                "nodes": [[
-                                    "nodeId": 6,
-                                    "backendNodeId": 6,
-                                    "nodeType": 1,
-                                    "nodeName": "A",
-                                    "localName": "a",
-                                    "nodeValue": "",
-                                    "attributes": ["href", "/target"],
-                                    "childNodeCount": 0,
-                                    "children": [],
-                                ]],
-                            ]
-                        )
+                if let params = payload["params"] as? NSDictionary {
+                    let nodeID = (params["nodeId"] as? NSNumber)?.intValue
+                        ?? runtimeTestIntValue(params["nodeId"])
+                    if let nodeID {
+                        requestedNodeIDs.append(nodeID)
+                        if nodeID == 1 {
+                            backend.emitPageEvent(
+                                method: "DOM.setChildNodes",
+                                params: [
+                                    "parentId": 10,
+                                    "nodes": [[
+                                        "nodeId": 6,
+                                        "backendNodeId": 6,
+                                        "nodeType": 1,
+                                        "nodeName": "A",
+                                        "localName": "a",
+                                        "nodeValue": "",
+                                        "attributes": ["href", "/target"],
+                                        "childNodeCount": 0,
+                                        "children": [],
+                                    ]],
+                                ]
+                            )
+                        }
                     }
                 }
                 return [:]
@@ -889,7 +892,7 @@ struct WIDOMInspectorTests {
                 case WITransportMethod.DOM.setInspectModeEnabled:
                     return [:]
                 case WITransportMethod.DOM.requestNode:
-                    let params = payload["params"] as? [String: Any]
+                    let params = runtimeTestDictionaryValue(payload["params"])
                     let objectID = params?["objectId"] as? String
                     if let objectID {
                         requestedObjectIDs.append(objectID)
@@ -1015,7 +1018,7 @@ struct WIDOMInspectorTests {
             pageResultProvider: { method, payload, _ in
                 let inspectModeEnabled: Bool?
                 if method == WITransportMethod.DOM.setInspectModeEnabled,
-                   let params = payload["params"] as? [String: Any] {
+                   let params = runtimeTestDictionaryValue(payload["params"]) {
                     inspectModeEnabled = params["enabled"] as? Bool
                 } else {
                     inspectModeEnabled = nil
@@ -1088,7 +1091,7 @@ struct WIDOMInspectorTests {
             pageResultProvider: { method, payload, _ in
                 let inspectModeEnabled: Bool?
                 if method == WITransportMethod.DOM.setInspectModeEnabled,
-                   let params = payload["params"] as? [String: Any] {
+                   let params = runtimeTestDictionaryValue(payload["params"]) {
                     inspectModeEnabled = params["enabled"] as? Bool
                 } else {
                     inspectModeEnabled = nil
@@ -1324,6 +1327,40 @@ private func makeDocumentResult(
             ],
         ],
     ]
+}
+
+private func runtimeTestIntValue(_ value: Any?) -> Int? {
+    if value is Bool {
+        return nil
+    }
+    if let value = value as? Int {
+        return value
+    }
+    if let value = value as? NSNumber {
+        if CFGetTypeID(value) == CFBooleanGetTypeID() {
+            return nil
+        }
+        return value.intValue
+    }
+    return nil
+}
+
+private func runtimeTestDictionaryValue(_ value: Any?) -> [String: Any]? {
+    if let value = value as? [String: Any] {
+        return value
+    }
+    if let value = value as? NSDictionary {
+        var normalized: [String: Any] = [:]
+        for (key, entry) in value {
+            if let stringKey = key as? String {
+                normalized[stringKey] = entry
+            } else if let stringKey = key as? NSString {
+                normalized[String(stringKey)] = entry
+            }
+        }
+        return normalized.isEmpty ? nil : normalized
+    }
+    return nil
 }
 
 @MainActor
