@@ -195,6 +195,23 @@ extension WIDOMInspector {
                     finish()
                 }
             }
+
+            Task { @MainActor in
+                for _ in 0..<8 {
+                    guard resumed == false else {
+                        return
+                    }
+                    if pageScene.activationState == .foregroundActive {
+                        finish()
+                        return
+                    }
+                    await awaitNextMainQueueDrain()
+                }
+                if pageScene.activationState != .foregroundActive {
+                    domWindowActivationLogger.notice("page scene activation did not complete before selection startup; continuing")
+                }
+                finish()
+            }
         }
     }
 
@@ -352,6 +369,21 @@ extension WIDOMInspector {
 
             unsafe inspector.addObserver(observer, forKeyPath: keyPath, options: [.new], context: nil)
             if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
+                finish()
+                return
+            }
+
+            Task { @MainActor in
+                for _ in 0..<8 {
+                    guard resumed == false else {
+                        return
+                    }
+                    if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
+                        finish()
+                        return
+                    }
+                    await awaitNextMainQueueDrain()
+                }
                 finish()
             }
         }
