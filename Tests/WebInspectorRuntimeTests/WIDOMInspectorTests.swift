@@ -1078,7 +1078,7 @@ struct WIDOMInspectorTests {
             }
             return inspector.document.selectedNode?.localID == 6
                 && inspector.isSelectingElement == false
-                && disableIndices.isEmpty
+                && disableIndices.isEmpty == false
                 && highlightIndex >= 0
         }
         #expect(selected)
@@ -1162,7 +1162,7 @@ struct WIDOMInspectorTests {
             return inspector.document.selectedNode?.localID == 6
                 && inspector.document.errorMessage == nil
                 && inspector.isSelectingElement == false
-                && disableIndices.isEmpty
+                && disableIndices.isEmpty == false
                 && highlightIndex >= 0
         }
         #expect(preserved)

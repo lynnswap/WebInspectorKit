@@ -1523,7 +1523,14 @@ private extension WIDOMInspector {
         )
 
 #if canImport(UIKit)
-        await awaitInspectModeInactive(forceDisable: false)
+        if let targetIdentifier {
+            try? await sendDOMCommand(
+                WITransportMethod.DOM.setInspectModeEnabled,
+                targetIdentifier: targetIdentifier,
+                parameters: DOMSetInspectModeEnabledParameters.disabled
+            )
+        }
+        await awaitInspectModeInactive(forceDisable: true)
         isSelectingElement = false
 #else
         if let targetIdentifier {

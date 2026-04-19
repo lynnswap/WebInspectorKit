@@ -197,7 +197,9 @@ extension WIDOMInspector {
             }
 
             Task { @MainActor in
-                for _ in 0..<8 {
+                let clock = ContinuousClock()
+                let deadline = clock.now + .seconds(2)
+                while clock.now < deadline {
                     guard resumed == false else {
                         return
                     }
@@ -205,7 +207,7 @@ extension WIDOMInspector {
                         finish()
                         return
                     }
-                    await awaitNextMainQueueDrain()
+                    try? await Task.sleep(nanoseconds: 50_000_000)
                 }
                 if pageScene.activationState != .foregroundActive {
                     domWindowActivationLogger.notice("page scene activation did not complete before selection startup; continuing")
