@@ -613,7 +613,7 @@ private extension WITransportSession {
             return
         }
 
-        if method == "DOM.inspect" {
+        if method == "DOM.inspect" || method == "Inspector.inspect" {
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: pageTargetTracker.currentIdentifier,

@@ -38,6 +38,11 @@ package enum WITransportMethod {
         package static let redo = "DOM.redo"
     }
 
+    package enum Inspector {
+        package static let enable = "Inspector.enable"
+        package static let initialized = "Inspector.initialized"
+    }
+
     package enum Runtime {
         package static let evaluate = "Runtime.evaluate"
     }

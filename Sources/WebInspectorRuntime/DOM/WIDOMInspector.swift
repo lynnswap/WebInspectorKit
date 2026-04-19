@@ -852,6 +852,14 @@ private extension WIDOMInspector {
         targetIdentifier: String
     ) async throws -> [String: Any] {
         _ = try await sendDOMCommand(
+            WITransportMethod.Inspector.enable,
+            targetIdentifier: targetIdentifier
+        )
+        _ = try await sendDOMCommand(
+            WITransportMethod.Inspector.initialized,
+            targetIdentifier: targetIdentifier
+        )
+        _ = try await sendDOMCommand(
             WITransportMethod.DOM.enable,
             targetIdentifier: targetIdentifier
         )
@@ -1034,7 +1042,9 @@ private extension WIDOMInspector {
     }
 
     func handleDOMEventEnvelope(_ envelope: WITransportEventEnvelope) async {
-        guard envelope.method.hasPrefix("DOM.") else {
+        let isDOMEvent = envelope.method.hasPrefix("DOM.")
+        let isInspectorInspectEvent = envelope.method == "Inspector.inspect"
+        guard isDOMEvent || isInspectorInspectEvent else {
             return
         }
         guard case let .ready(context, targetIdentifier) = phase,
@@ -1049,6 +1059,31 @@ private extension WIDOMInspector {
                 return
             }
             await handleInspectEvent(nodeID: nodeID, contextID: context.contextID)
+            return
+        }
+
+        if envelope.method == "Inspector.inspect" {
+            guard isSelectingElement,
+                  let object = try? JSONSerialization.jsonObject(with: envelope.paramsData) as? [String: Any],
+                  let remoteObject = object["object"] as? [String: Any],
+                  let objectID = stringValue(remoteObject["objectId"]) else {
+                return
+            }
+
+            do {
+                let nodeID = try await transportNodeID(forRemoteObjectID: objectID, targetIdentifier: targetIdentifier)
+                await handleInspectEvent(nodeID: nodeID, contextID: context.contextID)
+            } catch {
+                logSelectionDiagnostics(
+                    "Inspector.inspect failed to resolve node",
+                    extra: error.localizedDescription,
+                    level: .error
+                )
+                await clearSelectionForFailedResolution(
+                    contextID: context.contextID,
+                    errorMessage: "Failed to resolve selected element."
+                )
+            }
             return
         }
 
@@ -1383,7 +1418,7 @@ private extension WIDOMInspector {
     }
 
 #if canImport(UIKit)
-    package func handlePointerInspectSelection(at point: CGPoint) async {
+    func handlePointerInspectSelectionImpl(at point: CGPoint) async {
         guard isSelectingElement else {
             return
         }
@@ -1502,6 +1537,21 @@ private extension WIDOMInspector {
             throw DOMOperationError.invalidSelection
         }
         return objectID
+    }
+
+    private func transportNodeID(
+        forRemoteObjectID objectID: String,
+        targetIdentifier: String
+    ) async throws -> Int {
+        let response = try await sendDOMCommand(
+            WITransportMethod.DOM.requestNode,
+            targetIdentifier: targetIdentifier,
+            parameters: DOMRequestNodeParameters(objectId: objectID)
+        )
+        guard let nodeID = intValue(response["nodeId"]) else {
+            throw DOMOperationError.invalidSelection
+        }
+        return nodeID
     }
 #endif
 
@@ -2066,6 +2116,14 @@ private extension WIDOMInspector {
         return error.localizedDescription
     }
 }
+
+#if canImport(UIKit)
+extension WIDOMInspector {
+    package func handlePointerInspectSelection(at point: CGPoint) async {
+        await handlePointerInspectSelectionImpl(at: point)
+    }
+}
+#endif
 
 private struct DOMSetInspectModeEnabledParameters: Encodable {
     struct RGBAColor: Encodable {

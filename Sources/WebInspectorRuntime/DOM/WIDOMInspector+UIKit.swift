@@ -79,16 +79,16 @@ extension WIDOMInspector {
     }
 
     func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) {
-        guard NSClassFromString("XCTestCase") == nil,
-              !Bundle.main.bundlePath.hasSuffix(".xctest") else {
+        if usesCustomSelectionHitTestOverlay {
+            if enabled {
+                installSelectionHitTestOverlay()
+            } else {
+                removeSelectionHitTestOverlay()
+            }
             return
         }
 
-        if enabled {
-            installSelectionHitTestOverlay()
-        } else {
-            removeSelectionHitTestOverlay()
-        }
+        removeSelectionHitTestOverlay()
 
         guard let pageWebView,
               let contentView = findWKContentView(in: pageWebView)
@@ -100,7 +100,7 @@ extension WIDOMInspector {
         guard contentView.responds(to: selector) else {
             return
         }
-        contentView.perform(selector)
+        _ = unsafe contentView.perform(selector)
     }
 
     private func installSelectionHitTestOverlay() {
@@ -181,6 +181,13 @@ extension WIDOMInspector {
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
+    }
+
+    private var usesCustomSelectionHitTestOverlay: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+            || Bundle.main.bundlePath.hasSuffix(".xctest")
     }
 }
 
