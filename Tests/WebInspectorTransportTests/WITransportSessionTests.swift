@@ -486,7 +486,7 @@ struct WITransportSessionTests {
             messageSink.didReceiveRootMessage(
                 #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
             )
-            await messageSink.waitForPendingMessagesForTesting()
+            await messageSink.waitForPendingMessages()
         })
         let session = WITransportSession(
             configuration: .init(
@@ -705,7 +705,7 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
             messageSink.didReceiveRootMessage(
                 #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
             )
-            await messageSink.waitForPendingMessagesForTesting()
+            await messageSink.waitForPendingMessages()
         }
     }
 
@@ -756,7 +756,7 @@ private final class FakeSessionBackend: WITransportPlatformBackend {
     }
 
     func waitForPendingMessages() async {
-        await messageSink?.waitForPendingMessagesForTesting()
+        await messageSink?.waitForPendingMessages()
     }
 
     private static var defaultSupportedBackendKind: WITransportBackendKind {

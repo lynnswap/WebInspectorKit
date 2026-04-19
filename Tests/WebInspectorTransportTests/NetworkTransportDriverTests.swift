@@ -353,7 +353,7 @@ struct NetworkTransportDriverTests {
                 messageSink.didReceiveRootMessage(
                     #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-B","type":"page","isProvisional":false}}}"#
                 )
-                await messageSink.waitForPendingMessagesForTesting()
+                await messageSink.waitForPendingMessages()
             }
         )
         let driver = NetworkTransportDriver(transportSessionFactory: makeTransportSessionFactory(using: backend))
@@ -1382,7 +1382,7 @@ private final class FakeRegistryBackend: WITransportPlatformBackend {
             messageSink.didReceiveRootMessage(
                 #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
             )
-            await messageSink.waitForPendingMessagesForTesting()
+            await messageSink.waitForPendingMessages()
         }
     }
 

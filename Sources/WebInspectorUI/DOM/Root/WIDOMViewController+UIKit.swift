@@ -93,6 +93,22 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
         return isShowing(.inspector)
     }
 
+#if DEBUG
+    @_spi(Monocly) public func selectedTreeNodePreviewForDiagnostics() async -> String? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeTextForTesting()
+    }
+
+    @_spi(Monocly) public func selectedTreeNodeIsVisibleForDiagnostics() async -> Bool? {
+        let treeViewController = activeHostKindForTesting == "compact"
+            ? compactRootViewController
+            : domTreeViewController
+        return await treeViewController.selectedNodeIsVisibleForTesting()
+    }
+#endif
+
     private lazy var pickItem: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: UIImage(systemName: pickSymbolName),

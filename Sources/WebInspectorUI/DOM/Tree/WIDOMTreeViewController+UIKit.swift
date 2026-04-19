@@ -196,6 +196,36 @@ extension WIDOMTreeViewController {
         }
         return nil
     }
+
+    func selectedNodeIsVisibleForTesting() async -> Bool? {
+        guard let attachedInspectorWebView,
+              attachedInspectorWebView.superview === inspectorWebViewContainer
+        else {
+            return nil
+        }
+        let rawValue = try? await attachedInspectorWebView.callAsyncJavaScriptCompat(
+            """
+            const tree = document.getElementById('dom-tree');
+            const row = document.querySelector('.tree-node.is-selected .tree-node__row');
+            if (!tree || !row)
+                return null;
+            const treeRect = tree.getBoundingClientRect();
+            const rowRect = row.getBoundingClientRect();
+            const margin = 8;
+            return rowRect.bottom > treeRect.top + margin && rowRect.top < treeRect.bottom - margin;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        )
+        if let value = rawValue as? Bool {
+            return value
+        }
+        if let value = rawValue as? NSNumber {
+            return value.boolValue
+        }
+        return nil
+    }
 }
 #endif
 

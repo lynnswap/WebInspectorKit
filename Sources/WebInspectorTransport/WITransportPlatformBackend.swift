@@ -30,7 +30,7 @@ protocol WITransportBackendMessageSink: AnyObject, Sendable {
     func didReceiveRootMessage(_ message: String)
     func didReceivePageMessage(_ message: String, targetIdentifier: String)
     func didReceiveFatalFailure(_ message: String)
-    func waitForPendingMessagesForTesting() async
+    func waitForPendingMessages() async
 }
 
 @MainActor

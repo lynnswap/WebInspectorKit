@@ -231,6 +231,42 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func cancelSelectionModeDisablesInspectModeOnCurrentTarget() async throws {
+        var disableCount = 0
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = payload["params"] as? [String: Any]
+                    if (params?["enabled"] as? Bool) == false {
+                        disableCount += 1
+                    }
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        await inspector.cancelSelectionMode()
+
+        #expect(inspector.isSelectingElement == false)
+        #expect(disableCount == 1)
+    }
+
+    @Test
     func selectionModeDoesNotDisablePageInteractionOnUIKit() async throws {
 #if canImport(UIKit)
         let backend = FakeDOMTransportBackend(
@@ -372,6 +408,84 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func domInspectMaterializesSelectedNodeFromRequestedChildNodes() async throws {
+        var requestedNodeIDs: [Int] = []
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, _ in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    bodyChildren: [[
+                        "nodeId": 10,
+                        "backendNodeId": 10,
+                        "nodeType": 1,
+                        "nodeName": "SECTION",
+                        "localName": "section",
+                        "nodeValue": "",
+                        "attributes": ["id", "branch"],
+                        "childNodeCount": 1,
+                        "children": [],
+                    ]]
+                )
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestChildNodes:
+                if let params = payload["params"] as? [String: Any],
+                   let nodeID = params["nodeId"] as? Int {
+                    requestedNodeIDs.append(nodeID)
+                    if nodeID == 1 {
+                        backend.emitPageEvent(
+                            method: "DOM.setChildNodes",
+                            params: [
+                                "parentId": 10,
+                                "nodes": [[
+                                    "nodeId": 6,
+                                    "backendNodeId": 6,
+                                    "nodeType": 1,
+                                    "nodeName": "A",
+                                    "localName": "a",
+                                    "nodeValue": "",
+                                    "attributes": ["href", "/target"],
+                                    "childNodeCount": 0,
+                                    "children": [],
+                                ]],
+                            ]
+                        )
+                    }
+                }
+                return [:]
+            default:
+                return [:]
+            }
+        }
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+
+        let selected = await waitForCondition(
+            maxAttempts: 120,
+            intervalNanoseconds: 20_000_000
+        ) {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.selectedNode?.nodeName == "A"
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestedNodeIDs.contains(1))
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
     func inspectorInspectSelectsRealTransportNode() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -432,34 +546,33 @@ struct WIDOMInspectorTests {
     @Test
     func inspectorInspectMaterializesSelectedNodeFromRequestedNode() async throws {
         let backend = FakeDOMTransportBackend()
-        var getDocumentCount = 0
         backend.pageResultProvider = { method, _, _ in
             switch method {
             case WITransportMethod.DOM.getDocument:
-                getDocumentCount += 1
-                let bodyChildren: [[String: Any]]
-                if getDocumentCount == 1 {
-                    bodyChildren = []
-                } else {
-                    bodyChildren = [[
-                        "nodeId": 6,
-                        "backendNodeId": 6,
-                        "nodeType": 1,
-                        "nodeName": "A",
-                        "localName": "a",
-                        "nodeValue": "",
-                        "attributes": ["href", "/target"],
-                        "childNodeCount": 0,
-                        "children": [],
-                    ]]
-                }
                 return makeDocumentResult(
                     url: "https://example.com/a",
-                    bodyChildren: bodyChildren
+                    bodyChildren: []
                 )
             case WITransportMethod.DOM.setInspectModeEnabled:
                 return [:]
             case WITransportMethod.DOM.requestNode:
+                backend.emitPageEvent(
+                    method: "DOM.setChildNodes",
+                    params: [
+                        "parentId": 3,
+                        "nodes": [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]],
+                    ]
+                )
                 return ["nodeId": 6]
             default:
                 return [:]
@@ -573,7 +686,8 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
         let selected = await waitForCondition {
-            inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
+            inspector.document.selectedNode?.localID == 6
+                && inspector.isSelectingElement == false
         }
         #expect(selected)
 
@@ -872,7 +986,9 @@ struct WIDOMInspectorTests {
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
         let selected = await waitForCondition {
-            inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
+            inspector.document.selectedNode?.localID == 6
+                && inspector.isSelectingElement == false
+                && pageMethods.contains(WITransportMethod.DOM.highlightNode)
         }
         #expect(selected)
 
@@ -947,17 +1063,19 @@ struct WIDOMInspectorTests {
             maxAttempts: 120,
             intervalNanoseconds: 20_000_000
         ) {
-            guard let disableIndex = pageCalls.lastIndex(where: {
-                $0.method == WITransportMethod.DOM.setInspectModeEnabled && $0.inspectModeEnabled == false
-            }),
-            let highlightIndex = pageCalls.lastIndex(where: {
+            guard let highlightIndex = pageCalls.lastIndex(where: {
                 $0.method == WITransportMethod.DOM.highlightNode
             }) else {
                 return false
             }
+            let disableIndices = pageCalls.indices.filter {
+                pageCalls[$0].method == WITransportMethod.DOM.setInspectModeEnabled
+                    && pageCalls[$0].inspectModeEnabled == false
+            }
             return inspector.document.selectedNode?.localID == 6
                 && inspector.isSelectingElement == false
-                && highlightIndex > disableIndex
+                && disableIndices.isEmpty
+                && highlightIndex >= 0
         }
         #expect(selected)
     }
@@ -1028,18 +1146,20 @@ struct WIDOMInspectorTests {
             intervalNanoseconds: 20_000_000
         ) {
             let delta = Array(pageCalls.dropFirst(initialCallCount))
-            guard let disableIndex = delta.lastIndex(where: {
-                $0.method == WITransportMethod.DOM.setInspectModeEnabled && $0.inspectModeEnabled == false
-            }),
-            let highlightIndex = delta.lastIndex(where: {
+            guard let highlightIndex = delta.lastIndex(where: {
                 $0.method == WITransportMethod.DOM.highlightNode
             }) else {
                 return false
             }
+            let disableIndices = delta.indices.filter {
+                delta[$0].method == WITransportMethod.DOM.setInspectModeEnabled
+                    && delta[$0].inspectModeEnabled == false
+            }
             return inspector.document.selectedNode?.localID == 6
                 && inspector.document.errorMessage == nil
                 && inspector.isSelectingElement == false
-                && highlightIndex > disableIndex
+                && disableIndices.isEmpty
+                && highlightIndex >= 0
         }
         #expect(preserved)
     }
@@ -1230,7 +1350,7 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
         messageSink.didReceiveRootMessage(
             #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
         )
-        await messageSink.waitForPendingMessagesForTesting()
+        await messageSink.waitForPendingMessages()
     }
 
     func detach() {

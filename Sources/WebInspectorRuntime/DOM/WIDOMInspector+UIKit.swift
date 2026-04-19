@@ -159,7 +159,7 @@ extension WIDOMInspector {
         }
     }
 
-    func finishNativeInspectorNodeSearchTeardownIfNeeded() async {
+    func awaitInspectModeInactive(forceDisable: Bool) async {
         guard usesCustomSelectionHitTestOverlay == false else {
             removeSelectionHitTestOverlay()
             return
@@ -170,7 +170,9 @@ extension WIDOMInspector {
             return
         }
 
-        disableNativeInspectorNodeSearch(on: contentView)
+        if forceDisable {
+            disableNativeInspectorNodeSearch(on: contentView)
+        }
 
         for _ in 0..<120 {
             let nativeSelectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)

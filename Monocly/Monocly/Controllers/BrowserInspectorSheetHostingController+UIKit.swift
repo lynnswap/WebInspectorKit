@@ -88,7 +88,9 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         installInspectorContainer()
         installHarnessPanelIfNeeded()
         startPollingHarnessStateIfNeeded()
-        updateHarnessState()
+        Task { @MainActor [weak self] in
+            await self?.updateHarnessState()
+        }
     }
 
     private func installInspectorContainer() {
@@ -127,18 +129,20 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         pollTask?.cancel()
         pollTask = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
-                self.updateHarnessState()
+                await self.updateHarnessState()
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
 #endif
     }
 
-    private func updateHarnessState() {
+    private func updateHarnessState() async {
 #if DEBUG
         guard let harnessPanel else {
             return
         }
+
+        let treeDiagnostics = await currentDOMTreeDiagnostics()
 
         harnessPanel.apply(
             state: .init(
@@ -148,6 +152,8 @@ final class BrowserInspectorSheetHostingController: UIViewController {
                 domIsSelecting: inspectorController.dom.isSelectingElement,
                 domSelectedPreview: inspectorController.dom.currentSelectedNodePreviewForDiagnostics() ?? "n/a",
                 domSelectedSelector: inspectorController.dom.currentSelectedNodeSelectorForDiagnostics() ?? "n/a",
+                domTreeSelectedPreview: treeDiagnostics.preview,
+                domTreeSelectedVisible: treeDiagnostics.isVisible,
                 domSelectionDebug: inspectorController.dom.lastSelectionDiagnosticForDiagnostics() ?? "n/a",
                 domNativeSelectionState: inspectorController.dom.nativeInspectorInteractionStateForDiagnostics() ?? "n/a",
                 domRootReady: inspectorController.dom.document.rootNode != nil,
@@ -158,6 +164,32 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         )
 #endif
     }
+
+#if DEBUG
+    private func currentDOMTreeDiagnostics() async -> (preview: String, isVisible: Bool?) {
+        guard let domViewController = findDOMViewController(in: inspectorContainer) else {
+            return ("n/a", nil)
+        }
+        let preview = await domViewController.selectedTreeNodePreviewForDiagnostics() ?? "n/a"
+        let isVisible = await domViewController.selectedTreeNodeIsVisibleForDiagnostics()
+        return (preview, isVisible)
+    }
+
+    private func findDOMViewController(in viewController: UIViewController) -> WIDOMViewController? {
+        if let domViewController = viewController as? WIDOMViewController {
+            return domViewController
+        }
+        for child in viewController.children {
+            if let domViewController = findDOMViewController(in: child) {
+                return domViewController
+            }
+        }
+        if let presentedViewController = viewController.presentedViewController {
+            return findDOMViewController(in: presentedViewController)
+        }
+        return nil
+    }
+#endif
 }
 
 #if DEBUG
@@ -168,6 +200,8 @@ private struct BrowserInspectorUITestHarnessState {
     let domIsSelecting: Bool
     let domSelectedPreview: String
     let domSelectedSelector: String
+    let domTreeSelectedPreview: String
+    let domTreeSelectedVisible: Bool?
     let domSelectionDebug: String
     let domNativeSelectionState: String
     let domRootReady: Bool
@@ -183,6 +217,8 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
     private let domIsSelectingLabel = UILabel()
     private let domSelectedPreviewLabel = UILabel()
     private let domSelectedSelectorLabel = UILabel()
+    private let domTreeSelectedPreviewLabel = UILabel()
+    private let domTreeSelectedVisibleLabel = UILabel()
     private let domSelectionDebugLabel = UILabel()
     private let domNativeSelectionStateLabel = UILabel()
     private let domRootStateLabel = UILabel()
@@ -280,6 +316,8 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
             domIsSelectingLabel,
             domSelectedPreviewLabel,
             domSelectedSelectorLabel,
+            domTreeSelectedPreviewLabel,
+            domTreeSelectedVisibleLabel,
             domSelectionDebugLabel,
             domNativeSelectionStateLabel,
             domRootStateLabel,
@@ -301,7 +339,7 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         rootStack.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(rootStack)
 
-        for label in [browserURLLabel, domDocumentURLLabel, domContextIDLabel, domIsSelectingLabel, domSelectedPreviewLabel, domSelectedSelectorLabel, domSelectionDebugLabel, domNativeSelectionStateLabel, domRootStateLabel, domErrorLabel] {
+        for label in [browserURLLabel, domDocumentURLLabel, domContextIDLabel, domIsSelectingLabel, domSelectedPreviewLabel, domSelectedSelectorLabel, domTreeSelectedPreviewLabel, domTreeSelectedVisibleLabel, domSelectionDebugLabel, domNativeSelectionStateLabel, domRootStateLabel, domErrorLabel] {
             label.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
             label.numberOfLines = 2
             label.textColor = .label
@@ -315,6 +353,8 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         domIsSelectingLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domIsSelecting"
         domSelectedPreviewLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectedPreview"
         domSelectedSelectorLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectedSelector"
+        domTreeSelectedPreviewLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domTreeSelectedPreview"
+        domTreeSelectedVisibleLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domTreeSelectedVisible"
         domSelectionDebugLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domSelectionDebug"
         domNativeSelectionStateLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domNativeSelectionState"
         domRootStateLabel.accessibilityIdentifier = "Monocly.inspectorHarness.domRootState"
@@ -341,6 +381,8 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         domIsSelectingLabel.text = "domIsSelecting=\(state.domIsSelecting ? 1 : 0)"
         domSelectedPreviewLabel.text = "domSelectedPreview=\(state.domSelectedPreview)"
         domSelectedSelectorLabel.text = "domSelectedSelector=\(state.domSelectedSelector)"
+        domTreeSelectedPreviewLabel.text = "domTreeSelectedPreview=\(state.domTreeSelectedPreview)"
+        domTreeSelectedVisibleLabel.text = "domTreeSelectedVisible=\(state.domTreeSelectedVisible == true ? 1 : 0)"
         domSelectionDebugLabel.text = "domSelectionDebug=\(state.domSelectionDebug)"
         domNativeSelectionStateLabel.text = "domNativeSelectionState=\(state.domNativeSelectionState)"
         domRootStateLabel.text = "domRootReady=\(state.domRootReady ? 1 : 0)"

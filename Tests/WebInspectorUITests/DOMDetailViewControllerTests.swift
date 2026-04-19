@@ -183,7 +183,7 @@ struct DOMDetailViewControllerTests {
         }
         #expect(initialReady)
 
-        let initialSnapshotCount = try #require(await stableSnapshotApplyCount(for: viewController))
+        _ = try #require(await stableSnapshotApplyCount(for: viewController))
         inspector.document.applyMutationBundle(
             .init(
                 events: [
@@ -767,7 +767,7 @@ struct DOMDetailViewControllerTests {
 
     private func visibleTextViewText(in collectionView: UICollectionView, at indexPath: IndexPath) -> String? {
         collectionView.layoutIfNeeded()
-        guard let cell = collectionView.cellForItem(at: indexPath) else {
+        guard collectionView.cellForItem(at: indexPath) != nil else {
             return nil
         }
         return visibleTextView(in: collectionView, at: indexPath)?.text

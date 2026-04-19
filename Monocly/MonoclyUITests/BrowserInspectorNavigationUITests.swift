@@ -12,6 +12,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         static let domIsSelecting = "Monocly.inspectorHarness.domIsSelecting"
         static let domSelectedPreview = "Monocly.inspectorHarness.domSelectedPreview"
         static let domSelectedSelector = "Monocly.inspectorHarness.domSelectedSelector"
+        static let domTreeSelectedPreview = "Monocly.inspectorHarness.domTreeSelectedPreview"
+        static let domTreeSelectedVisible = "Monocly.inspectorHarness.domTreeSelectedVisible"
         static let domRootState = "Monocly.inspectorHarness.domRootState"
         static let domError = "Monocly.inspectorHarness.domError"
         static let loadPage1 = "Monocly.inspectorHarness.loadPage1"
@@ -199,11 +201,15 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
 
         let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
         let resolved = waitForCondition(timeout: 15) {
             domSelectedPreviewLabel.exists
                 && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
                 && domSelectedPreviewLabel.label.contains("<")
+                && domTreeSelectedPreviewLabel.label != "domTreeSelectedPreview=n/a"
+                && domTreeSelectedVisibleLabel.label == "domTreeSelectedVisible=1"
                 && domErrorLabel.label == "domError=n/a"
                 && selectingLabel.label == "domIsSelecting=0"
         }
@@ -213,6 +219,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             """
             Page tap did not resolve a real DOM selection.
             selectedPreview=\(domSelectedPreviewLabel.label)
+            treeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+            treeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
             selecting=\(selectingLabel.label)
             domError=\(domErrorLabel.label)
             """
@@ -348,6 +356,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let domDocumentURLLabel = app.staticTexts[AccessibilityID.domDocumentURL]
         let domContextIDLabel = app.staticTexts[AccessibilityID.domContextID]
         let domNativeSelectionStateLabel = app.staticTexts["Monocly.inspectorHarness.domNativeSelectionState"]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domRootStateLabel = app.staticTexts[AccessibilityID.domRootState]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
         let backButton = app.buttons[AccessibilityID.goBack]
@@ -357,6 +367,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             browserURLLabel.exists
                 && domDocumentURLLabel.exists
                 && domContextIDLabel.exists
+                && domTreeSelectedPreviewLabel.exists
+                && domTreeSelectedVisibleLabel.exists
                 && domRootStateLabel.exists
                 && domErrorLabel.exists
                 && domNativeSelectionStateLabel.exists
@@ -376,6 +388,8 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             browserURL=\(browserURLLabel.label)
             domDocumentURL=\(domDocumentURLLabel.label)
             domContextID=\(domContextIDLabel.label)
+            domTreeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+            domTreeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
             domNativeSelectionState=\(domNativeSelectionStateLabel.label)
             domRootState=\(domRootStateLabel.label)
             domError=\(domErrorLabel.label)

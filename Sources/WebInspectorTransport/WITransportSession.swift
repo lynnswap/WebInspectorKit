@@ -256,6 +256,10 @@ public final class WITransportSession {
         }
     }
 
+    package func waitForPendingMessages() async {
+        await backendMessageSink?.waitForPendingMessages()
+    }
+
     package func pageEvents() -> AsyncStream<WITransportEventEnvelope> {
         precondition(pageEventStreamContinuation == nil, "pageEvents() supports only a single consumer.")
 
@@ -1321,7 +1325,7 @@ private final class WITransportSessionMessageSink: WITransportBackendMessageSink
         }
     }
 
-    func waitForPendingMessagesForTesting() async {
+    func waitForPendingMessages() async {
         await inboundPump.waitUntilDrained()
     }
 
