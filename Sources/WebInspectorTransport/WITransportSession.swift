@@ -1040,13 +1040,17 @@ private extension WITransportSession {
             return derivedPageTargetIdentifierProviderForTesting(webView)
         }
 #endif
-        guard let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
+        let handleSelector = NSSelectorFromString("_handle")
+        guard webView.responds(to: handleSelector),
+              let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
             return nil
         }
 
+        let pageIDSelector = NSSelectorFromString("webPageID")
+        let legacyPageIDSelector = NSSelectorFromString("_webPageID")
         let pageIDValue =
-            (handle.value(forKey: "webPageID") as? NSNumber)
-            ?? (handle.value(forKey: "_webPageID") as? NSNumber)
+            (handle.responds(to: pageIDSelector) ? handle.value(forKey: "webPageID") as? NSNumber : nil)
+            ?? (handle.responds(to: legacyPageIDSelector) ? handle.value(forKey: "_webPageID") as? NSNumber : nil)
 
         guard let pageIDValue else {
             return nil

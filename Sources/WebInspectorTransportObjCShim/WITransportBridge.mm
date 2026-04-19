@@ -384,6 +384,10 @@ static BOOL controllerCandidateAtOffset(void *pageProxy, ptrdiff_t offset, void 
     if (!safeReadPointer(slot, &controller) || !controller || !pointerIsWritableMapped(controller))
         return NO;
 
+    void *frontendRouter = nullptr;
+    if (!frontendRouterPointer(controller, &frontendRouter) || !frontendRouter || !pointerIsWritableMapped(frontendRouter))
+        return NO;
+
     void *backendDispatcher = nullptr;
     if (!backendDispatcherPointer(controller, &backendDispatcher) || !backendDispatcher || !pointerIsWritableMapped(backendDispatcher))
         return NO;

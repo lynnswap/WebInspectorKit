@@ -2021,7 +2021,7 @@ private extension WIDOMInspector {
                 contextID: contextID
             )
         }
-        applyRecoverableError(nil)
+        applyRecoverableError(errorMessage)
     }
 
     func resolveTestingSelectorNode(_ cssSelector: String) -> DOMNodeModel? {

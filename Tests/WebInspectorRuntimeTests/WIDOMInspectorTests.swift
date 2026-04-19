@@ -865,7 +865,7 @@ struct WIDOMInspectorTests {
         }
 
         #expect(inspector.document.selectedNode == nil)
-        #expect(inspector.document.errorMessage == nil)
+        #expect(inspector.document.errorMessage == "Failed to resolve selected element.")
     }
 
     @Test
