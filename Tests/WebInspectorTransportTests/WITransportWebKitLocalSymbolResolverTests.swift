@@ -43,7 +43,8 @@ struct WITransportNativeInspectorSymbolResolverTests {
     @Test
     func resolveForTestingReportsFailureReasonForMissingSymbol() {
         let resolution = WITransportNativeInspectorSymbolResolver.resolveForTesting(
-            stringFromUTF8Symbol: "__ZN3WTF6String27definitelyMissingFromUTF8FooEv"
+            // __ZN3WTF6String27definitelyMissingFromUTF8FooEv
+            stringFromUTF8Symbol: mangled(["Ev", "27definitelyMissingFromUTF8Foo", "6String", "3WTF", "__ZN"])
         )
         let failureReason = resolution.failureReason
 
@@ -76,8 +77,10 @@ struct WITransportNativeInspectorSymbolResolverTests {
         let primaryDisconnect = try #require(disconnectSymbols.first)
 
         let resolution = WITransportNativeInspectorSymbolResolver.resolveForTesting(
-            connectSymbol: "__ZN7Missing26DefinitelyWrongConnectNameEv",
-            disconnectSymbol: "__ZN7Missing29DefinitelyWrongDisconnectNameEv",
+            // __ZN7Missing26DefinitelyWrongConnectNameEv
+            connectSymbol: mangled(["Ev", "26DefinitelyWrongConnectName", "7Missing", "__ZN"]),
+            // __ZN7Missing29DefinitelyWrongDisconnectNameEv
+            disconnectSymbol: mangled(["Ev", "29DefinitelyWrongDisconnectName", "7Missing", "__ZN"]),
             alternateConnectSymbols: [primaryConnect],
             alternateDisconnectSymbols: [primaryDisconnect]
         )
@@ -203,6 +206,10 @@ struct WITransportNativeInspectorSymbolResolverTests {
         throw Skip("This synthetic scanner test is only implemented for ARM64 layouts.")
         #endif
     }
+}
+
+private func mangled(_ reverseTokens: [String]) -> String {
+    reverseTokens.reversed().joined()
 }
 
 #if arch(arm64) || arch(arm64e)

@@ -49,6 +49,14 @@ static NSDictionary *dictionaryValue(id value)
     return [value isKindOfClass:NSDictionary.class] ? value : nil;
 }
 
+static NSString *deobfuscateSymbol(NSArray<NSString *> *reverseTokens)
+{
+    NSMutableString *result = [NSMutableString string];
+    for (NSString *token in [reverseTokens reverseObjectEnumerator])
+        [result appendString:token];
+    return result;
+}
+
 static NSString *stringValue(id value)
 {
     if ([value isKindOfClass:NSString.class])
@@ -220,12 +228,19 @@ static uintptr_t runtimeSymbolAddress(const char *symbolName)
     return symbol ? reinterpret_cast<uintptr_t>(symbol) : 0;
 }
 
+static uintptr_t runtimeSymbolAddress(NSArray<NSString *> *reverseTokens)
+{
+    NSString *symbolName = deobfuscateSymbol(reverseTokens);
+    return runtimeSymbolAddress(symbolName.UTF8String);
+}
+
 static void *inspectorTargetAgentPointer(void *controller)
 {
     if (!controller)
         return nullptr;
 
-    uintptr_t targetAgentVTableSymbol = runtimeSymbolAddress("__ZTVN9Inspector20InspectorTargetAgentE");
+    // __ZTVN9Inspector20InspectorTargetAgentE
+    uintptr_t targetAgentVTableSymbol = runtimeSymbolAddress(@[@"E", @"20InspectorTargetAgent", @"N9Inspector", @"__ZTV"]);
     if (!targetAgentVTableSymbol)
         return nullptr;
 
@@ -252,7 +267,8 @@ static void *inspectorTargetAgentPointer(void *controller)
 
 static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, NSError **error)
 {
-    auto didCreateAddress = runtimeSymbolAddress("__ZN9Inspector20InspectorTargetAgent27didCreateFrontendAndBackendEv");
+    // __ZN9Inspector20InspectorTargetAgent27didCreateFrontendAndBackendEv
+    auto didCreateAddress = runtimeSymbolAddress(@[@"Ev", @"27didCreateFrontendAndBackend", @"20InspectorTargetAgent", @"9Inspector", @"__ZN"]);
     if (!didCreateAddress) {
         NSLog(@"[WebInspectorTransport] router-direct target activation failed reason=missing-didCreate");
         if (error) {
@@ -284,7 +300,8 @@ static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, NS
 
 static void deactivateInspectorTargetsForFrontendRouterAttach(void *controller)
 {
-    auto willDestroyAddress = runtimeSymbolAddress("__ZN9Inspector20InspectorTargetAgent29willDestroyFrontendAndBackendENS_16DisconnectReasonE");
+    // __ZN9Inspector20InspectorTargetAgent29willDestroyFrontendAndBackendENS_16DisconnectReasonE
+    auto willDestroyAddress = runtimeSymbolAddress(@[@"E", @"NS_16DisconnectReason", @"29willDestroyFrontendAndBackendE", @"20InspectorTargetAgent", @"9Inspector", @"__ZN"]);
     if (!willDestroyAddress)
         return;
 
