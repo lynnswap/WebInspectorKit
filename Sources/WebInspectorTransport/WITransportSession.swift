@@ -194,11 +194,19 @@ public final class WITransportSession {
     }
 
     package func currentPageTargetIdentifier() -> String? {
-        refreshDerivedPageTargetIdentifierIfNeeded() ?? pageTargetTracker.currentIdentifier
+        if let currentIdentifier = pageTargetTracker.currentIdentifier {
+            return currentIdentifier
+        }
+        if pageTargetTracker.allowsDerivedCommittedSeed {
+            return refreshDerivedPageTargetIdentifierIfNeeded()
+        }
+        return nil
     }
 
     package func pageTargetIdentifiers() -> [String] {
-        _ = refreshDerivedPageTargetIdentifierIfNeeded()
+        if pageTargetTracker.allowsDerivedCommittedSeed {
+            _ = refreshDerivedPageTargetIdentifierIfNeeded()
+        }
         return pageTargetTracker.orderedIdentifiers
     }
 
@@ -1167,6 +1175,7 @@ private final class WITransportPageTargetTracker {
     }
 
     private var targetsByIdentifier: [String: KnownPageTarget] = [:]
+    private var hasObservedLifecycleEvents = false
     private var currentIdentifierStorage: String?
     private var committedIdentifierStorage: String?
     private var nextCreationOrder = 0
@@ -1174,6 +1183,10 @@ private final class WITransportPageTargetTracker {
 
     var currentIdentifier: String? {
         currentIdentifierStorage
+    }
+
+    var allowsDerivedCommittedSeed: Bool {
+        !hasObservedLifecycleEvents && currentIdentifierStorage == nil
     }
 
     var orderedIdentifiers: [String] {
@@ -1191,6 +1204,7 @@ private final class WITransportPageTargetTracker {
     }
 
     func didCreatePageTarget(identifier: String, isProvisional: Bool) {
+        hasObservedLifecycleEvents = true
         targetsByIdentifier[identifier] = KnownPageTarget(
             identifier: identifier,
             isProvisional: isProvisional,
@@ -1200,6 +1214,7 @@ private final class WITransportPageTargetTracker {
     }
 
     func didCommitPageTarget(oldIdentifier: String?, newIdentifier: String) -> String? {
+        hasObservedLifecycleEvents = true
         let effectiveOldIdentifier = oldIdentifier ?? inferredCommittedOldIdentifier(excluding: newIdentifier)
         if let effectiveOldIdentifier,
            let previous = targetsByIdentifier.removeValue(forKey: effectiveOldIdentifier) {
@@ -1228,6 +1243,7 @@ private final class WITransportPageTargetTracker {
     }
 
     func didDestroyPageTarget(identifier: String) -> Bool {
+        hasObservedLifecycleEvents = true
         guard targetsByIdentifier.removeValue(forKey: identifier) != nil else {
             return false
         }
@@ -1303,6 +1319,7 @@ private final class WITransportPageTargetTracker {
 
     func reset() {
         targetsByIdentifier.removeAll(keepingCapacity: true)
+        hasObservedLifecycleEvents = false
         currentIdentifierStorage = nil
         committedIdentifierStorage = nil
         nextCreationOrder = 0

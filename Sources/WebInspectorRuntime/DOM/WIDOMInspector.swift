@@ -241,6 +241,7 @@ public final class WIDOMInspector {
     public func beginSelectionMode() async throws {
         let _ = try requirePageWebView()
         applyRecoverableError(nil)
+        try? await hideHighlight()
 
         activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
@@ -1781,31 +1782,41 @@ private extension WIDOMInspector {
                 selectorPath: selectorPath,
                 transaction: transaction
             )
-            await materializePendingInspectSelection(
-                contextID: contextID,
-                targetIdentifier: targetIdentifier,
-                transaction: transaction
-            )
-            await awaitTransportMessagesToDrain()
-            await applyPendingInspectSelectionIfPossible()
-            if pendingInspectSelection?.nodeID == nodeID,
-               pendingInspectSelection?.contextID == contextID {
-                pendingInspectSelection = nil
-            }
-            if let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID),
-               selectionTransactionIsCurrent(transaction) {
-                logSelectionDiagnostics(
-                    "applyInspectedNode resolved transport node",
-                    selector: selectorPath,
-                    extra: selectionNodeSummary(node)
+            for _ in 0..<4 {
+                let requestedNodes = await materializePendingInspectSelection(
+                    contextID: contextID,
+                    targetIdentifier: targetIdentifier,
+                    transaction: transaction
                 )
-                await applySelection(
-                    to: node,
-                    selectorPath: selectorPath,
-                    contextID: contextID
-                )
-                applyRecoverableError(nil)
-                return
+                guard requestedNodes > 0 else {
+                    break
+                }
+                await awaitTransportMessagesToDrain()
+                await applyPendingInspectSelectionIfPossible()
+                if pendingInspectSelection?.nodeID == nodeID,
+                   pendingInspectSelection?.contextID == contextID,
+                   resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID) == nil {
+                    continue
+                }
+                if pendingInspectSelection?.nodeID == nodeID,
+                   pendingInspectSelection?.contextID == contextID {
+                    pendingInspectSelection = nil
+                }
+                if let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID),
+                   selectionTransactionIsCurrent(transaction) {
+                    logSelectionDiagnostics(
+                        "applyInspectedNode resolved transport node",
+                        selector: selectorPath,
+                        extra: selectionNodeSummary(node)
+                    )
+                    await applySelection(
+                        to: node,
+                        selectorPath: selectorPath,
+                        contextID: contextID
+                    )
+                    applyRecoverableError(nil)
+                    return
+                }
             }
         }
 
@@ -1827,19 +1838,20 @@ private extension WIDOMInspector {
         throw DOMOperationError.invalidSelection
     }
 
+    @discardableResult
     private func materializePendingInspectSelection(
         contextID: DOMContextID,
         targetIdentifier: String,
         transaction: SelectionTransaction?
-    ) async {
+    ) async -> Int {
         guard currentContext?.contextID == contextID,
               selectionTransactionIsCurrent(transaction) else {
-            return
+            return 0
         }
 
         let candidates = selectionMaterializationCandidates()
         if candidates.isEmpty {
-            return
+            return 0
         }
 
         logSelectionDiagnostics(
@@ -1847,10 +1859,11 @@ private extension WIDOMInspector {
             extra: "contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil") candidates=\(candidates.count)"
         )
 
+        var requestedNodes = 0
         for candidate in candidates {
             guard currentContext?.contextID == contextID,
                   selectionTransactionIsCurrent(transaction) else {
-                return
+                return requestedNodes
             }
             guard let transportNodeID = try? transportNodeID(for: candidate) else {
                 continue
@@ -1864,6 +1877,7 @@ private extension WIDOMInspector {
                         depth: max(configuration.snapshotDepth, 128)
                     )
                 )
+                requestedNodes += 1
             } catch {
                 logSelectionDiagnostics(
                     "materializePendingInspectSelection requestChildNodes failed",
@@ -1872,13 +1886,28 @@ private extension WIDOMInspector {
                 )
             }
         }
+        return requestedNodes
     }
 
     private func selectionMaterializationCandidates() -> [DOMNodeModel] {
         guard let root = document.rootNode else {
             return []
         }
-        return [root]
+
+        var queue: [DOMNodeModel] = [root]
+        var candidates: [DOMNodeModel] = [root]
+
+        while !queue.isEmpty {
+            let node = queue.removeFirst()
+            if node !== root,
+               (node.nodeType == 9 || node.nodeType == 1),
+               node.childCount > node.children.count {
+                candidates.append(node)
+            }
+            queue.append(contentsOf: node.children)
+        }
+
+        return candidates
     }
 
     func applySelection(
