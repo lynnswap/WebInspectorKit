@@ -425,17 +425,7 @@ struct WIDOMInspectorTests {
                                 "localName": "body",
                                 "nodeValue": "",
                                 "childNodeCount": 1,
-                                "children": didRequestChildren ? [[
-                                    "nodeId": 6,
-                                    "backendNodeId": 6,
-                                    "nodeType": 1,
-                                    "nodeName": "A",
-                                    "localName": "a",
-                                    "nodeValue": "",
-                                    "attributes": ["href", "/target"],
-                                    "childNodeCount": 0,
-                                    "children": [],
-                                ]] : [],
+                                "children": [],
                             ]],
                         ]],
                     ],
@@ -462,6 +452,31 @@ struct WIDOMInspectorTests {
 
         try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        Task { @MainActor in
+            for _ in 0..<50 where didRequestChildren == false {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            guard didRequestChildren else {
+                return
+            }
+            backend.emitPageEvent(
+                method: "DOM.setChildNodes",
+                params: [
+                    "parentId": 3,
+                    "nodes": [[
+                        "nodeId": 6,
+                        "backendNodeId": 6,
+                        "nodeType": 1,
+                        "nodeName": "A",
+                        "localName": "a",
+                        "nodeValue": "",
+                        "attributes": ["href", "/target"],
+                        "childNodeCount": 0,
+                        "children": [],
+                    ]],
+                ]
+            )
+        }
 
         let selected = await waitForCondition {
             inspector.document.selectedNode?.localID == 6
@@ -469,6 +484,7 @@ struct WIDOMInspectorTests {
                 && inspector.isSelectingElement == false
         }
         #expect(selected)
+        #expect(didRequestChildren)
         #expect(inspector.document.errorMessage == nil)
     }
 

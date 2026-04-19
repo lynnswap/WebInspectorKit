@@ -1,7 +1,6 @@
 import WebKit
 import WebInspectorEngine
 import WebInspectorRuntime
-import ObservationBridge
 
 #if canImport(AppKit)
 import AppKit
@@ -12,10 +11,6 @@ public final class WIDOMTreeViewController: NSViewController {
     private var contextMenuNodeID: Int?
     private var contextMenuNodeIdentity: DOMNodeModel.ID?
     private var contextMenuBackendNodeID: Int?
-    private var observationHandles: Set<ObservationHandle> = []
-    private var documentStoreObservationHandles: Set<ObservationHandle> = []
-
-    private let errorLabel = NSTextField(labelWithString: "")
 
     public init(inspector: WIDOMInspector) {
         self.inspector = inspector
@@ -57,46 +52,14 @@ public final class WIDOMTreeViewController: NSViewController {
             return self.makeTreeContextMenu()
         }
 
-        errorLabel.translatesAutoresizingMaskIntoConstraints = false
-        errorLabel.isHidden = true
-        errorLabel.textColor = .secondaryLabelColor
-        errorLabel.maximumNumberOfLines = 3
-
         view.addSubview(inspectorWebView)
-        view.addSubview(errorLabel)
 
         NSLayoutConstraint.activate([
             inspectorWebView.topAnchor.constraint(equalTo: view.topAnchor),
             inspectorWebView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             inspectorWebView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             inspectorWebView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            errorLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-            errorLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor)
         ])
-
-        observeState()
-        updateErrorLabel(errorMessage: inspector.document.errorMessage)
-    }
-
-    private func observeState() {
-        inspector.observe(
-            \.document
-        ) { [weak self] document in
-            guard let self else {
-                return
-            }
-            self.documentStoreObservationHandles.removeAll()
-            document.observe(
-                \.errorMessage,
-                options: [.removeDuplicates]
-            ) { [weak self] newErrorMessage in
-                self?.updateErrorLabel(errorMessage: newErrorMessage)
-            }
-            .store(in: &self.documentStoreObservationHandles)
-            self.updateErrorLabel(errorMessage: document.errorMessage)
-        }
-        .store(in: &observationHandles)
     }
 
     private func makeCopyMenu() -> NSMenu {
@@ -137,16 +100,6 @@ public final class WIDOMTreeViewController: NSViewController {
         menu.addItem(deleteItem)
 
         return menu
-    }
-
-    private func updateErrorLabel(errorMessage: String?) {
-        if let errorMessage, !errorMessage.isEmpty {
-            errorLabel.stringValue = errorMessage
-            errorLabel.isHidden = false
-        } else {
-            errorLabel.stringValue = ""
-            errorLabel.isHidden = true
-        }
     }
 
     @objc

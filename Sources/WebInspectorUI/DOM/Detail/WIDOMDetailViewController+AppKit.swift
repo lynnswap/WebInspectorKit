@@ -64,12 +64,6 @@ private struct ElementDetailsMacRootView: View {
         Group {
             if let selectedNode {
                 List {
-                    if let errorMessage = inspector.document.errorMessage, !errorMessage.isEmpty {
-                        Section {
-                            infoRow(message: errorMessage, color: .orange)
-                        }
-                    }
-
                     Section(LocalizedStringResource("dom.element.section.element", bundle: .module)) {
                         previewRow(selectedNode: selectedNode)
                     }

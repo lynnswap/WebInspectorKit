@@ -220,6 +220,64 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
     }
 
     @MainActor
+    func testDOMInspectorNativeSelectionLeavesPageInteractiveAfterSelection() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            }
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        let pickButton = app.buttons[AccessibilityID.pickButton]
+        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
+        pickButton.tap()
+
+        let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                selectingLabel.exists && selectingLabel.label == "domIsSelecting=1"
+            }
+        )
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+
+        let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                domSelectedPreviewLabel.exists
+                    && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
+                    && selectingLabel.label == "domIsSelecting=0"
+            }
+        )
+
+        // Tap the fixture link that sits to the left of the medium sheet.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.11, dy: 0.33)).tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-2.html",
+            canGoBack: true,
+            canGoForward: false
+        )
+    }
+
+    @MainActor
     func testDOMInspectorStaysStableAcrossRapidSwitchesAndRepeatedHistoryTraversal() throws {
         let app = XCUIApplication()
         app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domNavigationBackForward"

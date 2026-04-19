@@ -84,6 +84,11 @@ enum BrowserUITestScenario: String {
                         <main id="dom-page-1">
                             <h1>DOM Page 1</h1>
                             <p>alpha</p>
+                            <a
+                                id="page-2-link"
+                                href="dom-page-2.html"
+                                style="display:inline-block;margin-top:16px;padding:12px 16px;background:#0a84ff;color:#fff;text-decoration:none;border-radius:10px;"
+                            >Go to Page 2</a>
                         </main>
                     </body>
                     </html>

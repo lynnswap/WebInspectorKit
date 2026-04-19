@@ -103,6 +103,31 @@ extension WIDOMInspector {
         _ = unsafe contentView.perform(selector)
     }
 
+    func forceDisableNativeInspectorNodeSearchIfNeeded() {
+        guard usesCustomSelectionHitTestOverlay == false,
+              let pageWebView,
+              let contentView = findWKContentView(in: pageWebView)
+        else {
+            return
+        }
+
+        let selector = NSSelectorFromString("_disableInspectorNodeSearch")
+        guard contentView.responds(to: selector) else {
+            return
+        }
+        _ = unsafe contentView.perform(selector)
+    }
+
+    func scheduleNativeInspectorNodeSearchTeardown() {
+        guard usesCustomSelectionHitTestOverlay == false else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            self?.forceDisableNativeInspectorNodeSearchIfNeeded()
+        }
+    }
+
     private func installSelectionHitTestOverlay() {
         guard let pageWebView else {
             return

@@ -1239,6 +1239,12 @@ private extension WIDOMInspector {
     func handleInspectorSelection(_ payload: Any) {
         if case let .selection(selection) = payloadNormalizer.normalizeSelectionPayload(payload) {
             document.applySelectionSnapshot(selection)
+            Task { @MainActor [weak self] in
+                guard let self, let contextID = self.currentContext?.contextID else {
+                    return
+                }
+                await self.syncSelectedNodeHighlight(contextID: contextID)
+            }
         }
     }
 
@@ -1371,6 +1377,9 @@ private extension WIDOMInspector {
         inspectModeTargetIdentifier = nil
         isSelectingElement = false
 #if canImport(UIKit)
+        setNativeInspectorNodeSearchEnabled(false)
+        forceDisableNativeInspectorNodeSearchIfNeeded()
+        scheduleNativeInspectorNodeSearchTeardown()
         restorePageScrollingState()
 #endif
     }
@@ -1387,12 +1396,14 @@ private extension WIDOMInspector {
             )
             setNativeInspectorNodeSearchEnabled(true)
         } else {
+            defer {
+                setNativeInspectorNodeSearchEnabled(false)
+            }
             _ = try await sendDOMCommand(
                 WITransportMethod.DOM.setInspectModeEnabled,
                 targetIdentifier: targetIdentifier,
                 parameters: DOMSetInspectModeEnabledParameters.disabled
             )
-            setNativeInspectorNodeSearchEnabled(false)
         }
     }
 
@@ -1607,6 +1618,7 @@ private extension WIDOMInspector {
             selectionPayloadDictionary(from: payload),
             contextID: contextID
         )
+        await syncSelectedNodeHighlight(contextID: contextID)
         logSelectionDiagnostics(
             "applySelection updated document and frontend",
             selector: selectorPath,
@@ -1624,6 +1636,7 @@ private extension WIDOMInspector {
             level: .error
         )
         document.clearSelection()
+        try? await hideHighlight()
         if let contextID {
             await inspectorBridge.applySelectionPayload(
                 selectionPayloadDictionary(from: nil),
@@ -1814,42 +1827,71 @@ private extension WIDOMInspector {
             return node
         }
 
-        guard let rootNode = document.rootNode,
-              let rootTransportNodeID = try? transportNodeID(for: rootNode) else {
-            return nil
-        }
-
         let depth = max(configuration.snapshotDepth, 128)
-        do {
-            _ = try await sendDOMCommand(
-                WITransportMethod.DOM.requestChildNodes,
-                targetIdentifier: targetIdentifier,
-                parameters: DOMRequestChildNodesParameters(
-                    nodeId: rootTransportNodeID,
-                    depth: depth
-                )
+        for _ in 0..<3 {
+            let candidateNodes: [DOMNodeModel]
+            let incompleteNodes = nodesWithIncompleteChildren()
+            if incompleteNodes.isEmpty {
+                if let rootNode = document.rootNode {
+                    candidateNodes = [rootNode]
+                } else {
+                    break
+                }
+            } else {
+                candidateNodes = incompleteNodes
+            }
+
+            logSelectionDiagnostics(
+                "resolveInspectedNode requesting child nodes",
+                extra: "nodeID=\(nodeID) candidates=\(candidateNodes.count) depth=\(depth)"
             )
-        } catch {
-            return resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)
-        }
 
-        if let node = await waitForInspectedNode(
-            nodeID: nodeID,
-            contextID: contextID
-        ) {
-            return node
-        }
+            if candidateNodes.isEmpty {
+                break
+            }
 
-        guard (try? await refreshCurrentDocumentFromTransport(
-            contextID: contextID,
-            targetIdentifier: targetIdentifier,
-            depth: depth,
-            isFreshDocument: false
-        )) != nil else {
-            return resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)
+            for node in candidateNodes {
+                guard let transportNodeID = try? transportNodeID(for: node) else {
+                    continue
+                }
+                _ = try? await sendDOMCommand(
+                    WITransportMethod.DOM.requestChildNodes,
+                    targetIdentifier: targetIdentifier,
+                    parameters: DOMRequestChildNodesParameters(
+                        nodeId: transportNodeID,
+                        depth: depth
+                    )
+                )
+            }
+
+            if let node = await waitForInspectedNode(
+                nodeID: nodeID,
+                contextID: contextID
+            ) {
+                return node
+            }
         }
 
         return resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)
+    }
+
+    func nodesWithIncompleteChildren() -> [DOMNodeModel] {
+        var nodes: [DOMNodeModel] = []
+
+        func visit(_ node: DOMNodeModel?) {
+            guard let node else {
+                return
+            }
+            if node.childCount > node.children.count {
+                nodes.append(node)
+            }
+            for child in node.children {
+                visit(child)
+            }
+        }
+
+        visit(document.rootNode)
+        return nodes
     }
 
     func resolvedInspectedNodeFromCurrentDocument(nodeID: Int) -> DOMNodeModel? {
@@ -2048,6 +2090,28 @@ private extension WIDOMInspector {
         )
     }
 
+    func syncSelectedNodeHighlight(contextID: DOMContextID) async {
+        guard currentContext?.contextID == contextID,
+              let selectedNode = document.selectedNode,
+              let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() else {
+            return
+        }
+
+        do {
+            _ = try await sendDOMCommand(
+                WITransportMethod.DOM.highlightNode,
+                targetIdentifier: targetIdentifier,
+                parameters: DOMHighlightNodeParameters(nodeId: try transportNodeID(for: selectedNode))
+            )
+        } catch {
+            logSelectionDiagnostics(
+                "syncSelectedNodeHighlight failed",
+                extra: error.localizedDescription,
+                level: .error
+            )
+        }
+    }
+
 
     func mapTransportError(_ error: WITransportError) -> DOMOperationError {
         switch error {
@@ -2196,7 +2260,7 @@ private struct DOMRemoveAttributeParameters: Encodable {
 
 private struct DOMHighlightNodeParameters: Encodable {
     struct HighlightConfig: Encodable {
-        let showInfo = true
+        let showInfo = false
     }
 
     let nodeId: Int

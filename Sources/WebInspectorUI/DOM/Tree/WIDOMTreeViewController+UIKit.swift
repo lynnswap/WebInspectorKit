@@ -1,6 +1,5 @@
 import WebKit
 import WebInspectorRuntime
-import ObservationBridge
 
 #if canImport(UIKit)
 import UIKit
@@ -8,8 +7,6 @@ import UIKit
 @MainActor
 public final class WIDOMTreeViewController: UIViewController {
     private let inspector: WIDOMInspector
-    private var observationHandles: Set<ObservationHandle> = []
-    private var documentStoreObservationHandles: Set<ObservationHandle> = []
     private let inspectorWebViewContainer = UIView()
     private weak var attachedInspectorWebView: WKWebView?
     private var inspectorWebViewConstraints: [NSLayoutConstraint] = []
@@ -40,8 +37,6 @@ public final class WIDOMTreeViewController: UIViewController {
             inspectorWebViewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        observeState()
-        updateErrorPresentation(errorMessage: inspector.document.errorMessage)
         applyInspectorWebViewActivityIfNeeded()
     }
 
@@ -61,37 +56,6 @@ public final class WIDOMTreeViewController: UIViewController {
         }
         managesInspectorWebViewExternally = manages
         applyInspectorWebViewActivityIfNeeded()
-    }
-
-    private func observeState() {
-        inspector.observe(
-            \.document
-        ) { [weak self] document in
-            guard let self else {
-                return
-            }
-            self.documentStoreObservationHandles.removeAll()
-            document.observe(
-                \.errorMessage,
-                options: [.removeDuplicates]
-            ) { [weak self] newErrorMessage in
-                self?.updateErrorPresentation(errorMessage: newErrorMessage)
-            }
-            .store(in: &self.documentStoreObservationHandles)
-            self.updateErrorPresentation(errorMessage: document.errorMessage)
-        }
-        .store(in: &observationHandles)
-    }
-
-    private func updateErrorPresentation(errorMessage: String?) {
-        if let errorMessage, !errorMessage.isEmpty {
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = errorMessage
-            configuration.image = UIImage(systemName: "exclamationmark.triangle")
-            contentUnavailableConfiguration = configuration
-        } else {
-            contentUnavailableConfiguration = nil
-        }
     }
 
     private func applyInspectorWebViewActivityIfNeeded() {
