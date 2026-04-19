@@ -266,8 +266,12 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             }
         )
 
-        // Tap the fixture link that sits to the left of the medium sheet.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.11, dy: 0.33)).tap()
+        let page2Link = tappablePageLink(in: app, label: "Go to Page 2")
+        XCTAssertTrue(
+            page2Link.waitForExistence(timeout: 10),
+            "Fixture link did not expose an accessibility element."
+        )
+        page2Link.tap()
 
         _ = try waitForHarnessState(
             in: app,
@@ -343,6 +347,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let browserURLLabel = app.staticTexts[AccessibilityID.browserURL]
         let domDocumentURLLabel = app.staticTexts[AccessibilityID.domDocumentURL]
         let domContextIDLabel = app.staticTexts[AccessibilityID.domContextID]
+        let domNativeSelectionStateLabel = app.staticTexts["Monocly.inspectorHarness.domNativeSelectionState"]
         let domRootStateLabel = app.staticTexts[AccessibilityID.domRootState]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
         let backButton = app.buttons[AccessibilityID.goBack]
@@ -354,6 +359,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
                 && domContextIDLabel.exists
                 && domRootStateLabel.exists
                 && domErrorLabel.exists
+                && domNativeSelectionStateLabel.exists
                 && browserURLLabel.label.contains(pageFilename)
                 && domDocumentURLLabel.label.contains(pageFilename)
                 && domRootStateLabel.label == "domRootReady=1"
@@ -370,6 +376,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             browserURL=\(browserURLLabel.label)
             domDocumentURL=\(domDocumentURLLabel.label)
             domContextID=\(domContextIDLabel.label)
+            domNativeSelectionState=\(domNativeSelectionStateLabel.label)
             domRootState=\(domRootStateLabel.label)
             domError=\(domErrorLabel.label)
             backEnabled=\(backButton.isEnabled)
@@ -378,6 +385,21 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         )
 
         return domContextIDLabel.label
+    }
+
+    @MainActor
+    private func tappablePageLink(in app: XCUIApplication, label: String) -> XCUIElement {
+        let link = app.links[label]
+        if link.exists {
+            return link
+        }
+
+        let button = app.buttons[label]
+        if button.exists {
+            return button
+        }
+
+        return link
     }
 
     @MainActor

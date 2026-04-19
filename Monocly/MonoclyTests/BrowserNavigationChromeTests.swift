@@ -101,6 +101,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         XCTAssertEqual(pageViewController.inspectorButtonItemForTesting.accessibilityIdentifier, "Monocly.openInspectorButton.compact")
     }
 
+    @MainActor
     func testViewportChromeTopOverlapRequiresHostTopEdgeIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeBelowHost = CGRect(x: 40, y: 620, width: 320, height: 44)
@@ -122,6 +123,7 @@ final class BrowserNavigationChromeTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testViewportChromeBottomOverlapRequiresFrameIntersection() {
         let hostFrame = CGRect(x: 40, y: 120, width: 320, height: 480)
         let chromeInDifferentColumn = CGRect(x: 420, y: 560, width: 320, height: 88)
