@@ -149,16 +149,14 @@ struct WITransportNativeInspectorSymbolResolverTests {
             0xD503201F,
             0xD65F03C0,
         ]
-        let data = words.withUnsafeBufferPointer {
-            Data(buffer: UnsafeBufferPointer(start: UnsafeRawPointer($0.baseAddress!).assumingMemoryBound(to: UInt8.self), count: $0.count * MemoryLayout<UInt32>.size))
-        }
+        let bytes = arm64TextBytes(from: words)
 
-        let functionStart = data.withUnsafeBytes { rawBytes in
-            WITransportNativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
+        let functionStart = unsafe bytes.withUnsafeBufferPointer { rawBytes in
+            unsafe WITransportNativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
                 architecture: "arm64",
                 textBaseAddress: textBaseAddress,
-                textPointer: rawBytes.bindMemory(to: UInt8.self).baseAddress!,
-                textSize: data.count,
+                textPointer: rawBytes.baseAddress!,
+                textSize: bytes.count,
                 functionStartAddresses: functionStarts,
                 callTargetAddresses: [targetAddress]
             )
@@ -186,16 +184,14 @@ struct WITransportNativeInspectorSymbolResolverTests {
             0xD503201F,
             0xD65F03C0,
         ]
-        let data = words.withUnsafeBufferPointer {
-            Data(buffer: UnsafeBufferPointer(start: UnsafeRawPointer($0.baseAddress!).assumingMemoryBound(to: UInt8.self), count: $0.count * MemoryLayout<UInt32>.size))
-        }
+        let bytes = arm64TextBytes(from: words)
 
-        let functionStart = data.withUnsafeBytes { rawBytes in
-            WITransportNativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
+        let functionStart = unsafe bytes.withUnsafeBufferPointer { rawBytes in
+            unsafe WITransportNativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
                 architecture: "arm64",
                 textBaseAddress: textBaseAddress,
-                textPointer: rawBytes.bindMemory(to: UInt8.self).baseAddress!,
-                textSize: data.count,
+                textPointer: rawBytes.baseAddress!,
+                textSize: bytes.count,
                 functionStartAddresses: functionStarts,
                 callTargetAddresses: [targetAddress]
             )
@@ -217,6 +213,19 @@ private func encodeARM64BL(from instructionAddress: UInt64, to targetAddress: UI
     let delta = Int64(targetAddress) - Int64(instructionAddress + 4)
     let immediate = UInt32(bitPattern: Int32(delta >> 2)) & 0x03FF_FFFF
     return 0x9400_0000 | immediate
+}
+
+private func arm64TextBytes(from words: [UInt32]) -> [UInt8] {
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(words.count * MemoryLayout<UInt32>.size)
+    for word in words {
+        let encoded = word.littleEndian
+        bytes.append(UInt8(truncatingIfNeeded: encoded))
+        bytes.append(UInt8(truncatingIfNeeded: encoded >> 8))
+        bytes.append(UInt8(truncatingIfNeeded: encoded >> 16))
+        bytes.append(UInt8(truncatingIfNeeded: encoded >> 24))
+    }
+    return bytes
 }
 #endif
 #endif

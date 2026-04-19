@@ -1819,6 +1819,16 @@ private extension WIDOMInspector {
 
         await awaitTransportMessagesToDrain()
         await applyPendingInspectSelectionIfPossible()
+        guard let pendingInspectSelection,
+              pendingInspectSelection.contextID == contextID,
+              selectionTransactionIsCurrent(transaction) else {
+            return
+        }
+        await clearSelectionForFailedResolution(
+            contextID: contextID,
+            transaction: transaction,
+            errorMessage: "Failed to resolve selected element."
+        )
     }
 
     private func selectionMaterializationCandidates(limit: Int = 96) -> [DOMNodeModel] {

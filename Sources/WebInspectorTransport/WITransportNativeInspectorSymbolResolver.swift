@@ -1560,7 +1560,12 @@ private enum WITransportNativeInspectorResolver {
     ) {
         #if DEBUG
         let headerAddress = unsafe UInt(bitPattern: image.ptr)
-        let dlsymDescription = dlsymAddress.map { unsafe String(format: "0x%llx", $0) } ?? "nil"
+        let dlsymDescription: String
+        if let dlsymAddress {
+            dlsymDescription = unsafe String(format: "0x%llx", dlsymAddress)
+        } else {
+            dlsymDescription = "nil"
+        }
         NSLog(
             "[WebInspectorTransport] native inspector export lookup failed symbol=%@ header=0x%llx exportTrieAvailable=%@ exportTrieFound=%@ dlsym=%@ reason=%@",
             symbolName,
@@ -1790,7 +1795,7 @@ private enum WITransportNativeInspectorResolver {
         return matches.first
     }
 
-    private static func functionContainsCallTarget(
+    @unsafe private static func functionContainsCallTarget(
         architecture: String,
         textBaseAddress: UInt64,
         textPointer: UnsafePointer<UInt8>,
@@ -2119,7 +2124,7 @@ enum WITransportNativeInspectorSymbolResolver {
         [WITransportNativeInspectorResolver.disconnectFrontendSymbol]
     }
 
-    static func uniqueFunctionStartContainingCallTargetsForTesting(
+    @unsafe static func uniqueFunctionStartContainingCallTargetsForTesting(
         architecture: String,
         textBaseAddress: UInt64,
         textPointer: UnsafePointer<UInt8>,

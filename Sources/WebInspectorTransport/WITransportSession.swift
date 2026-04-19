@@ -31,6 +31,10 @@ public final class WITransportSession {
     private var hasAttachedPageEventConsumer = false
     private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
 
+#if DEBUG
+    package var derivedPageTargetIdentifierProviderForTesting: (@MainActor (WKWebView) -> String?)?
+#endif
+
     public convenience init(configuration: WITransportConfiguration = .init()) {
         self.init(configuration: configuration, backendFactory: WITransportPlatformBackendFactory.makeDefaultBackend)
     }
@@ -946,6 +950,11 @@ private extension WITransportSession {
     }
 
     func derivedPageTargetIdentifier(from webView: WKWebView) -> String? {
+#if DEBUG
+        if let derivedPageTargetIdentifierProviderForTesting {
+            return derivedPageTargetIdentifierProviderForTesting(webView)
+        }
+#endif
         guard let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
             return nil
         }

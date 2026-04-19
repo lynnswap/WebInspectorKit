@@ -1281,10 +1281,12 @@ private extension NetworkTransportDriverTests {
         configuration: WITransportConfiguration = .init(responseTimeout: .seconds(1))
     ) -> @MainActor () -> WITransportSession {
         {
-            WITransportSession(
+            let session = WITransportSession(
                 configuration: configuration,
                 backendFactory: { _ in backend }
             )
+            session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+            return session
         }
     }
 

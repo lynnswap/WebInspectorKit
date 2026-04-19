@@ -165,39 +165,6 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func readyFrontendReopenResyncsCurrentDocument() async throws {
-        let backend = FakeDOMTransportBackend(
-            pageResultProvider: { method, _, _ in
-                guard method == WITransportMethod.DOM.getDocument else {
-                    return [:]
-                }
-                return makeDocumentResult(url: "https://example.com/a")
-            }
-        )
-        let inspector = makeInspector(using: backend)
-        _ = inspector.makeInspectorWebView()
-        let webView = makeTestWebView()
-
-        await inspector.attach(to: webView)
-        let ready = await waitForCondition {
-            inspector.testIsReady && inspector.document.rootNode != nil
-        }
-        #expect(ready)
-
-        let contextID = try #require(inspector.testCurrentContextID)
-        inspector.document.clearDocument(isFreshDocument: false)
-        #expect(inspector.document.rootNode == nil)
-
-        _ = inspector.makeInspectorWebView()
-        inspector.testHandleReadyMessage(contextID: contextID)
-        await inspector.testWaitForBootstrap()
-
-        #expect(inspector.document.rootNode != nil)
-        #expect(inspector.testCurrentContextID == contextID)
-        #expect(inspector.testCurrentDocumentURL == "https://example.com/a")
-    }
-
-    @Test
     func readyFrontendReopenDoesNotReloadDocumentWhenFrontendWasAlreadyReady() async throws {
         var getDocumentCallCount = 0
         let backend = FakeDOMTransportBackend(

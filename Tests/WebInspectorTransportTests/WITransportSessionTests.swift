@@ -71,6 +71,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -88,6 +89,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -118,6 +120,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -167,6 +170,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -186,6 +190,7 @@ struct WITransportSessionTests {
             backendFactory: { _ in backend },
             clock: clock
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -227,6 +232,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -252,6 +258,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -302,6 +309,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -351,6 +359,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -399,6 +408,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -515,6 +525,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
@@ -625,6 +636,7 @@ struct WITransportSessionTests {
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
         let webView = makeIsolatedTestWebView()
 
         try await session.attach(to: webView)
