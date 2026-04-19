@@ -203,6 +203,10 @@ public final class WITransportSession {
         return nil
     }
 
+    package func currentObservedPageTargetIdentifier() -> String? {
+        pageTargetTracker.currentIdentifier
+    }
+
     package func pageTargetIdentifiers() -> [String] {
         if pageTargetTracker.allowsDerivedCommittedSeed {
             _ = refreshDerivedPageTargetIdentifierIfNeeded()
@@ -459,6 +463,10 @@ package final class WISharedInspectorTransport {
 
     package func currentPageTargetIdentifier() -> String? {
         session?.currentPageTargetIdentifier()
+    }
+
+    package func currentObservedPageTargetIdentifier() -> String? {
+        session?.currentObservedPageTargetIdentifier()
     }
 }
 

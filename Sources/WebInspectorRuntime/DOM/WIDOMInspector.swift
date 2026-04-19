@@ -163,7 +163,7 @@ public final class WIDOMInspector {
         pageBridge.attach(to: webView)
         await sharedTransport.attach(client: .dom, to: webView)
         await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
-        let targetIdentifier = sharedTransport.currentPageTargetIdentifier()
+        let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
         await beginFreshContext(
             documentURL: normalizedDocumentURL(webView.url?.absoluteString),
             targetIdentifier: targetIdentifier,
@@ -1015,7 +1015,7 @@ private extension WIDOMInspector {
             }
             if case let .waitingForTarget(context) = phase,
                wasFrontendReadyForContext == false,
-               let targetIdentifier = sharedTransport.currentPageTargetIdentifier() {
+               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier() {
                 startLoadingDocument(
                     for: context,
                     targetIdentifier: targetIdentifier,
@@ -1060,7 +1060,7 @@ private extension WIDOMInspector {
             guard case let .waitingForTarget(context) = phase else {
                 return
             }
-            guard let targetIdentifier = sharedTransport.currentPageTargetIdentifier() ?? envelope.targetIdentifier else {
+            guard let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier() else {
                 return
             }
             startLoadingDocument(
@@ -1070,7 +1070,7 @@ private extension WIDOMInspector {
                 isFreshDocument: true
             )
         case "Target.didCommitProvisionalTarget":
-            let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier()
+            let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier()
             await beginFreshContext(
                 documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
                 targetIdentifier: targetIdentifier,
@@ -1081,7 +1081,7 @@ private extension WIDOMInspector {
             guard envelope.targetIdentifier == phase.targetIdentifier else {
                 return
             }
-            let replacementTargetIdentifier = sharedTransport.currentPageTargetIdentifier()
+            let replacementTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
             await beginFreshContext(
                 documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
                 targetIdentifier: replacementTargetIdentifier,
@@ -1837,6 +1837,10 @@ private extension WIDOMInspector {
             extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil")",
             level: .error
         )
+        if pendingInspectSelection?.nodeID == nodeID,
+           pendingInspectSelection?.contextID == contextID {
+            pendingInspectSelection = nil
+        }
         await clearSelectionForFailedResolution(
             contextID: contextID,
             transaction: transaction,
