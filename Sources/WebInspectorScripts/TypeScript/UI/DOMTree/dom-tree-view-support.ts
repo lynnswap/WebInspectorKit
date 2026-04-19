@@ -48,6 +48,43 @@ import {
 
 let treeEventHandlersInstalled = false;
 let hoveredNodeId: number | null = null;
+let pendingSelectionRevealNodeId: number | null = null;
+
+function syncNodeSelectionState(element: HTMLElement, nodeId: number): void {
+    const isSelected = treeState.selectedNodeId === nodeId;
+    element.classList.toggle("is-selected", isSelected);
+    const row = element.querySelector(":scope > .tree-node__row");
+    if (row) {
+        row.setAttribute("aria-selected", isSelected ? "true" : "false");
+    }
+    if (isSelected) {
+        queueSelectionReveal(nodeId);
+    }
+}
+
+function queueSelectionReveal(nodeId: number): void {
+    if (!nodeId) {
+        return;
+    }
+    pendingSelectionRevealNodeId = nodeId;
+    if (renderState.frameId !== null || renderState.isProcessing) {
+        return;
+    }
+    flushPendingSelectionReveal();
+}
+
+function flushPendingSelectionReveal(): void {
+    if (
+        pendingSelectionRevealNodeId === null ||
+        renderState.frameId !== null ||
+        renderState.isProcessing
+    ) {
+        return;
+    }
+    const nodeId = pendingSelectionRevealNodeId;
+    pendingSelectionRevealNodeId = null;
+    scheduleSelectionScroll(nodeId);
+}
 
 /** Ensure delegated event handlers are installed */
 export function ensureTreeEventHandlers(): void {
@@ -134,6 +171,7 @@ export function buildNode(node: DOMNode): HTMLElement {
     childrenContainer.className = "tree-node__children";
     container.appendChild(childrenContainer);
     treeState.elements.set(node.id, container);
+    syncNodeSelectionState(container, node.id);
 
     const expanded = nodeShouldBeExpanded(node);
     if (expanded) {
@@ -155,6 +193,7 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
     row.className = "tree-node__row";
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-level", String(displayDepthForNode(node) + 1));
+    row.setAttribute("aria-selected", treeState.selectedNodeId === node.id ? "true" : "false");
 
     const hasChildren = node.childCount > 0 || (Array.isArray(node.children) && node.children.length > 0);
 
@@ -255,6 +294,7 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
     element.style.setProperty("--depth", String(displayDepth));
     element.style.setProperty("--indent-depth", String(clampIndentDepth(displayDepth)));
     updateNodeElementState(element, node);
+    syncNodeSelectionState(element, node.id);
 
     const newRow = createNodeRow(node, { modifiedAttributes });
     const existingRow = element.querySelector(":scope > .tree-node__row");
@@ -344,9 +384,11 @@ export function processPendingNodeRenders(): void {
     renderState.pendingNodes.clear();
 
     if (!pending.length) {
+        flushPendingSelectionReveal();
         return;
     }
 
+    renderState.isProcessing = true;
     pending.sort((a, b) => (a.node.depth || 0) - (b.node.depth || 0));
 
     let index = 0;
@@ -391,8 +433,13 @@ export function processPendingNodeRenders(): void {
                 modifiedAttributes: mergedAttributes,
             });
         }
+        renderState.isProcessing = false;
         renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+        return;
     }
+
+    renderState.isProcessing = false;
+    flushPendingSelectionReveal();
 }
 
 // =============================================================================
@@ -763,7 +810,7 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     }
 
     if (autoScroll) {
-        scheduleSelectionScroll(nodeId);
+        queueSelectionReveal(nodeId);
     }
 
     return true;

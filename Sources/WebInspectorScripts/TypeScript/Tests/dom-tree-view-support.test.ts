@@ -33,6 +33,7 @@ function resetRenderState() {
     }
     renderState.frameId = null;
     renderState.pendingNodes.clear();
+    renderState.isProcessing = false;
 
     treeState.nodes.clear();
     treeState.elements.clear();

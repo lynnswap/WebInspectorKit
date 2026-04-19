@@ -86,7 +86,8 @@ public final class WITransportSession {
                 throw WITransportError.transportClosed
             }
 
-            if let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() {
+            if pageTargetTracker.allowsDerivedCommittedSeed,
+               let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() {
                 log("derived current page target target=\(derivedTargetIdentifier)")
             } else {
                 log("derived current page target unavailable")
@@ -204,7 +205,7 @@ public final class WITransportSession {
     }
 
     package func currentObservedPageTargetIdentifier() -> String? {
-        pageTargetTracker.currentIdentifier
+        pageTargetTracker.observedCurrentIdentifier
     }
 
     package func pageTargetIdentifiers() -> [String] {
@@ -1196,6 +1197,13 @@ private final class WITransportPageTargetTracker {
 
     var currentIdentifier: String? {
         currentIdentifierStorage
+    }
+
+    var observedCurrentIdentifier: String? {
+        guard hasDerivedCommittedSeed == false else {
+            return nil
+        }
+        return currentIdentifierStorage
     }
 
     var allowsDerivedCommittedSeed: Bool {

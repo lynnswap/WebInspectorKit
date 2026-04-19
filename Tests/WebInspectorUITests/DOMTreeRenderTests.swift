@@ -133,6 +133,47 @@ struct DOMTreeRenderTests {
         #expect(selectedTreeText.localizedCaseInsensitiveContains("body"))
         #expect(detailPreview == "<body>")
     }
+
+    @Test
+    func selectionPayloadRevealsNodeRenderedByLaterSubtreeMerge() async throws {
+        let inspector = WIDOMInspector()
+        let (viewController, window) = makeHostedTreeViewController(inspector: inspector)
+        defer { tearDown(window: window) }
+
+        let ready = await waitUntilAsync {
+            await viewController.frontendIsReadyForTesting()
+        }
+        #expect(ready)
+
+        inspector.inspectorBridge.updateBootstrap(makeBootstrapPayload(contextID: 1))
+        await inspector.inspectorBridge.applyFullSnapshot(
+            makeShallowDocumentPayload(bodyChildCount: 48),
+            contextID: 1
+        )
+        await inspector.inspectorBridge.applySubtreePayload(
+            makeBodySubtreePayload(childCount: 48),
+            contextID: 1
+        )
+        await inspector.inspectorBridge.applySelectionPayload(
+            makeSelectionPayload(
+                localID: 247,
+                preview: "<div id=\"item-47\">",
+                selectorPath: "#item-47",
+                attributes: [["name": "id", "value": "item-47"]]
+            ),
+            contextID: 1
+        )
+
+        let selected = await waitUntilAsync {
+            await viewController.selectedNodeIDForTesting() == 247
+        }
+        #expect(selected)
+
+        let visible = await waitUntilAsync {
+            await viewController.selectedNodeIsVisibleForTesting() == true
+        }
+        #expect(visible)
+    }
 }
 
 @MainActor
@@ -337,6 +378,75 @@ private extension DOMTreeRenderTests {
             ),
             selectedLocalID: 6
         )
+    }
+
+    func makeShallowDocumentPayload(bodyChildCount: Int) -> [String: Any] {
+        [
+            "root": [
+                "nodeId": 1,
+                "nodeType": 9,
+                "nodeName": "#document",
+                "localName": "",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [
+                    [
+                        "nodeId": 2,
+                        "nodeType": 1,
+                        "nodeName": "HTML",
+                        "localName": "html",
+                        "nodeValue": "",
+                        "attributes": ["lang", "en"],
+                        "childNodeCount": 2,
+                        "children": [
+                            [
+                                "nodeId": 3,
+                                "nodeType": 1,
+                                "nodeName": "HEAD",
+                                "localName": "head",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                            ],
+                            [
+                                "nodeId": 4,
+                                "nodeType": 1,
+                                "nodeName": "BODY",
+                                "localName": "body",
+                                "nodeValue": "",
+                                "childNodeCount": bodyChildCount,
+                                "children": [],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+    }
+
+    func makeBodySubtreePayload(childCount: Int) -> [String: Any] {
+        let children = (0..<childCount).map { index in
+            [
+                "nodeId": 200 + index,
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "attributes": ["id", "item-\(index)"],
+                "childNodeCount": 0,
+                "children": [],
+            ]
+        }
+
+        return [
+            "nodeId": 4,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": childCount,
+            "children": children,
+        ]
     }
 
     func makeSelectionPayload(

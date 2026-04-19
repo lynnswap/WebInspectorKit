@@ -65,6 +65,7 @@ public final class WIDOMInspector {
         let contextID: DOMContextID
         let selectorPath: String?
         let transaction: SelectionTransaction?
+        var materializedAncestorNodeIDs: Set<DOMNodeModel.ID> = []
     }
 
     @ObservationIgnored package let pageBridge: DOMPageBridge
@@ -164,6 +165,7 @@ public final class WIDOMInspector {
         await sharedTransport.attach(client: .dom, to: webView)
         await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
         let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+            ?? sharedTransport.currentPageTargetIdentifier()
         await beginFreshContext(
             documentURL: normalizedDocumentURL(webView.url?.absoluteString),
             targetIdentifier: targetIdentifier,
@@ -1015,7 +1017,8 @@ private extension WIDOMInspector {
             }
             if case let .waitingForTarget(context) = phase,
                wasFrontendReadyForContext == false,
-               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier() {
+               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+                    ?? sharedTransport.currentPageTargetIdentifier() {
                 startLoadingDocument(
                     for: context,
                     targetIdentifier: targetIdentifier,
@@ -1524,7 +1527,7 @@ private extension WIDOMInspector {
 
 #if canImport(UIKit)
         if let targetIdentifier {
-            try? await sendDOMCommand(
+            _ = try? await sendDOMCommand(
                 WITransportMethod.DOM.setInspectModeEnabled,
                 targetIdentifier: targetIdentifier,
                 parameters: DOMSetInspectModeEnabledParameters.disabled
@@ -1865,6 +1868,14 @@ private extension WIDOMInspector {
             return 0
         }
 
+        let candidateNodeIDs = Set(candidates.map(\.id))
+        if var pendingInspectSelection,
+           pendingInspectSelection.contextID == contextID,
+           pendingInspectSelection.transaction == transaction {
+            pendingInspectSelection.materializedAncestorNodeIDs.formUnion(candidateNodeIDs)
+            self.pendingInspectSelection = pendingInspectSelection
+        }
+
         logSelectionDiagnostics(
             "materializePendingInspectSelection requesting child nodes",
             extra: "contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil") candidates=\(candidates.count)"
@@ -1924,9 +1935,13 @@ private extension WIDOMInspector {
     func applySelection(
         to node: DOMNodeModel,
         selectorPath: String?,
-        contextID: DOMContextID
+        contextID: DOMContextID,
+        preferredSubtreeRootNodeIDs: Set<DOMNodeModel.ID> = []
     ) async {
-        if let subtreeRoot = selectionSubtreeRoot(for: node) {
+        if let subtreeRoot = selectionSubtreeRoot(
+            for: node,
+            preferredNodeIDs: preferredSubtreeRootNodeIDs
+        ) {
             await inspectorBridge.applySubtreePayload(
                 nodePayloadDictionary(from: subtreeRoot),
                 contextID: contextID
@@ -1971,12 +1986,29 @@ private extension WIDOMInspector {
         await applySelection(
             to: node,
             selectorPath: pendingInspectSelection.selectorPath,
-            contextID: pendingInspectSelection.contextID
+            contextID: pendingInspectSelection.contextID,
+            preferredSubtreeRootNodeIDs: pendingInspectSelection.materializedAncestorNodeIDs
         )
         applyRecoverableError(nil)
     }
 
-    private func selectionSubtreeRoot(for node: DOMNodeModel) -> DOMNodeModel? {
+    private func selectionSubtreeRoot(
+        for node: DOMNodeModel,
+        preferredNodeIDs: Set<DOMNodeModel.ID> = []
+    ) -> DOMNodeModel? {
+        if !preferredNodeIDs.isEmpty {
+            var preferredCurrent: DOMNodeModel? = node
+            while let candidate = preferredCurrent {
+                if preferredNodeIDs.contains(candidate.id) {
+                    return candidate
+                }
+                if candidate.parent?.nodeType == 9 {
+                    break
+                }
+                preferredCurrent = candidate.parent
+            }
+        }
+
         var current: DOMNodeModel? = node
         var topmostRenderable: DOMNodeModel? = node
 

@@ -172,6 +172,7 @@ export interface RefreshAttempt {
 export interface RenderState {
     pendingNodes: Map<number, PendingRenderItem>;
     frameId: number | null;
+    isProcessing: boolean;
 }
 
 /** Pending render item */
