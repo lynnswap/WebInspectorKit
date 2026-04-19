@@ -145,7 +145,6 @@ public final class WIDOMInspector {
     }
 
     package func makeInspectorWebView() -> WKWebView {
-        frontendReadyContextID = nil
         return inspectorBridge.makeInspectorWebView(bootstrapPayload: bootstrapPayload())
     }
 
