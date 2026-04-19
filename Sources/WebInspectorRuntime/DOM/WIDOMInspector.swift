@@ -165,7 +165,6 @@ public final class WIDOMInspector {
         await sharedTransport.attach(client: .dom, to: webView)
         await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
         let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
-            ?? sharedTransport.currentPageTargetIdentifier()
         await beginFreshContext(
             documentURL: normalizedDocumentURL(webView.url?.absoluteString),
             targetIdentifier: targetIdentifier,
@@ -1017,8 +1016,7 @@ private extension WIDOMInspector {
             }
             if case let .waitingForTarget(context) = phase,
                wasFrontendReadyForContext == false,
-               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
-                    ?? sharedTransport.currentPageTargetIdentifier() {
+               let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier() {
                 startLoadingDocument(
                     for: context,
                     targetIdentifier: targetIdentifier,
@@ -1060,18 +1058,30 @@ private extension WIDOMInspector {
     func handleTransportEvent(_ envelope: WITransportEventEnvelope) async {
         switch envelope.method {
         case "Target.targetCreated":
-            guard case let .waitingForTarget(context) = phase else {
-                return
-            }
             guard let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier() else {
                 return
             }
-            startLoadingDocument(
-                for: context,
-                targetIdentifier: targetIdentifier,
-                depth: configuration.snapshotDepth,
-                isFreshDocument: true
-            )
+            switch phase {
+            case let .waitingForTarget(context):
+                startLoadingDocument(
+                    for: context,
+                    targetIdentifier: targetIdentifier,
+                    depth: configuration.snapshotDepth,
+                    isFreshDocument: true
+                )
+            case let .loadingDocument(context, activeTargetIdentifier):
+                guard activeTargetIdentifier == targetIdentifier else {
+                    return
+                }
+                startLoadingDocument(
+                    for: context,
+                    targetIdentifier: targetIdentifier,
+                    depth: configuration.snapshotDepth,
+                    isFreshDocument: true
+                )
+            default:
+                return
+            }
         case "Target.didCommitProvisionalTarget":
             let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier()
             await beginFreshContext(
@@ -1917,7 +1927,7 @@ private extension WIDOMInspector {
         }
 
         var queue: [DOMNodeModel] = [root]
-        var candidates: [DOMNodeModel] = [root]
+        var candidates: [DOMNodeModel] = []
 
         while !queue.isEmpty {
             let node = queue.removeFirst()
