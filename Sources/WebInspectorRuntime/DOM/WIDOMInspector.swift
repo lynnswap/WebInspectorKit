@@ -2040,7 +2040,9 @@ private extension WIDOMInspector {
             extra: "contextID=\(contextID.map(String.init) ?? "nil") generation=\(transaction.map { String($0.generation) } ?? "nil") error=\(errorMessage)",
             level: .error
         )
-        if let contextID, document.selectedNode != nil {
+        if transaction != nil,
+           let contextID,
+           document.selectedNode != nil {
             await syncSelectedNodeHighlight(contextID: contextID)
             applyRecoverableError(nil)
             return
