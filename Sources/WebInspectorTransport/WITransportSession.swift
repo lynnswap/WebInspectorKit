@@ -881,10 +881,10 @@ private extension WITransportSession {
     }
 
     private var pendingQueuedPageEventCount: UInt64 {
-        guard enqueuedPageEventCount >= deliveredPageEventCount + activePageEventDeliveryCount else {
+        guard enqueuedPageEventCount >= deliveredPageEventCount else {
             return 0
         }
-        return enqueuedPageEventCount - deliveredPageEventCount - activePageEventDeliveryCount
+        return enqueuedPageEventCount - deliveredPageEventCount
     }
 
     func resumePageEventDrainWaitersIfNeeded() {

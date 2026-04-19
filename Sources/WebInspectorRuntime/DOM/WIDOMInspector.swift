@@ -1515,6 +1515,7 @@ private extension WIDOMInspector {
     private func completeInspectModeAfterBackendSelection(
         invalidatePendingSelection: Bool = false
     ) async {
+        let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
         clearInspectModeState(
             invalidatePendingSelection: invalidatePendingSelection,
             markSelectionInactive: false
@@ -1524,6 +1525,13 @@ private extension WIDOMInspector {
         await awaitInspectModeInactive(forceDisable: false)
         isSelectingElement = false
 #else
+        if let targetIdentifier {
+            try? await sendDOMCommand(
+                WITransportMethod.DOM.setInspectModeEnabled,
+                targetIdentifier: targetIdentifier,
+                parameters: DOMSetInspectModeEnabledParameters.disabled
+            )
+        }
         isSelectingElement = false
 #endif
     }
