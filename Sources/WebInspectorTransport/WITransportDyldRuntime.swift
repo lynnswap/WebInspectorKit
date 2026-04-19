@@ -73,6 +73,18 @@ import MachO
         return unsafe String(cString: path)
     }
 
+    static func symbolAddress(named symbolName: String) -> UInt64? {
+        var iterator = unsafe symbolSearchHandles.makeIterator()
+        while let candidate = unsafe iterator.next() {
+            guard let handle = unsafe candidate,
+                  let symbol = unsafe dlsym(handle, symbolName) else {
+                continue
+            }
+            return unsafe UInt64(UInt(bitPattern: symbol))
+        }
+        return nil
+    }
+
     private static func deobfuscate(_ reverseTokens: [String]) -> String {
         reverseTokens.reversed().joined()
     }

@@ -8,7 +8,13 @@ typedef void (^WITransportRootMessageHandler)(NSString *message);
 typedef void (^WITransportPageMessageHandler)(NSString *message, NSString *targetIdentifier);
 typedef void (^WITransportFatalFailureHandler)(NSString *message);
 
+typedef NS_ENUM(NSInteger, WITransportAttachMode) {
+    WITransportAttachModeControllerWrapper = 0,
+    WITransportAttachModeFrontendRouterDirect = 1,
+};
+
 typedef struct {
+    NSInteger attachMode;
     uint64_t connectFrontendAddress;
     uint64_t disconnectFrontendAddress;
     uint64_t stringFromUTF8Address;

@@ -78,6 +78,11 @@ public final class WITransportSession {
                 throw WITransportError.transportClosed
             }
 
+            if let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() {
+                log("derived current page target target=\(derivedTargetIdentifier)")
+            } else {
+                log("derived current page target unavailable")
+            }
             transition(to: .attached)
             log("attached")
         } catch {
@@ -136,6 +141,11 @@ public final class WITransportSession {
             throw WITransportError.notAttached
         }
 
+        if let derivedTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded(),
+           derivedTargetIdentifier != excludedTargetIdentifier {
+            return derivedTargetIdentifier
+        }
+
         let resolvedTimeout = timeout ?? configuration.responseTimeout
         let timeoutError = WITransportError.requestTimedOut(
             scope: .root,
@@ -176,11 +186,12 @@ public final class WITransportSession {
     }
 
     package func currentPageTargetIdentifier() -> String? {
-        pageTargetTracker.currentIdentifier
+        refreshDerivedPageTargetIdentifierIfNeeded() ?? pageTargetTracker.currentIdentifier
     }
 
     package func pageTargetIdentifiers() -> [String] {
-        pageTargetTracker.orderedIdentifiers
+        _ = refreshDerivedPageTargetIdentifierIfNeeded()
+        return pageTargetTracker.orderedIdentifiers
     }
 
     package func sendRootData(
@@ -222,7 +233,7 @@ public final class WITransportSession {
         let resolvedTargetIdentifier: String
         if let targetIdentifier {
             resolvedTargetIdentifier = targetIdentifier
-        } else if let currentTargetIdentifier = pageTargetTracker.currentIdentifier {
+        } else if let currentTargetIdentifier = refreshDerivedPageTargetIdentifierIfNeeded() ?? pageTargetTracker.currentIdentifier {
             resolvedTargetIdentifier = currentTargetIdentifier
         } else {
             resolvedTargetIdentifier = try await waitForPageTarget(timeout: configuration.responseTimeout)
@@ -469,6 +480,15 @@ private extension WISharedInspectorTransport {
                 guard self.session === session else {
                     return
                 }
+                let message: String
+                if let localizedError = error as? LocalizedError,
+                   let description = localizedError.errorDescription,
+                   !description.isEmpty {
+                    message = description
+                } else {
+                    message = error.localizedDescription
+                }
+                NSLog("[WebInspectorTransport] shared transport attach failed: %@", message)
                 self.session = nil
                 self.attachedWebView = nil
                 self.supportSnapshot = self.sessionFactory().supportSnapshot
@@ -613,6 +633,10 @@ private extension WITransportSession {
             return
         }
 
+        if method.hasPrefix("Target.") || method == "DOM.inspect" || method == "Inspector.inspect" {
+            log("received root event method=\(method)")
+        }
+
         if method == "DOM.inspect" || method == "Inspector.inspect" {
             enqueuePageEvent(
                 method: method,
@@ -686,6 +710,11 @@ private extension WITransportSession {
                 identifier: targetIdentifier,
                 isProvisional: boolValue(targetInfo["isProvisional"]) == true
             )
+            let isProvisional = boolValue(targetInfo["isProvisional"]) == true
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            log(
+                "page target created target=\(targetIdentifier) provisional=\(isProvisional) current=\(currentIdentifier)"
+            )
             enqueuePageEvent(
                 method: method,
                 targetIdentifier: targetIdentifier,
@@ -700,6 +729,11 @@ private extension WITransportSession {
             let effectiveOldTargetIdentifier = pageTargetTracker.didCommitPageTarget(
                 oldIdentifier: stringValue(params["oldTargetId"]),
                 newIdentifier: newTargetIdentifier
+            )
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            let oldIdentifierDescription = effectiveOldTargetIdentifier ?? "nil"
+            log(
+                "page target committed old=\(oldIdentifierDescription) new=\(newTargetIdentifier) current=\(currentIdentifier)"
             )
 
             var normalizedParams: [String: Any] = ["newTargetId": newTargetIdentifier]
@@ -720,6 +754,8 @@ private extension WITransportSession {
             guard pageTargetTracker.didDestroyPageTarget(identifier: targetIdentifier) else {
                 return
             }
+            let currentIdentifier = pageTargetTracker.currentIdentifier ?? "nil"
+            log("page target destroyed target=\(targetIdentifier) current=\(currentIdentifier)")
 
             enqueuePageEvent(
                 method: method,
@@ -895,6 +931,30 @@ private extension WITransportSession {
 
     func log(_ message: String) {
         configuration.logHandler?("[WebInspectorTransport] \(message)")
+    }
+
+    func refreshDerivedPageTargetIdentifierIfNeeded() -> String? {
+        guard let webView, let targetIdentifier = derivedPageTargetIdentifier(from: webView) else {
+            return nil
+        }
+        pageTargetTracker.seedCommittedPageTarget(identifier: targetIdentifier)
+        return targetIdentifier
+    }
+
+    func derivedPageTargetIdentifier(from webView: WKWebView) -> String? {
+        guard let handle = (webView.value(forKey: "_handle") as AnyObject?) else {
+            return nil
+        }
+
+        let pageIDValue =
+            (handle.value(forKey: "webPageID") as? NSNumber)
+            ?? (handle.value(forKey: "_webPageID") as? NSNumber)
+
+        guard let pageIDValue else {
+            return nil
+        }
+
+        return "page-\(pageIDValue.uint64Value)"
     }
 
     func prepareInspectability(for webView: WKWebView) -> Bool? {
@@ -1094,6 +1154,25 @@ private final class WITransportPageTargetTracker {
         }
         refreshCurrentIdentifier()
         return true
+    }
+
+    func seedCommittedPageTarget(identifier: String) {
+        if let existing = targetsByIdentifier[identifier] {
+            targetsByIdentifier[identifier] = KnownPageTarget(
+                identifier: identifier,
+                isProvisional: false,
+                creationOrder: existing.creationOrder
+            )
+        } else {
+            targetsByIdentifier[identifier] = KnownPageTarget(
+                identifier: identifier,
+                isProvisional: false,
+                creationOrder: nextCreationOrderValue()
+            )
+        }
+
+        committedIdentifierStorage = identifier
+        refreshCurrentIdentifier()
     }
 
     func waitUntilAvailable(excluding excludedIdentifier: String? = nil) async throws -> String {

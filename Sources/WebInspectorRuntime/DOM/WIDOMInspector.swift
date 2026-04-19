@@ -55,6 +55,16 @@ public final class WIDOMInspector {
         let targetIdentifier: String
     }
 
+    private struct SelectionTransaction: Equatable {
+        let contextID: DOMContextID
+        let generation: UInt64
+    }
+
+    private enum InspectResolutionMode {
+        case currentDocumentOnly
+        case waitForRequestedNode
+    }
+
     @ObservationIgnored package let pageBridge: DOMPageBridge
     @ObservationIgnored private let sharedTransport: WISharedInspectorTransport
     @ObservationIgnored let inspectorBridge: DOMInspectorBridge
@@ -78,6 +88,7 @@ public final class WIDOMInspector {
     @ObservationIgnored private weak var deleteUndoManager: UndoManager?
     @ObservationIgnored private var pendingChildRequests: Set<Int> = []
     @ObservationIgnored private var lastSelectionDiagnosticMessage: String?
+    @ObservationIgnored private var selectionGeneration: UInt64 = 0
 
 #if canImport(UIKit)
     @ObservationIgnored package var scrollBackup: (isScrollEnabled: Bool, isPanEnabled: Bool)?
@@ -217,7 +228,7 @@ public final class WIDOMInspector {
         if let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier {
             try? await setInspectModeEnabled(false, targetIdentifier: targetIdentifier)
         }
-        clearInspectModeState()
+        clearInspectModeState(invalidatePendingSelection: true)
     }
 
     public func beginSelectionMode() async throws {
@@ -360,7 +371,9 @@ public final class WIDOMInspector {
             try await applyInspectedNode(
                 nodeID: nodeID,
                 contextID: context.contextID,
-                selectorPath: cssSelector
+                selectorPath: cssSelector,
+                transaction: nil,
+                resolutionMode: .currentDocumentOnly
             )
             return
         }
@@ -701,6 +714,7 @@ private extension WIDOMInspector {
         frontendReadyContextID = nil
         inspectModeTargetIdentifier = nil
         isSelectingElement = false
+        selectionGeneration &+= 1
         pendingChildRequests.removeAll(keepingCapacity: true)
         payloadNormalizer.resetForDocumentUpdate()
         document.clearDocument(isFreshDocument: true)
@@ -727,7 +741,10 @@ private extension WIDOMInspector {
         if isSelectingElement,
            let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier {
             try? await setInspectModeEnabled(false, targetIdentifier: activeTargetIdentifier)
-            clearInspectModeState()
+            clearInspectModeState(invalidatePendingSelection: true)
+        }
+        if document.selectedNode != nil {
+            try? await hideHighlight()
         }
         cancelBootstrap()
         pendingChildRequests.removeAll(keepingCapacity: true)
@@ -745,9 +762,13 @@ private extension WIDOMInspector {
         applyRecoverableError(nil)
         await installPageBridgeBootstrap(contextID: context.contextID)
         updateInspectorBootstrap()
+        logBootstrapDiagnostics(
+            "beginFreshContext context=\(context.contextID) target=\(targetIdentifier ?? "nil") loadImmediately=\(loadImmediately) url=\(documentURL ?? "nil")"
+        )
 
         guard loadImmediately, let targetIdentifier else {
             phase = .waitingForTarget(context)
+            logBootstrapDiagnostics("phase waitingForTarget context=\(context.contextID)")
             return
         }
 
@@ -767,6 +788,9 @@ private extension WIDOMInspector {
     ) {
         cancelBootstrap()
         phase = .loadingDocument(context, targetIdentifier: targetIdentifier)
+        logBootstrapDiagnostics(
+            "startLoadingDocument context=\(context.contextID) target=\(targetIdentifier) depth=\(depth)"
+        )
         let generation = bootstrapGeneration
         bootstrapTask = Task { @MainActor [weak self] in
             defer {
@@ -802,6 +826,9 @@ private extension WIDOMInspector {
             throw DOMOperationError.contextInvalidated
         }
         phase = .loadingDocument(activeContext, targetIdentifier: targetIdentifier)
+        logBootstrapDiagnostics(
+            "refreshCurrentDocumentFromTransport begin context=\(contextID) target=\(targetIdentifier)"
+        )
         let responseObject = try await loadDocumentResponseObject(
             targetIdentifier: targetIdentifier
         )
@@ -829,6 +856,9 @@ private extension WIDOMInspector {
         self.documentURL = resolvedURL
         phase = .ready(resolvedContext, targetIdentifier: targetIdentifier)
         applyRecoverableError(nil)
+        logBootstrapDiagnostics(
+            "refreshCurrentDocumentFromTransport ready context=\(contextID) target=\(targetIdentifier) root=\(snapshot.root.nodeName)"
+        )
 
         await hydrateInitiallyExpandedNodes(
             contextID: contextID,
@@ -851,18 +881,22 @@ private extension WIDOMInspector {
     func loadDocumentResponseObject(
         targetIdentifier: String
     ) async throws -> [String: Any] {
+        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) inspector.enable")
         _ = try await sendDOMCommand(
             WITransportMethod.Inspector.enable,
             targetIdentifier: targetIdentifier
         )
+        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) inspector.initialized")
         _ = try await sendDOMCommand(
             WITransportMethod.Inspector.initialized,
             targetIdentifier: targetIdentifier
         )
+        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) dom.enable")
         _ = try await sendDOMCommand(
             WITransportMethod.DOM.enable,
             targetIdentifier: targetIdentifier
         )
+        logBootstrapDiagnostics("loadDocumentResponseObject target=\(targetIdentifier) dom.getDocument")
         return try await sendDOMCommand(
             WITransportMethod.DOM.getDocument,
             targetIdentifier: targetIdentifier
@@ -1066,13 +1100,30 @@ private extension WIDOMInspector {
             guard isSelectingElement,
                   let object = try? JSONSerialization.jsonObject(with: envelope.paramsData) as? [String: Any],
                   let remoteObject = object["object"] as? [String: Any],
-                  let objectID = stringValue(remoteObject["objectId"]) else {
+                  let objectID = stringValue(remoteObject["objectId"]),
+                  let transaction = selectionTransaction(for: context.contextID) else {
                 return
             }
+            let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
 
             do {
+                if let activeTargetIdentifier {
+                    try? await setInspectModeEnabled(false, targetIdentifier: activeTargetIdentifier)
+                }
+                clearInspectModeState()
                 let nodeID = try await transportNodeID(forRemoteObjectID: objectID, targetIdentifier: targetIdentifier)
-                await handleInspectEvent(nodeID: nodeID, contextID: context.contextID)
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    try? await self.applyInspectedNode(
+                        nodeID: nodeID,
+                        contextID: context.contextID,
+                        selectorPath: nil,
+                        transaction: transaction,
+                        resolutionMode: .waitForRequestedNode
+                    )
+                }
             } catch {
                 logSelectionDiagnostics(
                     "Inspector.inspect failed to resolve node",
@@ -1081,6 +1132,7 @@ private extension WIDOMInspector {
                 )
                 await clearSelectionForFailedResolution(
                     contextID: context.contextID,
+                    transaction: transaction,
                     errorMessage: "Failed to resolve selected element."
                 )
             }
@@ -1366,6 +1418,7 @@ private extension WIDOMInspector {
     }
 
     func beginInspectMode(targetIdentifier: String) {
+        selectionGeneration &+= 1
         inspectModeTargetIdentifier = targetIdentifier
         isSelectingElement = true
 #if canImport(UIKit)
@@ -1373,9 +1426,12 @@ private extension WIDOMInspector {
 #endif
     }
 
-    func clearInspectModeState() {
+    func clearInspectModeState(invalidatePendingSelection: Bool = false) {
         inspectModeTargetIdentifier = nil
         isSelectingElement = false
+        if invalidatePendingSelection {
+            selectionGeneration &+= 1
+        }
 #if canImport(UIKit)
         setNativeInspectorNodeSearchEnabled(false)
         forceDisableNativeInspectorNodeSearchIfNeeded()
@@ -1411,9 +1467,12 @@ private extension WIDOMInspector {
         nodeID: Int,
         contextID: DOMContextID
     ) async {
+        guard let transaction = selectionTransaction(for: contextID) else {
+            return
+        }
         logSelectionDiagnostics(
             "handleInspectEvent received transport inspect",
-            extra: "nodeID=\(nodeID) contextID=\(contextID)"
+            extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(transaction.generation)"
         )
         let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
         if let targetIdentifier {
@@ -1424,7 +1483,9 @@ private extension WIDOMInspector {
         try? await applyInspectedNode(
             nodeID: nodeID,
             contextID: contextID,
-            selectorPath: nil
+            selectorPath: nil,
+            transaction: transaction,
+            resolutionMode: .currentDocumentOnly
         )
     }
 
@@ -1434,7 +1495,8 @@ private extension WIDOMInspector {
             return
         }
         guard let contextID = phase.context?.contextID,
-              let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier else {
+              let targetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier,
+              let transaction = selectionTransaction(for: contextID) else {
             return
         }
 
@@ -1469,6 +1531,7 @@ private extension WIDOMInspector {
                 )
                 await clearSelectionForFailedResolution(
                     contextID: contextID,
+                    transaction: transaction,
                     errorMessage: "Failed to resolve selected element."
                 )
                 return
@@ -1481,7 +1544,9 @@ private extension WIDOMInspector {
             try await applyInspectedNode(
                 nodeID: nodeID,
                 contextID: contextID,
-                selectorPath: nil
+                selectorPath: nil,
+                transaction: transaction,
+                resolutionMode: .waitForRequestedNode
             )
         } catch {
             logSelectionDiagnostics(
@@ -1491,6 +1556,7 @@ private extension WIDOMInspector {
             )
             await clearSelectionForFailedResolution(
                 contextID: contextID,
+                transaction: transaction,
                 errorMessage: "Failed to resolve selected element."
             )
         }
@@ -1566,23 +1632,34 @@ private extension WIDOMInspector {
     }
 #endif
 
-    func applyInspectedNode(
+    private func applyInspectedNode(
         nodeID: Int,
         contextID: DOMContextID,
-        selectorPath: String?
+        selectorPath: String?,
+        transaction: SelectionTransaction?,
+        resolutionMode: InspectResolutionMode
     ) async throws {
-        guard let node = await resolveInspectedNode(nodeID: nodeID, contextID: contextID) else {
+        guard let node = await resolveInspectedNode(
+            nodeID: nodeID,
+            contextID: contextID,
+            transaction: transaction,
+            mode: resolutionMode
+        ) else {
             logSelectionDiagnostics(
                 "applyInspectedNode could not resolve transport node",
                 selector: selectorPath,
-                extra: "nodeID=\(nodeID) contextID=\(contextID)",
+                extra: "nodeID=\(nodeID) contextID=\(contextID) generation=\(transaction.map { String($0.generation) } ?? "nil")",
                 level: .error
             )
             await clearSelectionForFailedResolution(
                 contextID: contextID,
+                transaction: transaction,
                 errorMessage: "Failed to resolve selected element."
             )
             throw DOMOperationError.invalidSelection
+        }
+        guard selectionTransactionIsCurrent(transaction) else {
+            return
         }
 
         logSelectionDiagnostics(
@@ -1626,15 +1703,28 @@ private extension WIDOMInspector {
         )
     }
 
-    func clearSelectionForFailedResolution(
+    private func clearSelectionForFailedResolution(
         contextID: DOMContextID?,
+        transaction: SelectionTransaction? = nil,
         errorMessage: String
     ) async {
+        guard selectionTransactionIsCurrent(transaction) else {
+            logSelectionDiagnostics(
+                "clearSelectionForFailedResolution ignored stale transaction",
+                extra: "contextID=\(contextID.map(String.init) ?? "nil") generation=\(transaction.map { String($0.generation) } ?? "nil")"
+            )
+            return
+        }
         logSelectionDiagnostics(
             "clearSelectionForFailedResolution",
-            extra: "contextID=\(contextID.map(String.init) ?? "nil") error=\(errorMessage)",
+            extra: "contextID=\(contextID.map(String.init) ?? "nil") generation=\(transaction.map { String($0.generation) } ?? "nil") error=\(errorMessage)",
             level: .error
         )
+        if let contextID, document.selectedNode != nil {
+            await syncSelectedNodeHighlight(contextID: contextID)
+            applyRecoverableError(nil)
+            return
+        }
         document.clearSelection()
         try? await hideHighlight()
         if let contextID {
@@ -1643,7 +1733,7 @@ private extension WIDOMInspector {
                 contextID: contextID
             )
         }
-        applyRecoverableError(errorMessage)
+        applyRecoverableError(nil)
     }
 
     func resolveTestingSelectorNode(_ cssSelector: String) -> DOMNodeModel? {
@@ -1753,6 +1843,10 @@ private extension WIDOMInspector {
         return "phase=\(phaseDescription) documentURL=\(currentContext?.documentURL ?? "nil") root=\(selectionNodeSummary(document.rootNode)) selected=\(selectionNodeSummary(document.selectedNode))"
     }
 
+    func logBootstrapDiagnostics(_ message: String) {
+        NSLog("[WebInspectorDOM] %@", message)
+    }
+
     func selectionNodeSummary(_ node: DOMNodeModel?) -> String {
         guard let node else {
             return "nil"
@@ -1805,13 +1899,15 @@ private extension WIDOMInspector {
         return nil
     }
 
-    func resolveInspectedNode(
+    private func resolveInspectedNode(
         nodeID: Int,
-        contextID: DOMContextID
+        contextID: DOMContextID,
+        transaction: SelectionTransaction?,
+        mode: InspectResolutionMode
     ) async -> DOMNodeModel? {
         guard let currentContext,
               currentContext.contextID == contextID,
-              let targetIdentifier = phase.targetIdentifier else {
+              selectionTransactionIsCurrent(transaction) else {
             return nil
         }
 
@@ -1819,79 +1915,16 @@ private extension WIDOMInspector {
             return node
         }
 
-        if let node = await waitForInspectedNode(
-            nodeID: nodeID,
-            contextID: contextID,
-            maxAttempts: 10
-        ) {
-            return node
-        }
-
-        let depth = max(configuration.snapshotDepth, 128)
-        for _ in 0..<3 {
-            let candidateNodes: [DOMNodeModel]
-            let incompleteNodes = nodesWithIncompleteChildren()
-            if incompleteNodes.isEmpty {
-                if let rootNode = document.rootNode {
-                    candidateNodes = [rootNode]
-                } else {
-                    break
-                }
-            } else {
-                candidateNodes = incompleteNodes
-            }
-
-            logSelectionDiagnostics(
-                "resolveInspectedNode requesting child nodes",
-                extra: "nodeID=\(nodeID) candidates=\(candidateNodes.count) depth=\(depth)"
-            )
-
-            if candidateNodes.isEmpty {
-                break
-            }
-
-            for node in candidateNodes {
-                guard let transportNodeID = try? transportNodeID(for: node) else {
-                    continue
-                }
-                _ = try? await sendDOMCommand(
-                    WITransportMethod.DOM.requestChildNodes,
-                    targetIdentifier: targetIdentifier,
-                    parameters: DOMRequestChildNodesParameters(
-                        nodeId: transportNodeID,
-                        depth: depth
-                    )
-                )
-            }
-
-            if let node = await waitForInspectedNode(
+        switch mode {
+        case .currentDocumentOnly:
+            return nil
+        case .waitForRequestedNode:
+            return await waitForInspectedNode(
                 nodeID: nodeID,
-                contextID: contextID
-            ) {
-                return node
-            }
+                contextID: contextID,
+                transaction: transaction
+            )
         }
-
-        return resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)
-    }
-
-    func nodesWithIncompleteChildren() -> [DOMNodeModel] {
-        var nodes: [DOMNodeModel] = []
-
-        func visit(_ node: DOMNodeModel?) {
-            guard let node else {
-                return
-            }
-            if node.childCount > node.children.count {
-                nodes.append(node)
-            }
-            for child in node.children {
-                visit(child)
-            }
-        }
-
-        visit(document.rootNode)
-        return nodes
     }
 
     func resolvedInspectedNodeFromCurrentDocument(nodeID: Int) -> DOMNodeModel? {
@@ -1901,14 +1934,16 @@ private extension WIDOMInspector {
         return document.node(backendNodeID: nodeID)
     }
 
-    func waitForInspectedNode(
+    private func waitForInspectedNode(
         nodeID: Int,
         contextID: DOMContextID,
+        transaction: SelectionTransaction?,
         maxAttempts: Int = 50,
         intervalNanoseconds: UInt64 = 20_000_000
     ) async -> DOMNodeModel? {
         for _ in 0..<maxAttempts {
-            guard currentContext?.contextID == contextID else {
+            guard currentContext?.contextID == contextID,
+                  selectionTransactionIsCurrent(transaction) else {
                 return nil
             }
             if let node = resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID) {
@@ -1916,10 +1951,26 @@ private extension WIDOMInspector {
             }
             try? await Task.sleep(nanoseconds: intervalNanoseconds)
         }
-        guard currentContext?.contextID == contextID else {
+        guard currentContext?.contextID == contextID,
+              selectionTransactionIsCurrent(transaction) else {
             return nil
         }
         return resolvedInspectedNodeFromCurrentDocument(nodeID: nodeID)
+    }
+
+    private func selectionTransaction(for contextID: DOMContextID) -> SelectionTransaction? {
+        guard currentContext?.contextID == contextID else {
+            return nil
+        }
+        return SelectionTransaction(contextID: contextID, generation: selectionGeneration)
+    }
+
+    private func selectionTransactionIsCurrent(_ transaction: SelectionTransaction?) -> Bool {
+        guard let transaction else {
+            return true
+        }
+        return currentContext?.contextID == transaction.contextID
+            && selectionGeneration == transaction.generation
     }
 
     func selectionPayload(for node: DOMNodeModel) -> DOMSelectionSnapshotPayload {
@@ -2092,8 +2143,12 @@ private extension WIDOMInspector {
 
     func syncSelectedNodeHighlight(contextID: DOMContextID) async {
         guard currentContext?.contextID == contextID,
-              let selectedNode = document.selectedNode,
               let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() else {
+            return
+        }
+
+        guard let selectedNode = document.selectedNode else {
+            try? await hideHighlight()
             return
         }
 
@@ -2210,7 +2265,7 @@ private struct DOMSetInspectModeEnabledParameters: Encodable {
 
     static let enabled = DOMSetInspectModeEnabledParameters(
         enabled: true,
-        highlightConfig: .init(showInfo: true)
+        highlightConfig: .init(showInfo: false)
     )
 
     static let disabled = DOMSetInspectModeEnabledParameters(

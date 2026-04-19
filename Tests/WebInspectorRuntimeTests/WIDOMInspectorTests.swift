@@ -393,9 +393,8 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func domInspectMaterializesSelectedNodeFromPartialDocument() async throws {
+    func inspectorInspectMaterializesSelectedNodeFromRequestedNode() async throws {
         let backend = FakeDOMTransportBackend()
-        var didRequestChildren = false
         backend.pageResultProvider = { method, _, _ in
             switch method {
             case WITransportMethod.DOM.getDocument:
@@ -430,11 +429,10 @@ struct WIDOMInspectorTests {
                         ]],
                     ],
                 ]
-            case WITransportMethod.DOM.requestChildNodes:
-                didRequestChildren = true
-                return [:]
             case WITransportMethod.DOM.setInspectModeEnabled:
                 return [:]
+            case WITransportMethod.DOM.requestNode:
+                return ["nodeId": 6]
             default:
                 return [:]
             }
@@ -451,14 +449,19 @@ struct WIDOMInspectorTests {
         #expect(ready)
 
         try await inspector.beginSelectionMode()
-        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-6",
+                ],
+                "hints": [:],
+            ]
+        )
         Task { @MainActor in
-            for _ in 0..<50 where didRequestChildren == false {
-                try? await Task.sleep(nanoseconds: 20_000_000)
-            }
-            guard didRequestChildren else {
-                return
-            }
+            try? await Task.sleep(nanoseconds: 60_000_000)
             backend.emitPageEvent(
                 method: "DOM.setChildNodes",
                 params: [
@@ -484,12 +487,11 @@ struct WIDOMInspectorTests {
                 && inspector.isSelectingElement == false
         }
         #expect(selected)
-        #expect(didRequestChildren)
         #expect(inspector.document.errorMessage == nil)
     }
 
     @Test
-    func unresolvedInspectClearsSelectionInsteadOfFallingBackToRoot() async throws {
+    func unresolvedInspectLeavesSelectionEmptyWithoutUserFacingError() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
                 switch method {
@@ -517,10 +519,64 @@ struct WIDOMInspectorTests {
 
         let cleared = await waitForCondition {
             inspector.document.selectedNode == nil
-                && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.document.errorMessage == nil
                 && inspector.isSelectingElement == false
         }
         #expect(cleared)
+    }
+
+    @Test
+    func unresolvedInspectPreservesExistingSelection() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 999])
+        let preserved = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(preserved)
     }
 
     @Test
@@ -683,7 +739,148 @@ struct WIDOMInspectorTests {
         }
 
         #expect(inspector.document.selectedNode == nil)
-        #expect(inspector.document.errorMessage == "Failed to resolve selected element.")
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func staleSelectionFailureDoesNotClearNewerSelection() async throws {
+        var requestedObjectIDs: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, payload, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled:
+                    return [:]
+                case WITransportMethod.DOM.requestNode:
+                    let params = payload["params"] as? [String: Any]
+                    let objectID = params?["objectId"] as? String
+                    if let objectID {
+                        requestedObjectIDs.append(objectID)
+                    }
+                    if objectID == "node-object-pending" {
+                        return ["nodeId": 999]
+                    }
+                    return ["nodeId": 6]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitRootEvent(
+            method: "Inspector.inspect",
+            params: [
+                "object": [
+                    "type": "object",
+                    "subtype": "node",
+                    "objectId": "node-object-pending",
+                ],
+                "hints": [:],
+            ]
+        )
+
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+
+        let selected = await waitForCondition(
+            maxAttempts: 120,
+            intervalNanoseconds: 20_000_000
+        ) {
+            inspector.document.selectedNode?.localID == 6
+                && inspector.document.errorMessage == nil
+                && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+        #expect(requestedObjectIDs.contains("node-object-pending"))
+    }
+
+    @Test
+    func selectedNodeSendsPersistentHighlightAndHidesItOnDocumentReload() async throws {
+        var pageMethods: [String] = []
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                pageMethods.append(method)
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(
+                        url: "https://example.com/a",
+                        mainChildren: [[
+                            "nodeId": 6,
+                            "backendNodeId": 6,
+                            "nodeType": 1,
+                            "nodeName": "A",
+                            "localName": "a",
+                            "nodeValue": "",
+                            "attributes": ["href", "/target"],
+                            "childNodeCount": 0,
+                            "children": [],
+                        ]]
+                    )
+                case WITransportMethod.DOM.setInspectModeEnabled,
+                     WITransportMethod.DOM.highlightNode,
+                     WITransportMethod.DOM.hideHighlight:
+                    return [:]
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
+        let selected = await waitForCondition {
+            inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
+        }
+        #expect(selected)
+
+        try await inspector.reloadDocument()
+
+        let reloaded = await waitForCondition {
+            inspector.document.selectedNode == nil
+        }
+        #expect(reloaded)
+        let highlightIndex = pageMethods.lastIndex(of: WITransportMethod.DOM.highlightNode)
+        let hideHighlightIndex = pageMethods.lastIndex(of: WITransportMethod.DOM.hideHighlight)
+        #expect(highlightIndex != nil)
+        #expect(hideHighlightIndex != nil)
+        if let highlightIndex, let hideHighlightIndex {
+            #expect(hideHighlightIndex > highlightIndex)
+        }
     }
 
     @Test

@@ -220,6 +220,7 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
 
         do {
             let resolvedFunctions = WITransportResolvedFunctions(
+                attachMode: resolution.attachModeRawValue,
                 connectFrontendAddress: resolution.connectFrontendAddress,
                 disconnectFrontendAddress: resolution.disconnectFrontendAddress,
                 stringFromUTF8Address: resolution.stringFromUTF8Address,
@@ -232,7 +233,28 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
             )
         } catch {
             let reason = (error as? WITransportError)?.errorDescription ?? error.localizedDescription
-            configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason)")
+            let errorDiagnostics: String?
+            if let nsError = error as NSError?,
+               let debugDescription = nsError.userInfo[NSDebugDescriptionErrorKey] as? String,
+               !debugDescription.isEmpty {
+                errorDiagnostics = debugDescription
+            } else {
+                errorDiagnostics = nil
+            }
+            let resolutionDiagnostics = resolution.diagnosticsSummary
+            let diagnostics = [resolutionDiagnostics, errorDiagnostics]
+                .compactMap { value in
+                    guard let value, !value.isEmpty else {
+                        return nil
+                    }
+                    return value
+                }
+                .joined(separator: " | ")
+            if diagnostics.isEmpty {
+                configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason)")
+            } else {
+                configuration.logHandler?("[WebInspectorTransport] attach failed: \(reason) | \(diagnostics)")
+            }
             throw error
         }
 
