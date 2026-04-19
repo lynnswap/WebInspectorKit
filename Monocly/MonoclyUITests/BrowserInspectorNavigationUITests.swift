@@ -5,9 +5,11 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
     private enum AccessibilityID {
         static let currentURL = "Monocly.diagnostics.currentURL"
         static let openInspector = "Monocly.inspectorHarness.openInspector"
+        static let pickButton = "WI.DOM.PickButton"
         static let browserURL = "Monocly.inspectorHarness.browserURL"
         static let domDocumentURL = "Monocly.inspectorHarness.domDocumentURL"
         static let domContextID = "Monocly.inspectorHarness.domContextID"
+        static let domIsSelecting = "Monocly.inspectorHarness.domIsSelecting"
         static let domSelectedPreview = "Monocly.inspectorHarness.domSelectedPreview"
         static let domSelectedSelector = "Monocly.inspectorHarness.domSelectedSelector"
         static let domRootState = "Monocly.inspectorHarness.domRootState"
@@ -152,6 +154,66 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             Harness did not resolve the expected selected node.
             selectedPreview=\(domSelectedPreviewLabel.label)
             selectedSelector=\(domSelectedSelectorLabel.label)
+            domError=\(domErrorLabel.label)
+            """
+        )
+    }
+
+    @MainActor
+    func testDOMInspectorNativeSelectionCanTapPageBehindMediumSheet() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            }
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        let pickButton = app.buttons[AccessibilityID.pickButton]
+        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
+        pickButton.tap()
+
+        let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                selectingLabel.exists && selectingLabel.label == "domIsSelecting=1"
+            },
+            "DOM selection mode did not start: \(selectingLabel.label)"
+        )
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+
+        let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domErrorLabel = app.staticTexts[AccessibilityID.domError]
+        let resolved = waitForCondition(timeout: 15) {
+            domSelectedPreviewLabel.exists
+                && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
+                && domSelectedPreviewLabel.label.contains("<")
+                && domErrorLabel.label == "domError=n/a"
+                && selectingLabel.label == "domIsSelecting=0"
+        }
+
+        XCTAssertTrue(
+            resolved,
+            """
+            Page tap did not resolve a real DOM selection.
+            selectedPreview=\(domSelectedPreviewLabel.label)
+            selecting=\(selectingLabel.label)
             domError=\(domErrorLabel.label)
             """
         )

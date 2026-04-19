@@ -306,6 +306,10 @@ final class BrowserNavigationChromeTests: XCTestCase {
         drainMainQueue()
 
         XCTAssertTrue(rootViewController.presentedViewController is WITabViewController)
+        let inspectorContainer = try XCTUnwrap(rootViewController.presentedViewController as? WITabViewController)
+        let sheet = try XCTUnwrap(inspectorContainer.sheetPresentationController)
+        XCTAssertEqual(sheet.selectedDetentIdentifier, .medium)
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .medium)
         XCTAssertFalse(pageViewController.inspectorButtonItemForTesting.isEnabled)
 
         dismissPresentedInspector(from: rootViewController)

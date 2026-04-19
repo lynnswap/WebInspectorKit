@@ -462,10 +462,10 @@ final class BrowserInspectorCoordinator {
             return
         }
         sheet.detents = [.medium(), .large()]
-        sheet.selectedDetentIdentifier = .large
+        sheet.selectedDetentIdentifier = .medium
         sheet.prefersGrabberVisible = false
         sheet.prefersScrollingExpandsWhenScrolledToEdge = false
-        sheet.largestUndimmedDetentIdentifier = .large
+        sheet.largestUndimmedDetentIdentifier = .medium
     }
 
     private func topViewController(from root: UIViewController?) -> UIViewController? {
