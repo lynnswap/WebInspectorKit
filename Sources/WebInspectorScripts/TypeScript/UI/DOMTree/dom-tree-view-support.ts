@@ -174,13 +174,7 @@ export function buildNode(node: DOMNode): HTMLElement {
     syncNodeSelectionState(container, node.id);
 
     const expanded = nodeShouldBeExpanded(node);
-    if (expanded) {
-        renderChildren(childrenContainer, node, { initialRender: true });
-        treeState.deferredChildRenders.delete(node.id);
-    } else {
-        treeState.deferredChildRenders.add(node.id);
-    }
-
+    treeState.deferredChildRenders.add(node.id);
     setNodeExpanded(node.id, expanded);
 
     return container;
@@ -312,12 +306,7 @@ export function refreshNodeElement(node: DOMNode, options: NodeRefreshOptions = 
     }
     const expanded = nodeShouldBeExpanded(node);
     if (updateChildren) {
-        if (expanded) {
-            renderChildren(childrenContainer, node);
-            treeState.deferredChildRenders.delete(node.id);
-        } else {
-            treeState.deferredChildRenders.add(node.id);
-        }
+        treeState.deferredChildRenders.add(node.id);
     }
 
     setNodeExpanded(node.id, expanded);
@@ -470,7 +459,11 @@ function shouldCollapseByDefault(node: DOMNode): boolean {
 export function setNodeExpanded(nodeId: number, expanded: boolean): void {
     treeState.openState.set(nodeId, expanded);
     const element = treeState.elements.get(nodeId);
+    const node = treeState.nodes.get(nodeId);
     if (!element) {
+        if (expanded && node && node.childCount > node.children.length) {
+            void requestChildren(node);
+        }
         return;
     }
 
@@ -490,7 +483,6 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
     }
 
     if (expanded && treeState.deferredChildRenders.has(nodeId)) {
-        const node = treeState.nodes.get(nodeId);
         const childrenContainer = element.querySelector(":scope > .tree-node__children") as HTMLElement | null;
         if (node && childrenContainer) {
             renderChildren(childrenContainer, node);
@@ -499,6 +491,10 @@ export function setNodeExpanded(nodeId: number, expanded: boolean): void {
         if (treeState.filter) {
             applyFilter();
         }
+    }
+
+    if (expanded && node && node.childCount > node.children.length) {
+        void requestChildren(node);
     }
 }
 
@@ -511,9 +507,6 @@ export function toggleNode(nodeId: number): void {
     const current = nodeShouldBeExpanded(node);
     const next = !current;
     setNodeExpanded(nodeId, next);
-    if (next && node.childCount > node.children.length) {
-        void requestChildren(node);
-    }
 }
 
 // =============================================================================
@@ -676,6 +669,13 @@ function handleRowHover(node: DOMNode): void {
 /** Handle row leave */
 function handleRowLeave(): void {
     clearPageHighlight();
+}
+
+/** Clear transient hover state after native pointer disconnect */
+export function clearPointerHoverState(): void {
+    hoveredNodeId = null;
+    (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = null;
+    handleRowLeave();
 }
 
 // =============================================================================

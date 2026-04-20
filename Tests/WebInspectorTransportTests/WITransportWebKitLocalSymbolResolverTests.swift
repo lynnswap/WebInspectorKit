@@ -58,6 +58,12 @@ struct WITransportNativeInspectorSymbolResolverTests {
         #expect(resolution.supportSnapshot.isSupported == false)
         #expect(resolution.phase != nil)
         #expect(!resolution.missingFunctions.isEmpty)
+        #expect(!resolution.missingFunctions.contains("inspectorTargetAgentVTable"))
+        #expect(!resolution.missingFunctions.contains("targetAgentDidCreateFrontendAndBackend"))
+        #expect(!resolution.missingFunctions.contains("targetAgentWillDestroyFrontendAndBackend"))
+        if let diagnosticsSummary = resolution.diagnosticsSummary {
+            #expect(!diagnosticsSummary.contains("attachMode="))
+        }
         if let failureReason {
             #expect(failureReason.contains("phase="))
             #expect(failureReason.contains("missing="))

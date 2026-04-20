@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import GameController
 import OSLog
 import ObjectiveC.runtime
 import UIKit
@@ -90,15 +91,17 @@ extension WIDOMInspector {
             return
         }
 
-        guard let pageWebView,
-              let contentView = findWKContentView(in: pageWebView) else {
+        guard let pageWebView else {
             return
         }
 
         if enabled {
+            guard let contentView = findWKContentView(in: pageWebView) else {
+                return
+            }
             enableNativeInspectorNodeSearch(on: contentView)
         } else {
-            disableNativeInspectorNodeSearch(on: contentView)
+            disableNativeInspectorNodeSearch(in: pageWebView)
         }
     }
 
@@ -137,7 +140,7 @@ extension WIDOMInspector {
         pageWindow.makeKey()
     }
 
-    func waitForPageWindowActivationIfNeeded() async {
+    func requestPageWindowActivationIfNeeded() {
         guard let pageWindow = pageWebView?.window else {
             return
         }
@@ -147,72 +150,15 @@ extension WIDOMInspector {
         guard pageScene.activationState != .foregroundActive else {
             return
         }
-        guard let uiScene = pageScene as? UIScene else {
-            return
-        }
 
-        await withCheckedContinuation { continuation in
-            final class TokenBox {
-                var token: NSObjectProtocol?
-            }
-            let center = NotificationCenter.default
-            let tokenBox = TokenBox()
-            var resumed = false
-            let finish: @MainActor () -> Void = {
-                guard resumed == false else {
-                    return
-                }
-                resumed = true
-                if let token = tokenBox.token {
-                    center.removeObserver(token)
-                }
-                continuation.resume()
-            }
-
-            tokenBox.token = center.addObserver(
-                forName: UIScene.didActivateNotification,
-                object: uiScene,
-                queue: nil
-            ) { _ in
-                Task { @MainActor in
-                    finish()
-                }
-            }
-
-            if pageScene.activationState == .foregroundActive {
-                finish()
-                return
-            }
-
-            let requestingScene = sceneActivationRequestingScene
-                ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
-            WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
-                of: pageScene,
-                requestingScene: requestingScene
-            ) { error in
-                Task { @MainActor in
-                    domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
-                    finish()
-                }
-            }
-
+        let requestingScene = sceneActivationRequestingScene
+            ?? WIDOMUIKitSceneActivationEnvironment.requestingSceneProvider(pageScene)
+        WIDOMUIKitSceneActivationEnvironment.requester.requestActivation(
+            of: pageScene,
+            requestingScene: requestingScene
+        ) { error in
             Task { @MainActor in
-                let clock = ContinuousClock()
-                let deadline = clock.now + .seconds(2)
-                while clock.now < deadline {
-                    guard resumed == false else {
-                        return
-                    }
-                    if pageScene.activationState == .foregroundActive {
-                        finish()
-                        return
-                    }
-                    try? await Task.sleep(nanoseconds: 50_000_000)
-                }
-                if pageScene.activationState != .foregroundActive {
-                    domWindowActivationLogger.notice("page scene activation did not complete before selection startup; continuing")
-                }
-                finish()
+                domWindowActivationLogger.error("page scene activation failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -223,25 +169,26 @@ extension WIDOMInspector {
             return
         }
 
-        guard let pageWebView,
-              let contentView = findWKContentView(in: pageWebView) else {
+        guard let pageWebView else {
             return
         }
 
         if forceDisable {
-            disableNativeInspectorNodeSearch(on: contentView)
+            disableNativeInspectorNodeSearch(in: pageWebView)
         }
 
         if isNativeInspectorElementSelectionActive(on: pageWebView) == true {
             await waitForNativeInspectorElementSelectionInactive(on: pageWebView)
         }
 
-        for _ in 0..<8 {
-            if nativeInspectorNodeSearchIsActive(in: contentView) == false {
-                return
-            }
-            disableNativeInspectorNodeSearch(on: contentView)
-            await awaitNextMainQueueDrain()
+        disableNativeInspectorNodeSearch(in: pageWebView)
+        if hasActiveNativeInspectorNodeSearch(in: pageWebView) == false {
+            return
+        }
+
+        removeLingeringNativeInspectorNodeSearchRecognizers(in: pageWebView)
+        if hasActiveNativeInspectorNodeSearch(in: pageWebView) == false {
+            return
         }
 
         domWindowActivationLogger.error("native inspector node search teardown did not settle")
@@ -259,15 +206,47 @@ extension WIDOMInspector {
     }
 
     private func findWKContentView(in view: UIView) -> UIView? {
+        allWKContentViews(in: view).first
+    }
+
+    private func allWKContentViews(in view: UIView) -> [UIView] {
+        var contentViews: [UIView] = []
         if NSStringFromClass(type(of: view)).contains(WIDOMUIKitPrivateRuntimeNames.contentViewClassName) {
-            return view
+            contentViews.append(view)
         }
         for subview in view.subviews {
-            if let contentView = findWKContentView(in: subview) {
-                return contentView
-            }
+            contentViews.append(contentsOf: allWKContentViews(in: subview))
         }
-        return nil
+        return contentViews
+    }
+
+    private func disableNativeInspectorNodeSearch(in webView: WKWebView) {
+        for contentView in self.allWKContentViews(in: webView) {
+            self.disableNativeInspectorNodeSearch(on: contentView)
+        }
+    }
+
+    private func removeLingeringNativeInspectorNodeSearchRecognizers(in webView: WKWebView) {
+        for contentView in self.allWKContentViews(in: webView) {
+            removeLingeringNativeInspectorNodeSearchRecognizers(from: contentView)
+        }
+    }
+
+    private func hasActiveNativeInspectorNodeSearch(in webView: WKWebView) -> Bool {
+        self.allWKContentViews(in: webView).contains { contentView in
+            self.nativeInspectorNodeSearchIsActive(in: contentView)
+        }
+    }
+
+    private func removeLingeringNativeInspectorNodeSearchRecognizers(from contentView: UIView) {
+        guard let gestureRecognizers = contentView.gestureRecognizers, !gestureRecognizers.isEmpty else {
+            return
+        }
+
+        for recognizer in gestureRecognizers where NSStringFromClass(type(of: recognizer)).contains(WIDOMUIKitPrivateRuntimeNames.inspectorNodeSearchGestureRecognizerClassName) {
+            recognizer.isEnabled = false
+            contentView.removeGestureRecognizer(recognizer)
+        }
     }
 
     private func hasNativeInspectorNodeSearchRecognizer(in contentView: UIView) -> Bool {
@@ -372,21 +351,6 @@ extension WIDOMInspector {
             unsafe inspector.addObserver(observer, forKeyPath: keyPath, options: [.new], context: nil)
             if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
                 finish()
-                return
-            }
-
-            Task { @MainActor in
-                for _ in 0..<8 {
-                    guard resumed == false else {
-                        return
-                    }
-                    if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
-                        finish()
-                        return
-                    }
-                    await awaitNextMainQueueDrain()
-                }
-                finish()
             }
         }
     }
@@ -400,12 +364,36 @@ extension WIDOMInspector {
         return inspector
     }
 
-    private func awaitNextMainQueueDrain() async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                continuation.resume()
+    func installPointerDisconnectObserverIfNeeded() {
+        guard pointerDisconnectObserver == nil else {
+            return
+        }
+
+        pointerDisconnectObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name.GCMouseDidDisconnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            Task { @MainActor in
+                await self.handlePointerDisconnectForInspectorHover()
             }
         }
+    }
+
+    func removePointerDisconnectObserver() {
+        guard let pointerDisconnectObserver else {
+            return
+        }
+        NotificationCenter.default.removeObserver(pointerDisconnectObserver)
+        self.pointerDisconnectObserver = nil
+    }
+
+    private func handlePointerDisconnectForInspectorHover() async {
+        await inspectorBridge.clearPointerHoverState()
+        await restoreInspectorHighlightAfterPointerDisconnect()
     }
 
     func nativeInspectorInteractionStateSummaryForDiagnostics() -> String? {
@@ -414,10 +402,10 @@ extension WIDOMInspector {
         }
 
         let selectionActive = isNativeInspectorElementSelectionActive(on: pageWebView)
-        let contentViewActive = findWKContentView(in: pageWebView).map(nativeInspectorNodeSearchIsActive(in:))
+        let contentViewActive = hasActiveNativeInspectorNodeSearch(in: pageWebView)
 
         let selectionValue = selectionActive.map { $0 ? "1" : "0" } ?? "n/a"
-        let contentViewValue = contentViewActive.map { $0 ? "1" : "0" } ?? "n/a"
+        let contentViewValue = contentViewActive ? "1" : "0"
         return "nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue)"
     }
 }

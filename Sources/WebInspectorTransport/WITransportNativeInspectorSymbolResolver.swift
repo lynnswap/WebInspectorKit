@@ -97,30 +97,17 @@ private enum WITransportResolvedAddress {
     case outsideText(UInt64)
 }
 
-private enum WITransportResolvedAttachMode: Int, Sendable {
-    case controllerWrapper = 0
-    case frontendRouterDirect = 1
-}
-
 private struct WITransportResolvedFunctionAddresses: Sendable {
-    let attachMode: WITransportResolvedAttachMode
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
-    let inspectorTargetAgentVTableAddress: UInt64
-    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
-    let targetAgentWillDestroyFrontendAndBackendAddress: UInt64
     let stringFromUTF8Address: UInt64
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
     let backendDispatcherDispatchAddress: UInt64
 
     static let zero = WITransportResolvedFunctionAddresses(
-        attachMode: .controllerWrapper,
         connectFrontendAddress: 0,
         disconnectFrontendAddress: 0,
-        inspectorTargetAgentVTableAddress: 0,
-        targetAgentDidCreateFrontendAndBackendAddress: 0,
-        targetAgentWillDestroyFrontendAndBackendAddress: 0,
         stringFromUTF8Address: 0,
         stringImplToNSStringAddress: 0,
         destroyStringImplAddress: 0,
@@ -141,13 +128,8 @@ private struct WITransportNativeInspectorSymbolResolution: Sendable {
 private struct WITransportNativeInspectorSymbolNames {
     let connectFrontend: [String]
     let disconnectFrontend: [String]
-    let frontendRouterConnect: [String]
-    let frontendRouterDisconnect: [String]
     let inspectorControllerConnectTargets: [String]
     let inspectorControllerDisconnectTargets: [String]
-    let inspectorTargetAgentVTable: [String]
-    let targetAgentDidCreateFrontendAndBackend: [String]
-    let targetAgentWillDestroyFrontendAndBackend: [String]
     let stringFromUTF8: [String]
     let stringImplToNSString: [String]
     let destroyStringImpl: [String]
@@ -157,9 +139,6 @@ private struct WITransportNativeInspectorSymbolNames {
 private struct WITransportNativeInspectorResolvedSymbols {
     let connectFrontend: WITransportResolvedAddress
     let disconnectFrontend: WITransportResolvedAddress
-    let inspectorTargetAgentVTable: WITransportResolvedAddress
-    let targetAgentDidCreateFrontendAndBackend: WITransportResolvedAddress
-    let targetAgentWillDestroyFrontendAndBackend: WITransportResolvedAddress
     let stringFromUTF8: WITransportResolvedAddress
     let stringImplToNSString: WITransportResolvedAddress
     let destroyStringImpl: WITransportResolvedAddress
@@ -169,7 +148,6 @@ private struct WITransportNativeInspectorResolvedSymbols {
 private struct WITransportResolvedConnectDisconnectFallbackResult {
     let symbols: WITransportNativeInspectorResolvedSymbols
     let usedFallback: Bool
-    let attachMode: WITransportResolvedAttachMode
 }
 
 private enum WITransportNativeInspectorResolver {
@@ -217,10 +195,6 @@ private enum WITransportNativeInspectorResolver {
     private static let destroyStringImplSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["royEPS0_", "mpl7dest", "0StringI", "_ZN3WTF1", "_"])
     // __ZN9Inspector17BackendDispatcher8dispatchERKN3WTF6StringE
     private static let backendDispatcherDispatchSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["6StringE", "ERKN3WTF", "dispatch", "patcher8", "ckendDis", "ctor17Ba", "ZN9Inspe", "__"])
-    // __ZN9Inspector14FrontendRouter15connectFrontendERNS_15FrontendChannelE
-    private static let frontendRouterConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERNS_", "15connectFrontend", "14FrontendRouter", "9Inspector", "__ZN"])
-    // __ZN9Inspector14FrontendRouter18disconnectFrontendERNS_15FrontendChannelE
-    private static let frontendRouterDisconnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERNS_", "18disconnectFrontend", "14FrontendRouter", "9Inspector", "__ZN"])
     // __ZN7WebCore23PageInspectorController15connectFrontendERN9Inspector15FrontendChannelEbb
     private static let pageInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "23PageInspectorController", "7WebCore", "__ZN"])
     // __ZN7WebCore23PageInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
@@ -229,13 +203,6 @@ private enum WITransportNativeInspectorResolver {
     private static let frameInspectorControllerConnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["bb", "15FrontendChannelE", "RN9Inspector", "15connectFrontendE", "24FrameInspectorController", "7WebCore", "__ZN"])
     // __ZN7WebCore24FrameInspectorController18disconnectFrontendERN9Inspector15FrontendChannelE
     private static let frameInspectorControllerDisconnectSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "15FrontendChannel", "ERN9Inspector", "18disconnectFrontend", "24FrameInspectorController", "7WebCore", "__ZN"])
-    // __ZTVN9Inspector20InspectorTargetAgentE
-    private static let inspectorTargetAgentVTableSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "20InspectorTargetAgent", "N9Inspector", "__ZTV"])
-    // __ZN9Inspector20InspectorTargetAgent27didCreateFrontendAndBackendEv
-    private static let targetAgentDidCreateFrontendAndBackendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["Ev", "27didCreateFrontendAndBackend", "20InspectorTargetAgent", "9Inspector", "__ZN"])
-    // __ZN9Inspector20InspectorTargetAgent29willDestroyFrontendAndBackendENS_16DisconnectReasonE
-    private static let targetAgentWillDestroyFrontendAndBackendSymbol = WITransportNativeInspectorObfuscation.deobfuscate(["E", "NS_16DisconnectReason", "29willDestroyFrontendAndBackend", "20InspectorTargetAgent", "9Inspector", "__ZN"])
-
     #if os(iOS)
     fileprivate static let backendKind: WITransportBackendKind = .iOSNativeInspector
     private static let sharedCacheDirectoryCandidates = [
@@ -285,21 +252,14 @@ private enum WITransportNativeInspectorResolver {
             symbols: WITransportNativeInspectorSymbolNames(
                 connectFrontend: [connectSymbol] + alternateConnectSymbols,
                 disconnectFrontend: [disconnectSymbol] + alternateDisconnectSymbols,
-                frontendRouterConnect: [frontendRouterConnectSymbol],
-                frontendRouterDisconnect: [frontendRouterDisconnectSymbol],
                 inspectorControllerConnectTargets: [
                     pageInspectorControllerConnectSymbol,
                     frameInspectorControllerConnectSymbol,
-                    frontendRouterConnectSymbol,
                 ],
                 inspectorControllerDisconnectTargets: [
                     pageInspectorControllerDisconnectSymbol,
                     frameInspectorControllerDisconnectSymbol,
-                    frontendRouterDisconnectSymbol,
                 ],
-                inspectorTargetAgentVTable: [inspectorTargetAgentVTableSymbol],
-                targetAgentDidCreateFrontendAndBackend: [targetAgentDidCreateFrontendAndBackendSymbol],
-                targetAgentWillDestroyFrontendAndBackend: [targetAgentWillDestroyFrontendAndBackendSymbol],
                 stringFromUTF8: [stringFromUTF8Symbol ?? self.stringFromUTF8Symbol],
                 stringImplToNSString: [stringImplToNSStringSymbol ?? self.stringImplToNSStringSymbol],
                 destroyStringImpl: [destroyStringImplSymbol ?? self.destroyStringImplSymbol],
@@ -312,21 +272,14 @@ private enum WITransportNativeInspectorResolver {
         WITransportNativeInspectorSymbolNames(
             connectFrontend: [connectFrontendSymbol],
             disconnectFrontend: [disconnectFrontendSymbol],
-            frontendRouterConnect: [frontendRouterConnectSymbol],
-            frontendRouterDisconnect: [frontendRouterDisconnectSymbol],
             inspectorControllerConnectTargets: [
                 pageInspectorControllerConnectSymbol,
                 frameInspectorControllerConnectSymbol,
-                frontendRouterConnectSymbol,
             ],
             inspectorControllerDisconnectTargets: [
                 pageInspectorControllerDisconnectSymbol,
                 frameInspectorControllerDisconnectSymbol,
-                frontendRouterDisconnectSymbol,
             ],
-            inspectorTargetAgentVTable: [inspectorTargetAgentVTableSymbol],
-            targetAgentDidCreateFrontendAndBackend: [targetAgentDidCreateFrontendAndBackendSymbol],
-            targetAgentWillDestroyFrontendAndBackend: [targetAgentWillDestroyFrontendAndBackendSymbol],
             stringFromUTF8: [stringFromUTF8Symbol],
             stringImplToNSString: [stringImplToNSStringSymbol],
             destroyStringImpl: [destroyStringImplSymbol],
@@ -361,9 +314,6 @@ private enum WITransportNativeInspectorResolver {
         let loadedImageResults = WITransportNativeInspectorResolvedSymbols(
             connectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.connectFrontend, in: image, text: text),
             disconnectFrontend: resolveLoadedImageSymbol(namedAnyOf: symbols.disconnectFrontend, in: image, text: text),
-            inspectorTargetAgentVTable: resolveLoadedImageSymbol(namedAnyOf: symbols.inspectorTargetAgentVTable, in: image, text: text),
-            targetAgentDidCreateFrontendAndBackend: resolveLoadedImageSymbol(namedAnyOf: symbols.targetAgentDidCreateFrontendAndBackend, in: image, text: text),
-            targetAgentWillDestroyFrontendAndBackend: resolveLoadedImageSymbol(namedAnyOf: symbols.targetAgentWillDestroyFrontendAndBackend, in: image, text: text),
             stringFromUTF8: resolveLoadedImageSymbol(namedAnyOf: symbols.stringFromUTF8, in: javaScriptCoreImage, text: javaScriptCoreText),
             stringImplToNSString: resolveLoadedImageSymbol(namedAnyOf: symbols.stringImplToNSString, in: javaScriptCoreImage, text: javaScriptCoreText),
             destroyStringImpl: resolveLoadedImageSymbol(namedAnyOf: symbols.destroyStringImpl, in: javaScriptCoreImage, text: javaScriptCoreText),
@@ -384,7 +334,6 @@ private enum WITransportNativeInspectorResolver {
         )
         let loadedImageResolution = successfulResolutionIfComplete(
             loadedImageResultsWithFallback.symbols,
-            attachMode: loadedImageResultsWithFallback.attachMode,
             phase: .loadedImage,
             source: loadedImageResultsWithFallback.usedFallback ? "loaded-image+text-scan" : "loaded-image",
             webKitHeaderAddress: loadedImage.headerAddress,
@@ -393,7 +342,6 @@ private enum WITransportNativeInspectorResolver {
         )
             ?? finalizeResolution(
                 loadedImageResultsWithFallback.symbols,
-                attachMode: loadedImageResultsWithFallback.attachMode,
                 phase: .loadedImage,
                 source: loadedImageResultsWithFallback.usedFallback ? "loaded-image+text-scan" : "loaded-image",
                 webKitHeaderAddress: loadedImage.headerAddress,
@@ -402,8 +350,7 @@ private enum WITransportNativeInspectorResolver {
             )
             ?? failure(.runtimeFunctionSymbolMissing)
 
-        if loadedImageResolution.failureReason == nil,
-           loadedImageResultsWithFallback.attachMode == .controllerWrapper {
+        if loadedImageResolution.failureReason == nil {
             return loadedImageResolution
         }
 
@@ -465,7 +412,6 @@ private enum WITransportNativeInspectorResolver {
         let javaScriptCoreTextRange = javaScriptCoreTextStart ..< javaScriptCoreTextStart + UInt64(javaScriptCoreText.virtualMemorySize)
         let javaScriptCoreDylibOffset = UInt64(javaScriptCoreText.virtualMemoryAddress) - cache.mainCacheHeader.sharedRegionStart
         var lastResolvedSymbols: WITransportNativeInspectorResolvedSymbols?
-        var lastAttachMode: WITransportResolvedAttachMode = .controllerWrapper
 
         if let localSymbolsInfo = cache.localSymbolsInfo {
             if let entry = localSymbolsInfo.entries(in: cache).first(where: { UInt64($0.dylibOffset) == dylibOffset }),
@@ -492,30 +438,6 @@ private enum WITransportNativeInspectorResolver {
                         ),
                         disconnectFrontend: resolveSharedCacheSymbol(
                             namedAnyOf: symbols.disconnectFrontend,
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
-                        ),
-                        inspectorTargetAgentVTable: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.inspectorTargetAgentVTable,
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
-                        ),
-                        targetAgentDidCreateFrontendAndBackend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.targetAgentDidCreateFrontendAndBackend,
-                            symbols: symbols64,
-                            symbolRange: lowerBound ..< upperBound,
-                            textVMAddress: UInt64(text.virtualMemoryAddress),
-                            textRange: textRange,
-                            slide: UInt64(slide)
-                        ),
-                        targetAgentWillDestroyFrontendAndBackend: resolveSharedCacheSymbol(
-                            namedAnyOf: symbols.targetAgentWillDestroyFrontendAndBackend,
                             symbols: symbols64,
                             symbolRange: lowerBound ..< upperBound,
                             textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -584,10 +506,8 @@ private enum WITransportNativeInspectorResolver {
                         loadedImageSymbols: loadedImageSymbols
                     )
                     lastResolvedSymbols = resolvedSymbolsWithRuntimeFallback
-                    lastAttachMode = resolvedSymbolsWithFallback.attachMode
                     if let resolution = successfulResolutionIfComplete(
                             resolvedSymbolsWithRuntimeFallback,
-                            attachMode: resolvedSymbolsWithFallback.attachMode,
                             phase: .sharedCache,
                             source: sharedCacheSourceDescription(
                                 base: "shared-cache",
@@ -624,30 +544,6 @@ private enum WITransportNativeInspectorResolver {
                 ),
                 disconnectFrontend: resolveSharedCacheSymbol(
                     namedAnyOf: symbols.disconnectFrontend,
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
-                ),
-                inspectorTargetAgentVTable: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.inspectorTargetAgentVTable,
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
-                ),
-                targetAgentDidCreateFrontendAndBackend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.targetAgentDidCreateFrontendAndBackend,
-                    symbols: fileBackedSymbols.symbols,
-                    symbolRange: fileBackedSymbols.symbolRange,
-                    textVMAddress: UInt64(text.virtualMemoryAddress),
-                    textRange: textRange,
-                    slide: UInt64(slide)
-                ),
-                targetAgentWillDestroyFrontendAndBackend: resolveSharedCacheSymbol(
-                    namedAnyOf: symbols.targetAgentWillDestroyFrontendAndBackend,
                     symbols: fileBackedSymbols.symbols,
                     symbolRange: fileBackedSymbols.symbolRange,
                     textVMAddress: UInt64(text.virtualMemoryAddress),
@@ -716,10 +612,8 @@ private enum WITransportNativeInspectorResolver {
                 loadedImageSymbols: loadedImageSymbols
             )
             lastResolvedSymbols = resolvedSymbolsWithRuntimeFallback
-            lastAttachMode = resolvedSymbolsWithFallback.attachMode
             if let resolution = successfulResolutionIfComplete(
                     resolvedSymbolsWithRuntimeFallback,
-                    attachMode: resolvedSymbolsWithFallback.attachMode,
                     phase: .sharedCacheFile,
                     source: sharedCacheSourceDescription(
                         base: "shared-cache-file",
@@ -736,7 +630,6 @@ private enum WITransportNativeInspectorResolver {
             if let lastResolvedSymbols {
                 return finalizeResolution(
                     lastResolvedSymbols,
-                    attachMode: lastAttachMode,
                     phase: nil,
                     source: "shared-cache-file",
                     webKitHeaderAddress: loadedImage.headerAddress,
@@ -750,7 +643,6 @@ private enum WITransportNativeInspectorResolver {
             if let lastResolvedSymbols {
                 return finalizeResolution(
                     lastResolvedSymbols,
-                    attachMode: lastAttachMode,
                     phase: nil,
                     source: "shared-cache-file",
                     webKitHeaderAddress: loadedImage.headerAddress,
@@ -765,7 +657,6 @@ private enum WITransportNativeInspectorResolver {
         if let lastResolvedSymbols {
             return finalizeResolution(
                 lastResolvedSymbols,
-                attachMode: lastAttachMode,
                 phase: nil,
                 source: "shared-cache",
                 webKitHeaderAddress: loadedImage.headerAddress,
@@ -796,18 +687,6 @@ private enum WITransportNativeInspectorResolver {
         WITransportNativeInspectorResolvedSymbols(
             connectFrontend: resolvedSymbols.connectFrontend,
             disconnectFrontend: resolvedSymbols.disconnectFrontend,
-            inspectorTargetAgentVTable: preferredResolvedAddress(
-                resolvedSymbols.inspectorTargetAgentVTable,
-                fallback: loadedImageSymbols.inspectorTargetAgentVTable
-            ),
-            targetAgentDidCreateFrontendAndBackend: preferredResolvedAddress(
-                resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                fallback: loadedImageSymbols.targetAgentDidCreateFrontendAndBackend
-            ),
-            targetAgentWillDestroyFrontendAndBackend: preferredResolvedAddress(
-                resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
-                fallback: loadedImageSymbols.targetAgentWillDestroyFrontendAndBackend
-            ),
             stringFromUTF8: preferredResolvedAddress(
                 resolvedSymbols.stringFromUTF8,
                 fallback: loadedImageSymbols.stringFromUTF8
@@ -832,15 +711,6 @@ private enum WITransportNativeInspectorResolver {
         loadedImageSymbols: WITransportNativeInspectorResolvedSymbols
     ) -> Bool {
         let symbolPairs: [(WITransportResolvedAddress, WITransportResolvedAddress)] = [
-            (resolvedSymbols.inspectorTargetAgentVTable, loadedImageSymbols.inspectorTargetAgentVTable),
-            (
-                resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                loadedImageSymbols.targetAgentDidCreateFrontendAndBackend
-            ),
-            (
-                resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
-                loadedImageSymbols.targetAgentWillDestroyFrontendAndBackend
-            ),
             (resolvedSymbols.stringFromUTF8, loadedImageSymbols.stringFromUTF8),
             (resolvedSymbols.stringImplToNSString, loadedImageSymbols.stringImplToNSString),
             (resolvedSymbols.destroyStringImpl, loadedImageSymbols.destroyStringImpl),
@@ -1013,15 +883,10 @@ private enum WITransportNativeInspectorResolver {
         guard connectMissing || disconnectMissing else {
             return .init(
                 symbols: resolvedSymbols,
-                usedFallback: false,
-                attachMode: .controllerWrapper
+                usedFallback: false
             )
         }
 
-        let webKitRouterConnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterConnect, in: image, text: text)
-        let webKitRouterDisconnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterDisconnect, in: image, text: text)
-        let javaScriptCoreRouterConnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterConnect, in: javaScriptCoreImage, text: javaScriptCoreText)
-        let javaScriptCoreRouterDisconnect = resolveLoadedImageSymbol(namedAnyOf: symbols.frontendRouterDisconnect, in: javaScriptCoreImage, text: javaScriptCoreText)
         let webCoreConnectTargets = unsafe resolvedCallTargetAddresses(
             symbolNames: symbols.inspectorControllerConnectTargets,
             in: webCoreImage,
@@ -1041,52 +906,22 @@ private enum WITransportNativeInspectorResolver {
             in: image
         )
 
-        let connectTargetAddresses = callTargetAddresses(
-            primary: webKitRouterConnect,
-            fallback: javaScriptCoreRouterConnect
-        )
-        .union(webCoreConnectTargets)
-        .union(webKitBoundConnectTargets)
-        let disconnectTargetAddresses = callTargetAddresses(
-            primary: webKitRouterDisconnect,
-            fallback: javaScriptCoreRouterDisconnect
-        )
-        .union(webCoreDisconnectTargets)
-        .union(webKitBoundDisconnectTargets)
+        let connectTargetAddresses = webCoreConnectTargets.union(webKitBoundConnectTargets)
+        let disconnectTargetAddresses = webCoreDisconnectTargets.union(webKitBoundDisconnectTargets)
 
         guard let functionStarts = image.functionStarts else {
             #if DEBUG
             NSLog(
-                "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webKitRouterConnect=%@ webKitRouterDisconnect=%@ jscRouterConnect=%@ jscRouterDisconnect=%@",
-                debugResolvedAddress(webKitRouterConnect),
-                debugResolvedAddress(webKitRouterDisconnect),
-                debugResolvedAddress(javaScriptCoreRouterConnect),
-                debugResolvedAddress(javaScriptCoreRouterDisconnect)
+                "[WebInspectorTransport] native inspector text scan unavailable functionStarts=nil webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu",
+                webCoreConnectTargets.count,
+                webCoreDisconnectTargets.count,
+                webKitBoundConnectTargets.count,
+                webKitBoundDisconnectTargets.count
             )
             #endif
-            let routerConnect = preferredResolvedAddress(webKitRouterConnect, fallback: javaScriptCoreRouterConnect)
-            let routerDisconnect = preferredResolvedAddress(webKitRouterDisconnect, fallback: javaScriptCoreRouterDisconnect)
-            if isFound(routerConnect), isFound(routerDisconnect) {
-                return .init(
-                    symbols: WITransportNativeInspectorResolvedSymbols(
-                        connectFrontend: routerConnect,
-                        disconnectFrontend: routerDisconnect,
-                        inspectorTargetAgentVTable: resolvedSymbols.inspectorTargetAgentVTable,
-                        targetAgentDidCreateFrontendAndBackend: resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                        targetAgentWillDestroyFrontendAndBackend: resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
-                        stringFromUTF8: resolvedSymbols.stringFromUTF8,
-                        stringImplToNSString: resolvedSymbols.stringImplToNSString,
-                        destroyStringImpl: resolvedSymbols.destroyStringImpl,
-                        backendDispatcherDispatch: resolvedSymbols.backendDispatcherDispatch
-                    ),
-                    usedFallback: true,
-                    attachMode: .frontendRouterDirect
-                )
-            }
             return .init(
                 symbols: resolvedSymbols,
-                usedFallback: false,
-                attachMode: .controllerWrapper
+                usedFallback: false
             )
         }
 
@@ -1111,11 +946,7 @@ private enum WITransportNativeInspectorResolver {
 
         #if DEBUG
         NSLog(
-            "[WebInspectorTransport] native inspector text scan webKitRouterConnect=%@ webKitRouterDisconnect=%@ jscRouterConnect=%@ jscRouterDisconnect=%@ webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
-            debugResolvedAddress(webKitRouterConnect),
-            debugResolvedAddress(webKitRouterDisconnect),
-            debugResolvedAddress(javaScriptCoreRouterConnect),
-            debugResolvedAddress(javaScriptCoreRouterDisconnect),
+            "[WebInspectorTransport] native inspector text scan webCoreConnectTargets=%lu webCoreDisconnectTargets=%lu webKitBoundConnectTargets=%lu webKitBoundDisconnectTargets=%lu connectTargets=%lu disconnectTargets=%lu resolvedConnect=%@ resolvedDisconnect=%@",
             webCoreConnectTargets.count,
             webCoreDisconnectTargets.count,
             webKitBoundConnectTargets.count,
@@ -1130,75 +961,22 @@ private enum WITransportNativeInspectorResolver {
         let resolvedWrapperSymbols = WITransportNativeInspectorResolvedSymbols(
             connectFrontend: connectMissing ? resolvedConnect : resolvedSymbols.connectFrontend,
             disconnectFrontend: disconnectMissing ? resolvedDisconnect : resolvedSymbols.disconnectFrontend,
-            inspectorTargetAgentVTable: resolvedSymbols.inspectorTargetAgentVTable,
-            targetAgentDidCreateFrontendAndBackend: resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-            targetAgentWillDestroyFrontendAndBackend: resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
             stringFromUTF8: resolvedSymbols.stringFromUTF8,
             stringImplToNSString: resolvedSymbols.stringImplToNSString,
             destroyStringImpl: resolvedSymbols.destroyStringImpl,
             backendDispatcherDispatch: resolvedSymbols.backendDispatcherDispatch
         )
         let usedWrapperFallback = (connectMissing && isFound(resolvedConnect)) || (disconnectMissing && isFound(resolvedDisconnect))
-        if usedWrapperFallback,
-           isFound(resolvedWrapperSymbols.connectFrontend),
-           isFound(resolvedWrapperSymbols.disconnectFrontend) {
-            return .init(
-                symbols: resolvedWrapperSymbols,
-                usedFallback: true,
-                attachMode: .controllerWrapper
-            )
-        }
-
-        let routerConnect = preferredResolvedAddress(webKitRouterConnect, fallback: javaScriptCoreRouterConnect)
-        let routerDisconnect = preferredResolvedAddress(webKitRouterDisconnect, fallback: javaScriptCoreRouterDisconnect)
-        if isFound(routerConnect), isFound(routerDisconnect) {
-            return .init(
-                symbols: WITransportNativeInspectorResolvedSymbols(
-                    connectFrontend: routerConnect,
-                    disconnectFrontend: routerDisconnect,
-                    inspectorTargetAgentVTable: resolvedSymbols.inspectorTargetAgentVTable,
-                    targetAgentDidCreateFrontendAndBackend: resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                    targetAgentWillDestroyFrontendAndBackend: resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
-                    stringFromUTF8: resolvedSymbols.stringFromUTF8,
-                    stringImplToNSString: resolvedSymbols.stringImplToNSString,
-                    destroyStringImpl: resolvedSymbols.destroyStringImpl,
-                    backendDispatcherDispatch: resolvedSymbols.backendDispatcherDispatch
-                ),
-                usedFallback: true,
-                attachMode: .frontendRouterDirect
-            )
-        }
 
         return .init(
             symbols: resolvedWrapperSymbols,
-            usedFallback: usedWrapperFallback,
-            attachMode: .controllerWrapper
+            usedFallback: usedWrapperFallback
         )
     }
 
     private static func resolvedFunctionAddresses(
-        from resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
-        attachMode: WITransportResolvedAttachMode
+        from resolvedSymbols: WITransportNativeInspectorResolvedSymbols
     ) -> WITransportResolvedFunctionAddresses? {
-        let routerDirectTargetAgentAddresses: (UInt64, UInt64, UInt64)?
-        switch attachMode {
-        case .controllerWrapper:
-            routerDirectTargetAgentAddresses = (0, 0, 0)
-        case .frontendRouterDirect:
-            guard
-                case let .found(inspectorTargetAgentVTableAddress) = resolvedSymbols.inspectorTargetAgentVTable,
-                case let .found(targetAgentDidCreateFrontendAndBackendAddress) = resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                case let .found(targetAgentWillDestroyFrontendAndBackendAddress) = resolvedSymbols.targetAgentWillDestroyFrontendAndBackend
-            else {
-                return nil
-            }
-            routerDirectTargetAgentAddresses = (
-                inspectorTargetAgentVTableAddress,
-                targetAgentDidCreateFrontendAndBackendAddress,
-                targetAgentWillDestroyFrontendAndBackendAddress
-            )
-        }
-
         guard
             case let .found(connectAddress) = resolvedSymbols.connectFrontend,
             case let .found(disconnectAddress) = resolvedSymbols.disconnectFrontend,
@@ -1211,12 +989,8 @@ private enum WITransportNativeInspectorResolver {
         }
 
         return WITransportResolvedFunctionAddresses(
-            attachMode: attachMode,
             connectFrontendAddress: connectAddress,
             disconnectFrontendAddress: disconnectAddress,
-            inspectorTargetAgentVTableAddress: routerDirectTargetAgentAddresses?.0 ?? 0,
-            targetAgentDidCreateFrontendAndBackendAddress: routerDirectTargetAgentAddresses?.1 ?? 0,
-            targetAgentWillDestroyFrontendAndBackendAddress: routerDirectTargetAgentAddresses?.2 ?? 0,
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
             destroyStringImplAddress: destroyStringImplAddress,
@@ -1225,16 +999,11 @@ private enum WITransportNativeInspectorResolver {
     }
 
     private static func expectedHeaderAddressesForAttachEntryPoints(
-        attachMode: WITransportResolvedAttachMode,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt
     ) -> [UInt] {
-        switch attachMode {
-        case .controllerWrapper:
-            return [webKitHeaderAddress]
-        case .frontendRouterDirect:
-            return [webKitHeaderAddress, javaScriptCoreHeaderAddress]
-        }
+        _ = javaScriptCoreHeaderAddress
+        return [webKitHeaderAddress]
     }
 
     private static func successResolution(
@@ -1260,7 +1029,6 @@ private enum WITransportNativeInspectorResolver {
 
     private static func successfulResolutionIfComplete(
         _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
-        attachMode: WITransportResolvedAttachMode,
         phase: WITransportNativeInspectorResolutionPhase?,
         source: String?,
         webKitHeaderAddress: UInt,
@@ -1270,9 +1038,6 @@ private enum WITransportNativeInspectorResolver {
         let allResults = [
             resolvedSymbols.connectFrontend,
             resolvedSymbols.disconnectFrontend,
-            resolvedSymbols.inspectorTargetAgentVTable,
-            resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-            resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
             resolvedSymbols.stringFromUTF8,
             resolvedSymbols.stringImplToNSString,
             resolvedSymbols.destroyStringImpl,
@@ -1295,16 +1060,12 @@ private enum WITransportNativeInspectorResolver {
         }
 
         let attachHeaders = expectedHeaderAddressesForAttachEntryPoints(
-            attachMode: attachMode,
             webKitHeaderAddress: webKitHeaderAddress,
             javaScriptCoreHeaderAddress: javaScriptCoreHeaderAddress
         )
         let expectedHeadersBySymbol: [(WITransportResolvedAddress, [UInt])] = [
             (resolvedSymbols.connectFrontend, attachHeaders),
             (resolvedSymbols.disconnectFrontend, attachHeaders),
-            (resolvedSymbols.inspectorTargetAgentVTable, [webKitHeaderAddress]),
-            (resolvedSymbols.targetAgentDidCreateFrontendAndBackend, [webKitHeaderAddress]),
-            (resolvedSymbols.targetAgentWillDestroyFrontendAndBackend, [webKitHeaderAddress]),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
@@ -1319,7 +1080,7 @@ private enum WITransportNativeInspectorResolver {
             }
         }
 
-        guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols, attachMode: attachMode) else {
+        guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) else {
             return nil
         }
         return successResolution(
@@ -1332,14 +1093,13 @@ private enum WITransportNativeInspectorResolver {
 
     private static func finalizeResolution(
         _ resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
-        attachMode: WITransportResolvedAttachMode,
         phase: WITransportNativeInspectorResolutionPhase?,
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
         usedConnectDisconnectFallback: Bool
     ) -> WITransportNativeInspectorSymbolResolution? {
-        var allResults = [
+        let allResults = [
             resolvedSymbols.connectFrontend,
             resolvedSymbols.disconnectFrontend,
             resolvedSymbols.stringFromUTF8,
@@ -1347,13 +1107,6 @@ private enum WITransportNativeInspectorResolver {
             resolvedSymbols.destroyStringImpl,
             resolvedSymbols.backendDispatcherDispatch,
         ]
-        if attachMode == .frontendRouterDirect {
-            allResults.insert(contentsOf: [
-                resolvedSymbols.inspectorTargetAgentVTable,
-                resolvedSymbols.targetAgentDidCreateFrontendAndBackend,
-                resolvedSymbols.targetAgentWillDestroyFrontendAndBackend,
-            ], at: 2)
-        }
 
         for result in allResults {
             if case .outsideText = result {
@@ -1361,18 +1114,17 @@ private enum WITransportNativeInspectorResolver {
                     .resolvedAddressOutsideText,
                     phase: phase,
                     source: source,
-                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols, attachMode: attachMode),
+                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                     usedConnectDisconnectFallback: usedConnectDisconnectFallback
                 )
             }
         }
 
         let attachHeaders = expectedHeaderAddressesForAttachEntryPoints(
-            attachMode: attachMode,
             webKitHeaderAddress: webKitHeaderAddress,
             javaScriptCoreHeaderAddress: javaScriptCoreHeaderAddress
         )
-        var expectedHeadersBySymbol: [(WITransportResolvedAddress, [UInt])] = [
+        let expectedHeadersBySymbol: [(WITransportResolvedAddress, [UInt])] = [
             (resolvedSymbols.connectFrontend, attachHeaders),
             (resolvedSymbols.disconnectFrontend, attachHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
@@ -1380,13 +1132,6 @@ private enum WITransportNativeInspectorResolver {
             (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
         ]
-        if attachMode == .frontendRouterDirect {
-            expectedHeadersBySymbol.insert(contentsOf: [
-                (resolvedSymbols.inspectorTargetAgentVTable, [webKitHeaderAddress]),
-                (resolvedSymbols.targetAgentDidCreateFrontendAndBackend, [webKitHeaderAddress]),
-                (resolvedSymbols.targetAgentWillDestroyFrontendAndBackend, [webKitHeaderAddress]),
-            ], at: 2)
-        }
         for (result, expectedHeaders) in expectedHeadersBySymbol {
             guard case let .found(address) = result else {
                 continue
@@ -1396,13 +1141,13 @@ private enum WITransportNativeInspectorResolver {
                     .resolvedAddressImageMismatch,
                     phase: phase,
                     source: source,
-                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols, attachMode: attachMode),
+                    missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                     usedConnectDisconnectFallback: usedConnectDisconnectFallback
                 )
             }
         }
 
-        let missingFunctions = unsafe missingFunctionNames(in: resolvedSymbols, attachMode: attachMode)
+        let missingFunctions = unsafe missingFunctionNames(in: resolvedSymbols)
         let missingConnectDisconnect = missingFunctions.filter {
             $0 == "connectFrontend" || $0 == "disconnectFrontend"
         }
@@ -1429,12 +1174,12 @@ private enum WITransportNativeInspectorResolver {
             )
         }
 
-        guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols, attachMode: attachMode) else {
+        guard let functionAddresses = resolvedFunctionAddresses(from: resolvedSymbols) else {
             return failure(
                 .runtimeFunctionSymbolMissing,
                 phase: phase,
                 source: source,
-                missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols, attachMode: attachMode),
+                missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
                 usedConnectDisconnectFallback: usedConnectDisconnectFallback
             )
         }
@@ -1793,20 +1538,6 @@ private enum WITransportNativeInspectorResolver {
         return .missing
     }
 
-    private static func callTargetAddresses(
-        primary: WITransportResolvedAddress,
-        fallback: WITransportResolvedAddress
-    ) -> Set<UInt64> {
-        var addresses = Set<UInt64>()
-        if case let .found(address) = primary {
-            addresses.insert(address)
-        }
-        if case let .found(address) = fallback {
-            addresses.insert(address)
-        }
-        return addresses
-    }
-
     @unsafe private static func resolvedCallTargetAddresses(
         symbolNames: [String],
         in image: MachOImage?,
@@ -2035,10 +1766,9 @@ private enum WITransportNativeInspectorResolver {
     }
 
     @unsafe private static func missingFunctionNames(
-        in resolvedSymbols: WITransportNativeInspectorResolvedSymbols,
-        attachMode: WITransportResolvedAttachMode
+        in resolvedSymbols: WITransportNativeInspectorResolvedSymbols
     ) -> [String] {
-        var symbolResults: [(String, WITransportResolvedAddress)] = [
+        let symbolResults: [(String, WITransportResolvedAddress)] = [
             ("connectFrontend", resolvedSymbols.connectFrontend),
             ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
             ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
@@ -2046,19 +1776,6 @@ private enum WITransportNativeInspectorResolver {
             ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
             ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
         ]
-        if attachMode == .frontendRouterDirect {
-            symbolResults.insert(contentsOf: [
-                ("inspectorTargetAgentVTable", resolvedSymbols.inspectorTargetAgentVTable),
-                (
-                    "targetAgentDidCreateFrontendAndBackend",
-                    resolvedSymbols.targetAgentDidCreateFrontendAndBackend
-                ),
-                (
-                    "targetAgentWillDestroyFrontendAndBackend",
-                    resolvedSymbols.targetAgentWillDestroyFrontendAndBackend
-                ),
-            ], at: 2)
-        }
         return symbolResults.compactMap { name, result in
             if case .missing = result {
                 return name
@@ -2156,12 +1873,8 @@ private enum WITransportNativeInspectorResolver {
 
 struct WITransportAttachSymbolResolution: Sendable {
     let backendKind: WITransportBackendKind
-    let attachModeRawValue: Int
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
-    let inspectorTargetAgentVTableAddress: UInt64
-    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
-    let targetAgentWillDestroyFrontendAndBackendAddress: UInt64
     let stringFromUTF8Address: UInt64
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
@@ -2175,7 +1888,6 @@ struct WITransportAttachSymbolResolution: Sendable {
 
     var diagnosticsSummary: String? {
         var parts = [String]()
-        parts.append("attachMode=\(attachModeRawValue)")
         if let phase, !phase.isEmpty {
             parts.append("phase=\(phase)")
         }
@@ -2211,14 +1923,6 @@ struct WITransportAttachSymbolResolution: Sendable {
     var isSupported: Bool {
         connectFrontendAddress != 0
             && disconnectFrontendAddress != 0
-            && (
-                attachModeRawValue != WITransportResolvedAttachMode.frontendRouterDirect.rawValue
-                || (
-                    inspectorTargetAgentVTableAddress != 0
-                        && targetAgentDidCreateFrontendAndBackendAddress != 0
-                        && targetAgentWillDestroyFrontendAndBackendAddress != 0
-                )
-            )
             && stringFromUTF8Address != 0
             && stringImplToNSStringAddress != 0
             && destroyStringImplAddress != 0
@@ -2318,12 +2022,8 @@ enum WITransportNativeInspectorSymbolResolver {
     private static func makeAttachResolution(from resolution: WITransportNativeInspectorSymbolResolution) -> WITransportAttachSymbolResolution {
         WITransportAttachSymbolResolution(
             backendKind: WITransportNativeInspectorResolver.backendKind,
-            attachModeRawValue: resolution.functionAddresses.attachMode.rawValue,
             connectFrontendAddress: resolution.functionAddresses.connectFrontendAddress,
             disconnectFrontendAddress: resolution.functionAddresses.disconnectFrontendAddress,
-            inspectorTargetAgentVTableAddress: resolution.functionAddresses.inspectorTargetAgentVTableAddress,
-            targetAgentDidCreateFrontendAndBackendAddress: resolution.functionAddresses.targetAgentDidCreateFrontendAndBackendAddress,
-            targetAgentWillDestroyFrontendAndBackendAddress: resolution.functionAddresses.targetAgentWillDestroyFrontendAndBackendAddress,
             stringFromUTF8Address: resolution.functionAddresses.stringFromUTF8Address,
             stringImplToNSStringAddress: resolution.functionAddresses.stringImplToNSStringAddress,
             destroyStringImplAddress: resolution.functionAddresses.destroyStringImplAddress,
@@ -2342,12 +2042,8 @@ enum WITransportNativeInspectorSymbolResolver {
 #if !os(iOS) && !os(macOS)
 struct WITransportAttachSymbolResolution: Sendable {
     let backendKind: WITransportBackendKind
-    let attachModeRawValue: Int
     let connectFrontendAddress: UInt64
     let disconnectFrontendAddress: UInt64
-    let inspectorTargetAgentVTableAddress: UInt64
-    let targetAgentDidCreateFrontendAndBackendAddress: UInt64
-    let targetAgentWillDestroyFrontendAndBackendAddress: UInt64
     let stringFromUTF8Address: UInt64
     let stringImplToNSStringAddress: UInt64
     let destroyStringImplAddress: UInt64
@@ -2361,7 +2057,6 @@ struct WITransportAttachSymbolResolution: Sendable {
 
     var diagnosticsSummary: String? {
         var parts = [String]()
-        parts.append("attachMode=\(attachModeRawValue)")
         if let failureKind, !failureKind.isEmpty {
             parts.append("failure=\(failureKind)")
         }
@@ -2382,12 +2077,8 @@ enum WITransportNativeInspectorSymbolResolver {
     static func currentAttachResolution() -> WITransportAttachSymbolResolution {
         WITransportAttachSymbolResolution(
             backendKind: .unsupported,
-            attachModeRawValue: 0,
             connectFrontendAddress: 0,
             disconnectFrontendAddress: 0,
-            inspectorTargetAgentVTableAddress: 0,
-            targetAgentDidCreateFrontendAndBackendAddress: 0,
-            targetAgentWillDestroyFrontendAndBackendAddress: 0,
             stringFromUTF8Address: 0,
             stringImplToNSStringAddress: 0,
             destroyStringImplAddress: 0,

@@ -19,10 +19,7 @@
 namespace WITransportBridgePrivate {
 
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
-using FrontendRouterConnectFn = void (*)(void *, Inspector::FrontendChannel&);
 using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
-using TargetAgentDidCreateFrontendAndBackendFn = void (*)(void *);
-using TargetAgentWillDestroyFrontendAndBackendFn = void (*)(void *, int);
 
 static constexpr ptrdiff_t invalidControllerOffset = -1;
 static constexpr ptrdiff_t webPageInspectorControllerOffset = 0x4C0;
@@ -33,7 +30,6 @@ static constexpr size_t fallbackControllerScanBytes = 0x1000;
 static std::atomic<ptrdiff_t> cachedControllerOffset { invalidControllerOffset };
 
 static NSString *const errorDomain = @"WebInspectorTransport.Transport";
-static constexpr int inspectorDisconnectReasonInspectorDestroyed = 1;
 
 enum ErrorCode : NSInteger {
     ErrorCodeUnsupported = 1,
@@ -76,12 +72,8 @@ static NSError *makeError(ErrorCode code, NSString *description, NSString *detai
 static WITransportResolvedFunctions emptyResolvedFunctions()
 {
     return {
-        .attachMode = WITransportAttachModeControllerWrapper,
         .connectFrontendAddress = 0,
         .disconnectFrontendAddress = 0,
-        .inspectorTargetAgentVTableAddress = 0,
-        .targetAgentDidCreateFrontendAndBackendAddress = 0,
-        .targetAgentWillDestroyFrontendAndBackendAddress = 0,
         .stringFromUTF8Address = 0,
         .stringImplToNSStringAddress = 0,
         .destroyStringImplAddress = 0,
@@ -91,24 +83,8 @@ static WITransportResolvedFunctions emptyResolvedFunctions()
 
 static BOOL resolvedFunctionsAreComplete(WITransportResolvedFunctions resolvedFunctions)
 {
-    switch (resolvedFunctions.attachMode) {
-    case WITransportAttachModeControllerWrapper:
-    case WITransportAttachModeFrontendRouterDirect:
-        break;
-    default:
-        return NO;
-    }
-
-    BOOL hasRouterDirectTargetAgentFunctions = YES;
-    if (resolvedFunctions.attachMode == WITransportAttachModeFrontendRouterDirect) {
-        hasRouterDirectTargetAgentFunctions = resolvedFunctions.inspectorTargetAgentVTableAddress
-            && resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress
-            && resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress;
-    }
-
     return resolvedFunctions.connectFrontendAddress
         && resolvedFunctions.disconnectFrontendAddress
-        && hasRouterDirectTargetAgentFunctions
         && resolvedFunctions.stringFromUTF8Address
         && resolvedFunctions.stringImplToNSStringAddress
         && resolvedFunctions.destroyStringImplAddress
@@ -118,26 +94,10 @@ static BOOL resolvedFunctionsAreComplete(WITransportResolvedFunctions resolvedFu
 static NSString *missingResolvedFunctionNames(WITransportResolvedFunctions resolvedFunctions)
 {
     NSMutableArray<NSString *> *names = [NSMutableArray array];
-    switch (resolvedFunctions.attachMode) {
-    case WITransportAttachModeControllerWrapper:
-    case WITransportAttachModeFrontendRouterDirect:
-        break;
-    default:
-        [names addObject:@"attachMode"];
-        break;
-    }
     if (!resolvedFunctions.connectFrontendAddress)
         [names addObject:@"connectFrontend"];
     if (!resolvedFunctions.disconnectFrontendAddress)
         [names addObject:@"disconnectFrontend"];
-    if (resolvedFunctions.attachMode == WITransportAttachModeFrontendRouterDirect) {
-        if (!resolvedFunctions.inspectorTargetAgentVTableAddress)
-            [names addObject:@"inspectorTargetAgentVTable"];
-        if (!resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress)
-            [names addObject:@"targetAgentDidCreateFrontendAndBackend"];
-        if (!resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress)
-            [names addObject:@"targetAgentWillDestroyFrontendAndBackend"];
-    }
     if (!resolvedFunctions.stringFromUTF8Address)
         [names addObject:@"stringFromUTF8"];
     if (!resolvedFunctions.stringImplToNSStringAddress)
@@ -229,91 +189,6 @@ static BOOL pointerIsWritableMapped(const void *pointer)
 
     vm_prot_t requiredProtection = VM_PROT_READ | VM_PROT_WRITE;
     return (info.protection & requiredProtection) == requiredProtection;
-}
-
-static uintptr_t stripPointerAuthentication(uintptr_t pointer)
-{
-#if defined(__arm64e__) && __has_include(<ptrauth.h>)
-    return reinterpret_cast<uintptr_t>(ptrauth_strip(reinterpret_cast<void *>(pointer), ptrauth_key_cxx_vtable_pointer));
-#else
-    return pointer;
-#endif
-}
-
-static void *inspectorTargetAgentPointer(void *controller, WITransportResolvedFunctions resolvedFunctions)
-{
-    if (!controller)
-        return nullptr;
-
-    uintptr_t targetAgentVTableSymbol = static_cast<uintptr_t>(resolvedFunctions.inspectorTargetAgentVTableAddress);
-    if (!targetAgentVTableSymbol)
-        return nullptr;
-
-    uintptr_t expectedVTablePointer = stripPointerAuthentication(targetAgentVTableSymbol + sizeof(uintptr_t) * 2);
-
-    constexpr size_t controllerScanBytes = 0x200;
-    for (size_t offset = 0; offset + sizeof(void *) <= controllerScanBytes; offset += sizeof(void *)) {
-        void *candidateObject = nullptr;
-        if (!safeReadPointer(reinterpret_cast<uint8_t *>(controller) + offset, &candidateObject) || !candidateObject)
-            continue;
-
-        uintptr_t candidateVTable = 0;
-        if (!safeReadWord(candidateObject, &candidateVTable) || !candidateVTable)
-            continue;
-
-        if (stripPointerAuthentication(candidateVTable) != expectedVTablePointer)
-            continue;
-
-        return candidateObject;
-    }
-
-    return nullptr;
-}
-
-static BOOL activateInspectorTargetsForFrontendRouterAttach(void *controller, WITransportResolvedFunctions resolvedFunctions, NSError **error)
-{
-    auto didCreateAddress = static_cast<uintptr_t>(resolvedFunctions.targetAgentDidCreateFrontendAndBackendAddress);
-    if (!didCreateAddress) {
-        NSLog(@"[WebInspectorTransport] router-direct target activation failed reason=missing-didCreate");
-        if (error) {
-            *error = makeError(
-                ErrorCodeAttachFailed,
-                @"InspectorTargetAgent.didCreateFrontendAndBackend was unavailable."
-            );
-        }
-        return NO;
-    }
-
-    void *targetAgent = inspectorTargetAgentPointer(controller, resolvedFunctions);
-    if (!targetAgent) {
-        NSLog(@"[WebInspectorTransport] router-direct target activation failed reason=missing-target-agent");
-        if (error) {
-            *error = makeError(
-                ErrorCodeAttachFailed,
-                @"InspectorTargetAgent could not be located for router-direct attach."
-            );
-        }
-        return NO;
-    }
-
-    auto *didCreate = reinterpret_cast<TargetAgentDidCreateFrontendAndBackendFn>(didCreateAddress);
-    didCreate(targetAgent);
-    NSLog(@"[WebInspectorTransport] router-direct target activation succeeded");
-    return YES;
-}
-
-static void deactivateInspectorTargetsForFrontendRouterAttach(void *controller, WITransportResolvedFunctions resolvedFunctions)
-{
-    auto willDestroyAddress = static_cast<uintptr_t>(resolvedFunctions.targetAgentWillDestroyFrontendAndBackendAddress);
-    if (!willDestroyAddress)
-        return;
-
-    void *targetAgent = inspectorTargetAgentPointer(controller, resolvedFunctions);
-    if (!targetAgent)
-        return;
-
-    auto *willDestroy = reinterpret_cast<TargetAgentWillDestroyFrontendAndBackendFn>(willDestroyAddress);
-    willDestroy(targetAgent, inspectorDisconnectReasonInspectorDestroyed);
 }
 
 static ptrdiff_t ivarOffset(Class cls, const char *name)
@@ -668,7 +543,6 @@ private:
     void *_backendDispatcher;
     void *_frontendConnectionTarget;
     ptrdiff_t _controllerOffset;
-    WITransportAttachMode _attachMode;
     uint64_t _disconnectFrontendAddress;
     WITransportResolvedFunctions _resolvedFunctions;
     std::unique_ptr<WITransportFrontendChannel> _frontendChannel;
@@ -683,7 +557,6 @@ private:
 
     _webView = webView;
     _controllerOffset = WITransportBridgePrivate::invalidControllerOffset;
-    _attachMode = WITransportAttachModeControllerWrapper;
     _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     return self;
 }
@@ -714,7 +587,6 @@ private:
 {
     _frontendAttached = NO;
     _frontendChannel.reset();
-    _attachMode = WITransportAttachModeControllerWrapper;
     _disconnectFrontendAddress = 0;
     _resolvedFunctions = WITransportBridgePrivate::emptyResolvedFunctions();
     _inspector = nil;
@@ -757,7 +629,6 @@ private:
         return NO;
     }
 
-    _attachMode = static_cast<WITransportAttachMode>(resolvedFunctions.attachMode);
     _disconnectFrontendAddress = resolvedFunctions.disconnectFrontendAddress;
     _resolvedFunctions = resolvedFunctions;
 
@@ -777,22 +648,6 @@ private:
     _controllerOffset = resolution.stats.resolvedOffset;
     if (_controllerOffset != WITransportBridgePrivate::invalidControllerOffset)
         WITransportBridgePrivate::cachedControllerOffset.store(_controllerOffset);
-
-    if (_attachMode == WITransportAttachModeFrontendRouterDirect) {
-        void *frontendRouter = nullptr;
-        if (!WITransportBridgePrivate::frontendRouterPointer(controller, &frontendRouter) || !frontendRouter) {
-            NSError *transportError = WITransportBridgePrivate::makeError(
-                WITransportBridgePrivate::ErrorCodeAttachFailed,
-                @"Failed to resolve FrontendRouter for direct attach."
-            );
-            if (error)
-                *error = transportError;
-            [self reportFatalFailure:transportError.localizedDescription];
-            [self detach];
-            return NO;
-        }
-        frontendConnectionTarget = frontendRouter;
-    }
     _frontendConnectionTarget = frontendConnectionTarget;
 
 #if TARGET_OS_OSX
@@ -836,49 +691,12 @@ private:
 #endif
 
     _frontendChannel = std::make_unique<WITransportFrontendChannel>(self, resolvedFunctions.stringImplToNSStringAddress);
-    switch (_attachMode) {
-    case WITransportAttachModeControllerWrapper: {
-        using ConnectFrontendFn = WITransportBridgePrivate::ConnectFrontendFn;
-        auto *connectFrontend = reinterpret_cast<ConnectFrontendFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
-        connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
-        break;
-    }
-    case WITransportAttachModeFrontendRouterDirect: {
-        using FrontendRouterConnectFn = WITransportBridgePrivate::FrontendRouterConnectFn;
-        auto *connectFrontend = reinterpret_cast<FrontendRouterConnectFn>(static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress));
-        connectFrontend(_frontendConnectionTarget, *_frontendChannel);
-        NSError *targetActivationError = nil;
-        if (!WITransportBridgePrivate::activateInspectorTargetsForFrontendRouterAttach(_controller, resolvedFunctions, &targetActivationError)) {
-            if (_frontendChannel && _frontendConnectionTarget && _disconnectFrontendAddress) {
-                WITransportBridgePrivate::deactivateInspectorTargetsForFrontendRouterAttach(_controller, _resolvedFunctions);
-                auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_disconnectFrontendAddress));
-                disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
-            }
-            if (error)
-                *error = targetActivationError;
-            [self reportFatalFailure:targetActivationError.localizedDescription];
-            [self detach];
-            return NO;
-        }
-        break;
-    }
-    default: {
-        NSError *transportError = WITransportBridgePrivate::makeError(
-            WITransportBridgePrivate::ErrorCodeUnsupported,
-            @"Unknown transport attach mode."
-        );
-        if (error)
-            *error = transportError;
-        [self reportFatalFailure:transportError.localizedDescription];
-        [self detach];
-        return NO;
-    }
-    }
-    _frontendAttached = YES;
-    NSLog(
-        @"[WebInspectorTransport] native inspector attach succeeded mode=%@",
-        _attachMode == WITransportAttachModeFrontendRouterDirect ? @"frontend-router-direct" : @"controller-wrapper"
+    auto *connectFrontend = reinterpret_cast<WITransportBridgePrivate::ConnectFrontendFn>(
+        static_cast<uintptr_t>(resolvedFunctions.connectFrontendAddress)
     );
+    connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
+    _frontendAttached = YES;
+    NSLog(@"[WebInspectorTransport] native inspector attach succeeded mode=controller-wrapper");
     return YES;
 }
 
@@ -1005,21 +823,10 @@ private:
     }
 
     if (canDisconnectFrontend) {
-        switch (_attachMode) {
-        case WITransportAttachModeControllerWrapper: {
-            auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_disconnectFrontendAddress));
-            disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
-            break;
-        }
-        case WITransportAttachModeFrontendRouterDirect: {
-            WITransportBridgePrivate::deactivateInspectorTargetsForFrontendRouterAttach(_controller, _resolvedFunctions);
-            auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(static_cast<uintptr_t>(_disconnectFrontendAddress));
-            disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
-            break;
-        }
-        default:
-            break;
-        }
+        auto *disconnectFrontend = reinterpret_cast<WITransportBridgePrivate::DisconnectFrontendFn>(
+            static_cast<uintptr_t>(_disconnectFrontendAddress)
+        );
+        disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
     }
 
     [self invalidateAttachmentState];

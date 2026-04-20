@@ -116,6 +116,13 @@ final class DOMInspectorBridge: NSObject {
         )
     }
 
+    func clearPointerHoverState() async {
+        await evaluateVoid(
+            "window.webInspectorDOMFrontend?.clearPointerHoverState?.()",
+            arguments: [:]
+        )
+    }
+
 #if canImport(AppKit)
     func setDOMContextMenuProvider(_ provider: ((Int?) -> NSMenu?)?) {
         inspectorWebView?.domContextMenuProvider = provider

@@ -220,12 +220,8 @@ final class WITransportNativeInspectorMessageEndpoint: WITransportMessageEndpoin
 
         do {
             let resolvedFunctions = WITransportResolvedFunctions(
-                attachMode: resolution.attachModeRawValue,
                 connectFrontendAddress: resolution.connectFrontendAddress,
                 disconnectFrontendAddress: resolution.disconnectFrontendAddress,
-                inspectorTargetAgentVTableAddress: resolution.inspectorTargetAgentVTableAddress,
-                targetAgentDidCreateFrontendAndBackendAddress: resolution.targetAgentDidCreateFrontendAndBackendAddress,
-                targetAgentWillDestroyFrontendAndBackendAddress: resolution.targetAgentWillDestroyFrontendAndBackendAddress,
                 stringFromUTF8Address: resolution.stringFromUTF8Address,
                 stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
                 destroyStringImplAddress: resolution.destroyStringImplAddress,

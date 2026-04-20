@@ -186,8 +186,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = app.buttons[AccessibilityID.pickButton]
-        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
+        let pickButton = activePickButton(in: app)
         pickButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
@@ -252,8 +251,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = app.buttons[AccessibilityID.pickButton]
-        XCTAssertTrue(pickButton.waitForExistence(timeout: 10))
+        let pickButton = activePickButton(in: app)
         pickButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
@@ -287,6 +285,74 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoBack: true,
             canGoForward: false
         )
+    }
+
+    @MainActor
+    func testDOMInspectorNativeSelectionRemainsStableAcrossRepeatedSelections() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["MONOCLY_UI_TEST_SCENARIO"] = "domOpenInspectorAfterInitialLoad"
+        app.launch()
+
+        let currentURLLabel = app.staticTexts[AccessibilityID.currentURL]
+        XCTAssertTrue(currentURLLabel.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForCondition(timeout: 15) {
+                currentURLLabel.label.contains("dom-page-1.html")
+            }
+        )
+
+        let openInspectorButton = app.buttons[AccessibilityID.openInspector]
+        XCTAssertTrue(openInspectorButton.waitForExistence(timeout: 10))
+        openInspectorButton.tap()
+
+        _ = try waitForHarnessState(
+            in: app,
+            pageFilename: "dom-page-1.html",
+            canGoBack: false,
+            canGoForward: false
+        )
+
+        let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
+        let domSelectedPreviewLabel = app.staticTexts[AccessibilityID.domSelectedPreview]
+        let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
+        let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
+        let domErrorLabel = app.staticTexts[AccessibilityID.domError]
+
+        for _ in 0..<3 {
+            activateDOMTabIfNeeded(in: app)
+            let currentPickButton = activePickButton(in: app)
+            currentPickButton.tap()
+
+            XCTAssertTrue(
+                waitForCondition(timeout: 15) {
+                    selectingLabel.exists && selectingLabel.label == "domIsSelecting=1"
+                }
+            )
+
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+
+            let resolved = waitForCondition(timeout: 15) {
+                domSelectedPreviewLabel.exists
+                    && domSelectedPreviewLabel.label != "domSelectedPreview=n/a"
+                    && domSelectedPreviewLabel.label.contains("<")
+                    && domTreeSelectedPreviewLabel.label != "domTreeSelectedPreview=n/a"
+                    && domTreeSelectedVisibleLabel.label == "domTreeSelectedVisible=1"
+                    && domErrorLabel.label == "domError=n/a"
+                    && selectingLabel.label == "domIsSelecting=0"
+            }
+
+            XCTAssertTrue(
+                resolved,
+                """
+                Repeated native selection became unstable.
+                selectedPreview=\(domSelectedPreviewLabel.label)
+                treeSelectedPreview=\(domTreeSelectedPreviewLabel.label)
+                treeSelectedVisible=\(domTreeSelectedVisibleLabel.label)
+                selecting=\(selectingLabel.label)
+                domError=\(domErrorLabel.label)
+                """
+            )
+        }
     }
 
     @MainActor
@@ -414,6 +480,55 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         }
 
         return link
+    }
+
+    @MainActor
+    private func activePickButton(
+        in app: XCUIApplication,
+        timeout: TimeInterval = 10
+    ) -> XCUIElement {
+        let query = app.buttons.matching(identifier: AccessibilityID.pickButton)
+        let resolved = waitForCondition(timeout: timeout) {
+            query.allElementsBoundByIndex.contains {
+                $0.exists && $0.isEnabled && $0.isHittable
+            }
+        }
+
+        XCTAssertTrue(
+            resolved,
+            "No hittable pick button was available."
+        )
+
+        if let activeButton = query.allElementsBoundByIndex.first(where: {
+            $0.exists && $0.isEnabled && $0.isHittable
+        }) {
+            return activeButton
+        }
+
+        return query.element(boundBy: 0)
+    }
+
+    @MainActor
+    private func activateDOMTabIfNeeded(in app: XCUIApplication) {
+        let tabCandidates = [
+            app.tabBars.buttons["wi_dom"],
+            app.tabBars.buttons["DOM"]
+        ]
+
+        guard let domTab = tabCandidates.first(where: \.exists) else {
+            return
+        }
+        if domTab.isHittable {
+            domTab.tap()
+        }
+    }
+
+    @MainActor
+    private func tapElementFrameCenter(_ element: XCUIElement, in app: XCUIApplication) {
+        let frame = element.frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let coordinate = origin.withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+        coordinate.tap()
     }
 
     @MainActor

@@ -687,6 +687,28 @@ struct DOMDetailViewControllerTests {
         #expect(restoredStateReady)
     }
 
+    @Test
+    func detailViewPickControlEnablesAfterLateAttach() async {
+        let controller = WIInspectorController()
+        let inspector = controller.dom
+        let (viewController, window) = makeHostedDetailViewController(inspector: inspector)
+        defer { tearDown(window: window) }
+
+        guard let pickItem = viewController.navigationItem.rightBarButtonItems?.first else {
+            Issue.record("Expected detail view pick button")
+            return
+        }
+
+        #expect(pickItem.isEnabled == false)
+
+        await inspector.attach(to: makeTestWebView())
+
+        let enabledAfterAttach = await waitUntil {
+            pickItem.isEnabled && pickItem.tintColor == .label
+        }
+        #expect(enabledAfterAttach)
+    }
+
     private func makeInspector(
         selectedLocalID: UInt64,
         preview: String,
