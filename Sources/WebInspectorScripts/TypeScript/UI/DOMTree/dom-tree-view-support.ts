@@ -816,7 +816,6 @@ function handleRowLeave(): void {
 export function clearPointerHoverState(): void {
     hoveredNodeId = null;
     (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = null;
-    handleRowLeave();
 }
 
 // =============================================================================

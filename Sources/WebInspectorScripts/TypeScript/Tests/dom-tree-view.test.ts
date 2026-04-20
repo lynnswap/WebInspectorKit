@@ -321,7 +321,6 @@ describe("dom-tree-view", () => {
     });
 
     it("clears transient hover state when native pointer disconnect is reported", async () => {
-        const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");
 
         (window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId = 7;
@@ -330,7 +329,6 @@ describe("dom-tree-view", () => {
         window.webInspectorDOMFrontend?.clearPointerHoverState?.();
 
         expect((window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId).toBeNull();
-        expect(hideHighlightHandler).toHaveBeenCalledTimes(1);
-        expect(hideHighlightHandler).toHaveBeenCalledWith({ contextID: protocolState.contextID });
+        expect(hideHighlightHandler).not.toHaveBeenCalled();
     });
 });
