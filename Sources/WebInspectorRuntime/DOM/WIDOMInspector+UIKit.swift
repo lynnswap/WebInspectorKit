@@ -313,46 +313,41 @@ extension WIDOMInspector {
             return
         }
 
-        final class Observer: NSObject {
-            var onChange: ((NSNumber?) -> Void)?
-
-            override func observeValue(
-                forKeyPath keyPath: String?,
-                of object: Any?,
-                change: [NSKeyValueChangeKey : Any]?,
-                context: UnsafeMutableRawPointer?
-            ) {
-                guard keyPath == WIDOMUIKitPrivateRuntimeNames.inspectorElementSelectionActiveSelectorName else {
-                    return
-                }
-                let value = change?[.newKey] as? NSNumber
-                onChange?(value)
-            }
+        let didSettle = await waitForInspectorElementSelectionInactive(
+            inspector,
+            keyPath: keyPath
+        )
+        guard didSettle == false else {
+            return
         }
 
-        await withCheckedContinuation { continuation in
-            let observer = Observer()
-            var resumed = false
-            let finish: @MainActor () -> Void = {
-                guard resumed == false else {
-                    return
-                }
-                resumed = true
-                inspector.removeObserver(observer, forKeyPath: keyPath)
-                continuation.resume()
-            }
+        domWindowActivationLogger.error(
+            "native inspector element selection did not transition inactive before timeout"
+        )
+    }
 
-            observer.onChange = { value in
-                if value?.boolValue != true {
-                    finish()
-                }
-            }
+    package func waitForInspectorElementSelectionInactive(
+        _ inspector: NSObject,
+        keyPath: String,
+        timeout: Duration = .seconds(1),
+        pollInterval: Duration = .milliseconds(25)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
 
-            unsafe inspector.addObserver(observer, forKeyPath: keyPath, options: [.new], context: nil)
+        while clock.now < deadline {
             if (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true {
-                finish()
+                return true
+            }
+
+            do {
+                try await Task.sleep(for: pollInterval)
+            } catch {
+                return (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true
             }
         }
+
+        return (inspector.value(forKey: keyPath) as? NSNumber)?.boolValue != true
     }
 
     private func nativeInspectorObject(on webView: WKWebView) -> NSObject? {

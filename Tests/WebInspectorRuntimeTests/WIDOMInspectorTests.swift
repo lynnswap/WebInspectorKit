@@ -10,6 +10,12 @@ import UIKit
 @MainActor
 @Suite(.serialized)
 struct WIDOMInspectorTests {
+#if canImport(UIKit)
+    final class FakeElementSelectionInspector: NSObject {
+        @objc dynamic var isElementSelectionActive = true
+    }
+#endif
+
     @Test
     func sameWebViewReattachKeepsContextID() async {
         let backend = FakeDOMTransportBackend()
@@ -269,6 +275,43 @@ struct WIDOMInspectorTests {
         #expect(inspector.isSelectingElement == false)
         #expect(disableCount == 1)
     }
+
+#if canImport(UIKit)
+    @Test
+    func inspectorElementSelectionWaitPollsUntilInactiveWithoutKVOTransition() async {
+        let inspector = WIDOMInspector()
+        let nativeInspector = FakeElementSelectionInspector()
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(40))
+            nativeInspector.isElementSelectionActive = false
+        }
+
+        let didSettle = await inspector.waitForInspectorElementSelectionInactive(
+            nativeInspector,
+            keyPath: "isElementSelectionActive",
+            timeout: .milliseconds(200),
+            pollInterval: .milliseconds(10)
+        )
+
+        #expect(didSettle)
+    }
+
+    @Test
+    func inspectorElementSelectionWaitTimesOutWhenSelectionStaysActive() async {
+        let inspector = WIDOMInspector()
+        let nativeInspector = FakeElementSelectionInspector()
+
+        let didSettle = await inspector.waitForInspectorElementSelectionInactive(
+            nativeInspector,
+            keyPath: "isElementSelectionActive",
+            timeout: .milliseconds(30),
+            pollInterval: .milliseconds(10)
+        )
+
+        #expect(didSettle == false)
+    }
+#endif
 
     @Test
     func selectionModeDoesNotDisablePageInteractionOnUIKit() async throws {
