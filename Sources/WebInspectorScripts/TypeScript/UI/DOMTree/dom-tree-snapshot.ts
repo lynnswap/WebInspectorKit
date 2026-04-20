@@ -51,10 +51,10 @@ import {
 import {
     applyFilter,
     buildNode,
-    captureTreeScrollPosition,
+    captureTreeScrollTop,
     ensureTreeEventHandlers,
     reopenSelectionAncestors,
-    restoreTreeScrollPosition,
+    restoreTreeScrollTop,
     scheduleNodeRender,
     selectNode,
     selectNodeByPath,
@@ -379,6 +379,15 @@ function ensureRenderedSnapshotIfNeeded(): void {
     }
 }
 
+function resetTreeViewportScroll(): void {
+    const scrollElement =
+        document.scrollingElement instanceof HTMLElement
+            ? document.scrollingElement
+            : document.documentElement;
+    scrollElement.scrollTop = 0;
+    scrollElement.scrollLeft = 0;
+}
+
 function handleDocumentUpdated(): void {
     treeState.snapshot = null;
     treeState.nodes.clear();
@@ -392,9 +401,8 @@ function handleDocumentUpdated(): void {
     clearRenderState();
     if (dom.tree) {
         dom.tree.innerHTML = "";
-        dom.tree.scrollTop = 0;
-        dom.tree.scrollLeft = 0;
     }
+    resetTreeViewportScroll();
     if (dom.empty) {
         dom.empty.hidden = false;
     }
@@ -559,7 +567,7 @@ export function setSnapshot(
         const previousSelectionId = treeState.selectedNodeId;
         const previousFilter = treeState.filter;
         const preservedOpenState = preserveState ? new Map(treeState.openState) : new Map();
-        const preservedScrollPosition = preserveState ? captureTreeScrollPosition() : null;
+        const preservedScrollTop = preserveState ? captureTreeScrollTop() : null;
 
         domTreeUpdater.reset();
 
@@ -576,9 +584,8 @@ export function setSnapshot(
             clearRenderState();
             if (dom.tree) {
                 dom.tree.innerHTML = "";
-                dom.tree.scrollTop = 0;
-                dom.tree.scrollLeft = 0;
             }
+            resetTreeViewportScroll();
             if (dom.empty) {
                 dom.empty.hidden = false;
             }
@@ -622,12 +629,9 @@ export function setSnapshot(
             treeState.refreshAttempts.clear();
             treeState.selectedNodeId = preserveState ? previousSelectionId : null;
             clearRenderState();
-            if (dom.tree) {
-                dom.tree.innerHTML = "";
-                if (!preserveState) {
-                    dom.tree.scrollTop = 0;
-                    dom.tree.scrollLeft = 0;
-                }
+            dom.tree?.replaceChildren();
+            if (!preserveState) {
+                resetTreeViewportScroll();
             }
             treeState.snapshot = snapshot;
             snapshot.root = normalizedRoot;
@@ -702,8 +706,8 @@ export function setSnapshot(
         }
         treeState.selectedNodeId = didSelect ? treeState.selectedNodeId : null;
 
-        if (preservedScrollPosition) {
-            restoreTreeScrollPosition(preservedScrollPosition);
+        if (preservedScrollTop !== null) {
+            restoreTreeScrollTop(preservedScrollTop);
         }
         return true;
     } catch (error) {

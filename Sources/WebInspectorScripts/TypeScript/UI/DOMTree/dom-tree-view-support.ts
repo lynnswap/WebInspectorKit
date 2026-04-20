@@ -50,6 +50,16 @@ let treeEventHandlersInstalled = false;
 let hoveredNodeId: number | null = null;
 let pendingSelectionRevealNodeId: number | null = null;
 
+function treeScrollElement(): HTMLElement {
+    if (document.scrollingElement instanceof HTMLElement) {
+        return document.scrollingElement;
+    }
+    if (document.documentElement instanceof HTMLElement) {
+        return document.documentElement;
+    }
+    return document.body;
+}
+
 function syncNodeSelectionState(element: HTMLElement, nodeId: number): void {
     const isSelected = treeState.selectedNodeId === nodeId;
     element.classList.toggle("is-selected", isSelected);
@@ -106,22 +116,34 @@ export function ensureTreeEventHandlers(): void {
 
 /** Capture current tree scroll position */
 export function captureTreeScrollPosition(): ScrollPosition | null {
-    if (!dom.tree) {
-        return null;
-    }
+    const scrollElement = treeScrollElement();
     return {
-        top: dom.tree.scrollTop,
-        left: dom.tree.scrollLeft,
+        top: scrollElement.scrollTop,
+        left: scrollElement.scrollLeft,
     };
 }
 
 /** Restore tree scroll position */
 export function restoreTreeScrollPosition(position: ScrollPosition | null): void {
-    if (!position || !dom.tree) {
+    if (!position) {
         return;
     }
-    dom.tree.scrollTop = position.top;
-    dom.tree.scrollLeft = position.left;
+    const scrollElement = treeScrollElement();
+    scrollElement.scrollTop = position.top;
+    scrollElement.scrollLeft = position.left;
+}
+
+/** Capture current tree vertical scroll position */
+export function captureTreeScrollTop(): number | null {
+    return treeScrollElement().scrollTop;
+}
+
+/** Restore tree vertical scroll position */
+export function restoreTreeScrollTop(top: number | null): void {
+    if (top === null) {
+        return;
+    }
+    treeScrollElement().scrollTop = top;
 }
 
 // =============================================================================
@@ -681,7 +703,7 @@ export function clearPointerHoverState(): void {
 
 /** Schedule selection scroll */
 function scheduleSelectionScroll(nodeId: number): void {
-    if (!nodeId || !dom.tree) {
+    if (!nodeId) {
         return;
     }
     requestAnimationFrame(() => {
@@ -691,9 +713,8 @@ function scheduleSelectionScroll(nodeId: number): void {
 
 /** Scroll selection into view */
 export function scrollSelectionIntoView(nodeId: number): boolean {
-    const container = dom.tree;
     const element = treeState.elements.get(nodeId);
-    if (!container || !element) {
+    if (!element) {
         return false;
     }
     if (treeState.selectedNodeId !== nodeId) {
@@ -701,49 +722,17 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
     }
 
     const row = element.querySelector(".tree-node__row") || element;
-    const containerRect = container.getBoundingClientRect();
     const targetRect = row.getBoundingClientRect();
     const margin = 8;
-    const relativeTop = targetRect.top - containerRect.top;
-    const relativeBottom = targetRect.bottom - containerRect.top;
-
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const visibleHeight = Math.max(
-        1,
-        Math.min(containerRect.bottom, viewportHeight) - Math.max(0, containerRect.top)
-    );
-
-    const contentTop = container.scrollTop + relativeTop;
-    const contentBottom = container.scrollTop + relativeBottom;
-
-    const visibleTop = container.scrollTop;
-    const visibleBottom = container.scrollTop + visibleHeight;
-
-    const isContainerScrollableV = Math.abs(container.scrollHeight - container.clientHeight) > 1;
     const visibleInViewportV = targetRect.bottom > margin && targetRect.top < viewportHeight - margin;
-    const verticallyVisible = contentBottom > visibleTop + margin && contentTop < visibleBottom - margin;
-
-    if (verticallyVisible) {
+    if (visibleInViewportV) {
         return true;
     }
 
-    let nextTop = container.scrollTop;
-    if (!verticallyVisible) {
-        if (isContainerScrollableV) {
-            const desiredTop = contentTop - visibleHeight / 3;
-            const maxTop = Math.max(0, container.scrollHeight - visibleHeight);
-            nextTop = Math.min(Math.max(0, desiredTop), maxTop);
-        } else if (!visibleInViewportV) {
-            const desiredPageTop = (window.scrollY || 0) + targetRect.top - viewportHeight / 3;
-            window.scrollTo({ top: Math.max(0, desiredPageTop), behavior: "auto" });
-        }
-    }
-
-    const alreadyAtTarget = Math.abs(container.scrollTop - nextTop) < 0.5;
-    if (alreadyAtTarget) {
-        return true;
-    }
-    container.scrollTo({ top: nextTop, behavior: "auto" });
+    const currentTop = window.scrollY || treeScrollElement().scrollTop;
+    const desiredPageTop = currentTop + targetRect.top - viewportHeight / 3;
+    window.scrollTo({ top: Math.max(0, desiredPageTop), behavior: "auto" });
     return false;
 }
 
