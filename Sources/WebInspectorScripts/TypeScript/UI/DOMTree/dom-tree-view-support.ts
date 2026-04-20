@@ -194,7 +194,7 @@ function createNodeRow(node: DOMNode, options: NodeRenderOptions = {}): HTMLElem
         disclosure.type = "button";
         disclosure.setAttribute("aria-label", "Expand or collapse child nodes");
         row.appendChild(disclosure);
-    } else {
+    } else if (node.nodeType !== NODE_TYPES.DOCUMENT_TYPE_NODE) {
         const spacer = document.createElement("span");
         spacer.className = "tree-node__disclosure-spacer";
         spacer.setAttribute("aria-hidden", "true");

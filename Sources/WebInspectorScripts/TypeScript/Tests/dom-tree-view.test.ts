@@ -163,6 +163,8 @@ describe("dom-tree-view", () => {
         expect(names).toContain("<html");
         expect(names).toContain("<body");
         expect(names).toContain("<main");
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure-spacer")).toBeNull();
+        expect(document.querySelector(".tree-node[data-node-id='10'] .tree-node__disclosure")).toBeNull();
         expect(document.querySelector(".tree-node__attribute")?.textContent).toBe(" lang");
         expect(document.querySelector(".tree-node__value")?.textContent).toBe("=\"ja\"");
         expect(document.querySelector(".tree-node.is-unrendered")).toBeNull();
