@@ -1038,7 +1038,9 @@ extension WITransportSession {
     }
 
     func refreshDerivedPageTargetIdentifierIfNeeded() -> String? {
-        guard let webView, let targetIdentifier = derivedPageTargetIdentifier(from: webView) else {
+        guard pageTargetTracker.allowsDerivedCommittedSeed,
+              let webView,
+              let targetIdentifier = derivedPageTargetIdentifier(from: webView) else {
             return nil
         }
         pageTargetTracker.seedCommittedPageTarget(identifier: targetIdentifier)

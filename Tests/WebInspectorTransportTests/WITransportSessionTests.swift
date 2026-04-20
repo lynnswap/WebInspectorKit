@@ -714,6 +714,41 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func pageCommandsKeepObservedTargetWhenDerivedSeedIsNoLongerAllowed() async throws {
+        let backend = FakeSessionBackend(attachHandler: { messageSink in
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-observed","type":"page","isProvisional":false}}}"#
+            )
+            await messageSink.waitForPendingMessages()
+        })
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in "page-derived" }
+        let webView = makeIsolatedTestWebView()
+
+        backend.onSendPageMessage = { message, targetIdentifier, outerIdentifier in
+            let identifier = try Self.identifier(from: message)
+            #expect(identifier == outerIdentifier)
+            #expect(targetIdentifier == "page-observed")
+            backend.emitPageMessage(
+                Self.jsonString([
+                    "id": identifier,
+                    "result": [:],
+                ]),
+                targetIdentifier: targetIdentifier
+            )
+        }
+
+        try await session.attach(to: webView)
+        _ = try await session.sendPageData(method: WITransportMethod.DOM.enable)
+
+        #expect(session.currentPageTargetIdentifier() == "page-observed")
+        #expect(session.pageTargetIdentifiers() == ["page-observed"])
+    }
+
+    @Test
     func supportedSnapshotFactoryPreservesBackendCapabilitiesAndFailureReason() {
         let snapshot = WITransportSupportSnapshot.supported(
             backendKind: .iOSNativeInspector,
