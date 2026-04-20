@@ -7,6 +7,7 @@ import {
     resetTreeInteractionStateForTesting,
     restoreTreeScrollPosition,
     scheduleNodeRender,
+    selectNode,
     syncTreeScrollMetrics,
 } from "../UI/DOMTree/dom-tree-view-support";
 import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
@@ -408,5 +409,78 @@ describe("dom-tree-view-support", () => {
         expect(module.scrollSelectionIntoView(13)).toBe(false);
         expect(scrollTo).toHaveBeenLastCalledWith({ top: 72, left: 55, behavior: "auto" });
         expect(document.documentElement.scrollLeft).toBe(55);
+    });
+
+    it("reveals rows hidden beyond the right edge when they fit in the viewport", async () => {
+        const module = await import("../UI/DOMTree/dom-tree-view-support");
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.appendChild(row);
+
+        tree.appendChild(element);
+        treeState.elements.set(14, element);
+        treeState.selectedNodeId = 14;
+
+        document.documentElement.scrollTop = 12;
+        document.documentElement.scrollLeft = 0;
+        setVisualViewport({ pageTop: 12, pageLeft: 0, width: 320, height: 640 });
+        setDocumentExtent({ width: 1800, height: 2000 });
+        row.getBoundingClientRect = () => ({
+            top: 120,
+            bottom: 160,
+            left: 360,
+            right: 560,
+            width: 200,
+            height: 40,
+            x: 360,
+            y: 120,
+            toJSON: () => ({}),
+        }) as DOMRect;
+
+        const scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+            if (typeof top === "number") {
+                document.documentElement.scrollTop = top;
+            }
+            if (typeof left === "number") {
+                document.documentElement.scrollLeft = left;
+            }
+        });
+        window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+
+        expect(module.scrollSelectionIntoView(14)).toBe(false);
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 12, left: 252, behavior: "auto" });
+    });
+
+    it("keeps aria-selected synchronized when switching selection between rendered rows", () => {
+        const { tree } = ensureDomFixture();
+        const previousElement = document.createElement("div");
+        previousElement.className = "tree-node is-selected";
+        previousElement.dataset.nodeId = "21";
+        const previousRow = document.createElement("div");
+        previousRow.className = "tree-node__row";
+        previousRow.setAttribute("aria-selected", "true");
+        previousElement.appendChild(previousRow);
+
+        const nextElement = document.createElement("div");
+        nextElement.className = "tree-node";
+        nextElement.dataset.nodeId = "22";
+        const nextRow = document.createElement("div");
+        nextRow.className = "tree-node__row";
+        nextRow.setAttribute("aria-selected", "false");
+        nextElement.appendChild(nextRow);
+
+        tree.appendChild(previousElement);
+        tree.appendChild(nextElement);
+        treeState.nodes.set(21, makeNode(21));
+        treeState.nodes.set(22, makeNode(22));
+        treeState.elements.set(21, previousElement);
+        treeState.elements.set(22, nextElement);
+        treeState.selectedNodeId = 21;
+
+        expect(selectNode(22, { shouldHighlight: false, notifyNative: false })).toBe(true);
+        expect(previousRow.getAttribute("aria-selected")).toBe("false");
+        expect(nextRow.getAttribute("aria-selected")).toBe("true");
     });
 });

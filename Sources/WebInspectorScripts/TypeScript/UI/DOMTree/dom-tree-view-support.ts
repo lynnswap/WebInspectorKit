@@ -849,12 +849,18 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
     const absoluteTop = viewport.top + targetRect.top;
     const absoluteBottom = absoluteTop + targetRect.height;
     const absoluteLeft = viewport.left + targetRect.left;
+    const absoluteRight = absoluteLeft + targetRect.width;
     const visibleTop = viewport.top + viewport.safeAreaTop + viewport.blockMargin;
     const visibleBottom = viewport.top + viewport.height - viewport.safeAreaBottom - viewport.blockMargin;
     const visibleLeft = viewport.left + viewport.safeAreaLeft + viewport.inlineStartMargin;
+    const visibleRight = viewport.left + viewport.width - viewport.safeAreaRight - viewport.inlineStartMargin;
     const availableHeight = Math.max(
         0,
         viewport.height - viewport.safeAreaTop - viewport.safeAreaBottom - (viewport.blockMargin * 2)
+    );
+    const availableWidth = Math.max(
+        0,
+        viewport.width - viewport.safeAreaLeft - viewport.safeAreaRight - (viewport.inlineStartMargin * 2)
     );
     let nextTop = viewport.top;
     let nextLeft = viewport.left;
@@ -862,6 +868,9 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
 
     if (absoluteLeft < visibleLeft) {
         nextLeft = absoluteLeft - viewport.safeAreaLeft - viewport.inlineStartMargin;
+        needsScroll = true;
+    } else if (targetRect.width < availableWidth && absoluteRight > visibleRight) {
+        nextLeft = absoluteRight - viewport.width + viewport.safeAreaRight + viewport.inlineStartMargin;
         needsScroll = true;
     }
 
@@ -927,17 +936,21 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
     const { shouldHighlight = true, autoScroll = false, notifyNative = true } = options;
     revealAncestors(nodeId);
 
-    const previous = treeState.elements.get(treeState.selectedNodeId ?? -1);
-    if (previous) {
-        previous.classList.remove("is-selected");
+    const previousNodeId = treeState.selectedNodeId;
+    treeState.selectedNodeId = nodeId;
+
+    if (previousNodeId !== null && previousNodeId !== nodeId) {
+        const previous = treeState.elements.get(previousNodeId);
+        if (previous) {
+            syncNodeSelectionState(previous, previousNodeId);
+        }
     }
 
     const element = treeState.elements.get(nodeId) ?? materializeSelectionElementIfNeeded(nodeId);
     if (element) {
-        element.classList.add("is-selected");
+        syncNodeSelectionState(element, nodeId);
     }
 
-    treeState.selectedNodeId = nodeId;
     setNodeExpanded(nodeId, true);
     const node = treeState.nodes.get(nodeId);
     if (notifyNative) {
