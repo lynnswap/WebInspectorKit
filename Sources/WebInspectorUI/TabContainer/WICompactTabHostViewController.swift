@@ -189,8 +189,8 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
     }
 
     private func applyUserSelection(selectedTab: WITab) {
-        inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
         inspector.setSelectedTab(selectedTab)
+        inspector.setPreferredCompactSelectedTabIdentifier(selectedTab.identifier)
     }
 
     private func restoreModelSelectionIfNeeded(displayTabs: [WITab]) {
