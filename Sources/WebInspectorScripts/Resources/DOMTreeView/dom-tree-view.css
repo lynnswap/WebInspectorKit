@@ -19,7 +19,6 @@
     --node-attribute: #ec9eff;
     --node-value: #ffd479;
     --dom-indent-base: 12px;
-    --dom-indent-step: 4px;
 }
 
 @media (prefers-color-scheme: light) {
@@ -139,14 +138,14 @@ html {
 .tree-node {
     position: relative;
     --tree-indent-depth: var(--indent-depth, var(--depth, 0));
-    padding-left: calc(var(--dom-indent-base) + var(--tree-indent-depth) * var(--dom-indent-step));
+    padding-left: calc(var(--dom-indent-base) + var(--tree-indent-depth) * 1px);
     border-left: 1px solid transparent;
 }
 
 .tree-node__row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     padding: 3px 16px 3px 0;
     min-height: 26px;
     cursor: pointer;
