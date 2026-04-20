@@ -5,7 +5,7 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
     private enum AccessibilityID {
         static let currentURL = "Monocly.diagnostics.currentURL"
         static let openInspector = "Monocly.inspectorHarness.openInspector"
-        static let pickButton = "WI.DOM.PickButton"
+        static let beginNativeSelection = "Monocly.inspectorHarness.beginNativeSelection"
         static let browserURL = "Monocly.inspectorHarness.browserURL"
         static let domDocumentURL = "Monocly.inspectorHarness.domDocumentURL"
         static let domContextID = "Monocly.inspectorHarness.domContextID"
@@ -186,8 +186,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = activePickButton(in: app)
-        pickButton.tap()
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
+        beginNativeSelectionButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
         XCTAssertTrue(
@@ -251,8 +252,9 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
             canGoForward: false
         )
 
-        let pickButton = activePickButton(in: app)
-        pickButton.tap()
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
+        beginNativeSelectionButton.tap()
 
         let selectingLabel = app.staticTexts[AccessibilityID.domIsSelecting]
         XCTAssertTrue(
@@ -317,11 +319,11 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         let domTreeSelectedPreviewLabel = app.staticTexts[AccessibilityID.domTreeSelectedPreview]
         let domTreeSelectedVisibleLabel = app.staticTexts[AccessibilityID.domTreeSelectedVisible]
         let domErrorLabel = app.staticTexts[AccessibilityID.domError]
+        let beginNativeSelectionButton = app.buttons[AccessibilityID.beginNativeSelection]
+        XCTAssertTrue(beginNativeSelectionButton.waitForExistence(timeout: 10))
 
         for _ in 0..<3 {
-            activateDOMTabIfNeeded(in: app)
-            let currentPickButton = activePickButton(in: app)
-            currentPickButton.tap()
+            beginNativeSelectionButton.tap()
 
             XCTAssertTrue(
                 waitForCondition(timeout: 15) {
@@ -480,55 +482,6 @@ final class BrowserInspectorNavigationUITests: XCTestCase {
         }
 
         return link
-    }
-
-    @MainActor
-    private func activePickButton(
-        in app: XCUIApplication,
-        timeout: TimeInterval = 10
-    ) -> XCUIElement {
-        let query = app.buttons.matching(identifier: AccessibilityID.pickButton)
-        let resolved = waitForCondition(timeout: timeout) {
-            query.allElementsBoundByIndex.contains {
-                $0.exists && $0.isEnabled && $0.isHittable
-            }
-        }
-
-        XCTAssertTrue(
-            resolved,
-            "No hittable pick button was available."
-        )
-
-        if let activeButton = query.allElementsBoundByIndex.first(where: {
-            $0.exists && $0.isEnabled && $0.isHittable
-        }) {
-            return activeButton
-        }
-
-        return query.element(boundBy: 0)
-    }
-
-    @MainActor
-    private func activateDOMTabIfNeeded(in app: XCUIApplication) {
-        let tabCandidates = [
-            app.tabBars.buttons["wi_dom"],
-            app.tabBars.buttons["DOM"]
-        ]
-
-        guard let domTab = tabCandidates.first(where: \.exists) else {
-            return
-        }
-        if domTab.isHittable {
-            domTab.tap()
-        }
-    }
-
-    @MainActor
-    private func tapElementFrameCenter(_ element: XCUIElement, in app: XCUIApplication) {
-        let frame = element.frame
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        let coordinate = origin.withOffset(CGVector(dx: frame.midX, dy: frame.midY))
-        coordinate.tap()
     }
 
     @MainActor

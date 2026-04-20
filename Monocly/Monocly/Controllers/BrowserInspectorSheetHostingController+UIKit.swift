@@ -38,6 +38,17 @@ final class BrowserInspectorSheetHostingController: UIViewController {
         if launchConfiguration.uiTestScenario?.showsInspectorHarnessPanel == true {
             self.harnessPanel = BrowserInspectorUITestHarnessPanel(
                 fixturePages: launchConfiguration.uiTestFixturePages,
+                onBeginNativeSelection: { [weak inspectorController] in
+                    Task { @MainActor in
+                        do {
+                            try await inspectorController?.dom.beginSelectionMode()
+                        } catch {
+                            inspectorHarnessLogger.error(
+                                "beginNativeSelection failed error=\(error.localizedDescription, privacy: .public)"
+                            )
+                        }
+                    }
+                },
                 onLoadPage: { [weak browserStore] page in
                     browserStore?.load(url: page.url)
                 },
@@ -230,6 +241,7 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
 
     init(
         fixturePages: [BrowserUITestFixturePage],
+        onBeginNativeSelection: @escaping () -> Void,
         onLoadPage: @escaping (BrowserUITestFixturePage) -> Void,
         onSelectNode: @escaping (BrowserUITestSelectionTarget) -> Void,
         onGoBack: @escaping () -> Void,
@@ -266,6 +278,18 @@ private final class BrowserInspectorUITestHarnessPanel: UIVisualEffectView {
         selectionButtonStack.alignment = .fill
         selectionButtonStack.distribution = .fillEqually
         selectionButtonStack.spacing = 8
+
+        let nativeSelectionButton = UIButton(type: .system)
+        nativeSelectionButton.configuration = .tinted()
+        nativeSelectionButton.configuration?.title = "Native Pick"
+        nativeSelectionButton.accessibilityIdentifier = "Monocly.inspectorHarness.beginNativeSelection"
+        nativeSelectionButton.addAction(
+            UIAction { _ in
+                onBeginNativeSelection()
+            },
+            for: .primaryActionTriggered
+        )
+        selectionButtonStack.addArrangedSubview(nativeSelectionButton)
 
         let selectionTargets = fixturePages.flatMap(\.selectionTargets)
         for (index, target) in selectionTargets.enumerated() {

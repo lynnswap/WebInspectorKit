@@ -139,14 +139,12 @@ public final class WIDOMDetailViewController: UICollectionViewController {
     private lazy var dataSource = makeDataSource()
 
     private lazy var pickItem: UIBarButtonItem = {
-        let item = UIBarButtonItem(
+        UIBarButtonItem(
             image: UIImage(systemName: pickSymbolName),
             style: .plain,
             target: self,
             action: #selector(toggleSelectionMode)
         )
-        item.accessibilityIdentifier = "WI.DOM.PickButton"
-        return item
     }()
 
     public init(inspector: WIDOMInspector, showsNavigationControls: Bool = true) {
