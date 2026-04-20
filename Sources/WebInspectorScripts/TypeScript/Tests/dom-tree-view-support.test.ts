@@ -226,6 +226,26 @@ describe("dom-tree-view-support", () => {
             .toBeNull();
     });
 
+    it("starts hover tracking after pointer availability changes post-install", () => {
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.className = "tree-node";
+        element.dataset.nodeId = "14";
+        element.appendChild(row);
+        tree.appendChild(element);
+        treeState.nodes.set(14, makeNode(14));
+        setMatchMedia(false);
+
+        ensureTreeEventHandlers();
+        setMatchMedia(true);
+        row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+        expect((window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId ?? null)
+            .toBe(14);
+    });
+
     it("reveals the selected row leading edge with a 12px margin", async () => {
         const module = await import("../UI/DOMTree/dom-tree-view-support");
         const { tree } = ensureDomFixture();

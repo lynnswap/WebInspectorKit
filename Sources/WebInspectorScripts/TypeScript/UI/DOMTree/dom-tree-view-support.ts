@@ -200,11 +200,9 @@ export function ensureTreeEventHandlers(): void {
     syncTreeScrollMetrics();
     dom.tree.addEventListener("click", handleTreeClick);
     dom.tree.addEventListener("contextmenu", handleTreeContextMenu);
-    if (hoverInteractionsEnabled()) {
-        dom.tree.addEventListener("mouseover", handleTreeMouseOver);
-        dom.tree.addEventListener("mouseout", handleTreeMouseOut);
-        dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
-    }
+    dom.tree.addEventListener("mouseover", handleTreeMouseOver);
+    dom.tree.addEventListener("mouseout", handleTreeMouseOut);
+    dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
     treeEventHandlersInstalled = true;
 }
 
