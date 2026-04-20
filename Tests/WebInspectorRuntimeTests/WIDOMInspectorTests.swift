@@ -1,6 +1,9 @@
 import Foundation
 import Testing
 import WebKit
+#if canImport(UIKit)
+import UIKit
+#endif
 @_spi(Monocly) @testable import WebInspectorRuntime
 @testable import WebInspectorTransport
 

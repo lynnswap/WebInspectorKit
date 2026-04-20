@@ -36,6 +36,7 @@ struct DOMTreeRenderTests {
         #expect(!treeText.contains("#document"))
         #expect(treeText.localizedCaseInsensitiveContains("<!DOCTYPE html>"))
         #expect(treeText.localizedCaseInsensitiveContains("html"))
+
     }
 
     @Test
@@ -135,7 +136,7 @@ struct DOMTreeRenderTests {
     }
 
     @Test
-    func selectionPayloadRevealsNodeRenderedByLaterSubtreeMerge() async throws {
+    func selectedRowBackgroundReachesViewportTrailingEdgeAfterHorizontalScroll() async throws {
         let inspector = WIDOMInspector()
         let (viewController, window) = makeHostedTreeViewController(inspector: inspector)
         defer { tearDown(window: window) }
@@ -147,33 +148,36 @@ struct DOMTreeRenderTests {
 
         inspector.inspectorBridge.updateBootstrap(makeBootstrapPayload(contextID: 1))
         await inspector.inspectorBridge.applyFullSnapshot(
-            makeShallowDocumentPayload(bodyChildCount: 48),
-            contextID: 1
-        )
-        await inspector.inspectorBridge.applySubtreePayload(
-            makeBodySubtreePayload(childCount: 48),
-            contextID: 1
-        )
-        await inspector.inspectorBridge.applySelectionPayload(
-            makeSelectionPayload(
-                localID: 247,
-                preview: "<div id=\"item-47\">",
-                selectorPath: "#item-47",
-                attributes: [["name": "id", "value": "item-47"]]
+            makeScrollableDocumentPayload(
+                nodeCount: 8,
+                wideNodeID: 108
             ),
             contextID: 1
         )
 
+        let rendered = await waitUntilAsync {
+            guard let text = await viewController.treeTextContentForTesting() else {
+                return false
+            }
+            return text.contains("node-8")
+        }
+        #expect(rendered)
+
+        await inspector.inspectorBridge.applySelectionPayload(["id": 108], contextID: 1)
         let selected = await waitUntilAsync {
-            await viewController.selectedNodeIDForTesting() == 247
+            await viewController.selectedNodeIDForTesting() == 108
         }
         #expect(selected)
 
-        let visible = await waitUntilAsync {
-            await viewController.selectedNodeIsVisibleForTesting() == true
+        let scrolled = await viewController.setTreeScrollPositionForTesting(left: 180)
+        #expect(scrolled)
+
+        let reachesViewportEdge = await waitUntilAsync {
+            await viewController.selectedNodeReachesViewportRightEdgeForTesting() == true
         }
-        #expect(visible)
+        #expect(reachesViewportEdge)
     }
+
 }
 
 @MainActor
@@ -302,6 +306,66 @@ private extension DOMTreeRenderTests {
                 "nodeValue": "",
                 "childNodeCount": documentChildren.count,
                 "children": documentChildren,
+            ],
+        ]
+    }
+
+    func makeScrollableDocumentPayload(
+        nodeCount: Int,
+        wideNodeID: Int?
+    ) -> [String: Any] {
+        let bodyChildren: [[String: Any]] = (0..<nodeCount).map { index in
+            let nodeID = 101 + index
+            let attributes: [String]
+            if nodeID == wideNodeID {
+                attributes = [
+                    "class",
+                    "node-\(index + 1) viewport-width-selection-background-check " + String(repeating: "wide-token-", count: 18),
+                ]
+            } else {
+                attributes = [
+                    "class",
+                    "node-\(index + 1)",
+                ]
+            }
+            return [
+                "nodeId": nodeID,
+                "nodeType": 1,
+                "nodeName": "DIV",
+                "localName": "div",
+                "nodeValue": "",
+                "attributes": attributes,
+                "childNodeCount": 0,
+                "children": [],
+            ]
+        }
+
+        return [
+            "root": [
+                "nodeId": 1,
+                "nodeType": 9,
+                "nodeName": "#document",
+                "localName": "",
+                "nodeValue": "",
+                "documentURL": "https://example.com/scrollable",
+                "childNodeCount": 1,
+                "children": [[
+                    "nodeId": 2,
+                    "nodeType": 1,
+                    "nodeName": "HTML",
+                    "localName": "html",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [[
+                        "nodeId": 3,
+                        "nodeType": 1,
+                        "nodeName": "BODY",
+                        "localName": "body",
+                        "nodeValue": "",
+                        "childNodeCount": bodyChildren.count,
+                        "children": bodyChildren,
+                    ]],
+                ]],
             ],
         ]
     }

@@ -2,6 +2,9 @@ import OSLog
 import WebKit
 import WebInspectorEngine
 import WebInspectorScripts
+#if canImport(UIKit)
+import UIKit
+#endif
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -28,7 +31,7 @@ final class InspectorWebView: WKWebView {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     private static func makeDefaultConfiguration() -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.writingToolsBehavior = .none
@@ -73,7 +76,6 @@ final class InspectorWebView: WKWebView {
         scrollView.backgroundColor = .clear
         scrollView.isScrollEnabled = true
         scrollView.alwaysBounceVertical = true
-        scrollView.contentInsetAdjustmentBehavior = .automatic
         scrollView.automaticallyAdjustsScrollIndicatorInsets = true
         scrollView.clipsToBounds = true
         clipsToBounds = true

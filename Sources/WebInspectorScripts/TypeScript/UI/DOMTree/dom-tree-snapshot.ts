@@ -59,6 +59,7 @@ import {
     selectNode,
     selectNodeByPath,
     setNodeExpanded,
+    syncTreeScrollMetrics,
     updateDetails,
 } from "./dom-tree-view-support";
 import { applyMutationBundlesFromBuffer } from "./dom-tree-buffer-transport";
@@ -386,6 +387,7 @@ function resetTreeViewportScroll(): void {
             : document.documentElement;
     scrollElement.scrollTop = 0;
     scrollElement.scrollLeft = 0;
+    syncTreeScrollMetrics();
 }
 
 function handleDocumentUpdated(): void {

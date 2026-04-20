@@ -25,6 +25,7 @@
     --wi-safe-area-left: env(safe-area-inset-left, 0px);
     --wi-selection-reveal-inline-start: 12px;
     --wi-selection-reveal-block-margin: 8px;
+    --wi-tree-scroll-left: 0px;
 }
 
 @media (prefers-color-scheme: light) {
@@ -120,7 +121,10 @@ html {
 }
 
 .dom-tree {
-    padding: 4px 0 16px;
+    padding:
+        calc(var(--wi-selection-reveal-block-margin, 8px) + var(--wi-safe-area-top, 0px))
+        0
+        calc(16px + var(--wi-selection-reveal-block-margin, 8px) + var(--wi-safe-area-bottom, 0px));
     font: 13px/1.5 "SFMono-Regular", "SF Mono", Menlo, Consolas, "Osaka-Mono", "Noto Sans Mono", monospace;
     font-variant-numeric: tabular-nums;
     font-variant-ligatures: none;
@@ -161,15 +165,17 @@ html::-webkit-scrollbar-thumb {
     padding: 3px 16px 3px 0;
     min-height: 26px;
     width: max-content;
-    min-width: 100%;
+    min-width: calc(100% + var(--wi-tree-scroll-left, 0px));
     cursor: pointer;
     color: var(--text-primary);
     transition: background 0.15s ease;
     white-space: nowrap;
 }
 
-.tree-node__row:hover {
-    background: var(--hover-overlay);
+@media (hover: hover) and (pointer: fine) {
+    .tree-node__row:hover {
+        background: var(--hover-overlay);
+    }
 }
 
 .tree-node.is-selected > .tree-node__row {

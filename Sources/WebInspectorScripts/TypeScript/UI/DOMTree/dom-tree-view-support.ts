@@ -47,6 +47,7 @@ import {
 // =============================================================================
 
 let treeEventHandlersInstalled = false;
+let treeScrollMetricsObserverInstalled = false;
 let hoveredNodeId: number | null = null;
 let pendingSelectionRevealNodeId: number | null = null;
 
@@ -71,6 +72,51 @@ function treeScrollElement(): HTMLElement {
         return document.documentElement;
     }
     return document.body;
+}
+
+function setRootCSSPixelVariable(name: string, value: number): void {
+    document.documentElement.style.setProperty(name, `${Math.max(0, value)}px`);
+}
+
+export function syncTreeScrollMetrics(): void {
+    setRootCSSPixelVariable("--wi-tree-scroll-left", treeScrollElement().scrollLeft);
+}
+
+export function hoverInteractionsEnabled(): boolean {
+    if (typeof window.matchMedia !== "function") {
+        return true;
+    }
+    return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+}
+
+function handleTreeViewportScroll(): void {
+    syncTreeScrollMetrics();
+}
+
+function ensureTreeScrollMetricsObserver(): void {
+    if (treeScrollMetricsObserverInstalled) {
+        return;
+    }
+    window.addEventListener("scroll", handleTreeViewportScroll, { passive: true });
+    treeScrollMetricsObserverInstalled = true;
+}
+
+export function resetTreeInteractionStateForTesting(): void {
+    treeEventHandlersInstalled = false;
+    if (treeScrollMetricsObserverInstalled) {
+        window.removeEventListener("scroll", handleTreeViewportScroll);
+        treeScrollMetricsObserverInstalled = false;
+    }
+    hoveredNodeId = null;
+    pendingSelectionRevealNodeId = null;
+    document.documentElement.style.removeProperty("--wi-tree-scroll-left");
+    (window as Window & {
+        __wiLastDOMTreeHoveredNodeId?: number | null;
+        __wiLastDOMTreeContextNodeId?: number | null;
+    }).__wiLastDOMTreeHoveredNodeId = null;
+    (window as Window & {
+        __wiLastDOMTreeContextNodeId?: number | null;
+    }).__wiLastDOMTreeContextNodeId = null;
 }
 
 function cssPixelValue(variableName: string, fallback = 0): number {
@@ -142,17 +188,23 @@ function flushPendingSelectionReveal(): void {
 /** Ensure delegated event handlers are installed */
 export function ensureTreeEventHandlers(): void {
     if (treeEventHandlersInstalled) {
+        ensureTreeScrollMetricsObserver();
+        syncTreeScrollMetrics();
         return;
     }
     ensureDomElements();
     if (!dom.tree) {
         return;
     }
+    ensureTreeScrollMetricsObserver();
+    syncTreeScrollMetrics();
     dom.tree.addEventListener("click", handleTreeClick);
     dom.tree.addEventListener("contextmenu", handleTreeContextMenu);
-    dom.tree.addEventListener("mouseover", handleTreeMouseOver);
-    dom.tree.addEventListener("mouseout", handleTreeMouseOut);
-    dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
+    if (hoverInteractionsEnabled()) {
+        dom.tree.addEventListener("mouseover", handleTreeMouseOver);
+        dom.tree.addEventListener("mouseout", handleTreeMouseOut);
+        dom.tree.addEventListener("mouseleave", handleTreeMouseLeave);
+    }
     treeEventHandlersInstalled = true;
 }
 
@@ -177,6 +229,7 @@ export function restoreTreeScrollPosition(position: ScrollPosition | null): void
     const scrollElement = treeScrollElement();
     scrollElement.scrollTop = position.top;
     scrollElement.scrollLeft = position.left;
+    syncTreeScrollMetrics();
 }
 
 /** Capture current tree vertical scroll position */
@@ -190,6 +243,7 @@ export function restoreTreeScrollTop(top: number | null): void {
         return;
     }
     treeScrollElement().scrollTop = top;
+    syncTreeScrollMetrics();
 }
 
 // =============================================================================
@@ -402,6 +456,21 @@ function mergeModifiedAttributes(
     return merged;
 }
 
+function requestPendingNodeRenderPass(): void {
+    renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+    window.setTimeout(() => {
+        if (renderState.frameId === null || renderState.isProcessing || renderState.pendingNodes.size === 0) {
+            return;
+        }
+        const pendingFrameId = renderState.frameId;
+        renderState.frameId = null;
+        if (pendingFrameId !== null) {
+            cancelAnimationFrame(pendingFrameId);
+        }
+        processPendingNodeRenders();
+    }, 32);
+}
+
 /** Schedule a node for re-rendering */
 export function scheduleNodeRender(node: DOMNode, options: NodeRefreshOptions = {}): void {
     if (!node || typeof node.id === "undefined") {
@@ -428,7 +497,7 @@ export function scheduleNodeRender(node: DOMNode, options: NodeRefreshOptions = 
     if (renderState.frameId !== null) {
         return;
     }
-    renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+    requestPendingNodeRenderPass();
 }
 
 /** Process pending node renders */
@@ -488,7 +557,7 @@ export function processPendingNodeRenders(): void {
             });
         }
         renderState.isProcessing = false;
-        renderState.frameId = requestAnimationFrame(() => processPendingNodeRenders());
+        requestPendingNodeRenderPass();
         return;
     }
 
@@ -645,6 +714,9 @@ function handleTreeContextMenu(event: MouseEvent): void {
 
 /** Handle delegated row hover */
 function handleTreeMouseOver(event: MouseEvent): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     if (!target) {
         return;
@@ -664,6 +736,9 @@ function handleTreeMouseOver(event: MouseEvent): void {
 
 /** Handle delegated row leave */
 function handleTreeMouseOut(event: MouseEvent): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     if (!target) {
         return;
@@ -683,6 +758,9 @@ function handleTreeMouseOut(event: MouseEvent): void {
 
 /** Handle leaving the tree container */
 function handleTreeMouseLeave(): void {
+    if (!hoverInteractionsEnabled()) {
+        return;
+    }
     hoveredNodeId = null;
     (window as any).__wiLastDOMTreeHoveredNodeId = null;
     handleRowLeave();
@@ -822,7 +900,24 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
         left: clampScrollOffset(nextLeft, maxHorizontalExtent, viewport.width),
         behavior: "auto",
     });
+    syncTreeScrollMetrics();
     return false;
+}
+
+function materializeSelectionElementIfNeeded(nodeId: number): HTMLElement | null {
+    let node = treeState.nodes.get(nodeId);
+    while (node) {
+        const ancestorElement = treeState.elements.get(node.id);
+        if (ancestorElement) {
+            refreshNodeElement(node, { updateChildren: true });
+            return treeState.elements.get(nodeId) ?? null;
+        }
+        if (!node.parentId) {
+            break;
+        }
+        node = treeState.nodes.get(node.parentId);
+    }
+    return null;
 }
 
 /** Select a node by ID */
@@ -839,7 +934,7 @@ export function selectNode(nodeId: number, options: SelectionOptions = {}): bool
         previous.classList.remove("is-selected");
     }
 
-    const element = treeState.elements.get(nodeId);
+    const element = treeState.elements.get(nodeId) ?? materializeSelectionElementIfNeeded(nodeId);
     if (element) {
         element.classList.add("is-selected");
     }

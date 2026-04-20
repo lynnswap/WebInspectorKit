@@ -209,7 +209,7 @@ private extension DOMInspectorBridge {
         do {
             try await inspectorWebView.callAsyncVoidJavaScript(
                 script,
-                arguments: arguments,
+                arguments: normalizedJavaScriptArguments(arguments),
                 contentWorld: .page
             )
         } catch {
@@ -274,6 +274,51 @@ private extension DOMInspectorBridge {
             return dictionary as? [String: Any]
         }
         return nil
+    }
+
+    func normalizedJavaScriptArguments(_ arguments: [String: Any]) -> [String: Any] {
+        arguments.mapValues { normalizedJavaScriptValue($0) }
+    }
+
+    func normalizedJavaScriptValue(_ value: Any) -> Any {
+        guard let unwrapped = unwrapOptionalJavaScriptValue(value) else {
+            return NSNull()
+        }
+
+        switch unwrapped {
+        case let null as NSNull:
+            return null
+        case let number as NSNumber:
+            return number
+        case let string as NSString:
+            return string
+        case let string as String:
+            return string
+        case let date as NSDate:
+            return date
+        case let date as Date:
+            return date as NSDate
+        case let array as [Any]:
+            return array.map { normalizedJavaScriptValue($0) }
+        case let dictionary as [String: Any]:
+            return dictionary.mapValues { normalizedJavaScriptValue($0) }
+        default:
+            if JSONSerialization.isValidJSONObject(["value": unwrapped]),
+               let data = try? JSONSerialization.data(withJSONObject: ["value": unwrapped]),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let normalized = object["value"] {
+                return normalized
+            }
+            return String(describing: unwrapped)
+        }
+    }
+
+    func unwrapOptionalJavaScriptValue(_ value: Any) -> Any? {
+        let mirror = Mirror(reflecting: value)
+        guard mirror.displayStyle == .optional else {
+            return value
+        }
+        return mirror.children.first?.value
     }
 }
 

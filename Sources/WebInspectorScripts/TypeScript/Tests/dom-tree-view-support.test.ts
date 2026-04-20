@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     captureTreeScrollPosition,
+    ensureTreeEventHandlers,
     processPendingNodeRenders,
+    resetTreeInteractionStateForTesting,
     restoreTreeScrollPosition,
-    scheduleNodeRender
+    scheduleNodeRender,
+    syncTreeScrollMetrics,
 } from "../UI/DOMTree/dom-tree-view-support";
 import { dom, renderState, treeState } from "../UI/DOMTree/dom-tree-state";
 import { TEXT_CONTENT_ATTRIBUTE } from "../UI/DOMTree/dom-tree-types";
@@ -30,6 +33,7 @@ function makeNode(id: number): DOMNode {
 }
 
 function resetRenderState() {
+    resetTreeInteractionStateForTesting();
     document.body.innerHTML = "<div id=\"dom-tree\"></div><div id=\"dom-empty\"></div>";
     dom.tree = null;
     dom.empty = null;
@@ -58,6 +62,10 @@ function resetRenderState() {
     Object.defineProperty(window, "innerHeight", {
         configurable: true,
         value: 768,
+    });
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: undefined,
     });
 }
 
@@ -106,6 +114,22 @@ function setDocumentExtent({
     Object.defineProperty(document.body, "scrollHeight", {
         configurable: true,
         value: height,
+    });
+}
+
+function setMatchMedia(matches: boolean) {
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+            matches,
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn(),
+        })),
     });
 }
 
@@ -165,6 +189,41 @@ describe("dom-tree-view-support", () => {
 
         expect(document.documentElement.scrollTop).toBe(120);
         expect(document.documentElement.scrollLeft).toBe(48);
+    });
+
+    it("syncs tree scroll metrics on install and scroll updates", () => {
+        ensureDomFixture();
+        document.documentElement.scrollLeft = 18;
+
+        ensureTreeEventHandlers();
+        expect(document.documentElement.style.getPropertyValue("--wi-tree-scroll-left")).toBe("18px");
+
+        document.documentElement.scrollLeft = 52;
+        window.dispatchEvent(new Event("scroll"));
+        expect(document.documentElement.style.getPropertyValue("--wi-tree-scroll-left")).toBe("52px");
+
+        document.documentElement.scrollLeft = 91;
+        syncTreeScrollMetrics();
+        expect(document.documentElement.style.getPropertyValue("--wi-tree-scroll-left")).toBe("91px");
+    });
+
+    it("does not record hover state when hover interactions are unavailable", () => {
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.className = "tree-node";
+        element.dataset.nodeId = "14";
+        element.appendChild(row);
+        tree.appendChild(element);
+        treeState.nodes.set(14, makeNode(14));
+        setMatchMedia(false);
+
+        ensureTreeEventHandlers();
+        row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+
+        expect((window as Window & { __wiLastDOMTreeHoveredNodeId?: number | null }).__wiLastDOMTreeHoveredNodeId ?? null)
+            .toBeNull();
     });
 
     it("reveals the selected row leading edge with a 12px margin", async () => {
