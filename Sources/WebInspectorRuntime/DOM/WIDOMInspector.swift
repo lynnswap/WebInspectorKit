@@ -1617,6 +1617,11 @@ private extension WIDOMInspector {
                 extra: error.localizedDescription,
                 level: .error
             )
+            await clearSelectionForFailedResolution(
+                contextID: contextID,
+                transaction: transaction,
+                errorMessage: "Failed to resolve selected element."
+            )
         }
     }
 
@@ -2141,13 +2146,6 @@ private extension WIDOMInspector {
         if transaction != nil {
             pendingInspectSelection = nil
             acceptsInspectEvents = false
-        }
-        if transaction != nil,
-           let contextID,
-           document.selectedNode != nil {
-            await syncSelectedNodeHighlight(contextID: contextID)
-            applyRecoverableError(nil)
-            return
         }
         document.clearSelection()
         try? await hideHighlight()

@@ -32,7 +32,7 @@ public final class WITransportSession {
     private var enqueuedPageEventCount: UInt64 = 0
     private var deliveredPageEventCount: UInt64 = 0
     private var activePageEventDeliveryCount: UInt64 = 0
-    private var pageEventDrainWaiters: [CheckedContinuation<Void, Never>] = []
+    private var pageEventDrainWaiters: [PageEventDrainWaiter] = []
     private var stableNetworkBootstrapAvailability: StableNetworkBootstrapAvailability = .unknown
 
 #if DEBUG
@@ -282,12 +282,18 @@ public final class WITransportSession {
     }
 
     package func waitForPostActivePageEventsToDrain() async {
-        guard pendingQueuedPageEventCount > 0 else {
+        let targetDeliveredCount = enqueuedPageEventCount
+        guard targetDeliveredCount > deliveredPageEventCount else {
             return
         }
 
         await withCheckedContinuation { continuation in
-            pageEventDrainWaiters.append(continuation)
+            pageEventDrainWaiters.append(
+                PageEventDrainWaiter(
+                    targetDeliveredCount: targetDeliveredCount,
+                    continuation: continuation
+                )
+            )
             resumePageEventDrainWaitersIfNeeded()
         }
     }
@@ -369,7 +375,12 @@ public final class WITransportSession {
     }
 }
 
-private extension WITransportSession {
+private struct PageEventDrainWaiter {
+    let targetDeliveredCount: UInt64
+    let continuation: CheckedContinuation<Void, Never>
+}
+
+extension WITransportSession {
     enum StableNetworkBootstrapAvailability {
         case unknown
         case available
@@ -889,15 +900,15 @@ private extension WITransportSession {
         pageEventStreamContinuation = nil
         continuation?.finish()
         for waiter in drainWaiters {
-            waiter.resume()
+            waiter.continuation.resume()
         }
     }
 
-    func beginPageEventDelivery() {
+    package func beginPageEventDelivery() {
         activePageEventDeliveryCount &+= 1
     }
 
-    func finishPageEventDelivery() {
+    package func finishPageEventDelivery() {
         if activePageEventDeliveryCount > 0 {
             activePageEventDeliveryCount &-= 1
         }
@@ -905,24 +916,21 @@ private extension WITransportSession {
         resumePageEventDrainWaitersIfNeeded()
     }
 
-    private var pendingQueuedPageEventCount: UInt64 {
-        guard enqueuedPageEventCount >= deliveredPageEventCount else {
-            return 0
-        }
-        return enqueuedPageEventCount - deliveredPageEventCount
-    }
-
     func resumePageEventDrainWaitersIfNeeded() {
         guard !pageEventDrainWaiters.isEmpty else {
             return
         }
-        guard pendingQueuedPageEventCount == 0 else {
+        let readyWaiters = pageEventDrainWaiters.filter {
+            deliveredPageEventCount >= $0.targetDeliveredCount
+        }
+        guard !readyWaiters.isEmpty else {
             return
         }
-        let waiters = pageEventDrainWaiters
-        pageEventDrainWaiters.removeAll(keepingCapacity: true)
-        for waiter in waiters {
-            waiter.resume()
+        pageEventDrainWaiters.removeAll {
+            deliveredPageEventCount >= $0.targetDeliveredCount
+        }
+        for waiter in readyWaiters {
+            waiter.continuation.resume()
         }
     }
 

@@ -715,7 +715,7 @@ struct WIDOMInspectorTests {
     }
 
     @Test
-    func inspectorInspectResolutionFailureDoesNotBlockSubsequentDOMInspectSelection() async throws {
+    func inspectorInspectResolutionFailureSurfacesErrorAndAllowsRetry() async throws {
         var requestedObjectIDs: [String] = []
         let backend = FakeDOMTransportBackend()
         backend.pageResultProvider = { method, payload, _ in
@@ -790,15 +790,16 @@ struct WIDOMInspectorTests {
             ]
         )
 
-        let discarded = await waitForCondition {
+        let failed = await waitForCondition {
             requestedObjectIDs.contains("bad-node-object")
                 && inspector.isSelectingElement == false
                 && inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == "Failed to resolve selected element."
         }
-        #expect(discarded)
+        #expect(failed)
 
+        try await inspector.beginSelectionMode()
         backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 6])
-
         let selected = await waitForCondition {
             inspector.document.selectedNode?.localID == 6
                 && inspector.document.selectedNode?.nodeName == "A"

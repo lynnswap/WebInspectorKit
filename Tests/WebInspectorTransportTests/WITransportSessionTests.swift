@@ -630,6 +630,70 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func waitForPostActivePageEventsToDrainIgnoresLaterTraffic() async throws {
+        let backend = FakeSessionBackend()
+        let session = WITransportSession(
+            configuration: .init(responseTimeout: .seconds(1)),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+
+        let attachEvent = await iterator.next()
+        #expect(attachEvent?.method == "Target.targetCreated")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+
+        backend.emitRootMessage(
+            #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+        )
+        await backend.waitForPendingMessages()
+
+        let drainTask = Task { @MainActor in
+            await session.waitForPostActivePageEventsToDrain()
+        }
+        defer { drainTask.cancel() }
+
+        backend.emitPageMessage(
+            #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1"}}"#,
+            targetIdentifier: "page-B"
+        )
+        await backend.waitForPendingMessages()
+
+        let committedTargetEvent = await iterator.next()
+        #expect(committedTargetEvent?.method == "Target.didCommitProvisionalTarget")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+
+        let drainedAfterCommittedTarget = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await drainTask.value
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(drainedAfterCommittedTarget)
+
+        let laterTrafficEvent = await iterator.next()
+        #expect(laterTrafficEvent?.method == "Network.requestWillBeSent")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+    }
+
+    @Test
     func waitForPendingMessagesCompletesForOffMainEnqueue() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
