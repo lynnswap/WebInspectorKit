@@ -38,6 +38,7 @@ final class WICompactTabHostViewController: UITabBarController, UITabBarControll
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         delegate = self
         tabBar.scrollEdgeAppearance = tabBar.standardAppearance
         rebuildNativeTabsIfPossible()

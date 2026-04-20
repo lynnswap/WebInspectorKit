@@ -54,6 +54,7 @@ final class WIRegularTabHostViewController: UINavigationController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         navigationBar.prefersLargeTitles = false
         wiApplyClearNavigationBarStyle(to: self)
 
@@ -293,6 +294,7 @@ private final class WIRegularSplitRootContainerViewController: UIViewController 
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         installContentViewControllerIfNeeded()
     }
 

@@ -93,6 +93,7 @@ public final class WINetworkViewController: UISplitViewController, UISplitViewCo
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             self.listPaneViewController.applyListColumnNavigationItemsForRegularLayout()
             self.updateNavigationItemState()

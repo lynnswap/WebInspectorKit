@@ -146,7 +146,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func configureViewHierarchy() {
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
         let webView = store.webView
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -442,7 +442,7 @@ final class BrowserPageViewController: UIViewController {
         progressView.isHidden = progressIsVisible == false
         progressHeightConstraint?.constant = progressIsVisible ? 2 : 0
 
-        view.backgroundColor = store.underPageBackgroundColor ?? .systemBackground
+        view.backgroundColor = store.underPageBackgroundColor ?? .clear
 
         if launchConfiguration.shouldShowDiagnostics {
             diagnosticsPanel.update(with: store)

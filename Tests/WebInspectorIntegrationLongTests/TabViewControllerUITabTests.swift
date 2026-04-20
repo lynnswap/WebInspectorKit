@@ -29,6 +29,33 @@ struct TabViewControllerUITabTests {
     }
 
     @Test
+    func compactHostHierarchyUsesClearBackgrounds() {
+        let controller = WIInspectorController()
+        let container = WITabViewController(
+            controller,
+            webView: nil,
+            tabs: [.dom(), .network()]
+        )
+
+        container.loadViewIfNeeded()
+        configureSizeClass(.compact, for: container, requestedTabs: [.dom(), .network()])
+
+        #expect(container.view.backgroundColor == .clear)
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        #expect(compactHost.view.backgroundColor == .clear)
+
+        guard let domViewController = compactHost.selectedViewController as? WIDOMViewController else {
+            Issue.record("Expected DOM split controller")
+            return
+        }
+        #expect(domViewController.view.backgroundColor == .clear)
+    }
+
+    @Test
     func containerSwitchesHostWhenSizeClassChanges() {
         let controller = WIInspectorController()
         let container = WITabViewController(

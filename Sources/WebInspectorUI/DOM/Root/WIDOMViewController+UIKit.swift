@@ -167,6 +167,7 @@ public final class WIDOMViewController: UISplitViewController, UISplitViewContro
 
     public override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .clear
 
         registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
             if self.traitCollection.horizontalSizeClass == .compact {

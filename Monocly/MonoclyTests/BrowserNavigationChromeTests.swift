@@ -336,6 +336,65 @@ final class BrowserNavigationChromeTests: XCTestCase {
     }
 
     @MainActor
+    func testInspectorSheetHostingControllerUsesClearBackground() {
+        let browserStore = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        let controller = BrowserInspectorSheetHostingController(
+            browserStore: browserStore,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!,
+                shouldShowDiagnostics: true,
+                uiTestScenario: .domOpenInspectorAfterInitialLoad
+            ),
+            tabs: [.dom()]
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testBrowserControllersUseClearBackgroundWithoutSystemFallback() throws {
+        let fixture = try makeHostedRootViewController()
+
+        XCTAssertEqual(fixture.rootViewController.view.backgroundColor, .clear)
+        XCTAssertEqual(
+            fixture.pageViewController.view.backgroundColor,
+            fixture.rootViewController.store.underPageBackgroundColor
+        )
+
+        let inspectorWindowController = BrowserInspectorWindowHostingController()
+        inspectorWindowController.loadViewIfNeeded()
+
+        XCTAssertEqual(inspectorWindowController.view.backgroundColor, .clear)
+    }
+
+    @MainActor
+    func testPageViewControllerUsesUnderPageBackgroundColorWhenProvided() {
+        let store = BrowserStore(
+            url: URL(string: "about:blank")!,
+            automaticallyLoadsInitialRequest: false
+        )
+        store.underPageBackgroundColor = .systemRed
+
+        let controller = BrowserPageViewController(
+            store: store,
+            inspectorController: WIInspectorController(),
+            launchConfiguration: BrowserLaunchConfiguration(
+                initialURL: URL(string: "about:blank")!
+            )
+        )
+
+        controller.loadViewIfNeeded()
+
+        XCTAssertEqual(controller.view.backgroundColor, .systemRed)
+    }
+
+    @MainActor
     func testRegularInspectorWindowActionCreatesWindowAndPreventsReentry() throws {
         let fixture = try makeHostedRootViewController()
         let rootViewController = fixture.rootViewController
