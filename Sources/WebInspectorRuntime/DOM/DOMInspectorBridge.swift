@@ -66,7 +66,7 @@ final class DOMInspectorBridge: NSObject {
     }
 
     func applyFullSnapshot(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
+        await evaluateVoidPreservingViewport(
             "window.webInspectorDOMFrontend?.applyFullSnapshot?.(payload, contextID)",
             arguments: [
                 "payload": payload,
@@ -76,7 +76,7 @@ final class DOMInspectorBridge: NSObject {
     }
 
     func applyMutationBundles(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
+        await evaluateVoidPreservingViewport(
             "window.webInspectorDOMFrontend?.applyMutationBundles?.(payload, contextID)",
             arguments: [
                 "payload": payload,
@@ -86,7 +86,7 @@ final class DOMInspectorBridge: NSObject {
     }
 
     func applySubtreePayload(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
+        await evaluateVoidPreservingViewport(
             "window.webInspectorDOMFrontend?.applySubtreePayload?.(payload, contextID)",
             arguments: [
                 "payload": payload,
@@ -96,7 +96,7 @@ final class DOMInspectorBridge: NSObject {
     }
 
     func applySelectionPayload(_ payload: Any, contextID: DOMContextID) async {
-        await evaluateVoid(
+        await evaluateVoidPreservingViewport(
             "window.webInspectorDOMFrontend?.applySelectionPayload?.(payload, contextID)",
             arguments: [
                 "payload": payload,
@@ -106,7 +106,7 @@ final class DOMInspectorBridge: NSObject {
     }
 
     func finishChildNodeRequest(nodeID: Int, success: Bool, contextID: DOMContextID) async {
-        await evaluateVoid(
+        await evaluateVoidPreservingViewport(
             "window.webInspectorDOMFrontend?.finishChildNodeRequest?.(nodeId, success, contextID)",
             arguments: [
                 "nodeId": nodeID,
@@ -212,6 +212,29 @@ private extension DOMInspectorBridge {
                 arguments: arguments,
                 contentWorld: .page
             )
+        } catch {
+            domInspectorBridgeLogger.error("bridge dispatch failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func evaluateVoidPreservingViewport(_ script: String, arguments: [String: Any]) async {
+        guard let inspectorWebView else {
+            return
+        }
+        do {
+#if canImport(UIKit)
+            try await inspectorWebView.callAsyncVoidJavaScriptPreservingViewport(
+                script,
+                arguments: arguments,
+                contentWorld: .page
+            )
+#else
+            try await inspectorWebView.callAsyncVoidJavaScript(
+                script,
+                arguments: arguments,
+                contentWorld: .page
+            )
+#endif
         } catch {
             domInspectorBridgeLogger.error("bridge dispatch failed: \(error.localizedDescription, privacy: .public)")
         }

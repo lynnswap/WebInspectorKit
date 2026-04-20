@@ -4,6 +4,8 @@ import WebInspectorEngine
 import WebInspectorScripts
 #if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
 #endif
 
 private let domTreeViewLogger = Logger(subsystem: "WebInspectorKit", category: "DOMTreeView")
@@ -79,7 +81,74 @@ final class InspectorWebView: WKWebView {
         clipsToBounds = true
 #endif
     }
-    
+
+#if canImport(UIKit)
+    private struct PreservedViewportState {
+        let zoomScale: CGFloat
+        let contentOffset: CGPoint
+    }
+
+    private func captureViewportState() -> PreservedViewportState? {
+        guard scrollView.isZooming == false, scrollView.isZoomBouncing == false else {
+            return nil
+        }
+        return PreservedViewportState(
+            zoomScale: scrollView.zoomScale,
+            contentOffset: scrollView.contentOffset
+        )
+    }
+
+    private func restoreViewportState(_ state: PreservedViewportState?) {
+        guard let state else {
+            return
+        }
+
+        let minimumZoomScale = scrollView.minimumZoomScale
+        let maximumZoomScale = max(minimumZoomScale, scrollView.maximumZoomScale)
+        let targetZoomScale = min(max(state.zoomScale, minimumZoomScale), maximumZoomScale)
+        if abs(scrollView.zoomScale - targetZoomScale) > 0.001 {
+            scrollView.setZoomScale(targetZoomScale, animated: false)
+            scrollView.layoutIfNeeded()
+        }
+
+        let adjustedInset = scrollView.adjustedContentInset
+        let minimumOffsetX = -adjustedInset.left
+        let minimumOffsetY = -adjustedInset.top
+        let maximumOffsetX = max(
+            minimumOffsetX,
+            scrollView.contentSize.width - scrollView.bounds.width + adjustedInset.right
+        )
+        let maximumOffsetY = max(
+            minimumOffsetY,
+            scrollView.contentSize.height - scrollView.bounds.height + adjustedInset.bottom
+        )
+        let targetContentOffset = CGPoint(
+            x: min(max(state.contentOffset.x, minimumOffsetX), maximumOffsetX),
+            y: min(max(state.contentOffset.y, minimumOffsetY), maximumOffsetY)
+        )
+
+        if abs(scrollView.contentOffset.x - targetContentOffset.x) > 0.5
+            || abs(scrollView.contentOffset.y - targetContentOffset.y) > 0.5 {
+            scrollView.setContentOffset(targetContentOffset, animated: false)
+        }
+    }
+
+    func callAsyncVoidJavaScriptPreservingViewport(
+        _ script: String,
+        arguments: [String: Any] = [:],
+        in frame: WKFrameInfo? = nil,
+        contentWorld: WKContentWorld
+    ) async throws {
+        let preservedViewportState = captureViewportState()
+        try await callAsyncVoidJavaScript(
+            script,
+            arguments: arguments,
+            in: frame,
+            contentWorld: contentWorld
+        )
+        restoreViewportState(preservedViewportState)
+    }
+#endif
 #if canImport(UIKit)
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)

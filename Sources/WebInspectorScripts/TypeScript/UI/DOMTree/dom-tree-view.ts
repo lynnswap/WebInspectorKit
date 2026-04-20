@@ -22,7 +22,12 @@ import {
     registerTreeHandlers,
     setSnapshot,
 } from "./dom-tree-snapshot";
-import { clearPointerHoverState, selectNode, selectNodeByPath, setSearchTerm } from "./dom-tree-view-support";
+import {
+    clearPointerHoverState,
+    selectNode,
+    selectNodeByPath,
+    setSearchTerm,
+} from "./dom-tree-view-support";
 
 function readBootstrap(): DOMFrontendBootstrapState {
     const globalBootstrap = (window as Window & {

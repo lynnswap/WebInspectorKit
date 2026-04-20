@@ -24,9 +24,9 @@ import {
     renderState,
     ensureDomElements,
     childRequestDepth,
-    protocolState,
     RENDER_BATCH_LIMIT,
     RENDER_TIME_BUDGET,
+    protocolState,
 } from "./dom-tree-state";
 import {
     clampIndentDepth,
@@ -56,9 +56,6 @@ function syncNodeSelectionState(element: HTMLElement, nodeId: number): void {
     const row = element.querySelector(":scope > .tree-node__row");
     if (row) {
         row.setAttribute("aria-selected", isSelected ? "true" : "false");
-    }
-    if (isSelected) {
-        queueSelectionReveal(nodeId);
     }
 }
 
@@ -457,9 +454,9 @@ function shouldCollapseByDefault(node: DOMNode): boolean {
 
 /** Set node expanded state */
 export function setNodeExpanded(nodeId: number, expanded: boolean): void {
+    const node = treeState.nodes.get(nodeId);
     treeState.openState.set(nodeId, expanded);
     const element = treeState.elements.get(nodeId);
-    const node = treeState.nodes.get(nodeId);
     if (!element) {
         if (expanded && node && node.childCount > node.children.length) {
             void requestChildren(node);
@@ -709,38 +706,24 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
     const margin = 8;
     const relativeTop = targetRect.top - containerRect.top;
     const relativeBottom = targetRect.bottom - containerRect.top;
-    const relativeLeft = targetRect.left - containerRect.left;
-    const relativeRight = targetRect.right - containerRect.left;
 
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
     const visibleHeight = Math.max(
         1,
         Math.min(containerRect.bottom, viewportHeight) - Math.max(0, containerRect.top)
     );
-    const visibleWidth = Math.max(
-        1,
-        Math.min(containerRect.right, viewportWidth) - Math.max(0, containerRect.left)
-    );
 
     const contentTop = container.scrollTop + relativeTop;
     const contentBottom = container.scrollTop + relativeBottom;
-    const contentLeft = container.scrollLeft + relativeLeft;
-    const contentRight = container.scrollLeft + relativeRight;
 
     const visibleTop = container.scrollTop;
     const visibleBottom = container.scrollTop + visibleHeight;
-    const visibleLeft = container.scrollLeft;
-    const visibleRight = container.scrollLeft + visibleWidth;
 
     const isContainerScrollableV = Math.abs(container.scrollHeight - container.clientHeight) > 1;
-    const isContainerScrollableH = Math.abs(container.scrollWidth - container.clientWidth) > 1;
     const visibleInViewportV = targetRect.bottom > margin && targetRect.top < viewportHeight - margin;
-    const visibleInViewportH = targetRect.right > margin && targetRect.left < viewportWidth - margin;
     const verticallyVisible = contentBottom > visibleTop + margin && contentTop < visibleBottom - margin;
-    const horizontallyVisible = contentRight > visibleLeft + margin && contentLeft < visibleRight - margin;
 
-    if (verticallyVisible && horizontallyVisible) {
+    if (verticallyVisible) {
         return true;
     }
 
@@ -756,25 +739,11 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
         }
     }
 
-    let nextLeft = container.scrollLeft;
-    if (!horizontallyVisible) {
-        if (isContainerScrollableH) {
-            const desiredLeft = contentLeft - visibleWidth / 5;
-            const maxLeft = Math.max(0, container.scrollWidth - visibleWidth);
-            nextLeft = Math.min(Math.max(0, desiredLeft), maxLeft);
-        } else if (!visibleInViewportH) {
-            const desiredPageLeft = (window.scrollX || 0) + targetRect.left - viewportWidth / 5;
-            window.scrollTo({ left: Math.max(0, desiredPageLeft), behavior: "auto" });
-        }
-    }
-
-    const alreadyAtTarget =
-        Math.abs(container.scrollTop - nextTop) < 0.5 &&
-        Math.abs(container.scrollLeft - nextLeft) < 0.5;
+    const alreadyAtTarget = Math.abs(container.scrollTop - nextTop) < 0.5;
     if (alreadyAtTarget) {
         return true;
     }
-    container.scrollTo({ top: nextTop, left: nextLeft, behavior: "auto" });
+    container.scrollTo({ top: nextTop, behavior: "auto" });
     return false;
 }
 

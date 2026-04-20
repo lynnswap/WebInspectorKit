@@ -2281,7 +2281,7 @@ private extension WIDOMInspector {
     }
 
     func logBootstrapDiagnostics(_ message: String) {
-        NSLog("[WebInspectorDOM] %@", message)
+        domViewLogger.debug("[WebInspectorDOM] \(message, privacy: .public)")
     }
 
     func selectionNodeSummary(_ node: DOMNodeModel?) -> String {
