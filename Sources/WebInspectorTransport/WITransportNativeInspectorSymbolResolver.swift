@@ -1731,7 +1731,7 @@ private enum WITransportNativeInspectorResolver {
         let immediateMask: UInt32 = 0x03FFFFFF
         let immediate = Int32(bitPattern: instruction & immediateMask)
         let signedImmediate = (immediate << 6) >> 4
-        let target = Int64(bitPattern: instructionAddress &+ 4) + Int64(signedImmediate)
+        let target = Int64(bitPattern: instructionAddress) + Int64(signedImmediate)
         guard target >= 0 else {
             return nil
         }
@@ -1744,7 +1744,10 @@ private enum WITransportNativeInspectorResolver {
         callOffset: Int,
         textBaseAddress: UInt64
     ) -> UInt64? {
-        let displacement = unsafe UnsafeRawPointer(textPointer.advanced(by: callOffset + 1)).load(as: Int32.self)
+        let displacement = unsafe UnsafeRawPointer(textPointer).loadUnaligned(
+            fromByteOffset: callOffset + 1,
+            as: Int32.self
+        )
         let nextInstructionAddress = Int64(textBaseAddress) + Int64(callOffset + 5)
         let target = nextInstructionAddress + Int64(displacement)
         guard target >= 0 else {

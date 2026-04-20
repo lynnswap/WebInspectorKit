@@ -592,7 +592,7 @@ private extension WISharedInspectorTransport {
     }
 }
 
-private extension WITransportSession {
+extension WITransportSession {
     func awaitReply(
         id: Int,
         scope: WITransportTargetScope,

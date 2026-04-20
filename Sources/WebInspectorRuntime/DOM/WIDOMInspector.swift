@@ -1870,7 +1870,7 @@ private extension WIDOMInspector {
                 targetIdentifier: targetIdentifier,
                 transaction: transaction
             )
-            if transaction != nil || requestedNodes > 0 {
+            if requestedNodes > 0 {
                 return
             }
         }
@@ -2093,6 +2093,19 @@ private extension WIDOMInspector {
 
         pendingInspectSelection.outstandingMaterializationNodeIDs.subtract(completedNodeIDs)
         self.pendingInspectSelection = pendingInspectSelection
+        guard pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty else {
+            return
+        }
+        guard resolvedInspectedNodeFromCurrentDocument(nodeID: pendingInspectSelection.nodeID) == nil else {
+            return
+        }
+
+        self.pendingInspectSelection = nil
+        await clearSelectionForFailedResolution(
+            contextID: contextID,
+            transaction: pendingInspectSelection.transaction,
+            errorMessage: "Failed to resolve selected element."
+        )
     }
 
     private func selectionSubtreeRoot(

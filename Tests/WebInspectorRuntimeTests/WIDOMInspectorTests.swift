@@ -304,6 +304,7 @@ struct WIDOMInspectorTests {
 #endif
     }
 
+    #if canImport(UIKit)
     @Test
     func pointerInspectSelectionUsesRuntimeHitTestAndRequestNode() async throws {
         var didEvaluateHitTest = false
@@ -361,6 +362,7 @@ struct WIDOMInspectorTests {
         #expect(requestedObjectID == "node-object-6")
         #expect(inspector.document.errorMessage == nil)
     }
+    #endif
 
     @Test
     func domInspectSelectsRealTransportNode() async throws {
@@ -903,6 +905,75 @@ struct WIDOMInspectorTests {
         }
         #expect(selected)
         #expect(requestedNodeIDs == [3])
+    }
+
+    @Test
+    func domInspectFailsAfterFinalMaterializationReplyDoesNotResolveNode() async throws {
+        var didRequestChildNodes = false
+        let backend = FakeDOMTransportBackend()
+        backend.pageResultProvider = { method, payload, _ in
+            switch method {
+            case WITransportMethod.DOM.getDocument:
+                return makeDocumentResult(
+                    url: "https://example.com/a",
+                    bodyChildren: []
+                )
+            case WITransportMethod.DOM.setInspectModeEnabled:
+                return [:]
+            case WITransportMethod.DOM.requestChildNodes:
+                let params = runtimeTestDictionaryValue(payload["params"])
+                let requestedNodeID = params.flatMap {
+                    runtimeTestIntValue($0["nodeId"]) ?? ($0["nodeId"] as? NSNumber)?.intValue
+                }
+                didRequestChildNodes = requestedNodeID == 3
+                return [:]
+            default:
+                return [:]
+            }
+        }
+
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        try await inspector.beginSelectionMode()
+        backend.emitPageEvent(method: "DOM.inspect", params: ["nodeId": 999])
+
+        let requestedChildren = await waitForCondition {
+            didRequestChildNodes && inspector.document.selectedNode == nil
+        }
+        #expect(requestedChildren)
+
+        backend.emitPageEvent(
+            method: "DOM.setChildNodes",
+            params: [
+                "parentId": 3,
+                "nodes": [[
+                    "nodeId": 7,
+                    "backendNodeId": 7,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "attributes": ["id", "other"],
+                    "childNodeCount": 0,
+                    "children": [],
+                ]],
+            ]
+        )
+
+        let failed = await waitForCondition {
+            inspector.document.selectedNode == nil
+                && inspector.document.errorMessage == "Failed to resolve selected element."
+                && inspector.isSelectingElement == false
+        }
+        #expect(failed)
     }
 
     @Test

@@ -216,7 +216,7 @@ private func mangled(_ reverseTokens: [String]) -> String {
 
 #if arch(arm64) || arch(arm64e)
 private func encodeARM64BL(from instructionAddress: UInt64, to targetAddress: UInt64) -> UInt32 {
-    let delta = Int64(targetAddress) - Int64(instructionAddress + 4)
+    let delta = Int64(targetAddress) - Int64(instructionAddress)
     let immediate = UInt32(bitPattern: Int32(delta >> 2)) & 0x03FF_FFFF
     return 0x9400_0000 | immediate
 }
