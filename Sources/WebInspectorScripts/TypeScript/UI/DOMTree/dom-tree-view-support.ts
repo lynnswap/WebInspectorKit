@@ -866,7 +866,7 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
     let nextLeft = viewport.left;
     let needsScroll = false;
 
-    if (absoluteLeft < visibleLeft) {
+    if (absoluteLeft < visibleLeft || absoluteLeft > visibleRight) {
         nextLeft = absoluteLeft - viewport.safeAreaLeft - viewport.inlineStartMargin;
         needsScroll = true;
     } else if (targetRect.width < availableWidth && absoluteRight > visibleRight) {

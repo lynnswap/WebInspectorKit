@@ -450,7 +450,49 @@ describe("dom-tree-view-support", () => {
         window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
 
         expect(module.scrollSelectionIntoView(14)).toBe(false);
-        expect(scrollTo).toHaveBeenLastCalledWith({ top: 12, left: 252, behavior: "auto" });
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 12, left: 348, behavior: "auto" });
+    });
+
+    it("reveals wide rows when their leading edge starts beyond the right edge", async () => {
+        const module = await import("../UI/DOMTree/dom-tree-view-support");
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.appendChild(row);
+
+        tree.appendChild(element);
+        treeState.elements.set(15, element);
+        treeState.selectedNodeId = 15;
+
+        document.documentElement.scrollTop = 18;
+        document.documentElement.scrollLeft = 0;
+        setVisualViewport({ pageTop: 18, pageLeft: 0, width: 320, height: 640 });
+        setDocumentExtent({ width: 2200, height: 2000 });
+        row.getBoundingClientRect = () => ({
+            top: 120,
+            bottom: 160,
+            left: 360,
+            right: 1060,
+            width: 700,
+            height: 40,
+            x: 360,
+            y: 120,
+            toJSON: () => ({}),
+        }) as DOMRect;
+
+        const scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+            if (typeof top === "number") {
+                document.documentElement.scrollTop = top;
+            }
+            if (typeof left === "number") {
+                document.documentElement.scrollLeft = left;
+            }
+        });
+        window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+
+        expect(module.scrollSelectionIntoView(15)).toBe(false);
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 18, left: 348, behavior: "auto" });
     });
 
     it("keeps aria-selected synchronized when switching selection between rendered rows", () => {

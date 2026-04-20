@@ -1930,14 +1930,21 @@ private extension WIDOMInspector {
             return pendingInspectSelection.outstandingMaterializationNodeIDs.count
         }
 
+        let unresolvedCandidateIDs = Set(unresolvedCandidates.map(\.id))
+        pendingInspectSelection.materializedAncestorNodeIDs.formUnion(unresolvedCandidateIDs)
+        pendingInspectSelection.outstandingMaterializationNodeIDs.formUnion(unresolvedCandidateIDs)
+        self.pendingInspectSelection = pendingInspectSelection
+
         var requestedNodes = 0
-        var requestedNodeIDs = Set<DOMNodeModel.ID>()
         for candidate in unresolvedCandidates {
             guard currentContext?.contextID == contextID,
                   selectionTransactionIsCurrent(transaction) else {
                 return pendingInspectSelection.outstandingMaterializationNodeIDs.count
             }
             guard let transportNodeID = try? transportNodeID(for: candidate) else {
+                pendingInspectSelection.materializedAncestorNodeIDs.remove(candidate.id)
+                pendingInspectSelection.outstandingMaterializationNodeIDs.remove(candidate.id)
+                self.pendingInspectSelection = pendingInspectSelection
                 continue
             }
             do {
@@ -1950,8 +1957,10 @@ private extension WIDOMInspector {
                     )
                 )
                 requestedNodes += 1
-                requestedNodeIDs.insert(candidate.id)
             } catch {
+                pendingInspectSelection.materializedAncestorNodeIDs.remove(candidate.id)
+                pendingInspectSelection.outstandingMaterializationNodeIDs.remove(candidate.id)
+                self.pendingInspectSelection = pendingInspectSelection
                 logSelectionDiagnostics(
                     "materializePendingInspectSelection requestChildNodes failed",
                     extra: "nodeID=\(transportNodeID) error=\(error.localizedDescription)",
@@ -1959,8 +1968,6 @@ private extension WIDOMInspector {
                 )
             }
         }
-        pendingInspectSelection.materializedAncestorNodeIDs.formUnion(requestedNodeIDs)
-        pendingInspectSelection.outstandingMaterializationNodeIDs.formUnion(requestedNodeIDs)
         self.pendingInspectSelection = pendingInspectSelection
         return pendingInspectSelection.outstandingMaterializationNodeIDs.count
     }
@@ -2087,11 +2094,14 @@ private extension WIDOMInspector {
                 DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: UInt64($0))
             }
         )
-        guard completedNodeIDs.isEmpty == false else {
+        let relevantCompletedNodeIDs = completedNodeIDs.intersection(
+            pendingInspectSelection.outstandingMaterializationNodeIDs
+        )
+        guard relevantCompletedNodeIDs.isEmpty == false else {
             return
         }
 
-        pendingInspectSelection.outstandingMaterializationNodeIDs.subtract(completedNodeIDs)
+        pendingInspectSelection.outstandingMaterializationNodeIDs.subtract(relevantCompletedNodeIDs)
         self.pendingInspectSelection = pendingInspectSelection
         guard pendingInspectSelection.outstandingMaterializationNodeIDs.isEmpty else {
             return
@@ -2766,6 +2776,53 @@ extension WIDOMInspector {
 
     package func testWaitForBootstrap() async {
         await bootstrapTask?.value
+    }
+
+    package func testSetPendingInspectSelection(
+        nodeID: Int,
+        contextID: DOMContextID,
+        outstandingLocalIDs: [UInt64]
+    ) {
+        let trackedIDs = Set(
+            outstandingLocalIDs.map {
+                DOMNodeModel.ID(documentIdentity: document.documentIdentity, localID: $0)
+            }
+        )
+        pendingInspectSelection = PendingInspectSelection(
+            nodeID: nodeID,
+            contextID: contextID,
+            selectorPath: nil,
+            transaction: selectionTransaction(for: contextID),
+            materializedAncestorNodeIDs: trackedIDs,
+            outstandingMaterializationNodeIDs: trackedIDs
+        )
+    }
+
+    package var testPendingInspectOutstandingLocalIDs: [UInt64] {
+        guard let pendingInspectSelection else {
+            return []
+        }
+        return pendingInspectSelection.outstandingMaterializationNodeIDs
+            .map(\.localID)
+            .sorted()
+    }
+
+    package var testHasPendingInspectSelection: Bool {
+        pendingInspectSelection != nil
+    }
+
+    package func testFinishPendingInspectMaterialization(
+        parentLocalID: UInt64,
+        contextID: DOMContextID
+    ) async {
+        await finishPendingInspectMaterialization(
+            from: DOMGraphMutationBundle(
+                events: [
+                    .setChildNodes(parentLocalID: parentLocalID, nodes: [])
+                ]
+            ),
+            contextID: contextID
+        )
     }
 }
 #endif

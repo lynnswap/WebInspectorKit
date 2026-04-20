@@ -954,6 +954,84 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func pendingInspectMaterializationKeepsLaterCandidatesOutstandingUntilTheyFinish() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [3, 4]
+        )
+
+        await inspector.testFinishPendingInspectMaterialization(
+            parentLocalID: 3,
+            contextID: contextID
+        )
+
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [4])
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
+    func pendingInspectMaterializationIgnoresCompletionsThatWereNeverOutstanding() async throws {
+        let backend = FakeDOMTransportBackend(
+            pageResultProvider: { method, _, _ in
+                switch method {
+                case WITransportMethod.DOM.getDocument:
+                    return makeDocumentResult(url: "https://example.com/a")
+                default:
+                    return [:]
+                }
+            }
+        )
+        let inspector = makeInspector(using: backend)
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        let ready = await waitForCondition {
+            inspector.testIsReady && inspector.document.rootNode != nil
+        }
+        #expect(ready)
+
+        let contextID = try #require(inspector.testCurrentContextID)
+        inspector.testSetPendingInspectSelection(
+            nodeID: 999,
+            contextID: contextID,
+            outstandingLocalIDs: [4]
+        )
+
+        await inspector.testFinishPendingInspectMaterialization(
+            parentLocalID: 3,
+            contextID: contextID
+        )
+
+        #expect(inspector.testHasPendingInspectSelection)
+        #expect(inspector.testPendingInspectOutstandingLocalIDs == [4])
+        #expect(inspector.document.errorMessage == nil)
+    }
+
+    @Test
     func domInspectFailsAfterFinalMaterializationReplyDoesNotResolveNode() async throws {
         var didRequestChildNodes = false
         let backend = FakeDOMTransportBackend()
