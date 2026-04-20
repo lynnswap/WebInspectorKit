@@ -46,12 +46,67 @@ function resetRenderState() {
     treeState.deferredChildRenders.clear();
     treeState.selectionRecoveryRequestKeys.clear();
     treeState.snapshot = null;
+    document.documentElement.removeAttribute("style");
+    Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: undefined,
+    });
+    Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1024,
+    });
+    Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: 768,
+    });
 }
 
 function ensureDomFixture(): {tree: HTMLDivElement} {
     const tree = document.getElementById("dom-tree") as HTMLDivElement;
     dom.tree = tree;
     return {tree};
+}
+
+function setVisualViewport(options: {
+    pageTop?: number;
+    pageLeft?: number;
+    width: number;
+    height: number;
+}) {
+    Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: {
+            pageTop: options.pageTop ?? 0,
+            pageLeft: options.pageLeft ?? 0,
+            width: options.width,
+            height: options.height,
+        },
+    });
+}
+
+function setDocumentExtent({
+    width,
+    height,
+}: {
+    width: number;
+    height: number;
+}) {
+    Object.defineProperty(document.documentElement, "scrollWidth", {
+        configurable: true,
+        value: width,
+    });
+    Object.defineProperty(document.documentElement, "scrollHeight", {
+        configurable: true,
+        value: height,
+    });
+    Object.defineProperty(document.body, "scrollWidth", {
+        configurable: true,
+        value: width,
+    });
+    Object.defineProperty(document.body, "scrollHeight", {
+        configurable: true,
+        value: height,
+    });
 }
 
 describe("dom-tree-view-support", () => {
@@ -112,7 +167,7 @@ describe("dom-tree-view-support", () => {
         expect(document.documentElement.scrollLeft).toBe(48);
     });
 
-    it("keeps horizontal scroll position when restoring selection visibility", async () => {
+    it("reveals the selected row leading edge with a 12px margin", async () => {
         const module = await import("../UI/DOMTree/dom-tree-view-support");
         const { tree } = ensureDomFixture();
         const row = document.createElement("div");
@@ -124,27 +179,155 @@ describe("dom-tree-view-support", () => {
         treeState.elements.set(10, element);
         treeState.selectedNodeId = 10;
 
-        document.documentElement.scrollTop = 10;
-        document.documentElement.scrollLeft = 42;
+        document.documentElement.scrollTop = 24;
+        document.documentElement.scrollLeft = 80;
+        setVisualViewport({ pageTop: 24, pageLeft: 80, width: 320, height: 640 });
+        setDocumentExtent({ width: 1600, height: 2000 });
         row.getBoundingClientRect = () => ({
-            top: 880,
-            bottom: 920,
-            left: 0,
-            right: 200,
+            top: 120,
+            bottom: 160,
+            left: -32,
+            right: 208,
             width: 200,
             height: 40,
-            x: 0,
-            y: 880,
+            x: -32,
+            y: 120,
             toJSON: () => ({}),
         }) as DOMRect;
 
-        const scrollTo = vi.fn(({ top }: { top: number }) => {
-            document.documentElement.scrollTop = top;
+        const scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+            if (typeof top === "number") {
+                document.documentElement.scrollTop = top;
+            }
+            if (typeof left === "number") {
+                document.documentElement.scrollLeft = left;
+            }
         });
         window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
 
         expect(module.scrollSelectionIntoView(10)).toBe(false);
         expect(scrollTo).toHaveBeenCalledTimes(1);
-        expect(document.documentElement.scrollLeft).toBe(42);
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 24, left: 36, behavior: "auto" });
+    });
+
+    it("does not scroll horizontally when the selected row leading edge is already visible", async () => {
+        const module = await import("../UI/DOMTree/dom-tree-view-support");
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.appendChild(row);
+
+        tree.appendChild(element);
+        treeState.elements.set(11, element);
+        treeState.selectedNodeId = 11;
+
+        document.documentElement.scrollTop = 24;
+        document.documentElement.scrollLeft = 80;
+        setVisualViewport({ pageTop: 24, pageLeft: 80, width: 320, height: 640 });
+        row.getBoundingClientRect = () => ({
+            top: 160,
+            bottom: 200,
+            left: 20,
+            right: 720,
+            width: 700,
+            height: 40,
+            x: 20,
+            y: 160,
+            toJSON: () => ({}),
+        }) as DOMRect;
+
+        const scrollTo = vi.fn();
+        window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+
+        expect(module.scrollSelectionIntoView(11)).toBe(true);
+        expect(scrollTo).not.toHaveBeenCalled();
+    });
+
+    it("reveals rows hidden above the safe area inset", async () => {
+        const module = await import("../UI/DOMTree/dom-tree-view-support");
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.appendChild(row);
+
+        tree.appendChild(element);
+        treeState.elements.set(12, element);
+        treeState.selectedNodeId = 12;
+
+        document.documentElement.style.setProperty("--wi-safe-area-top", "44px");
+        document.documentElement.scrollTop = 100;
+        document.documentElement.scrollLeft = 18;
+        setVisualViewport({ pageTop: 100, pageLeft: 18, width: 320, height: 640 });
+        setDocumentExtent({ width: 1200, height: 2400 });
+        row.getBoundingClientRect = () => ({
+            top: 20,
+            bottom: 60,
+            left: 24,
+            right: 240,
+            width: 216,
+            height: 40,
+            x: 24,
+            y: 20,
+            toJSON: () => ({}),
+        }) as DOMRect;
+
+        const scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+            if (typeof top === "number") {
+                document.documentElement.scrollTop = top;
+            }
+            if (typeof left === "number") {
+                document.documentElement.scrollLeft = left;
+            }
+        });
+        window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+
+        expect(module.scrollSelectionIntoView(12)).toBe(false);
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 68, left: 18, behavior: "auto" });
+    });
+
+    it("preserves horizontal scroll while revealing rows hidden below the safe area inset", async () => {
+        const module = await import("../UI/DOMTree/dom-tree-view-support");
+        const { tree } = ensureDomFixture();
+        const row = document.createElement("div");
+        row.className = "tree-node__row";
+        const element = document.createElement("div");
+        element.appendChild(row);
+
+        tree.appendChild(element);
+        treeState.elements.set(13, element);
+        treeState.selectedNodeId = 13;
+
+        document.documentElement.style.setProperty("--wi-safe-area-bottom", "34px");
+        document.documentElement.scrollTop = 10;
+        document.documentElement.scrollLeft = 55;
+        setVisualViewport({ pageTop: 10, pageLeft: 55, width: 320, height: 640 });
+        setDocumentExtent({ width: 1600, height: 2400 });
+        row.getBoundingClientRect = () => ({
+            top: 620,
+            bottom: 660,
+            left: 40,
+            right: 240,
+            width: 200,
+            height: 40,
+            x: 40,
+            y: 620,
+            toJSON: () => ({}),
+        }) as DOMRect;
+
+        const scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+            if (typeof top === "number") {
+                document.documentElement.scrollTop = top;
+            }
+            if (typeof left === "number") {
+                document.documentElement.scrollLeft = left;
+            }
+        });
+        window.scrollTo = scrollTo as unknown as typeof window.scrollTo;
+
+        expect(module.scrollSelectionIntoView(13)).toBe(false);
+        expect(scrollTo).toHaveBeenLastCalledWith({ top: 72, left: 55, behavior: "auto" });
+        expect(document.documentElement.scrollLeft).toBe(55);
     });
 });

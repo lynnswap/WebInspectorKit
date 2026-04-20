@@ -50,6 +50,19 @@ let treeEventHandlersInstalled = false;
 let hoveredNodeId: number | null = null;
 let pendingSelectionRevealNodeId: number | null = null;
 
+type TreeViewportMetrics = {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    safeAreaTop: number;
+    safeAreaRight: number;
+    safeAreaBottom: number;
+    safeAreaLeft: number;
+    inlineStartMargin: number;
+    blockMargin: number;
+};
+
 function treeScrollElement(): HTMLElement {
     if (document.scrollingElement instanceof HTMLElement) {
         return document.scrollingElement;
@@ -58,6 +71,39 @@ function treeScrollElement(): HTMLElement {
         return document.documentElement;
     }
     return document.body;
+}
+
+function cssPixelValue(variableName: string, fallback = 0): number {
+    const rawValue = getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+    if (!rawValue) {
+        return fallback;
+    }
+    const value = Number.parseFloat(rawValue);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function viewportMetrics(): TreeViewportMetrics {
+    const scrollElement = treeScrollElement();
+    const visualViewport = window.visualViewport;
+    return {
+        top: visualViewport?.pageTop ?? window.scrollY ?? scrollElement.scrollTop ?? 0,
+        left: visualViewport?.pageLeft ?? window.scrollX ?? scrollElement.scrollLeft ?? 0,
+        width: visualViewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth ?? 0,
+        height: visualViewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight ?? 0,
+        safeAreaTop: cssPixelValue("--wi-safe-area-top"),
+        safeAreaRight: cssPixelValue("--wi-safe-area-right"),
+        safeAreaBottom: cssPixelValue("--wi-safe-area-bottom"),
+        safeAreaLeft: cssPixelValue("--wi-safe-area-left"),
+        inlineStartMargin: cssPixelValue("--wi-selection-reveal-inline-start", 12),
+        blockMargin: cssPixelValue("--wi-selection-reveal-block-margin", 8),
+    };
+}
+
+function clampScrollOffset(offset: number, contentExtent: number, viewportExtent: number): number {
+    if (contentExtent > viewportExtent) {
+        return Math.min(Math.max(0, offset), contentExtent - viewportExtent);
+    }
+    return Math.max(0, offset);
 }
 
 function syncNodeSelectionState(element: HTMLElement, nodeId: number): void {
@@ -723,16 +769,59 @@ export function scrollSelectionIntoView(nodeId: number): boolean {
 
     const row = element.querySelector(".tree-node__row") || element;
     const targetRect = row.getBoundingClientRect();
-    const margin = 8;
-    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-    const visibleInViewportV = targetRect.bottom > margin && targetRect.top < viewportHeight - margin;
-    if (visibleInViewportV) {
+    const viewport = viewportMetrics();
+    const absoluteTop = viewport.top + targetRect.top;
+    const absoluteBottom = absoluteTop + targetRect.height;
+    const absoluteLeft = viewport.left + targetRect.left;
+    const visibleTop = viewport.top + viewport.safeAreaTop + viewport.blockMargin;
+    const visibleBottom = viewport.top + viewport.height - viewport.safeAreaBottom - viewport.blockMargin;
+    const visibleLeft = viewport.left + viewport.safeAreaLeft + viewport.inlineStartMargin;
+    const availableHeight = Math.max(
+        0,
+        viewport.height - viewport.safeAreaTop - viewport.safeAreaBottom - (viewport.blockMargin * 2)
+    );
+    let nextTop = viewport.top;
+    let nextLeft = viewport.left;
+    let needsScroll = false;
+
+    if (absoluteLeft < visibleLeft) {
+        nextLeft = absoluteLeft - viewport.safeAreaLeft - viewport.inlineStartMargin;
+        needsScroll = true;
+    }
+
+    if (targetRect.height >= availableHeight) {
+        if (absoluteTop < visibleTop || absoluteBottom > visibleBottom) {
+            nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
+            needsScroll = true;
+        }
+    } else if (absoluteTop < visibleTop) {
+        nextTop = absoluteTop - viewport.safeAreaTop - viewport.blockMargin;
+        needsScroll = true;
+    } else if (absoluteBottom > visibleBottom) {
+        nextTop = absoluteBottom - viewport.height + viewport.safeAreaBottom + viewport.blockMargin;
+        needsScroll = true;
+    }
+
+    if (!needsScroll) {
         return true;
     }
 
-    const currentTop = window.scrollY || treeScrollElement().scrollTop;
-    const desiredPageTop = currentTop + targetRect.top - viewportHeight / 3;
-    window.scrollTo({ top: Math.max(0, desiredPageTop), behavior: "auto" });
+    const scrollElement = treeScrollElement();
+    const maxVerticalExtent = Math.max(
+        scrollElement.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+    );
+    const maxHorizontalExtent = Math.max(
+        scrollElement.scrollWidth,
+        document.documentElement.scrollWidth,
+        document.body.scrollWidth
+    );
+    window.scrollTo({
+        top: clampScrollOffset(nextTop, maxVerticalExtent, viewport.height),
+        left: clampScrollOffset(nextLeft, maxHorizontalExtent, viewport.width),
+        behavior: "auto",
+    });
     return false;
 }
 

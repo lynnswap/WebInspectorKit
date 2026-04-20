@@ -19,6 +19,12 @@
     --node-attribute: #ec9eff;
     --node-value: #ffd479;
     --dom-indent-base: 12px;
+    --wi-safe-area-top: env(safe-area-inset-top, 0px);
+    --wi-safe-area-right: env(safe-area-inset-right, 0px);
+    --wi-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --wi-safe-area-left: env(safe-area-inset-left, 0px);
+    --wi-selection-reveal-inline-start: 12px;
+    --wi-selection-reveal-block-margin: 8px;
 }
 
 @media (prefers-color-scheme: light) {
