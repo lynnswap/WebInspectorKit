@@ -356,12 +356,10 @@ public final class WIDOMInspector {
         applyRecoverableError(nil)
         try? await hideHighlight()
 
-#if canImport(UIKit)
-        try ensureNativeInspectorSelectionAvailableIfNeeded()
-#endif
         activatePageWindowForSelectionIfPossible()
 #if canImport(UIKit)
         try await requestPageWindowActivationIfNeeded()
+        try ensureNativeInspectorSelectionAvailableIfNeeded()
 #endif
 
         let targetIdentifier = try requireCurrentTargetIdentifier()

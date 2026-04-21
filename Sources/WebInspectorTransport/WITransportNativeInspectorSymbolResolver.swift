@@ -164,10 +164,8 @@ private enum WITransportNativeInspectorResolver {
         WITransportNativeInspectorObfuscation.deobfuscate(["tCore", "avaScrip", "ions/A/J", "ork/Vers", "e.framew", "criptCor", "ks/JavaS", "Framewor", "Library/", "/System/"]),
     ]
     fileprivate static let webCoreImagePathSuffixes = [
-        // /System/Library/PrivateFrameworks/WebCore.framework/WebCore
-        WITransportNativeInspectorObfuscation.deobfuscate(["Core", "eb", "ork/W", "e.framew", "ore", "orks/WebC", "Framework", "Private", "Library/", "/System/"]),
-        // /System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore
-        WITransportNativeInspectorObfuscation.deobfuscate(["Core", "eb", "A/W", "ions/", "ork/Vers", "e.framew", "ore", "orks/WebC", "Framework", "Private", "Library/", "/System/"]),
+        "/System/Library/PrivateFrameworks/WebCore.framework/WebCore",
+        "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore",
     ]
     // __TEXT
     private static let textSegmentName = WITransportNativeInspectorObfuscation.deobfuscate(["__TEXT"])
