@@ -848,6 +848,7 @@ extension WITransportSession {
             case .dropped:
                 enqueuedPageEventCount &+= 1
                 deliveredPageEventCount &+= 1
+                resumePageEventDrainWaitersIfNeeded()
                 return
             case .terminated:
                 self.pageEventStreamContinuation = nil
