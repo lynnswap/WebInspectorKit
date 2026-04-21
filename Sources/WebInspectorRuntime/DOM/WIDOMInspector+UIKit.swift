@@ -122,7 +122,7 @@ package enum WIDOMUIKitSceneActivationEnvironment {
     package static var requester: any WIDOMUIKitSceneActivationRequesting = UIApplication.shared
     package static var sceneProvider: @MainActor (UIWindow) -> (any WIDOMUIKitSceneActivationTarget)? = { $0.windowScene }
     package static var requestingSceneProvider: @MainActor (any WIDOMUIKitSceneActivationTarget) -> UIScene? = { _ in nil }
-    package static var activationTimeout: Duration = .seconds(1)
+    package static var activationTimeout: Duration = .seconds(5)
     package static var activationWaiter: @MainActor (any WIDOMUIKitSceneActivationTarget, Duration) async throws -> Void = {
         target,
         timeout in
