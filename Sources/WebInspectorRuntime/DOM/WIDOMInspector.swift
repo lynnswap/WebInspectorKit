@@ -1117,7 +1117,9 @@ private extension WIDOMInspector {
     func handleTransportEvent(_ envelope: WITransportEventEnvelope) async {
         switch envelope.method {
         case "Target.targetCreated":
-            guard let targetIdentifier = envelope.targetIdentifier ?? sharedTransport.currentObservedPageTargetIdentifier() else {
+            guard let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+                ?? envelope.targetIdentifier
+            else {
                 return
             }
             switch phase {
@@ -2179,6 +2181,19 @@ private extension WIDOMInspector {
         }
         guard resolvedInspectedNodeFromCurrentDocument(nodeID: pendingInspectSelection.nodeID) == nil else {
             return
+        }
+
+        if let targetIdentifier = phase.targetIdentifier ?? sharedTransport.currentPageTargetIdentifier() {
+            let requestedNodes = await materializePendingInspectSelection(
+                nodeID: pendingInspectSelection.nodeID,
+                selectorPath: pendingInspectSelection.selectorPath,
+                contextID: pendingInspectSelection.contextID,
+                targetIdentifier: targetIdentifier,
+                transaction: pendingInspectSelection.transaction
+            )
+            if requestedNodes > 0 {
+                return
+            }
         }
 
         self.pendingInspectSelection = nil
