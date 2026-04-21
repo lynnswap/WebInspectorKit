@@ -179,7 +179,7 @@ package struct WITransportNetworkBootstrapResource: Decodable, Sendable {
     package let bodyFetchDescriptor: WITransportNetworkBootstrapBodyFetchDescriptor?
 }
 
-public struct WITransportDOMNode: Decodable, Sendable {
+public final class WITransportDOMNode: Decodable, Sendable {
     public let nodeId: Int
     public let nodeType: Int
     public let nodeName: String
@@ -191,6 +191,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
     public let documentURL: String?
     public let baseURL: String?
     public let frameId: String?
+    public let contentDocument: WITransportDOMNode?
     public let layoutFlags: [String]?
 
     public init(
@@ -205,6 +206,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
         documentURL: String?,
         baseURL: String?,
         frameId: String?,
+        contentDocument: WITransportDOMNode? = nil,
         layoutFlags: [String]?
     ) {
         self.nodeId = nodeId
@@ -218,6 +220,7 @@ public struct WITransportDOMNode: Decodable, Sendable {
         self.documentURL = documentURL
         self.baseURL = baseURL
         self.frameId = frameId
+        self.contentDocument = contentDocument
         self.layoutFlags = layoutFlags
     }
 }

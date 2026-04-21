@@ -102,6 +102,147 @@ struct DOMDocumentModelTests {
     }
 
     @Test
+    func nestedDocumentRemainsChildOfFrameOwner() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 20,
+                            frameID: "frame-child",
+                            children: [
+                                makeNode(
+                                    localID: 24,
+                                    backendNodeID: 24,
+                                    frameID: "frame-child",
+                                    children: [
+                                        makeNode(
+                                            localID: 26,
+                                            backendNodeID: 26,
+                                            attributes: [.init(nodeId: 26, name: "id", value: "frame-target")],
+                                            nodeName: "BUTTON",
+                                            localName: "button"
+                                        )
+                                    ],
+                                    nodeType: 9,
+                                    nodeName: "#document",
+                                    localName: ""
+                                )
+                            ],
+                            nodeName: "IFRAME",
+                            localName: "iframe"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            )
+        )
+
+        let iframeNode = try! #require(model.node(localID: 20))
+        let nestedDocument = try! #require(iframeNode.children.first)
+        let nestedButton = try! #require(nestedDocument.children.first)
+
+        #expect(iframeNode.frameID == "frame-child")
+        #expect(nestedDocument.nodeType == 9)
+        #expect(nestedDocument.parent === iframeNode)
+        #expect(nestedDocument.frameID == "frame-child")
+        #expect(nestedButton.localName == "button")
+    }
+
+    @Test
+    func selectionReprojectsInsideNestedDocumentByStableBackendNodeID() {
+        let model = DOMDocumentModel()
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 20,
+                            frameID: "frame-child",
+                            children: [
+                                makeNode(
+                                    localID: 24,
+                                    backendNodeID: 24,
+                                    frameID: "frame-child",
+                                    children: [
+                                        makeNode(
+                                            localID: 26,
+                                            backendNodeID: 77,
+                                            backendNodeIDIsStable: true,
+                                            attributes: [.init(nodeId: 77, name: "id", value: "before")],
+                                            nodeName: "BUTTON",
+                                            localName: "button"
+                                        )
+                                    ],
+                                    nodeType: 9,
+                                    nodeName: "#document",
+                                    localName: ""
+                                )
+                            ],
+                            nodeName: "IFRAME",
+                            localName: "iframe"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                ),
+                selectedLocalID: 26
+            )
+        )
+
+        model.replaceDocument(
+            with: .init(
+                root: makeNode(
+                    localID: 1,
+                    children: [
+                        makeNode(
+                            localID: 200,
+                            frameID: "frame-child",
+                            children: [
+                                makeNode(
+                                    localID: 240,
+                                    backendNodeID: 24,
+                                    frameID: "frame-child",
+                                    children: [
+                                        makeNode(
+                                            localID: 260,
+                                            backendNodeID: 77,
+                                            backendNodeIDIsStable: true,
+                                            attributes: [.init(nodeId: 77, name: "id", value: "after")],
+                                            nodeName: "BUTTON",
+                                            localName: "button"
+                                        )
+                                    ],
+                                    nodeType: 9,
+                                    nodeName: "#document",
+                                    localName: ""
+                                )
+                            ],
+                            nodeName: "IFRAME",
+                            localName: "iframe"
+                        )
+                    ],
+                    nodeType: 9,
+                    nodeName: "#document",
+                    localName: ""
+                )
+            ),
+            isFreshDocument: false
+        )
+
+        let reprojected = try! #require(model.selectedNode)
+        #expect(reprojected.localID == 260)
+        #expect(reprojected.backendNodeID == 77)
+        #expect(reprojected.attributes.first(where: { $0.name == "id" })?.value == "after")
+    }
+
+    @Test
     func sameContextSnapshotReplaceRebindsSelectionByStableBackendNodeID() {
         let model = DOMDocumentModel()
         model.replaceDocument(
@@ -420,6 +561,7 @@ struct DOMDocumentModelTests {
         localID: UInt64,
         backendNodeID: Int? = nil,
         backendNodeIDIsStable: Bool? = nil,
+        frameID: String? = nil,
         attributes: [DOMAttribute] = [],
         children: [DOMGraphNodeDescriptor] = [],
         nodeType: Int = 1,
@@ -431,6 +573,7 @@ struct DOMDocumentModelTests {
             localID: localID,
             backendNodeID: backendNodeID ?? Int(localID),
             backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,

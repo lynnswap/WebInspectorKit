@@ -99,9 +99,6 @@ extension UIApplication: WIDOMUIKitSceneActivationRequesting {
 
 @MainActor
 package enum WIDOMUIKitInspectorSelectionEnvironment {
-    package static var availabilityProvider: @MainActor (WKWebView) -> Bool = {
-        WIInspectorSelectionPrivateBridge.hasPrivateInspectorAccess(in: $0)
-    }
     package static var nodeSearchSetter: @MainActor (WKWebView, Bool) -> Bool = { webView, enabled in
         WIInspectorSelectionPrivateBridge.setNodeSearchEnabled(enabled, in: webView)
     }
@@ -114,7 +111,6 @@ package enum WIDOMUIKitInspectorSelectionEnvironment {
     package static var selectionActiveProvider: @MainActor (WKWebView) -> Bool? = {
         WIInspectorSelectionPrivateBridge.isElementSelectionActive(in: $0)
     }
-    package static var customSelectionOverlayOverride: Bool?
 }
 
 @MainActor
@@ -180,127 +176,6 @@ package enum WIDOMUIKitSceneActivationEnvironment {
 }
 
 extension WIDOMInspector {
-    func ensureNativeInspectorSelectionAvailableIfNeeded() throws {
-        guard usesCustomSelectionHitTestOverlay == false else {
-            return
-        }
-
-        guard let pageWebView else {
-            return
-        }
-
-        guard WIDOMUIKitInspectorSelectionEnvironment.availabilityProvider(pageWebView) else {
-            throw DOMOperationError.scriptFailure("Native inspector selection private API unavailable.")
-        }
-    }
-
-    @discardableResult
-    func setNativeInspectorNodeSearchEnabled(_ enabled: Bool) -> Bool {
-        if usesCustomSelectionHitTestOverlay {
-            if enabled {
-                installSelectionHitTestOverlay()
-            } else {
-                removeSelectionHitTestOverlay()
-            }
-#if DEBUG
-            recordInspectSelectionDiagnostic(
-                InspectSelectionDiagnosticEvent.nativeNodeSearch(
-                    enabled: enabled,
-                    contextID: currentContextIDForSelectionDiagnostics(),
-                    succeeded: true,
-                    summary: nativeInspectorInteractionStateSummaryForDiagnostics()
-                )
-            )
-#endif
-            return true
-        }
-
-        guard let pageWebView else {
-#if DEBUG
-            recordInspectSelectionDiagnostic(
-                InspectSelectionDiagnosticEvent.nativeNodeSearch(
-                    enabled: enabled,
-                    contextID: currentContextIDForSelectionDiagnostics(),
-                    succeeded: false,
-                    summary: nil as String?
-                )
-            )
-#endif
-            return false
-        }
-
-        if enabled {
-            let alreadyActive =
-                (isNativeInspectorElementSelectionActive(on: pageWebView) ?? false)
-                || hasActiveNativeInspectorNodeSearch(in: pageWebView)
-            if alreadyActive {
-#if DEBUG
-                recordInspectSelectionDiagnostic(
-                    InspectSelectionDiagnosticEvent.nativeNodeSearch(
-                        enabled: enabled,
-                        contextID: currentContextIDForSelectionDiagnostics(),
-                        succeeded: true,
-                        summary: nativeInspectorInteractionStateSummaryForDiagnostics()
-                    )
-                )
-#endif
-                domWindowActivationLogger.debug(
-                    "native inspector node search enable skipped because it is already active contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
-                )
-                return true
-            }
-        }
-
-        let didEnable = WIDOMUIKitInspectorSelectionEnvironment.nodeSearchSetter(pageWebView, enabled)
-#if DEBUG
-        recordInspectSelectionDiagnostic(
-            InspectSelectionDiagnosticEvent.nativeNodeSearch(
-                enabled: enabled,
-                contextID: currentContextIDForSelectionDiagnostics(),
-                succeeded: didEnable,
-                summary: nativeInspectorInteractionStateSummaryForDiagnostics()
-            )
-        )
-#endif
-        guard didEnable else {
-            domWindowActivationLogger.error(
-                "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) unavailable contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
-            )
-            return false
-        }
-        domWindowActivationLogger.debug(
-            "native inspector node search \(enabled ? "enable" : "disable", privacy: .public) contextID=\(self.currentContextIDForSelectionDiagnostics() ?? 0, privacy: .public) state=\(self.nativeInspectorInteractionStateSummaryForDiagnostics() ?? "nil", privacy: .public)"
-        )
-        return true
-    }
-
-    private func installSelectionHitTestOverlay() {
-#if DEBUG
-        guard let pageWebView else {
-            return
-        }
-
-        if selectionHitTestOverlay?.superview === pageWebView {
-            selectionHitTestOverlay?.frame = pageWebView.bounds
-            return
-        }
-
-        removeSelectionHitTestOverlay()
-        let overlay = WIDOMSelectionHitTestOverlay(inspector: self)
-        overlay.frame = pageWebView.bounds
-        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        pageWebView.addSubview(overlay)
-        selectionHitTestOverlay = overlay
-#endif
-    }
-
-    private func removeSelectionHitTestOverlay() {
-#if DEBUG
-        selectionHitTestOverlay?.removeFromSuperview()
-        selectionHitTestOverlay = nil
-#endif
-    }
-
     func activatePageWindowForSelectionIfPossible() {
         guard let pageWindow = pageWebView?.window else {
             return
@@ -356,12 +231,13 @@ extension WIDOMInspector {
     }
 
     func awaitInspectModeInactive() async {
-        guard usesCustomSelectionHitTestOverlay == false else {
-            removeSelectionHitTestOverlay()
+        guard let pageWebView else {
             return
         }
 
-        guard let pageWebView else {
+        let selectionActive = isNativeInspectorElementSelectionActive(on: pageWebView) ?? false
+        let contentViewActive = hasActiveNativeInspectorNodeSearch(in: pageWebView)
+        guard selectionActive || contentViewActive else {
             return
         }
 
@@ -376,20 +252,6 @@ extension WIDOMInspector {
         }
 
         domWindowActivationLogger.error("native inspector node search teardown did not settle")
-    }
-
-    var usesCustomSelectionHitTestOverlay: Bool {
-#if DEBUG
-        if let override = WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride {
-            return override
-        }
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || NSClassFromString("XCTestCase") != nil
-            || Bundle.main.bundlePath.hasSuffix(".xctest")
-#else
-        false
-#endif
     }
 
     private func removeLingeringNativeInspectorNodeSearchRecognizers(in webView: WKWebView) {
@@ -461,37 +323,4 @@ extension WIDOMInspector {
         return "nativeSelectionActive=\(selectionValue) contentViewActive=\(contentViewValue)"
     }
 }
-
-#if DEBUG
-private final class WIDOMSelectionHitTestOverlay: UIView {
-    private weak var inspector: WIDOMInspector?
-
-    init(inspector: WIDOMInspector) {
-        self.inspector = inspector
-        super.init(frame: .zero)
-        backgroundColor = .clear
-        isOpaque = false
-
-        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        addGestureRecognizer(tapRecognizer)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    @objc
-    private func handleTap(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.state == .ended,
-              let inspector else {
-            return
-        }
-        let point = recognizer.location(in: self)
-        Task { @MainActor in
-            await inspector.handlePointerInspectSelection(at: point)
-        }
-    }
-}
-#endif
 #endif

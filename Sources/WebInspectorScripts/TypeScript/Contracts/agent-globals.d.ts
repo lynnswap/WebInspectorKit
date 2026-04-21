@@ -7,14 +7,6 @@ type WebKitMessageHandler = {
 declare global {
     interface Window {
         __wiDOMFrontendInitialContextID?: number;
-        __wiDOMAgentBootstrap?: {
-            contextID?: number;
-            autoSnapshot?: {
-                enabled?: boolean;
-                maxDepth?: number;
-                debounce?: number;
-            };
-        };
         __wiDOMFrontendBootstrap?: {
             config?: {
                 snapshotDepth?: number;
@@ -24,19 +16,6 @@ declare global {
             context?: {
                 contextID?: number;
             } | null;
-        };
-        webInspectorDOM?: {
-            __installed?: boolean;
-            detach?: () => void;
-            setContextID?: (contextID: number) => void;
-            bootstrap?: (bootstrap?: {
-                contextID?: number;
-                autoSnapshot?: {
-                    enabled?: boolean;
-                    maxDepth?: number;
-                    debounce?: number;
-                };
-            } | null) => boolean;
         };
         webInspectorNetworkAgent?: {
             __installed?: boolean;
@@ -48,8 +27,6 @@ declare global {
             serializeNode?: (node: Node) => unknown;
             buffers?: Record<string, unknown>;
             messageHandlers?: {
-                webInspectorDOMSnapshot?: WebKitMessageHandler;
-                webInspectorDOMMutations?: WebKitMessageHandler;
                 webInspectorDomRequestChildren?: WebKitMessageHandler;
                 webInspectorDomHighlight?: WebKitMessageHandler;
                 webInspectorDomHideHighlight?: WebKitMessageHandler;

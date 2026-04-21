@@ -30,7 +30,7 @@ describe("dom-tree-snapshot-envelope", () => {
     it("accepts a serialized envelope with fallback identifiers", () => {
         const didApply = setSnapshot({
             type: "serialized-node-envelope",
-            schemaVersion: 1,
+            schemaVersion: 2,
             node: document.createElement("main"),
             fallback: {
                 root: {
@@ -55,7 +55,7 @@ describe("dom-tree-snapshot-envelope", () => {
     it("rejects an invalid envelope without a resolvable root", () => {
         const didApply = setSnapshot({
             type: "serialized-node-envelope",
-            schemaVersion: 1,
+            schemaVersion: 2,
             node: null,
             fallback: null,
         });

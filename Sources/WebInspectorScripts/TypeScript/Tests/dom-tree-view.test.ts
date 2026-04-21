@@ -170,6 +170,91 @@ describe("dom-tree-view", () => {
         expect(document.querySelector(".tree-node.is-unrendered")).toBeNull();
     });
 
+    it("renders nested iframe documents without flattening them away", async () => {
+        const { protocolState, treeState } = await import("../UI/DOMTree/dom-tree-state");
+        await import("../UI/DOMTree/dom-tree-view");
+
+        window.webInspectorDOMFrontend?.applyFullSnapshot?.({
+            root: {
+                nodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                childNodeCount: 1,
+                children: [
+                    {
+                        nodeId: 2,
+                        nodeType: 1,
+                        nodeName: "HTML",
+                        localName: "html",
+                        childNodeCount: 1,
+                        children: [
+                            {
+                                nodeId: 3,
+                                nodeType: 1,
+                                nodeName: "BODY",
+                                localName: "body",
+                                childNodeCount: 1,
+                                children: [
+                                    {
+                                        nodeId: 20,
+                                        nodeType: 1,
+                                        nodeName: "IFRAME",
+                                        localName: "iframe",
+                                        frameId: "frame-child",
+                                        childNodeCount: 1,
+                                        contentDocument: {
+                                            nodeId: 24,
+                                            nodeType: 9,
+                                            nodeName: "#document",
+                                            localName: "",
+                                            frameId: "frame-child",
+                                            childNodeCount: 1,
+                                            children: [
+                                                {
+                                                    nodeId: 25,
+                                                    nodeType: 1,
+                                                    nodeName: "HTML",
+                                                    localName: "html",
+                                                    childNodeCount: 1,
+                                                    children: [
+                                                        {
+                                                            nodeId: 26,
+                                                            nodeType: 1,
+                                                            nodeName: "BUTTON",
+                                                            localName: "button",
+                                                            attributes: ["id", "frame-target"],
+                                                            childNodeCount: 0,
+                                                            children: [],
+                                                        },
+                                                    ],
+                                                },
+                                            ],
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }, protocolState.contextID);
+
+        expect(treeState.nodes.get(24)?.parentId).toBe(20);
+        expect(treeState.nodes.get(24)?.nodeType).toBe(9);
+        expect(treeState.nodes.get(24)?.frameId).toBe("frame-child");
+
+        const { toggleNode } = await import("../UI/DOMTree/dom-tree-view-support");
+        toggleNode(20);
+        toggleNode(24);
+        toggleNode(25);
+
+        const treeText = document.getElementById("dom-tree")?.textContent ?? "";
+        expect(treeText).toContain("iframe");
+        expect(treeText).toContain("#document");
+        expect(treeText).toContain("button");
+    });
+
     it("does not render placeholder rows for partially loaded nodes", async () => {
         const { protocolState } = await import("../UI/DOMTree/dom-tree-state");
         await import("../UI/DOMTree/dom-tree-view");

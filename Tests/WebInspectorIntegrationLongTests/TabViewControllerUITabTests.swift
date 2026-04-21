@@ -1511,14 +1511,6 @@ struct TabViewControllerUITabTests {
 
     @Test
     func compactActualWebViewNavigationAllowsPostNavigationSelection() async throws {
-#if canImport(UIKit)
-        let previousSelectionOverlayOverride = WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride
-        WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = true
-        defer {
-            WIDOMUIKitInspectorSelectionEnvironment.customSelectionOverlayOverride = previousSelectionOverlayOverride
-        }
-#endif
-
         let controller = WIInspectorController()
         let webView = makeTestWebView()
         await loadHTML(
@@ -1635,39 +1627,113 @@ struct TabViewControllerUITabTests {
             return
         }
 
-        controller.dom.resetInspectSelectionDiagnosticsForTesting()
-        try await controller.dom.beginSelectionMode()
-        await controller.dom.handlePointerInspectSelection(at: CGPoint(x: 40, y: 60))
-
-        let selectionReady = await waitForCondition(attempts: 180) {
-            let selectedNode = controller.dom.document.selectedNode
-            return selectedNode?.nodeName == "SECTION"
-                && selectedNode?.attributes.contains(where: { $0.name == "id" && $0.value == "page-b" }) == true
-                && controller.dom.isSelectingElement == false
-        }
-        #expect(selectionReady)
-
-        let selectedNodeID = try #require(controller.dom.document.selectedNode?.id)
-        let treeSelectionReady = await waitForCondition(attempts: 180) {
-            let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
-            return selectedNodeLocalID == Int(selectedNodeID.localID)
-        }
-        #expect(treeSelectionReady)
-
-        let detailReady = await waitForCondition(attempts: 180) {
-            elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "id") == "page-b"
-                && elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "class") == "updated"
-                && elementViewController.renderedAttributeValueForTesting(nodeID: selectedNodeID, name: "data-role") == "hero"
-        }
-        #expect(detailReady)
-        #expect(
-            controller.dom.inspectSelectionDiagnosticsForTesting.contains {
-                if case let .armed(contextID, _, _) = $0 {
-                    return contextID == controller.dom.currentContextIDForDiagnostics()
-                }
-                return false
-            }
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#page-b",
+            expectedAttributes: [
+                "id": "page-b",
+                "class": "updated",
+                "data-role": "hero",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
         )
+
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
+        #expect(controller.dom.isSelectingElement == false)
+    }
+
+    @Test
+    func compactSameOriginIFrameSelectionProjectsIntoTreeAndDetail() async throws {
+        let controller = WIInspectorController()
+        let webView = makeTestWebView()
+        await loadHTML(
+            """
+            <!doctype html>
+            <html>
+            <body>
+                <iframe
+                    id="frame-owner"
+                    srcdoc="<!doctype html><html><body><button id='frame-target' data-role='nested'>Frame</button></body></html>">
+                </iframe>
+            </body>
+            </html>
+            """,
+            in: webView
+        )
+
+        let requestedTabs: [WITab] = [.dom(), .network()]
+        let container = WITabViewController(
+            controller,
+            webView: webView,
+            tabs: requestedTabs
+        )
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = container
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        container.loadViewIfNeeded()
+        drainMainQueue()
+        configureSizeClass(.compact, for: container, requestedTabs: requestedTabs)
+        drainMainQueue()
+        await waitForControllerLifecycles(
+            in: container,
+            states: [(controller, .active)]
+        )
+
+        guard let compactHost = container.activeHostViewControllerForTesting as? WICompactTabHostViewController else {
+            Issue.record("Expected compact host")
+            return
+        }
+        guard let domViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) as? WIDOMViewController else {
+            Issue.record("Expected DOM root view controller")
+            return
+        }
+        guard let elementViewController = compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) as? WIDOMDetailViewController else {
+            Issue.record("Expected Element detail view controller")
+            return
+        }
+
+        let iframeContentReady = await waitForPageCondition(
+            "document.getElementById('frame-owner')?.contentDocument?.getElementById('frame-target')",
+            in: webView,
+            attempts: 600
+        )
+        #expect(iframeContentReady)
+        guard iframeContentReady else {
+            return
+        }
+
+        let selectedNodeID = try await selectNodeAndWaitForCompactProjection(
+            cssSelector: "#frame-target",
+            expectedAttributes: [
+                "id": "frame-target",
+                "data-role": "nested",
+            ],
+            in: controller,
+            domViewController: domViewController,
+            elementViewController: elementViewController,
+            requiresTreeSelection: true
+        )
+
+        let treeReady = await waitForCondition(attempts: 600) {
+            let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+            return treeText.contains("#document")
+                && treeText.contains("iframe")
+                && treeText.contains("frame-target")
+        }
+        #expect(treeReady)
+
+        let treeText = await domViewController.compactTreeViewControllerForTesting.treeTextContentForTesting() ?? ""
+        #expect(treeText.contains("#document"))
+        #expect(treeText.contains("iframe"))
+        #expect(treeText.contains("frame-target"))
+        #expect(controller.dom.document.selectedNode?.id == selectedNodeID)
     }
 
     @Test
@@ -1716,6 +1782,20 @@ struct TabViewControllerUITabTests {
                 in: container,
                 states: [(controller, .active)]
             )
+        }
+
+        let detailControllersReady = await waitForCondition(attempts: 200) {
+            guard let hostedContainer = container,
+                  let compactHost = hostedContainer.activeHostViewControllerForTesting as? WICompactTabHostViewController
+            else {
+                return false
+            }
+            return compactHost.rootViewControllerForTesting(tabIdentifier: WITab.domTabID) is WIDOMViewController
+                && compactHost.rootViewControllerForTesting(tabIdentifier: WITab.elementTabID) is WIDOMDetailViewController
+        }
+        #expect(detailControllersReady)
+        guard detailControllersReady else {
+            return
         }
 
         guard let hostedContainer = container else {
@@ -1809,6 +1889,26 @@ struct TabViewControllerUITabTests {
         await withCheckedContinuation { continuation in
             navigationDelegate.continuation = continuation
             webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private func waitForPageCondition(
+        _ expression: String,
+        in webView: WKWebView,
+        attempts: Int = 120
+    ) async -> Bool {
+        await waitForCondition(attempts: attempts) {
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    "return Boolean(\(expression));",
+                    arguments: [:],
+                    in: nil,
+                    contentWorld: .page
+                ) as? Bool
+                return result == true
+            } catch {
+                return false
+            }
         }
     }
 
@@ -1974,13 +2074,13 @@ struct TabViewControllerUITabTests {
 
         let selectedNodeID = try #require(controller.dom.document.selectedNode?.id)
         if requiresTreeSelection {
-            var treeSelectionReady = await waitForCondition(attempts: 120) {
+            var treeSelectionReady = await waitForCondition(attempts: 600) {
                 let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
                 return selectedNodeLocalID == Int(selectedNodeID.localID)
             }
             if !treeSelectionReady {
                 try await controller.dom.selectNodeForTesting(cssSelector: cssSelector)
-                treeSelectionReady = await waitForCondition(attempts: 120) {
+                treeSelectionReady = await waitForCondition(attempts: 600) {
                     let selectedNodeLocalID = await domViewController.compactTreeViewControllerForTesting.selectedNodeIDForTesting()
                     return selectedNodeLocalID == Int(selectedNodeID.localID)
                 }

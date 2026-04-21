@@ -33,7 +33,7 @@ final class DOMPayloadNormalizer {
             return nil
         }
 
-        if let version = intValue(object["version"]), version != 1 {
+        if let version = intValue(object["version"]), version != 2 {
             return nil
         }
 
@@ -344,6 +344,7 @@ private extension DOMPayloadNormalizer {
         let nodeType = intValue(object["nodeType"]) ?? 0
         let rawNodeName = stringValue(object["nodeName"]) ?? ""
         let rawLocalName = stringValue(object["localName"]) ?? ""
+        let frameID = stringValue(object["frameId"]) ?? stringValue(object["frameID"])
         let nodeName = nodeType == 1 ? rawNodeName.lowercased() : rawNodeName
         let localName = nodeType == 1
             ? (rawLocalName.isEmpty ? rawNodeName : rawLocalName).lowercased()
@@ -351,7 +352,8 @@ private extension DOMPayloadNormalizer {
         let nodeValue = stringValue(object["nodeValue"]) ?? ""
 
         let attributes = normalizeNodeAttributes(object["attributes"], backendNodeID: backendNodeID)
-        let childPayloads = arrayValue(object["children"]) ?? []
+        let contentDocumentPayload = object["contentDocument"].flatMap(resolveNodePayload)
+        let childPayloads = contentDocumentPayload.map { [$0] } ?? (arrayValue(object["children"]) ?? [])
         let layoutFlags = normalizeLayoutFlags(object["layoutFlags"])
         let isRendered = boolValue(object["isRendered"]) ?? true
 
@@ -371,12 +373,16 @@ private extension DOMPayloadNormalizer {
 
         let explicitChildCount = intValue(object["childNodeCount"])
             ?? intValue(object["childCount"])
-        let childCount = explicitChildCount.map { max(0, $0 - omittedChildren) } ?? children.count
+        let minimumChildCount = max(children.count, contentDocumentPayload == nil ? 0 : 1)
+        let childCount = explicitChildCount.map {
+            max(max(0, $0 - omittedChildren), minimumChildCount)
+        } ?? minimumChildCount
 
         return DOMGraphNodeDescriptor(
             localID: localID,
             backendNodeID: backendNodeID,
             backendNodeIDIsStable: backendNodeIDIsStable,
+            frameID: frameID,
             nodeType: nodeType,
             nodeName: nodeName,
             localName: localName,
@@ -643,6 +649,10 @@ private extension DOMPayloadNormalizer {
             return false
         }
 
+        if let contentDocument = object["contentDocument"] {
+            return nodeDescriptorHasStableIDs(contentDocument)
+        }
+
         guard let children = arrayValue(object["children"]) else {
             return true
         }
@@ -667,6 +677,10 @@ private extension DOMPayloadNormalizer {
             || uint64Value(object["id"]) != nil
         else {
             return false
+        }
+
+        if let contentDocument = object["contentDocument"] {
+            return nodeDescriptorHasLocalIDs(contentDocument)
         }
 
         guard let children = arrayValue(object["children"]) else {

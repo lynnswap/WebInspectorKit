@@ -35,6 +35,7 @@ export interface DOMNode {
     nodeName: string;
     displayName: string;
     nodeType: number;
+    frameId?: string | null;
     attributes: NodeAttribute[];
     textContent: string | null;
     layoutFlags: LayoutFlag[];
@@ -54,6 +55,7 @@ export interface RawNodeDescriptor {
     nodeType?: number;
     nodeName?: string;
     localName?: string;
+    frameId?: string;
     attributes?: (string | undefined)[];
     nodeValue?: string;
     documentURL?: string;
@@ -65,6 +67,7 @@ export interface RawNodeDescriptor {
     childNodeCount?: number;
     childCount?: number;
     children?: RawNodeDescriptor[];
+    contentDocument?: RawNodeDescriptor;
     layoutFlags?: unknown[];
     isRendered?: boolean;
 }

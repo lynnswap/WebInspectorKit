@@ -99,7 +99,7 @@ describe("dom-tree-protocol", () => {
         });
 
         applyMutationBundle({
-            version: 1,
+            version: 2,
             kind: "mutation",
             contextID: 999,
             events: [{ method: "DOM.attributeModified", params: { nodeId: 1, name: "class", value: "after" } }],
@@ -124,7 +124,7 @@ describe("dom-tree-protocol", () => {
         document.documentElement.scrollLeft = 55;
 
         applyMutationBundle({
-            version: 1,
+            version: 2,
             kind: "mutation",
             contextID: protocolState.contextID,
             events: [{ method: "DOM.documentUpdated", params: {} }],

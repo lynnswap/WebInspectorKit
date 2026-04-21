@@ -75,7 +75,7 @@ describe("dom-tree-buffer-transport", () => {
 
         const bundles = [{
             bundle: {
-                version: 1,
+                version: 2,
                 kind: "mutation",
                 contextID: 999,
                 events: [{

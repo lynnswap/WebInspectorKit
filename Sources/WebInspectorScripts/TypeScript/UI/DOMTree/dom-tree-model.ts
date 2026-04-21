@@ -57,6 +57,7 @@ export function normalizeNodeDescriptor(
 
     const nodeType = typeof descriptor.nodeType === "number" ? descriptor.nodeType : 0;
     const nodeName = descriptor.nodeName || "";
+    const frameId = typeof descriptor.frameId === "string" ? descriptor.frameId : null;
     const displayName = computeDisplayName(nodeType, nodeName, descriptor.localName);
     const attributes = deserializeAttributes(descriptor.attributes);
     const textContent = extractTextContent(nodeType, descriptor.nodeValue);
@@ -69,27 +70,35 @@ export function normalizeNodeDescriptor(
     const renderedSelf = resolveRenderedState(layoutFlags, descriptor.isRendered);
     const isRendered = parentRendered && renderedSelf;
 
+    const normalizedContentDocument = normalizeNodeDescriptor(descriptor.contentDocument, isRendered);
+
     const rawChildCount =
         typeof descriptor.childNodeCount === "number"
             ? descriptor.childNodeCount
             : typeof descriptor.childCount === "number"
               ? descriptor.childCount
+              : normalizedContentDocument
+                ? 1
               : Array.isArray(descriptor.children)
                 ? descriptor.children.length
                 : 0;
 
     const children: DOMNode[] = [];
-    const rawChildren = Array.isArray(descriptor.children) ? descriptor.children : [];
     let filteredChildren = 0;
 
-    for (const child of rawChildren) {
-        if (shouldOmitDescriptor(child)) {
-            filteredChildren += 1;
-            continue;
-        }
-        const normalized = normalizeNodeDescriptor(child, isRendered);
-        if (normalized) {
-            children.push(normalized);
+    if (normalizedContentDocument) {
+        children.push(normalizedContentDocument);
+    } else {
+        const rawChildren = Array.isArray(descriptor.children) ? descriptor.children : [];
+        for (const child of rawChildren) {
+            if (shouldOmitDescriptor(child)) {
+                filteredChildren += 1;
+                continue;
+            }
+            const normalized = normalizeNodeDescriptor(child, isRendered);
+            if (normalized) {
+                children.push(normalized);
+            }
         }
     }
 
@@ -100,6 +109,7 @@ export function normalizeNodeDescriptor(
         nodeName,
         displayName,
         nodeType,
+        frameId,
         attributes,
         textContent,
         layoutFlags,
@@ -266,6 +276,7 @@ export function mergeNodeWithSource(
     target.nodeName = source.nodeName;
     target.displayName = source.displayName;
     target.nodeType = source.nodeType;
+    target.frameId = source.frameId ?? null;
     target.attributes = Array.isArray(source.attributes) ? source.attributes : [];
     target.textContent = source.textContent || null;
     target.childCount =

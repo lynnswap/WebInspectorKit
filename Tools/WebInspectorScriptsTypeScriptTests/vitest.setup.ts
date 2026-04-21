@@ -7,14 +7,15 @@ type MessageHandler = {
 type MessageHandlers = Record<string, MessageHandler>;
 
 const createMessageHandlers = (): MessageHandlers => ({
-    webInspectorDOMSnapshot: { postMessage: vi.fn() },
-    webInspectorDOMMutations: { postMessage: vi.fn() },
-    webInspectorProtocol: { postMessage: vi.fn() },
     webInspectorLog: { postMessage: vi.fn() },
+    webInspectorReady: { postMessage: vi.fn() },
     webInspectorDomSelection: { postMessage: vi.fn() },
-    webInspectorDomSelector: { postMessage: vi.fn() },
+    webInspectorDomRequestChildren: { postMessage: vi.fn() },
+    webInspectorDomHighlight: { postMessage: vi.fn() },
+    webInspectorDomHideHighlight: { postMessage: vi.fn() },
     webInspectorNetworkEvents: { postMessage: vi.fn() },
-    webInspectorNetworkReset: { postMessage: vi.fn() }
+    webInspectorNetworkReset: { postMessage: vi.fn() },
+    webInspectorWSUpdate: { postMessage: vi.fn() }
 });
 
 beforeEach(() => {

@@ -3,7 +3,7 @@
  * Keep this file backward compatible across Swift + TypeScript boundaries.
  */
 
-export const WI_DOM_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+export const WI_DOM_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 export const WI_NETWORK_EVENT_SCHEMA_VERSION = 1 as const;
 
 export interface WISerializedNodeEnvelopeContract {

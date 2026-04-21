@@ -84,6 +84,28 @@ function readString(value: unknown): string | undefined {
     return typeof value === "string" ? value : undefined;
 }
 
+function contentDocumentForSerializedNode(
+    serializedNode: unknown
+): Node | null {
+    if (!serializedNode || typeof serializedNode !== "object") {
+        return null;
+    }
+
+    const node = serializedNode as Node & {
+        contentDocument?: Document | null;
+    };
+
+    if (readNumber((node as { nodeType?: unknown }).nodeType) !== Node.ELEMENT_NODE) {
+        return null;
+    }
+
+    try {
+        return node.contentDocument ?? null;
+    } catch {
+        return null;
+    }
+}
+
 function makeDescriptorFromSerializedNode(serializedNode: unknown): RawNodeDescriptor | null {
     if (!serializedNode || typeof serializedNode !== "object") {
         return null;
@@ -104,6 +126,7 @@ function makeDescriptorFromSerializedNode(serializedNode: unknown): RawNodeDescr
         nodeType: readNumber((node as { nodeType?: number }).nodeType),
         nodeName: readString((node as { nodeName?: string }).nodeName) ?? "",
         localName: readString(node.localName) ?? readString((node as { nodeName?: string }).nodeName)?.toLowerCase() ?? "",
+        frameId: readString((node as { frameId?: string }).frameId),
         nodeValue: readString(node.nodeValue) ?? "",
         childNodeCount: node.childNodes ? node.childNodes.length : 0,
         children: [],
@@ -130,15 +153,23 @@ function makeDescriptorFromSerializedNode(serializedNode: unknown): RawNodeDescr
         descriptor.name = readString(node.name) ?? "";
         descriptor.value = readString(node.value) ?? "";
     } else if (descriptor.nodeType === Node.DOCUMENT_NODE) {
-        descriptor.documentURL = document.URL || "";
+        descriptor.documentURL = readString((node as Document).URL) || document.URL || "";
+    } else if (descriptor.nodeType === Node.ELEMENT_NODE) {
+        const contentDocumentDescriptor = makeDescriptorFromSerializedNode(contentDocumentForSerializedNode(node));
+        if (contentDocumentDescriptor) {
+            descriptor.contentDocument = contentDocumentDescriptor;
+            descriptor.childNodeCount = Math.max(descriptor.childNodeCount ?? 0, 1);
+        }
     }
 
-    const rawChildren = node.childNodes ? Array.from(node.childNodes) : [];
-    for (const child of rawChildren) {
-        const childDescriptor = makeDescriptorFromSerializedNode(child);
-        if (childDescriptor) {
-            descriptor.children = descriptor.children || [];
-            descriptor.children.push(childDescriptor);
+    if (!descriptor.contentDocument) {
+        const rawChildren = node.childNodes ? Array.from(node.childNodes) : [];
+        for (const child of rawChildren) {
+            const childDescriptor = makeDescriptorFromSerializedNode(child);
+            if (childDescriptor) {
+                descriptor.children = descriptor.children || [];
+                descriptor.children.push(childDescriptor);
+            }
         }
     }
 
@@ -163,6 +194,15 @@ function applyIdentifierHints(
         target.childNodeCount = fallback.childNodeCount;
     } else if (typeof fallback.childCount === "number") {
         target.childCount = fallback.childCount;
+    }
+
+    if (typeof fallback.frameId === "string") {
+        target.frameId = fallback.frameId;
+    }
+
+    if (fallback.contentDocument) {
+        target.contentDocument = target.contentDocument || fallback.contentDocument;
+        applyIdentifierHints(target.contentDocument, fallback.contentDocument);
     }
 
     const targetChildren = Array.isArray(target.children) ? target.children : [];
@@ -192,11 +232,22 @@ function mergeSerializedRootWithFallback(
         ...serialized,
     };
 
+    const mergedContentDocument = mergeSerializedRootWithFallback(
+        serialized.contentDocument,
+        fallback.contentDocument
+    );
+    if (mergedContentDocument) {
+        merged.contentDocument = mergedContentDocument;
+        delete merged.children;
+    } else {
+        delete merged.contentDocument;
+    }
+
     const serializedChildren = Array.isArray(serialized.children) ? serialized.children : [];
     const fallbackChildren = Array.isArray(fallback.children) ? fallback.children : [];
     const childCount = Math.max(serializedChildren.length, fallbackChildren.length);
 
-    if (childCount > 0) {
+    if (!mergedContentDocument && childCount > 0) {
         const children: RawNodeDescriptor[] = [];
         for (let index = 0; index < childCount; index += 1) {
             const mergedChild = mergeSerializedRootWithFallback(serializedChildren[index], fallbackChildren[index]);
@@ -205,7 +256,7 @@ function mergeSerializedRootWithFallback(
             }
         }
         merged.children = children;
-    } else if (Array.isArray(merged.children) && !merged.children.length) {
+    } else if (!mergedContentDocument && Array.isArray(merged.children) && !merged.children.length) {
         delete merged.children;
     }
 
@@ -475,7 +526,7 @@ export function applyMutationBundle(
     if (!parsed || typeof parsed !== "object") {
         return;
     }
-    if (typeof parsed.version === "number" && parsed.version !== 1) {
+    if (typeof parsed.version === "number" && parsed.version !== DOM_SNAPSHOT_SCHEMA_VERSION) {
         return;
     }
     const effectiveContextID = resolveMutationBundleContext(parsed, resolvedBundle);

@@ -1136,6 +1136,14 @@ function createPrimaryLabel(node: DOMNode, options: NodeRenderOptions = {}): Doc
         return fragment;
     }
 
+    if (node.nodeType === NODE_TYPES.DOCUMENT_NODE) {
+        const span = document.createElement("span");
+        span.className = "tree-node__name";
+        span.textContent = "#document";
+        fragment.appendChild(span);
+        return fragment;
+    }
+
     const tagName = (node.displayName || node.nodeName || "").toLowerCase();
     const tag = document.createElement("span");
     tag.className = "tree-node__name";

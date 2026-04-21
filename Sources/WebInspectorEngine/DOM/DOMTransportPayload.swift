@@ -4,6 +4,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
     package var localID: UInt64
     package var backendNodeID: Int?
     package var backendNodeIDIsStable: Bool
+    package var frameID: String?
     package var nodeType: Int
     package var nodeName: String
     package var localName: String
@@ -18,6 +19,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         localID: UInt64,
         backendNodeID: Int?,
         backendNodeIDIsStable: Bool? = nil,
+        frameID: String? = nil,
         nodeType: Int,
         nodeName: String,
         localName: String,
@@ -31,6 +33,7 @@ package struct DOMGraphNodeDescriptor: Sendable {
         self.localID = localID
         self.backendNodeID = backendNodeID
         self.backendNodeIDIsStable = backendNodeIDIsStable ?? (backendNodeID != nil)
+        self.frameID = frameID
         self.nodeType = nodeType
         self.nodeName = nodeName
         self.localName = localName
@@ -50,67 +53,6 @@ package struct DOMGraphSnapshot: Sendable {
     package init(root: DOMGraphNodeDescriptor, selectedLocalID: UInt64? = nil) {
         self.root = root
         self.selectedLocalID = selectedLocalID
-    }
-}
-
-package enum DOMRequestNodeTarget: Sendable, Equatable, Hashable {
-    case local(UInt64)
-    case backend(Int)
-    case selector(String)
-
-    package var jsArgument: NSDictionary? {
-        switch self {
-        case let .local(localID):
-            guard localID <= UInt64(Int.max) else {
-                return nil
-            }
-            return NSDictionary(dictionary: [
-                "kind": "local",
-                "value": NSNumber(value: Int(localID)),
-            ])
-        case let .backend(backendNodeID):
-            return NSDictionary(dictionary: [
-                "kind": "backend",
-                "value": NSNumber(value: backendNodeID),
-            ])
-        case let .selector(selectorPath):
-            return NSDictionary(dictionary: [
-                "kind": "selector",
-                "value": selectorPath,
-            ])
-        }
-    }
-
-    package var jsIdentifier: Int? {
-        switch self {
-        case let .local(localID):
-            guard localID <= UInt64(Int.max) else {
-                return nil
-            }
-            return Int(localID)
-        case let .backend(backendNodeID):
-            return backendNodeID
-        case .selector:
-            return nil
-        }
-    }
-
-    package var localID: UInt64? {
-        switch self {
-        case let .local(localID):
-            return localID
-        case .backend, .selector:
-            return nil
-        }
-    }
-
-    package var backendNodeID: Int? {
-        switch self {
-        case .local, .selector:
-            return nil
-        case let .backend(backendNodeID):
-            return backendNodeID
-        }
     }
 }
 
