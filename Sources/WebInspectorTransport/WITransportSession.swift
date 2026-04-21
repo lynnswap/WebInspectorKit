@@ -877,7 +877,11 @@ extension WITransportSession {
             if queuedPageEvents.count > configuration.eventBufferLimit {
                 let droppedCount = queuedPageEvents.count - configuration.eventBufferLimit
                 queuedPageEvents.removeFirst(droppedCount)
+                let droppedSequences = Array(queuedPageEventSequences.prefix(droppedCount))
                 queuedPageEventSequences.removeFirst(droppedCount)
+                for droppedSequence in droppedSequences {
+                    markPageEventSequenceSettled(droppedSequence)
+                }
             }
         }
     }

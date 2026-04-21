@@ -751,6 +751,56 @@ struct WITransportSessionTests {
     }
 
     @Test
+    func waitForPostActivePageEventsToDrainCompletesAfterPreConsumerBufferOverflow() async throws {
+        let backend = FakeSessionBackend(attachHandler: { messageSink in
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            )
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-A","newTargetId":"page-B"}}"#
+            )
+            await messageSink.waitForPendingMessages()
+        })
+        let session = WITransportSession(
+            configuration: .init(
+                responseTimeout: .seconds(1),
+                eventBufferLimit: 1,
+                dropEventsWithoutSubscribers: true
+            ),
+            backendFactory: { _ in backend }
+        )
+        session.derivedPageTargetIdentifierProviderForTesting = { _ in nil }
+        let webView = makeIsolatedTestWebView()
+
+        try await session.attach(to: webView)
+
+        let stream = session.pageEvents()
+        var iterator = stream.makeAsyncIterator()
+
+        let bufferedEvent = await iterator.next()
+        #expect(bufferedEvent?.method == "Target.didCommitProvisionalTarget")
+        session.beginPageEventDelivery()
+        session.finishPageEventDelivery()
+
+        let drainedAfterOverflow = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await session.waitForPostActivePageEventsToDrain()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+
+        #expect(drainedAfterOverflow)
+    }
+
+    @Test
     func waitForPostActivePageEventsToDrainDoesNotCompleteWhileOlderActiveEventIsStillRunning() async throws {
         let backend = FakeSessionBackend()
         let session = WITransportSession(
