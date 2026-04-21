@@ -212,6 +212,111 @@ struct WIDOMInspectorTests {
     }
 
     @Test
+    func targetCreatedPrefersCommittedTargetOverProvisionalEnvelopeWhenObservedTargetIsNil() async {
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: targetIdentifier == "page-B" ? "https://example.com/b" : "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        let loadedCommittedDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loadedCommittedDocument)
+    }
+
+    @Test
+    func targetDestroyedFallsBackToCommittedTargetWhenObservedTargetIsNil() async throws {
+        let backend = FakeDOMTransportBackend(
+            emitsInitialPageTargetCreatedOnAttach: false,
+            pageResultProvider: { method, _, targetIdentifier in
+                guard method == WITransportMethod.DOM.getDocument else {
+                    return [:]
+                }
+                return makeDocumentResult(url: targetIdentifier == "page-B" ? "https://example.com/b" : "https://example.com/a")
+            }
+        )
+        let inspector = makeInspector(
+            using: backend,
+            derivedPageTargetIdentifier: "page-A"
+        )
+        _ = inspector.makeInspectorWebView()
+        let webView = makeTestWebView()
+
+        await inspector.attach(to: webView)
+        backend.emitRootEvent(
+            method: "Target.targetCreated",
+            params: [
+                "targetInfo": [
+                    "targetId": "page-B",
+                    "type": "page",
+                    "isProvisional": true,
+                ],
+            ]
+        )
+
+        let loadedCommittedDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(loadedCommittedDocument)
+
+        await inspector.testBeginFreshContext(
+            documentURL: "https://example.com/b",
+            targetIdentifier: "page-B",
+            loadImmediately: true,
+            isFreshDocument: true
+        )
+
+        let provisionalContextID = try #require(inspector.testCurrentContextID)
+        let loadedProvisionalDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentContextID == provisionalContextID
+                && inspector.testCurrentDocumentURL == "https://example.com/b"
+        }
+        #expect(loadedProvisionalDocument)
+
+        backend.emitRootEvent(
+            method: "Target.targetDestroyed",
+            params: ["targetId": "page-B"]
+        )
+
+        let reloadedCommittedDocument = await waitForCondition {
+            inspector.testIsReady
+                && inspector.document.rootNode != nil
+                && inspector.testCurrentContextID != provisionalContextID
+                && inspector.testCurrentDocumentURL == "https://example.com/a"
+        }
+        #expect(reloadedCommittedDocument)
+    }
+
+    @Test
     func documentUpdatedInvalidatesAndReloadsFreshDocument() async throws {
         let backend = FakeDOMTransportBackend(
             pageResultProvider: { method, _, _ in
@@ -2099,13 +2204,22 @@ struct WIDOMInspectorTests {
 @MainActor
 private func makeInspector(
     configuration: DOMConfiguration = .init(),
-    using backend: FakeDOMTransportBackend
+    using backend: FakeDOMTransportBackend,
+    derivedPageTargetIdentifier: String? = nil
 ) -> WIDOMInspector {
     let sharedTransport = WISharedInspectorTransport(sessionFactory: {
-        WITransportSession(
+        let session = WITransportSession(
             configuration: .init(responseTimeout: .seconds(1)),
             backendFactory: { _ in backend }
         )
+#if DEBUG
+        if let derivedPageTargetIdentifier {
+            session.derivedPageTargetIdentifierProviderForTesting = { _ in
+                derivedPageTargetIdentifier
+            }
+        }
+#endif
+        return session
     })
     return WIDOMInspector(
         configuration: configuration,
@@ -2286,25 +2400,30 @@ private final class FakeDOMTransportBackend: WITransportPlatformBackend {
 
     private var messageSink: (any WITransportBackendMessageSink)?
     private var currentTargetIdentifier = "page-A"
+    private let emitsInitialPageTargetCreatedOnAttach: Bool
 
     init(
         capabilities: Set<WITransportCapability> = [.rootMessaging, .pageMessaging, .pageTargetRouting, .domDomain],
+        emitsInitialPageTargetCreatedOnAttach: Bool = true,
         pageResultProvider: ((String, [String: Any], String) throws -> [String: Any])? = nil
     ) {
         self.supportSnapshot = .supported(
             backendKind: .macOSNativeInspector,
             capabilities: capabilities
         )
+        self.emitsInitialPageTargetCreatedOnAttach = emitsInitialPageTargetCreatedOnAttach
         self.pageResultProvider = pageResultProvider
     }
 
     func attach(to webView: WKWebView, messageSink: any WITransportBackendMessageSink) async throws {
         _ = webView
         self.messageSink = messageSink
-        messageSink.didReceiveRootMessage(
-            #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
-        )
-        await messageSink.waitForPendingMessages()
+        if emitsInitialPageTargetCreatedOnAttach {
+            messageSink.didReceiveRootMessage(
+                #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-A","type":"page","isProvisional":false}}}"#
+            )
+            await messageSink.waitForPendingMessages()
+        }
     }
 
     func detach() {

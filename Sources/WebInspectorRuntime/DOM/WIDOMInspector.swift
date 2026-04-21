@@ -11,7 +11,7 @@ import UIKit
 
 private let domViewLogger = Logger(subsystem: "WebInspectorKit", category: "WIDOMInspector")
 private let domDeleteUndoHistoryLimit = 128
-nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = malloc(1)!
+nonisolated(unsafe) private let pageWebViewLifetimeObserverAssociationKey = unsafe malloc(1)!
 
 @MainActor
 private final class WIPageWebViewLifetimeObserver {
@@ -1201,6 +1201,7 @@ private extension WIDOMInspector {
         switch envelope.method {
         case "Target.targetCreated":
             guard let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+                ?? sharedTransport.currentPageTargetIdentifier()
                 ?? envelope.targetIdentifier
             else {
                 return
@@ -1239,6 +1240,7 @@ private extension WIDOMInspector {
                 return
             }
             let replacementTargetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
+                ?? sharedTransport.currentPageTargetIdentifier()
             await beginFreshContext(
                 documentURL: normalizedDocumentURL(pageWebView?.url?.absoluteString),
                 targetIdentifier: replacementTargetIdentifier,
@@ -2893,7 +2895,7 @@ private extension WIDOMInspector {
             }
             self.handleAttachedPageWebViewReleased(expectedGeneration: expectedGeneration)
         }
-        objc_setAssociatedObject(
+        unsafe objc_setAssociatedObject(
             webView,
             pageWebViewLifetimeObserverAssociationKey,
             observer,
@@ -3055,6 +3057,20 @@ extension WIDOMInspector {
 
     package func testWaitForBootstrap() async {
         await bootstrapTask?.value
+    }
+
+    package func testBeginFreshContext(
+        documentURL: String?,
+        targetIdentifier: String?,
+        loadImmediately: Bool,
+        isFreshDocument: Bool
+    ) async {
+        await beginFreshContext(
+            documentURL: documentURL,
+            targetIdentifier: targetIdentifier,
+            loadImmediately: loadImmediately,
+            isFreshDocument: isFreshDocument
+        )
     }
 
     package func testSetPendingInspectSelection(
