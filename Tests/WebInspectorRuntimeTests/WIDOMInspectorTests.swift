@@ -810,8 +810,9 @@ struct WIDOMInspectorTests {
 
     @Test
     func domInspectSelectsRealTransportNode() async throws {
+        var inspectModeEnabledValues: [Bool] = []
         let backend = FakeDOMTransportBackend(
-            pageResultProvider: { method, _, _ in
+            pageResultProvider: { method, payload, _ in
                 switch method {
                 case WITransportMethod.DOM.getDocument:
                     return makeDocumentResult(
@@ -829,6 +830,10 @@ struct WIDOMInspectorTests {
                         ]]
                     )
                 case WITransportMethod.DOM.setInspectModeEnabled:
+                    let params = runtimeTestDictionaryValue(payload["params"])
+                    if let enabled = params?["enabled"] as? Bool {
+                        inspectModeEnabledValues.append(enabled)
+                    }
                     return [:]
                 default:
                     return [:]
@@ -852,6 +857,7 @@ struct WIDOMInspectorTests {
             inspector.document.selectedNode?.localID == 6 && inspector.isSelectingElement == false
         }
         #expect(selected)
+        #expect(inspectModeEnabledValues == [true, false])
     }
 
     @Test

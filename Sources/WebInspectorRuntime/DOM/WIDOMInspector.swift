@@ -1745,11 +1745,24 @@ private extension WIDOMInspector {
     private func completeInspectModeAfterBackendSelection(
         invalidatePendingSelection: Bool = false
     ) async {
+        let activeTargetIdentifier = inspectModeTargetIdentifier ?? phase.targetIdentifier
         clearInspectModeState(
             invalidatePendingSelection: invalidatePendingSelection,
             markSelectionInactive: false,
             deactivateInspectEvents: false
         )
+
+        if let activeTargetIdentifier {
+            do {
+                try await setInspectModeEnabled(false, targetIdentifier: activeTargetIdentifier)
+            } catch {
+                logSelectionDiagnostics(
+                    "completeInspectModeAfterBackendSelection failed to disable inspect mode",
+                    extra: error.localizedDescription,
+                    level: .error
+                )
+            }
+        }
 
 #if canImport(UIKit)
         await awaitInspectModeInactive()
