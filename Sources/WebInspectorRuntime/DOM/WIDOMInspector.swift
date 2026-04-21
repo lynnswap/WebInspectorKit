@@ -253,8 +253,11 @@ public final class WIDOMInspector {
 #endif
         if pageWebView === webView, currentContext != nil {
             installPageWebViewLifetimeObserver(on: webView)
-            hasPageWebView = true
             await sharedTransport.attach(client: .dom, to: webView)
+            hasPageWebView = await sharedTransport.attachedSession() != nil
+            guard hasPageWebView else {
+                return
+            }
             await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
             return
         }
@@ -265,9 +268,12 @@ public final class WIDOMInspector {
         }
         pageWebView = webView
         installPageWebViewLifetimeObserver(on: webView)
-        hasPageWebView = true
         pageBridge.attach(to: webView)
         await sharedTransport.attach(client: .dom, to: webView)
+        hasPageWebView = await sharedTransport.attachedSession() != nil
+        guard hasPageWebView else {
+            return
+        }
         await installPageBridgeBootstrap(contextID: currentContext?.contextID ?? 0)
         let targetIdentifier = sharedTransport.currentObservedPageTargetIdentifier()
         await beginFreshContext(
